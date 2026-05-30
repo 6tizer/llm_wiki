@@ -253,6 +253,11 @@ export async function streamAgent(
 					callbacks.onHookEvent?.(msg);
 					return;
 				}
+				if (wrapper.type === "agent_progress_summary") {
+					callbacks.onAgentProgressSummary?.(msg);
+					return;
+				}
+
 				if (wrapper.type === "subagent_event") {
 					callbacks.onSubagentEvent?.(msg);
 					return;

@@ -200,6 +200,13 @@ export function createRequestHandler({
 						send({ streamId: req.streamId, type: "prompt_suggestion", data: suggestions });
 					}
 				}
+				if (req.options.agentProgressSummaries && msg?.type === "result") {
+					const summaries = msg.agentProgressSummaries;
+					if (summaries) {
+						send({ streamId: req.streamId, type: "agent_progress_summary", data: summaries });
+					}
+				}
+
 				if (req.options.includePartialMessages && msg?.type === "partial_message") {
 					send({ streamId: req.streamId, type: "partial_message", data: msg });
 					continue;

@@ -133,6 +133,7 @@ export interface AgentMessage {
 		| "prompt_suggestion"
 		| "partial_message"
 		| "hook_event"
-		| "subagent_event";
+		| "subagent_event"
+		| "agent_progress_summary";
 	data: unknown;
 }

@@ -247,4 +247,5 @@ export interface AgentCallbacks {
 	onPartialMessage?: (payload: unknown) => void;
 	onHookEvent?: (payload: unknown) => void;
 	onSubagentEvent?: (payload: unknown) => void;
+	onAgentProgressSummary?: (payload: unknown) => void;
 }
