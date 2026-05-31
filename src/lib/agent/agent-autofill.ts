@@ -12,7 +12,7 @@
  *   - concept/entity with empty tags → extract 1-3 keywords from title + body headings
  */
 
-import { readFile, listDirectory } from "@/commands/fs"
+import { readFile, listDirectory, writeFile } from "@/commands/fs"
 import { parseFrontmatter } from "@/lib/frontmatter"
 import { getRelativePath, normalizePath } from "@/lib/path-utils"
 import type { FileNode } from "@/types/wiki"
@@ -51,7 +51,7 @@ function extractWikilinks(content: string): string[] {
 
 /** Check if body has a Definition-like section. */
 function hasDefinitionSection(body: string): boolean {
-  return /^##?\s*(definition|definição|定义|定义|什么是)/im.test(body)
+  return /^##?\s*(definition|definição|定义|什么是)/im.test(body)
 }
 
 /** Check if body has a Key Points / Core Features section. */
@@ -221,6 +221,10 @@ async function countSummaryReferences(
   return counts
 }
 
+// Note: countSummaryReferences re-scans the wiki directory independently from
+// scanWikiPages. For small wikis this is negligible; if I/O becomes a concern,
+// pass pre-scanned page entries to avoid re-reading files.
+
 /** Update frontmatter field in a markdown file. */
 async function updateFrontmatterField(
   filePath: string,
@@ -250,7 +254,6 @@ async function updateFrontmatterField(
 
   // Reconstruct file: new frontmatter + original body
   const newContent = lines.join("\n") + "\n" + body
-  const { writeFile } = await import("@/commands/fs")
   await writeFile(filePath, newContent)
 }
 
@@ -320,7 +323,7 @@ export async function runAutofill(projectPath: string): Promise<AutofillResult> 
         } catch (err) {
           console.warn(`[autofill] failed to promote status for ${page.slug}:`, err)
         }
-        continue
+        continue // page already reached highest status; tags can wait for next pass
       }
 
       // Rule 2: Draft ≥7 days + content complete → Under Review
