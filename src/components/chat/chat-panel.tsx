@@ -418,7 +418,6 @@ function ModeButton({
 						onWikiChanged: (payload) => {
 							appendAgentWikiChange(messageId, payload)
 							const projectPath = options.projectPath ?? options.cwd ?? project?.path
-							enqueueAgentLintFromPaths(projectPath, [payload.path])
 							refreshAgentFileTree(projectPath).catch((err) => {
 								console.warn("[agent] failed to refresh file tree:", err)
 							})
