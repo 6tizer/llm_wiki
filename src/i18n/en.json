@@ -139,7 +139,17 @@
     "useAnyTxtSearch": "AnyTXT search",
     "enableAnyTxtInSettings": "Enable AnyTXT in Settings → External Information Sources",
     "sendMessage": "Send message",
-    "stopGeneration": "Stop generation"
+    "stopGeneration": "Stop generation",
+    "qaDelete": {
+      "title": "Extract QA before deleting?",
+      "description": "\"{{title}}\" may contain useful Agent knowledge. Extract it into a QA page before deleting this conversation?",
+      "extractAndDelete": "Extract QA and Delete",
+      "extracting": "Extracting QA...",
+      "deleteWithoutQa": "Delete Without QA",
+      "cancel": "Cancel",
+      "failed": "QA extraction failed.",
+      "failedWithError": "QA extraction failed: {{error}}"
+    }
   },
   "agent": {
     "mode": {

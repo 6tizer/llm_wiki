@@ -2,11 +2,19 @@ import { useRef, useEffect, useCallback, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { BookOpen, Bot, GitFork, Loader2, MessageSquare, Plus, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog"
 import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message"
 import { ChatInput, type ChatSendOptions } from "./chat-input"
 import { AgentPermissionDialogHost } from "./agent-permission-dialog"
 import { AgentRewindDialogHost } from "./agent-rewind-dialog"
-import { useChatStore, chatMessagesToLLM, type MessageReference } from "@/stores/chat-store"
+import { useChatStore, chatMessagesToLLM, type DisplayMessage, type MessageReference } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { streamAgent } from "@/lib/agent/agent-transport"
@@ -31,7 +39,15 @@ import { computeContextBudget } from "@/lib/context-budget"
 import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search"
 import { resolveSearchConfig, webSearch, type WebSearchResult } from "@/lib/web-search"
 import { API_SERVER_PORT } from "@/lib/api-server-constants"
-import { markConversationDirty, flushQaForConversation, flushAllPendingQa, unmarkConversation, loadPendingQa } from "@/lib/agent/agent-qa-hook"
+import {
+	markConversationDirty,
+	flushQaForConversation,
+	flushAllPendingQa,
+	unmarkConversation,
+	loadPendingQa,
+	shouldExtractQa,
+	isConversationPending,
+} from "@/lib/agent/agent-qa-hook"
 import {
 	agentResultToStats,
 	agentToolBatchToRecords,
@@ -61,6 +77,20 @@ function formatDate(timestamp: number): string {
 		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 	}
 	return d.toLocaleDateString([], { month: "short", day: "numeric" })
+}
+
+export function shouldPromptForQaBeforeConversationDelete(
+	conversationMessages: DisplayMessage[],
+	options: { hasProject: boolean; isPending: boolean },
+): boolean {
+	if (!options.hasProject) return false
+	if (!shouldExtractQa(conversationMessages).extract) return false
+	return options.isPending || conversationMessages.some((message) =>
+		message.mode === "agent" ||
+		Boolean(message.agentSessionId) ||
+		Boolean(message.agentBlocks?.length) ||
+		Boolean(message.toolCalls?.length),
+	)
 }
 
 function agentBaseUrl(config: ReturnType<typeof useWikiStore.getState>["llmConfig"]): string | undefined {
@@ -146,7 +176,7 @@ function ModeButton({
 		</button>
 	)
 }
- function ConversationSidebar() {
+function ConversationSidebar() {
 	const { t } = useTranslation()
 	const conversations = useChatStore((s) => s.conversations)
 	const activeConversationId = useChatStore((s) => s.activeConversationId)
@@ -155,11 +185,67 @@ function ModeButton({
 	const deleteConversation = useChatStore((s) => s.deleteConversation)
 	const setActiveConversation = useChatStore((s) => s.setActiveConversation)
 	const forkAgentConversation = useChatStore((s) => s.forkAgentConversation)
- 	const [hoveredId, setHoveredId] = useState<string | null>(null)
+	const [hoveredId, setHoveredId] = useState<string | null>(null)
 	const [menu, setMenu] = useState<{ conversationId: string; x: number; y: number } | null>(null)
- 	const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt)
- 	function getMessageCount(convId: string): number {
-		return messages.filter((m) => m.conversationId === convId).length
+	const [qaDeleteDialog, setQaDeleteDialog] = useState<{ conversationId: string; title: string } | null>(null)
+	const [qaDeleteError, setQaDeleteError] = useState<string | null>(null)
+	const [qaDeleteBusy, setQaDeleteBusy] = useState(false)
+	const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt)
+
+	function getConversationMessages(convId: string): DisplayMessage[] {
+		return messages.filter((m) => m.conversationId === convId)
+	}
+	function getMessageCount(convId: string): number {
+		return getConversationMessages(convId).length
+	}
+	function deleteConversationFiles(convId: string): void {
+		unmarkConversation(convId)
+		deleteConversation(convId)
+		const proj = useWikiStore.getState().project
+		if (proj) {
+			deleteFile(`${proj.path}/.llm-wiki/chats/${convId}.json`).catch(() => {})
+		}
+	}
+	function requestDeleteConversation(convId: string, title: string): void {
+		const s = useWikiStore.getState()
+		const convMessages = getConversationMessages(convId)
+		const shouldPrompt = shouldPromptForQaBeforeConversationDelete(convMessages, {
+			hasProject: Boolean(s.project),
+			isPending: isConversationPending(convId),
+		})
+		if (!shouldPrompt) {
+			deleteConversationFiles(convId)
+			return
+		}
+		setQaDeleteError(null)
+		setQaDeleteDialog({ conversationId: convId, title })
+	}
+	async function extractQaThenDelete(): Promise<void> {
+		if (!qaDeleteDialog) return
+		const s = useWikiStore.getState()
+		if (!s.project) {
+			deleteConversationFiles(qaDeleteDialog.conversationId)
+			setQaDeleteDialog(null)
+			return
+		}
+		const convId = qaDeleteDialog.conversationId
+		const msgs = useChatStore.getState().messages.filter((m) => m.conversationId === convId)
+		setQaDeleteBusy(true)
+		setQaDeleteError(null)
+		try {
+			markConversationDirty(convId)
+			const result = await flushQaForConversation(convId, msgs, s.project.path, s.llmConfig, s.searchApiConfig)
+			if (!result.ok) {
+				setQaDeleteError(result.error || t("chat.qaDelete.failed"))
+				return
+			}
+			deleteConversationFiles(convId)
+			setQaDeleteDialog(null)
+		} catch (err) {
+			setQaDeleteError(err instanceof Error ? err.message : String(err))
+		} finally {
+			setQaDeleteBusy(false)
+		}
 	}
 	useEffect(() => {
 		if (!menu) return
@@ -171,7 +257,7 @@ function ModeButton({
 			window.removeEventListener("keydown", close)
 		}
 	}, [menu])
- 	return (
+	return (
 		<div className="flex h-full w-[200px] flex-shrink-0 flex-col border-r bg-muted/30">
 			<div className="border-b p-2">
 				<Button
@@ -184,7 +270,7 @@ function ModeButton({
 					{t("chat.newChat")}
 				</Button>
 			</div>
- 			<div className="flex-1 overflow-y-auto py-1">
+			<div className="flex-1 overflow-y-auto py-1">
 				{sorted.length === 0 ? (
 					<p className="px-3 py-4 text-xs text-muted-foreground text-center">
 						{t("chat.noConversationsYet")}
@@ -230,13 +316,7 @@ function ModeButton({
 											className="flex-shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
 											onClick={(e) => {
 												e.stopPropagation()
-												unmarkConversation(conv.id)
-											deleteConversation(conv.id)
-												// Delete persisted chat file
-												const proj = useWikiStore.getState().project
-												if (proj) {
-													deleteFile(`${proj.path}/.llm-wiki/chats/${conv.id}.json`).catch(() => {})
-												}
+												requestDeleteConversation(conv.id, conv.title)
 											}}
 										>
 											<Trash2 className="h-3 w-3" />
@@ -277,10 +357,61 @@ function ModeButton({
 					</button>
 				</div>
 			)}
+			<Dialog
+				open={Boolean(qaDeleteDialog)}
+				onOpenChange={(open) => {
+					if (!open && !qaDeleteBusy) setQaDeleteDialog(null)
+				}}
+			>
+				<DialogContent className="w-[calc(100vw-2rem)] max-w-md" showCloseButton={!qaDeleteBusy}>
+					<DialogHeader>
+						<DialogTitle>{t("chat.qaDelete.title")}</DialogTitle>
+						<DialogDescription>
+							{t("chat.qaDelete.description", { title: qaDeleteDialog?.title || "" })}
+						</DialogDescription>
+					</DialogHeader>
+					{qaDeleteError && (
+						<p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+							{t("chat.qaDelete.failedWithError", { error: qaDeleteError })}
+						</p>
+					)}
+					<DialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+						<Button
+							type="button"
+							variant="outline"
+							disabled={qaDeleteBusy}
+							onClick={() => setQaDeleteDialog(null)}
+						>
+							{t("chat.qaDelete.cancel")}
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							disabled={qaDeleteBusy}
+							onClick={() => {
+								if (!qaDeleteDialog) return
+								deleteConversationFiles(qaDeleteDialog.conversationId)
+								setQaDeleteDialog(null)
+							}}
+						>
+							{t("chat.qaDelete.deleteWithoutQa")}
+						</Button>
+						<Button
+							type="button"
+							disabled={qaDeleteBusy}
+							onClick={() => {
+								void extractQaThenDelete()
+							}}
+						>
+							{qaDeleteBusy ? t("chat.qaDelete.extracting") : t("chat.qaDelete.extractAndDelete")}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	)
 }
- export function ChatPanel() {
+export function ChatPanel() {
 	const { t } = useTranslation()
 	useSourceFiles() // Keep source file cache warm
 	const activeConversationId = useChatStore((s) => s.activeConversationId)
