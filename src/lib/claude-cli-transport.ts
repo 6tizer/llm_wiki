@@ -227,6 +227,11 @@ export async function streamClaudeCodeCli(
 			},
 		);
 
+		if (finished) {
+			cleanup();
+			return;
+		}
+
 		const payload: SpawnPayload = {
 			streamId,
 			model: config.model,

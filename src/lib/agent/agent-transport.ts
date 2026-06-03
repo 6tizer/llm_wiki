@@ -386,6 +386,11 @@ export async function streamAgent(
 			},
 		);
 
+		if (finished) {
+			cleanup();
+			return;
+		}
+
 		const payload: InvokePayload = {
 			streamId,
 			prompt,
