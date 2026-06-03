@@ -10,11 +10,11 @@
  * and forwards assistant text to `onToken`.
  */
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { LlmConfig } from "@/stores/wiki-store";
-import type { StreamCallbacks } from "./llm-client";
-import type { ChatMessage, RequestOverrides } from "./llm-providers";
+import { invoke } from "@tauri-apps/api/core"
+import { listen, type UnlistenFn } from "@tauri-apps/api/event"
+import type { LlmConfig } from "@/stores/wiki-store"
+import type { ChatMessage, RequestOverrides } from "./llm-providers"
+import type { StreamCallbacks } from "./llm-client"
 
 /**
  * Public parse entry point. Given one stream-json line from claude's
@@ -28,76 +28,74 @@ import type { ChatMessage, RequestOverrides } from "./llm-providers";
  * when they arrive and skip the fat `assistant` events after seeing one.
  */
 export function createClaudeCodeStreamParser() {
-	let sawDelta = false;
-	// Track the running text we have emitted for the current assistant
-	// turn via `assistant` events so we can diff new content off the end
-	// and only emit what wasn't already streamed.
-	let emittedFromAssistant = "";
+  let sawDelta = false
+  // Track the running text we have emitted for the current assistant
+  // turn via `assistant` events so we can diff new content off the end
+  // and only emit what wasn't already streamed.
+  let emittedFromAssistant = ""
 
-	return function parseLine(rawLine: string): string | null {
-		const line = rawLine.trim();
-		if (!line) return null;
+  return function parseLine(rawLine: string): string | null {
+    const line = rawLine.trim()
+    if (!line) return null
 
-		let evt: unknown;
-		try {
-			evt = JSON.parse(line);
-		} catch {
-			return null;
-		}
+    let evt: unknown
+    try {
+      evt = JSON.parse(line)
+    } catch {
+      return null
+    }
 
-		if (!evt || typeof evt !== "object") return null;
-		const obj = evt as Record<string, unknown>;
-		const type = obj.type;
+    if (!evt || typeof evt !== "object") return null
+    const obj = evt as Record<string, unknown>
+    const type = obj.type
 
-		// Real streaming deltas (passthrough from Anthropic API when
-		// --verbose is active on newer claude CLI versions).
-		if (type === "stream_event") {
-			const event = obj.event as Record<string, unknown> | undefined;
-			if (event?.type === "content_block_delta") {
-				const delta = event.delta as Record<string, unknown> | undefined;
-				if (delta?.type === "text_delta" && typeof delta.text === "string") {
-					sawDelta = true;
-					return delta.text;
-				}
-			}
-			return null;
-		}
+    // Real streaming deltas (passthrough from Anthropic API when
+    // --verbose is active on newer claude CLI versions).
+    if (type === "stream_event") {
+      const event = obj.event as Record<string, unknown> | undefined
+      if (event?.type === "content_block_delta") {
+        const delta = event.delta as Record<string, unknown> | undefined
+        if (delta?.type === "text_delta" && typeof delta.text === "string") {
+          sawDelta = true
+          return delta.text
+        }
+      }
+      return null
+    }
 
-		// Full assistant message (older CLI versions or when deltas are
-		// unavailable). Ship only the portion we haven't already emitted
-		// via stream_event deltas, so streaming still works smoothly.
-		if (type === "assistant") {
-			const message = obj.message as Record<string, unknown> | undefined;
-			const content = message?.content;
-			if (!Array.isArray(content)) return null;
-			const text = content
-				.map((c) => {
-					const cc = c as Record<string, unknown>;
-					return cc.type === "text" && typeof cc.text === "string"
-						? cc.text
-						: "";
-				})
-				.join("");
-			if (!text) return null;
+    // Full assistant message (older CLI versions or when deltas are
+    // unavailable). Ship only the portion we haven't already emitted
+    // via stream_event deltas, so streaming still works smoothly.
+    if (type === "assistant") {
+      const message = obj.message as Record<string, unknown> | undefined
+      const content = message?.content
+      if (!Array.isArray(content)) return null
+      const text = content
+        .map((c) => {
+          const cc = c as Record<string, unknown>
+          return cc.type === "text" && typeof cc.text === "string" ? cc.text : ""
+        })
+        .join("")
+      if (!text) return null
 
-			if (sawDelta) {
-				// Deltas already covered this turn; skip the fat assistant event.
-				return null;
-			}
-			if (text.startsWith(emittedFromAssistant)) {
-				const novel = text.slice(emittedFromAssistant.length);
-				emittedFromAssistant = text;
-				return novel || null;
-			}
-			// Non-prefix change: cli sent something different than expected.
-			// Reset tracker and emit the new text wholesale.
-			emittedFromAssistant = text;
-			return text;
-		}
+      if (sawDelta) {
+        // Deltas already covered this turn; skip the fat assistant event.
+        return null
+      }
+      if (text.startsWith(emittedFromAssistant)) {
+        const novel = text.slice(emittedFromAssistant.length)
+        emittedFromAssistant = text
+        return novel || null
+      }
+      // Non-prefix change: cli sent something different than expected.
+      // Reset tracker and emit the new text wholesale.
+      emittedFromAssistant = text
+      return text
+    }
 
-		// Ignore session init, tool_use, result summary, unknown types.
-		return null;
-	};
+    // Ignore session init, tool_use, result summary, unknown types.
+    return null
+  }
 }
 
 // Tauri's `invoke` typing requires the payload object to satisfy
@@ -106,10 +104,10 @@ export function createClaudeCodeStreamParser() {
 // `&` intersection. Without this, TS rejects the call to invoke()
 // even though the runtime payload is identical.
 type SpawnPayload = Record<string, unknown> & {
-	streamId: string;
-	model: string;
-	messages: ChatMessage[];
-};
+  streamId: string
+  model: string
+  messages: ChatMessage[]
+}
 
 /**
  * Subprocess equivalent of the HTTP path in streamChat. Obeys the same
@@ -117,141 +115,130 @@ type SpawnPayload = Record<string, unknown> & {
  * which transport it's talking to.
  */
 export async function streamClaudeCodeCli(
-	config: LlmConfig,
-	messages: ChatMessage[],
-	callbacks: StreamCallbacks,
-	signal?: AbortSignal,
-	overrides?: RequestOverrides,
+  config: LlmConfig,
+  messages: ChatMessage[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+  overrides?: RequestOverrides,
 ): Promise<void> {
-	const { onToken, onDone, onError } = callbacks;
+  const { onToken, onDone, onError } = callbacks
 
-	// Sampling knobs aren't wired through the Claude Code CLI (no flag
-	// equivalents for temperature/top_p/max_tokens/stop). Warn loudly in
-	// dev so a caller wiring these up doesn't silently wonder why they
-	// don't take effect; keep quiet in prod so regular users aren't
-	// alarmed by a reasonable default.
-	if (import.meta.env?.DEV && overrides) {
-		for (const key of [
-			"temperature",
-			"top_p",
-			"top_k",
-			"max_tokens",
-			"stop",
-		] as const) {
-			if (overrides[key] !== undefined) {
-				// eslint-disable-next-line no-console
-				console.warn(
-					`[claude-code] ignoring unsupported override "${key}": CLI has no equivalent flag`,
-				);
-			}
-		}
-	}
+  // Sampling knobs aren't wired through the Claude Code CLI (no flag
+  // equivalents for temperature/top_p/max_tokens/stop). Warn loudly in
+  // dev so a caller wiring these up doesn't silently wonder why they
+  // don't take effect; keep quiet in prod so regular users aren't
+  // alarmed by a reasonable default.
+  if (import.meta.env?.DEV && overrides) {
+    for (const key of ["temperature", "top_p", "top_k", "max_tokens", "stop"] as const) {
+      if (overrides[key] !== undefined) {
+        // eslint-disable-next-line no-console
+        console.warn(`[claude-code] ignoring unsupported override "${key}": CLI has no equivalent flag`)
+      }
+    }
+  }
 
-	const streamId = crypto.randomUUID();
-	const parse = createClaudeCodeStreamParser();
+  const streamId = crypto.randomUUID()
+  const parse = createClaudeCodeStreamParser()
 
-	let unlistenData: UnlistenFn | undefined;
-	let unlistenDone: UnlistenFn | undefined;
-	let finished = false;
+  let unlistenData: UnlistenFn | undefined
+  let unlistenDone: UnlistenFn | undefined
+  let finished = false
 
-	// Diagnostic capture for failure paths. The Rust side emits every
-	// stdout line; lines the parser doesn't recognize (non-JSON,
-	// unknown event types, the stream-json `{"type":"error",...}`
-	// shape claude can emit on auth failure) used to be silently
-	// dropped — leaving users staring at a bare "exit code 1" with
-	// nothing to act on. We collect them up to a hard cap so that if
-	// the child exits non-zero AND stderr is empty, we have something
-	// concrete to show in the error message.
-	const UNPARSED_BUFFER_CAP = 4096;
-	const unparsedLines: string[] = [];
-	let unparsedSize = 0;
-	function captureUnparsed(line: string) {
-		if (unparsedSize >= UNPARSED_BUFFER_CAP) return;
-		const trimmed = line.trim();
-		if (trimmed.length === 0) return;
-		unparsedLines.push(line);
-		unparsedSize += line.length + 1;
-	}
+  // Diagnostic capture for failure paths. The Rust side emits every
+  // stdout line; lines the parser doesn't recognize (non-JSON,
+  // unknown event types, the stream-json `{"type":"error",...}`
+  // shape claude can emit on auth failure) used to be silently
+  // dropped — leaving users staring at a bare "exit code 1" with
+  // nothing to act on. We collect them up to a hard cap so that if
+  // the child exits non-zero AND stderr is empty, we have something
+  // concrete to show in the error message.
+  const UNPARSED_BUFFER_CAP = 4096
+  const unparsedLines: string[] = []
+  let unparsedSize = 0
+  function captureUnparsed(line: string) {
+    if (unparsedSize >= UNPARSED_BUFFER_CAP) return
+    const trimmed = line.trim()
+    if (trimmed.length === 0) return
+    unparsedLines.push(line)
+    unparsedSize += line.length + 1
+  }
 
-	const cleanup = () => {
-		unlistenData?.();
-		unlistenDone?.();
-	};
+  const cleanup = () => {
+    unlistenData?.()
+    unlistenDone?.()
+  }
 
-	const finishWith = (cb: () => void) => {
-		if (finished) return;
-		finished = true;
-		cleanup();
-		cb();
-	};
+  const finishWith = (cb: () => void) => {
+    if (finished) return
+    finished = true
+    cleanup()
+    cb()
+  }
 
-	const abortListener = () => {
-		void invoke("claude_cli_kill", { streamId }).catch(() => {
-			// Kill is best-effort; if the process already exited, the Rust
-			// side returns Ok and the done handler fires normally.
-		});
-		finishWith(onDone);
-	};
-	signal?.addEventListener("abort", abortListener);
+  const abortListener = () => {
+    void invoke("claude_cli_kill", { streamId }).catch(() => {
+      // Kill is best-effort; if the process already exited, the Rust
+      // side returns Ok and the done handler fires normally.
+    })
+    finishWith(onDone)
+  }
+  signal?.addEventListener("abort", abortListener)
 
-	try {
-		// Listen FIRST so we don't miss the very first event on fast CLIs.
-		unlistenData = await listen<string>(`claude-cli:${streamId}`, (event) => {
-			if (finished) return;
-			const token = parse(event.payload);
-			if (token !== null) {
-				onToken(token);
-			} else {
-				// Parser didn't recognize this line. Stash it in case the
-				// child later exits non-zero with empty stderr — at that
-				// point this captured stdout is the only diagnostic the
-				// user has.
-				captureUnparsed(event.payload);
-			}
-		});
+  try {
+    // Listen FIRST so we don't miss the very first event on fast CLIs.
+    unlistenData = await listen<string>(`claude-cli:${streamId}`, (event) => {
+      const token = parse(event.payload)
+      if (token !== null) {
+        onToken(token)
+      } else {
+        // Parser didn't recognize this line. Stash it in case the
+        // child later exits non-zero with empty stderr — at that
+        // point this captured stdout is the only diagnostic the
+        // user has.
+        captureUnparsed(event.payload)
+      }
+    })
 
-		unlistenDone = await listen<{ code: number | null; stderr: string }>(
-			`claude-cli:${streamId}:done`,
-			(event) => {
-				const code = event.payload?.code;
-				const stderr = event.payload?.stderr?.trim() ?? "";
-				if (code !== null && code !== undefined && code !== 0) {
-					finishWith(() =>
-						onError(
-							new Error(buildExitError(code, stderr, unparsedLines.join("\n"))),
-						),
-					);
-				} else {
-					finishWith(onDone);
-				}
-			},
-		);
+    unlistenDone = await listen<{ code: number | null; stderr: string }>(
+      `claude-cli:${streamId}:done`,
+      (event) => {
+        const code = event.payload?.code
+        const stderr = event.payload?.stderr?.trim() ?? ""
+        if (code !== null && code !== undefined && code !== 0) {
+          finishWith(() =>
+            onError(
+              new Error(buildExitError(code, stderr, unparsedLines.join("\n"))),
+            ),
+          )
+        } else {
+          finishWith(onDone)
+        }
+      },
+    )
 
-		const payload: SpawnPayload = {
-			streamId,
-			model: config.model,
-			messages,
-		};
-		await invoke("claude_cli_spawn", payload);
-	} catch (err) {
-		finishWith(() => {
-			const message = err instanceof Error ? err.message : String(err);
-			// Surface the classic "CLI not installed" case as an actionable
-			// message — the Rust side returns a plain string from
-			// spawn-failed, but users need to know to install claude.
-			if (/not found|No such file|executable file not found/i.test(message)) {
-				onError(
-					new Error(
-						"Claude Code CLI not found. Install `claude` (https://www.anthropic.com/claude-code) or pick a different provider.",
-					),
-				);
-			} else {
-				onError(err instanceof Error ? err : new Error(message));
-			}
-		});
-	} finally {
-		signal?.removeEventListener("abort", abortListener);
-	}
+    const payload: SpawnPayload = {
+      streamId,
+      model: config.model,
+      messages,
+    }
+    await invoke("claude_cli_spawn", payload)
+  } catch (err) {
+    finishWith(() => {
+      const message = err instanceof Error ? err.message : String(err)
+      // Surface the classic "CLI not installed" case as an actionable
+      // message — the Rust side returns a plain string from
+      // spawn-failed, but users need to know to install claude.
+      if (/not found|No such file|executable file not found/i.test(message)) {
+        onError(new Error(
+          "Claude Code CLI not found. Install `claude` (https://www.anthropic.com/claude-code) or pick a different provider.",
+        ))
+      } else {
+        onError(err instanceof Error ? err : new Error(message))
+      }
+    })
+  } finally {
+    signal?.removeEventListener("abort", abortListener)
+  }
 }
 
 /**
@@ -278,36 +265,34 @@ export async function streamClaudeCodeCli(
  *      see whatever output the CLI does produce.
  */
 export function buildExitError(
-	code: number,
-	stderr: string,
-	unparsedStdout: string = "",
+  code: number,
+  stderr: string,
+  unparsedStdout: string = "",
 ): string {
-	if (/unauthenticated|please.*log\s*in|authentication.*failed/i.test(stderr)) {
-		return [
-			"Claude Code CLI is not authenticated.",
-			"Please open a terminal and run `claude` to complete the OAuth login,",
-			"then retry. (LLM Wiki only spawns the binary — it can't run the",
-			"login flow on your behalf.)",
-			stderr ? `\n\n— stderr —\n${stderr}` : "",
-		]
-			.join(" ")
-			.trim();
-	}
-	if (stderr) {
-		return `claude CLI exited with code ${code}: ${stderr}`;
-	}
-	if (unparsedStdout.trim()) {
-		return [
-			`claude CLI exited with code ${code} (no stderr).`,
-			"Captured stdout output that LLM Wiki couldn't parse — pasting it",
-			"here so you can see what the CLI actually emitted:\n",
-			unparsedStdout.trim(),
-		].join(" ");
-	}
-	return [
-		`claude CLI exited silently with code ${code}.`,
-		"No stdout or stderr was captured — try running `claude -p` in a",
-		"terminal with the same prompt to see what's wrong, or switch to",
-		"the official Anthropic API in Settings.",
-	].join(" ");
+  if (/unauthenticated|please.*log\s*in|authentication.*failed/i.test(stderr)) {
+    return [
+      "Claude Code CLI is not authenticated.",
+      "Please open a terminal and run `claude` to complete the OAuth login,",
+      "then retry. (LLM Wiki only spawns the binary — it can't run the",
+      "login flow on your behalf.)",
+      stderr ? `\n\n— stderr —\n${stderr}` : "",
+    ].join(" ").trim()
+  }
+  if (stderr) {
+    return `claude CLI exited with code ${code}: ${stderr}`
+  }
+  if (unparsedStdout.trim()) {
+    return [
+      `claude CLI exited with code ${code} (no stderr).`,
+      "Captured stdout output that LLM Wiki couldn't parse — pasting it",
+      "here so you can see what the CLI actually emitted:\n",
+      unparsedStdout.trim(),
+    ].join(" ")
+  }
+  return [
+    `claude CLI exited silently with code ${code}.`,
+    "No stdout or stderr was captured — try running `claude -p` in a",
+    "terminal with the same prompt to see what's wrong, or switch to",
+    "the official Anthropic API in Settings.",
+  ].join(" ")
 }

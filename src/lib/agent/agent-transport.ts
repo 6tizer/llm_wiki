@@ -9,20 +9,19 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { runAgentAppTool } from "./agent-app-tools";
 import type {
+	AgentCallbacks,
 	AgentActionRequiredPayload,
 	AgentAppToolRequestPayload,
-	AgentCallbacks,
 	AgentDonePayload,
 	AgentPermissionDecision,
-	AgentPermissionPolicy,
 	AgentPermissionRequestPayload,
 	AgentRewindFilesPayload,
+	AgentPermissionPolicy,
 	AgentSummaryPayload,
 	AgentTaskEventPayload,
-	AgentToolEventPayload,
 	AgentTransportOptions,
+	AgentToolEventPayload,
 	AgentWikiChangedPayload,
 	SDKAssistantMessage,
 	SDKContentBlock,
@@ -30,6 +29,7 @@ import type {
 	SDKResultMessage,
 	SubagentConfig,
 } from "./agent-types";
+import { runAgentAppTool } from "./agent-app-tools";
 
 type InvokePayload = Record<string, unknown> & {
 	streamId: string;
@@ -202,8 +202,6 @@ export async function streamAgent(
 
 		unlistenData = await listen<string>(`agent:${streamId}`, (event) => {
 			try {
-				if (finished) return;
-
 				const raw = event.payload;
 
 				const wrapper = JSON.parse(raw) as {
@@ -225,51 +223,46 @@ export async function streamAgent(
 				if (wrapper.type === "app_tool_request") {
 					const request = msg as AgentAppToolRequestPayload;
 					void runAgentAppTool(request.toolName, request.args)
-						.then((data) => {
-							if (finished) return;
-							return sendAppToolResponse({
+						.then((data) =>
+							sendAppToolResponse({
 								streamId,
 								requestId: request.requestId,
 								ok: true,
 								data,
-							});
-						})
-						.catch((err) => {
-							if (finished) return;
-							return sendAppToolResponse({
+							}),
+						)
+						.catch((err) =>
+							sendAppToolResponse({
 								streamId,
 								requestId: request.requestId,
 								ok: false,
 								error: err instanceof Error ? err.message : String(err),
-							});
-						});
+							}),
+						);
 					return;
 				}
 
 				if (wrapper.type === "agent_permission_request") {
 					const request = msg as AgentPermissionRequestPayload;
 					void Promise.resolve(
-						callbacks.onPermissionRequest?.(request) ??
-							defaultPermissionDecision(),
+						callbacks.onPermissionRequest?.(request) ?? defaultPermissionDecision(),
 					)
-						.then((decision) => {
-							if (finished) return;
-							return sendPermissionResponse({
+						.then((decision) =>
+							sendPermissionResponse({
 								streamId,
 								requestId: request.requestId,
 								ok: true,
 								decision,
-							});
-						})
-						.catch((err) => {
-							if (finished) return;
-							return sendPermissionResponse({
+							}),
+						)
+						.catch((err) =>
+							sendPermissionResponse({
 								streamId,
 								requestId: request.requestId,
 								ok: false,
 								error: err instanceof Error ? err.message : String(err),
-							});
-						});
+							}),
+						);
 					return;
 				}
 
