@@ -20,6 +20,7 @@ import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
 import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search"
 import { resolveSearchConfig, webSearch, type WebSearchResult } from "@/lib/web-search"
+import { API_SERVER_PORT } from "@/lib/api-server-constants"
 import { markConversationDirty, flushQaForConversation, flushAllPendingQa, unmarkConversation, loadPendingQa } from "@/lib/agent/agent-qa-hook"
 import {
 	agentResultToStats,
@@ -57,6 +58,10 @@ function agentBaseUrl(config: ReturnType<typeof useWikiStore.getState>["llmConfi
 	return undefined
 }
 
+function agentApiServerBaseUrl(): string {
+	return `http://127.0.0.1:${API_SERVER_PORT}`
+}
+
 function buildAgentTransportOptions(): AgentTransportOptions | null {
 	const wikiState = useWikiStore.getState()
 	const chatState = useChatStore.getState()
@@ -75,12 +80,11 @@ function buildAgentTransportOptions(): AgentTransportOptions | null {
 		apiKey: wikiState.llmConfig.apiKey || undefined,
 		baseUrl: agentBaseUrl(wikiState.llmConfig),
 		resume: agentSessionId,
-		resumeSessionAt: agentSessionId,
 		persistSession: true,
 		permissionPolicy: "default",
 		enableWikiTools: true,
 		enableWriteTools: true,
-		apiServerBaseUrl: "http://127.0.0.1:19828",
+		apiServerBaseUrl: agentApiServerBaseUrl(),
 		apiToken: wikiState.apiConfig.token || undefined,
 	}
 }
