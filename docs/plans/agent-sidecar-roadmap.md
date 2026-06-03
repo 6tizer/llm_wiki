@@ -116,12 +116,13 @@ Claude Agent SDK sandbox 可作为以后增强 Claude Code 内置工具隔离的
 - Session resume/fork、权限审批、checkpoint rewind 的用户交互
 - 成本/用量统计面板
 
-### Phase 5: 打包 & 优化
-- Sidecar 编译为单文件 binary（`bun build --compile`）
-- `startup()` 预热消除冷启动
-- 并发 Agent 支持（多 streamId）
-- 长期 session 存储整理、清理、迁移
-- 资源使用限制（CPU/内存/时间）
+### Phase 5: Agent 稳定性、资源控制与打包优化 — 待开始
+- 详见 [Phase 5 计划](./agent-sidecar-phase5.md)
+- **5a Session 行为修复**：compact/resume 摘要过滤、resume 意图保护、rewind 生命周期修复
+- **5b 资源限制与配置**：maxTurns/maxFilesChanged 配置化、session 存储整理
+- **5c Bug 修复**：React key warnings、Tauri resource id、QA hook topic 提取
+- **5d 打包优化**：Sidecar 编译为单文件 binary（`bun build --compile`）
+- 关联 Issues：#60, #62, #64, #65, #66, #67, #69, #59, #63
 
 ## 技术选型
 
