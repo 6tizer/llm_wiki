@@ -174,6 +174,12 @@ export async function streamAgent(
 ): Promise<void> {
 	const streamId = crypto.randomUUID();
 	callbacks.onStreamStart?.(streamId);
+
+	if (signal?.aborted) {
+		callbacks.onDone(null);
+		return;
+	}
+
 	let unlistenData: UnlistenFn | undefined;
 	let unlistenDone: UnlistenFn | undefined;
 	let finished = false;

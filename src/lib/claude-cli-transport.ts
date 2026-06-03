@@ -150,6 +150,11 @@ export async function streamClaudeCodeCli(
 	const streamId = crypto.randomUUID();
 	const parse = createClaudeCodeStreamParser();
 
+	if (signal?.aborted) {
+		onDone();
+		return;
+	}
+
 	let unlistenData: UnlistenFn | undefined;
 	let unlistenDone: UnlistenFn | undefined;
 	let finished = false;
