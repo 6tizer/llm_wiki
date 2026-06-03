@@ -261,7 +261,7 @@ const CJK_RE = /[一-鿿㐀-䶿]/;
  * - CJK text: character bigrams for better near-duplicate detection
  */
 function extractTokens(text: string): Set<string> {
-	const cleaned = text.toLowerCase().replace(/[^\w一-鿿]+/g, " ");
+	const cleaned = text.toLowerCase().replace(/[^\w一-鿿㐀-䶿]+/g, " ");
 	const tokens = new Set<string>();
 
 	for (const word of cleaned.split(/\s+/)) {
