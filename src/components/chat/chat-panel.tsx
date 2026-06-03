@@ -1,7 +1,23 @@
-import { useRef, useEffect, useCallback, useState, type ReactNode } from "react"
-import { useTranslation } from "react-i18next"
-import { BookOpen, Bot, GitFork, Loader2, MessageSquare, Plus, Trash2, Upload } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import {
+	BookOpen,
+	Bot,
+	GitFork,
+	Loader2,
+	MessageSquare,
+	Plus,
+	Trash2,
+	Upload,
+} from "lucide-react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+import { useTranslation } from "react-i18next";
+import { deleteFile, listDirectory, readFile } from "@/commands/fs";
+import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -9,126 +25,152 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-} from "@/components/ui/dialog"
-import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message"
-import { ChatInput, type ChatSendOptions } from "./chat-input"
-import { AgentPermissionDialogHost } from "./agent-permission-dialog"
-import { AgentRewindDialogHost } from "./agent-rewind-dialog"
-import { useChatStore, chatMessagesToLLM, type DisplayMessage, type MessageReference } from "@/stores/chat-store"
-import { useWikiStore } from "@/stores/wiki-store"
-import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
-import { streamAgent } from "@/lib/agent/agent-transport"
-import type { AgentActionRequiredPayload, AgentRewindFilesPayload, AgentTransportOptions } from "@/lib/agent/agent-types"
-import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue"
+} from "@/components/ui/dialog";
+import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue";
 import {
+	flushAllPendingQa,
+	flushQaForConversation,
+	isConversationPending,
+	loadPendingQa,
+	markConversationDirty,
+	shouldExtractQa,
+	unmarkConversation,
+} from "@/lib/agent/agent-qa-hook";
+import {
+	type AgentErrorKind,
+	type AgentRunPhase,
 	agentErrorI18nKey,
 	agentRunPhaseI18nKey,
 	classifyAgentError,
 	getAgentPreflightError,
-	type AgentErrorKind,
-	type AgentRunPhase,
-} from "@/lib/agent/agent-run-state"
-import { executeIngestWrites } from "@/lib/ingest"
-import { listDirectory, readFile, deleteFile } from "@/commands/fs"
-import { searchWiki } from "@/lib/search"
-import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
-import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
-import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
-import { isGreeting } from "@/lib/greeting-detector"
-import { computeContextBudget } from "@/lib/context-budget"
-import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search"
-import { resolveSearchConfig, webSearch, type WebSearchResult } from "@/lib/web-search"
-import { API_SERVER_PORT } from "@/lib/api-server-constants"
+} from "@/lib/agent/agent-run-state";
+import { streamAgent } from "@/lib/agent/agent-transport";
+import type {
+	AgentActionRequiredPayload,
+	AgentRewindFilesPayload,
+	AgentTransportOptions,
+} from "@/lib/agent/agent-types";
+import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search";
+import { API_SERVER_PORT } from "@/lib/api-server-constants";
+import { computeContextBudget } from "@/lib/context-budget";
+import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance";
+import { isGreeting } from "@/lib/greeting-detector";
+import { executeIngestWrites } from "@/lib/ingest";
+import { type ChatMessage as LLMMessage, streamChat } from "@/lib/llm-client";
 import {
-	markConversationDirty,
-	flushQaForConversation,
-	flushAllPendingQa,
-	unmarkConversation,
-	loadPendingQa,
-	shouldExtractQa,
-	isConversationPending,
-} from "@/lib/agent/agent-qa-hook"
+	buildLanguageReminder,
+	getOutputLanguage,
+} from "@/lib/output-language";
+import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils";
+import { searchWiki } from "@/lib/search";
+import {
+	resolveSearchConfig,
+	type WebSearchResult,
+	webSearch,
+} from "@/lib/web-search";
+import {
+	chatMessagesToLLM,
+	type DisplayMessage,
+	type MessageReference,
+	useChatStore,
+} from "@/stores/chat-store";
+import { useWikiStore } from "@/stores/wiki-store";
+import { AgentPermissionDialogHost } from "./agent-permission-dialog";
+import { AgentRewindDialogHost } from "./agent-rewind-dialog";
 import {
 	agentResultToStats,
 	agentToolBatchToRecords,
 	agentToolEventToRecord,
 	isSdkAssistantMessage,
 	isSdkUserMessage,
-} from "./agent-stream-integration"
- // Store the page mapping from the last query so SourceFilesBar can show which pages were cited
-export let lastQueryPages: { title: string; path: string }[] = []
- function formatExternalSearchContext(results: WebSearchResult[]): string {
-	if (results.length === 0) return ""
+} from "./agent-stream-integration";
+import { ChatInput, type ChatSendOptions } from "./chat-input";
+import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message";
+// Store the page mapping from the last query so SourceFilesBar can show which pages were cited
+export let lastQueryPages: { title: string; path: string }[] = [];
+function formatExternalSearchContext(results: WebSearchResult[]): string {
+	if (results.length === 0) return "";
 	return results
-		.map((result, index) => [
-			`### [E${index + 1}] ${result.title}`,
-			`Source: ${result.source}`,
-			`URL: ${result.url}`,
-			"",
-			result.snippet,
-		].join("\n"))
-		.join("\n\n---\n\n")
+		.map((result, index) =>
+			[
+				`### [E${index + 1}] ${result.title}`,
+				`Source: ${result.source}`,
+				`URL: ${result.url}`,
+				"",
+				result.snippet,
+			].join("\n"),
+		)
+		.join("\n\n---\n\n");
 }
 function formatDate(timestamp: number): string {
-	const d = new Date(timestamp)
-	const now = new Date()
-	const isToday = d.toDateString() === now.toDateString()
+	const d = new Date(timestamp);
+	const now = new Date();
+	const isToday = d.toDateString() === now.toDateString();
 	if (isToday) {
-		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	}
-	return d.toLocaleDateString([], { month: "short", day: "numeric" })
+	return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 export function shouldPromptForQaBeforeConversationDelete(
 	conversationMessages: DisplayMessage[],
 	options: { hasProject: boolean; isPending: boolean },
 ): boolean {
-	if (!options.hasProject) return false
-	if (!shouldExtractQa(conversationMessages).extract) return false
-	return options.isPending || conversationMessages.some((message) =>
-		message.mode === "agent" ||
-		Boolean(message.agentSessionId) ||
-		Boolean(message.agentBlocks?.length) ||
-		Boolean(message.toolCalls?.length),
-	)
+	if (!options.hasProject) return false;
+	if (!shouldExtractQa(conversationMessages).extract) return false;
+	return (
+		options.isPending ||
+		conversationMessages.some(
+			(message) =>
+				message.mode === "agent" ||
+				Boolean(message.agentSessionId) ||
+				Boolean(message.agentBlocks?.length) ||
+				Boolean(message.toolCalls?.length),
+		)
+	);
 }
 
-function agentBaseUrl(config: ReturnType<typeof useWikiStore.getState>["llmConfig"]): string | undefined {
-	if (config.provider === "custom") return config.customEndpoint || undefined
-	if (config.provider === "ollama") return config.ollamaUrl || undefined
-	return undefined
+function agentBaseUrl(
+	config: ReturnType<typeof useWikiStore.getState>["llmConfig"],
+): string | undefined {
+	if (config.provider === "custom") return config.customEndpoint || undefined;
+	if (config.provider === "ollama") return config.ollamaUrl || undefined;
+	return undefined;
 }
 
 function agentApiServerBaseUrl(): string {
-	return `http://127.0.0.1:${API_SERVER_PORT}`
+	return `http://127.0.0.1:${API_SERVER_PORT}`;
 }
 
 async function refreshAgentFileTree(projectPath?: string): Promise<void> {
-	if (!projectPath) return
-	const tree = await listDirectory(projectPath)
-	const wikiStore = useWikiStore.getState()
-	wikiStore.setFileTree(tree)
-	wikiStore.bumpDataVersion()
+	if (!projectPath) return;
+	const tree = await listDirectory(projectPath);
+	const wikiStore = useWikiStore.getState();
+	wikiStore.setFileTree(tree);
+	wikiStore.bumpDataVersion();
 }
 
-function enqueueAgentLintFromPaths(projectPath: string | undefined, paths: readonly string[]): void {
-	if (!projectPath || paths.length === 0) return
-	enqueueAgentStructuralLint(projectPath, paths)
+function enqueueAgentLintFromPaths(
+	projectPath: string | undefined,
+	paths: readonly string[],
+): void {
+	if (!projectPath || paths.length === 0) return;
+	enqueueAgentStructuralLint(projectPath, paths);
 }
 
 function changedPathsFromAction(payload: AgentActionRequiredPayload): string[] {
-	return payload.kind === "lint_recommended" ? payload.paths : []
+	return payload.kind === "lint_recommended" ? payload.paths : [];
 }
 
 function buildAgentTransportOptions(): AgentTransportOptions | null {
-	const wikiState = useWikiStore.getState()
-	const chatState = useChatStore.getState()
-	const project = wikiState.project
-	if (!project) return null
+	const wikiState = useWikiStore.getState();
+	const chatState = useChatStore.getState();
+	const project = wikiState.project;
+	if (!project) return null;
 	const activeConversation = chatState.conversations.find(
 		(conversation) => conversation.id === chatState.activeConversationId,
-	)
-	const agentSessionId = activeConversation?.agentSessionId
+	);
+	const agentSessionId = activeConversation?.agentSessionId;
 
 	return {
 		cwd: project.path,
@@ -146,7 +188,7 @@ function buildAgentTransportOptions(): AgentTransportOptions | null {
 		enableFileCheckpointing: true,
 		apiServerBaseUrl: agentApiServerBaseUrl(),
 		apiToken: wikiState.apiConfig.token || undefined,
-	}
+	};
 }
 
 function ModeButton({
@@ -155,10 +197,10 @@ function ModeButton({
 	disabled = false,
 	onClick,
 }: {
-	active: boolean
-	children: ReactNode
-	disabled?: boolean
-	onClick: () => void
+	active: boolean;
+	children: ReactNode;
+	disabled?: boolean;
+	onClick: () => void;
 }) {
 	return (
 		<button
@@ -174,89 +216,107 @@ function ModeButton({
 		>
 			{children}
 		</button>
-	)
+	);
 }
 function ConversationSidebar() {
-	const { t } = useTranslation()
-	const conversations = useChatStore((s) => s.conversations)
-	const activeConversationId = useChatStore((s) => s.activeConversationId)
-	const messages = useChatStore((s) => s.messages)
-	const createConversation = useChatStore((s) => s.createConversation)
-	const deleteConversation = useChatStore((s) => s.deleteConversation)
-	const setActiveConversation = useChatStore((s) => s.setActiveConversation)
-	const forkAgentConversation = useChatStore((s) => s.forkAgentConversation)
-	const [hoveredId, setHoveredId] = useState<string | null>(null)
-	const [menu, setMenu] = useState<{ conversationId: string; x: number; y: number } | null>(null)
-	const [qaDeleteDialog, setQaDeleteDialog] = useState<{ conversationId: string; title: string } | null>(null)
-	const [qaDeleteError, setQaDeleteError] = useState<string | null>(null)
-	const [qaDeleteBusy, setQaDeleteBusy] = useState(false)
-	const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt)
+	const { t } = useTranslation();
+	const conversations = useChatStore((s) => s.conversations);
+	const activeConversationId = useChatStore((s) => s.activeConversationId);
+	const messages = useChatStore((s) => s.messages);
+	const createConversation = useChatStore((s) => s.createConversation);
+	const deleteConversation = useChatStore((s) => s.deleteConversation);
+	const setActiveConversation = useChatStore((s) => s.setActiveConversation);
+	const forkAgentConversation = useChatStore((s) => s.forkAgentConversation);
+	const [hoveredId, setHoveredId] = useState<string | null>(null);
+	const [menu, setMenu] = useState<{
+		conversationId: string;
+		x: number;
+		y: number;
+	} | null>(null);
+	const [qaDeleteDialog, setQaDeleteDialog] = useState<{
+		conversationId: string;
+		title: string;
+	} | null>(null);
+	const [qaDeleteError, setQaDeleteError] = useState<string | null>(null);
+	const [qaDeleteBusy, setQaDeleteBusy] = useState(false);
+	const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
 
 	function getConversationMessages(convId: string): DisplayMessage[] {
-		return messages.filter((m) => m.conversationId === convId)
+		return messages.filter((m) => m.conversationId === convId);
 	}
 	function getMessageCount(convId: string): number {
-		return getConversationMessages(convId).length
+		return getConversationMessages(convId).length;
 	}
 	function deleteConversationFiles(convId: string): void {
-		unmarkConversation(convId)
-		deleteConversation(convId)
-		const proj = useWikiStore.getState().project
+		unmarkConversation(convId);
+		deleteConversation(convId);
+		const proj = useWikiStore.getState().project;
 		if (proj) {
-			deleteFile(`${proj.path}/.llm-wiki/chats/${convId}.json`).catch(() => {})
+			deleteFile(`${proj.path}/.llm-wiki/chats/${convId}.json`).catch(() => {});
 		}
 	}
 	function requestDeleteConversation(convId: string, title: string): void {
-		const s = useWikiStore.getState()
-		const convMessages = getConversationMessages(convId)
-		const shouldPrompt = shouldPromptForQaBeforeConversationDelete(convMessages, {
-			hasProject: Boolean(s.project),
-			isPending: isConversationPending(convId),
-		})
+		const s = useWikiStore.getState();
+		const convMessages = getConversationMessages(convId);
+		const shouldPrompt = shouldPromptForQaBeforeConversationDelete(
+			convMessages,
+			{
+				hasProject: Boolean(s.project),
+				isPending: isConversationPending(convId),
+			},
+		);
 		if (!shouldPrompt) {
-			deleteConversationFiles(convId)
-			return
+			deleteConversationFiles(convId);
+			return;
 		}
-		setQaDeleteError(null)
-		setQaDeleteDialog({ conversationId: convId, title })
+		setQaDeleteError(null);
+		setQaDeleteDialog({ conversationId: convId, title });
 	}
 	async function extractQaThenDelete(): Promise<void> {
-		if (!qaDeleteDialog) return
-		const s = useWikiStore.getState()
+		if (!qaDeleteDialog) return;
+		const s = useWikiStore.getState();
 		if (!s.project) {
-			deleteConversationFiles(qaDeleteDialog.conversationId)
-			setQaDeleteDialog(null)
-			return
+			deleteConversationFiles(qaDeleteDialog.conversationId);
+			setQaDeleteDialog(null);
+			return;
 		}
-		const convId = qaDeleteDialog.conversationId
-		const msgs = useChatStore.getState().messages.filter((m) => m.conversationId === convId)
-		setQaDeleteBusy(true)
-		setQaDeleteError(null)
+		const convId = qaDeleteDialog.conversationId;
+		const msgs = useChatStore
+			.getState()
+			.messages.filter((m) => m.conversationId === convId);
+		setQaDeleteBusy(true);
+		setQaDeleteError(null);
 		try {
-			markConversationDirty(convId)
-			const result = await flushQaForConversation(convId, msgs, s.project.path, s.llmConfig, s.searchApiConfig)
+			markConversationDirty(convId);
+			const result = await flushQaForConversation(
+				convId,
+				msgs,
+				s.project.path,
+				s.llmConfig,
+				s.searchApiConfig,
+			);
 			if (!result.ok) {
-				setQaDeleteError(result.error || t("chat.qaDelete.failed"))
-				return
+				setQaDeleteError(result.error || t("chat.qaDelete.failed"));
+				return;
 			}
-			deleteConversationFiles(convId)
-			setQaDeleteDialog(null)
+			deleteConversationFiles(convId);
+			setQaDeleteDialog(null);
 		} catch (err) {
-			setQaDeleteError(err instanceof Error ? err.message : String(err))
+			setQaDeleteError(err instanceof Error ? err.message : String(err));
 		} finally {
-			setQaDeleteBusy(false)
+			setQaDeleteBusy(false);
 		}
 	}
 	useEffect(() => {
-		if (!menu) return
-		const close = () => setMenu(null)
-		window.addEventListener("click", close)
-		window.addEventListener("keydown", close)
+		if (!menu) return;
+		const close = () => setMenu(null);
+		window.addEventListener("click", close);
+		window.addEventListener("keydown", close);
 		return () => {
-			window.removeEventListener("click", close)
-			window.removeEventListener("keydown", close)
-		}
-	}, [menu])
+			window.removeEventListener("click", close);
+			window.removeEventListener("keydown", close);
+		};
+	}, [menu]);
 	return (
 		<div className="flex h-full w-[200px] flex-shrink-0 flex-col border-r bg-muted/30">
 			<div className="border-b p-2">
@@ -277,8 +337,8 @@ function ConversationSidebar() {
 					</p>
 				) : (
 					sorted.map((conv) => {
-						const isActive = conv.id === activeConversationId
-						const msgCount = getMessageCount(conv.id)
+						const isActive = conv.id === activeConversationId;
+						const msgCount = getMessageCount(conv.id);
 						return (
 							<div
 								key={conv.id}
@@ -292,17 +352,24 @@ function ConversationSidebar() {
 									if (prevId && prevId !== conv.id) {
 										const msgs = useChatStore.getState().messages;
 										const s = useWikiStore.getState();
-										if (s.project) flushQaForConversation(prevId, msgs, s.project.path, s.llmConfig, s.searchApiConfig).catch(() => {});
+										if (s.project)
+											flushQaForConversation(
+												prevId,
+												msgs,
+												s.project.path,
+												s.llmConfig,
+												s.searchApiConfig,
+											).catch(() => {});
 									}
 									setActiveConversation(conv.id);
 								}}
 								onContextMenu={(event) => {
-									event.preventDefault()
+									event.preventDefault();
 									setMenu({
 										conversationId: conv.id,
 										x: event.clientX,
 										y: event.clientY,
-									})
+									});
 								}}
 								onMouseEnter={() => setHoveredId(conv.id)}
 								onMouseLeave={() => setHoveredId(null)}
@@ -315,8 +382,8 @@ function ConversationSidebar() {
 										<button
 											className="flex-shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
 											onClick={(e) => {
-												e.stopPropagation()
-												requestDeleteConversation(conv.id, conv.title)
+												e.stopPropagation();
+												requestDeleteConversation(conv.id, conv.title);
 											}}
 										>
 											<Trash2 className="h-3 w-3" />
@@ -328,12 +395,14 @@ function ConversationSidebar() {
 									{msgCount > 0 && (
 										<>
 											<span>·</span>
-											<span>{msgCount} {t("chat.msgCount")}</span>
+											<span>
+												{msgCount} {t("chat.msgCount")}
+											</span>
 										</>
 									)}
 								</div>
 							</div>
-						)
+						);
 					})
 				)}
 			</div>
@@ -345,11 +414,14 @@ function ConversationSidebar() {
 				>
 					<button
 						type="button"
-						disabled={!conversations.find((conv) => conv.id === menu.conversationId)?.agentSessionId}
+						disabled={
+							!conversations.find((conv) => conv.id === menu.conversationId)
+								?.agentSessionId
+						}
 						className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
 						onClick={() => {
-							forkAgentConversation(menu.conversationId)
-							setMenu(null)
+							forkAgentConversation(menu.conversationId);
+							setMenu(null);
 						}}
 					>
 						<GitFork className="h-3.5 w-3.5" />
@@ -360,14 +432,19 @@ function ConversationSidebar() {
 			<Dialog
 				open={Boolean(qaDeleteDialog)}
 				onOpenChange={(open) => {
-					if (!open && !qaDeleteBusy) setQaDeleteDialog(null)
+					if (!open && !qaDeleteBusy) setQaDeleteDialog(null);
 				}}
 			>
-				<DialogContent className="w-[calc(100vw-2rem)] max-w-md" showCloseButton={!qaDeleteBusy}>
+				<DialogContent
+					className="w-[calc(100vw-2rem)] max-w-md"
+					showCloseButton={!qaDeleteBusy}
+				>
 					<DialogHeader>
 						<DialogTitle>{t("chat.qaDelete.title")}</DialogTitle>
 						<DialogDescription>
-							{t("chat.qaDelete.description", { title: qaDeleteDialog?.title || "" })}
+							{t("chat.qaDelete.description", {
+								title: qaDeleteDialog?.title || "",
+							})}
 						</DialogDescription>
 					</DialogHeader>
 					{qaDeleteError && (
@@ -389,9 +466,9 @@ function ConversationSidebar() {
 							variant="outline"
 							disabled={qaDeleteBusy}
 							onClick={() => {
-								if (!qaDeleteDialog) return
-								deleteConversationFiles(qaDeleteDialog.conversationId)
-								setQaDeleteDialog(null)
+								if (!qaDeleteDialog) return;
+								deleteConversationFiles(qaDeleteDialog.conversationId);
+								setQaDeleteDialog(null);
 							}}
 						>
 							{t("chat.qaDelete.deleteWithoutQa")}
@@ -400,64 +477,84 @@ function ConversationSidebar() {
 							type="button"
 							disabled={qaDeleteBusy}
 							onClick={() => {
-								void extractQaThenDelete()
+								void extractQaThenDelete();
 							}}
 						>
-							{qaDeleteBusy ? t("chat.qaDelete.extracting") : t("chat.qaDelete.extractAndDelete")}
+							{qaDeleteBusy
+								? t("chat.qaDelete.extracting")
+								: t("chat.qaDelete.extractAndDelete")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 		</div>
-	)
+	);
 }
 export function ChatPanel() {
-	const { t } = useTranslation()
-	useSourceFiles() // Keep source file cache warm
-	const activeConversationId = useChatStore((s) => s.activeConversationId)
-	const isStreaming = useChatStore((s) => s.isStreaming)
-	const streamingContent = useChatStore((s) => s.streamingContent)
-	const mode = useChatStore((s) => s.mode)
-	const addMessage = useChatStore((s) => s.addMessage)
-	const setStreaming = useChatStore((s) => s.setStreaming)
-	const setMode = useChatStore((s) => s.setMode)
-	const appendStreamToken = useChatStore((s) => s.appendStreamToken)
-	const finalizeStream = useChatStore((s) => s.finalizeStream)
-	const createConversation = useChatStore((s) => s.createConversation)
-	const removeLastAssistantMessage = useChatStore((s) => s.removeLastAssistantMessage)
-	const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
-	const startAgentStreamMessage = useChatStore((s) => s.startAgentStreamMessage)
-	const updateAgentStreamMessage = useChatStore((s) => s.updateAgentStreamMessage)
-	const finishAgentStreamMessage = useChatStore((s) => s.finishAgentStreamMessage)
-	const setAgentToolCalls = useChatStore((s) => s.setAgentToolCalls)
-	const updateAgentProgress = useChatStore((s) => s.updateAgentProgress)
-	const appendAgentWikiChange = useChatStore((s) => s.appendAgentWikiChange)
-	const markAgentMessageRewindable = useChatStore((s) => s.markAgentMessageRewindable)
-	const requestAgentRewind = useChatStore((s) => s.requestAgentRewind)
-	const requestAgentPermission = useChatStore((s) => s.requestAgentPermission)
-	const clearAgentPermissionRequests = useChatStore((s) => s.clearAgentPermissionRequests)
-	const agentRewindTargets = useChatStore((s) => s.agentRewindTargets)
- 	// Derive active messages via selector to re-render on message changes
-	const allMessages = useChatStore((s) => s.messages)
+	const { t } = useTranslation();
+	useSourceFiles(); // Keep source file cache warm
+	const activeConversationId = useChatStore((s) => s.activeConversationId);
+	const isStreaming = useChatStore((s) => s.isStreaming);
+	const streamingContent = useChatStore((s) => s.streamingContent);
+	const mode = useChatStore((s) => s.mode);
+	const addMessage = useChatStore((s) => s.addMessage);
+	const setStreaming = useChatStore((s) => s.setStreaming);
+	const setMode = useChatStore((s) => s.setMode);
+	const appendStreamToken = useChatStore((s) => s.appendStreamToken);
+	const finalizeStream = useChatStore((s) => s.finalizeStream);
+	const createConversation = useChatStore((s) => s.createConversation);
+	const removeLastAssistantMessage = useChatStore(
+		(s) => s.removeLastAssistantMessage,
+	);
+	const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages);
+	const startAgentStreamMessage = useChatStore(
+		(s) => s.startAgentStreamMessage,
+	);
+	const updateAgentStreamMessage = useChatStore(
+		(s) => s.updateAgentStreamMessage,
+	);
+	const finishAgentStreamMessage = useChatStore(
+		(s) => s.finishAgentStreamMessage,
+	);
+	const setAgentToolCalls = useChatStore((s) => s.setAgentToolCalls);
+	const updateAgentProgress = useChatStore((s) => s.updateAgentProgress);
+	const appendAgentWikiChange = useChatStore((s) => s.appendAgentWikiChange);
+	const markAgentMessageRewindable = useChatStore(
+		(s) => s.markAgentMessageRewindable,
+	);
+	const requestAgentRewind = useChatStore((s) => s.requestAgentRewind);
+	const requestAgentPermission = useChatStore((s) => s.requestAgentPermission);
+	const clearAgentPermissionRequests = useChatStore(
+		(s) => s.clearAgentPermissionRequests,
+	);
+	const agentRewindTargets = useChatStore((s) => s.agentRewindTargets);
+	// Derive active messages via selector to re-render on message changes
+	const allMessages = useChatStore((s) => s.messages);
 	const activeMessages = activeConversationId
 		? allMessages.filter((m) => m.conversationId === activeConversationId)
-		: []
-	const project = useWikiStore((s) => s.project)
-	const llmConfig = useWikiStore((s) => s.llmConfig)
-	const searchApiConfig = useWikiStore((s) => s.searchApiConfig)
-	const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt)
-	const setFileTree = useWikiStore((s) => s.setFileTree)
-	const abortRef = useRef<AbortController | null>(null)
-	const scrollContainerRef = useRef<HTMLDivElement>(null)
-	const bottomRef = useRef<HTMLDivElement>(null)
-	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle")
- 	// Auto-scroll to bottom when messages change or streaming content updates
+		: [];
+	const project = useWikiStore((s) => s.project);
+	const llmConfig = useWikiStore((s) => s.llmConfig);
+	const searchApiConfig = useWikiStore((s) => s.searchApiConfig);
+	const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt);
+	const setFileTree = useWikiStore((s) => s.setFileTree);
+	const abortRef = useRef<AbortController | null>(null);
+	// Abort any in-flight agent/LLM stream on unmount to prevent stale callbacks
 	useEffect(() => {
-		const container = scrollContainerRef.current
+		return () => {
+			abortRef.current?.abort();
+		};
+	}, []);
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
+	const bottomRef = useRef<HTMLDivElement>(null);
+	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle");
+	// Auto-scroll to bottom when messages change or streaming content updates
+	useEffect(() => {
+		const container = scrollContainerRef.current;
 		if (container) {
-			container.scrollTop = container.scrollHeight
+			container.scrollTop = container.scrollHeight;
 		}
-	}, [activeMessages, streamingContent])
+	}, [activeMessages, streamingContent]);
 
 	// Startup: flush any QA pending from last session
 	useEffect(() => {
@@ -466,79 +563,93 @@ export function ChatPanel() {
 			const msgs = useChatStore.getState().messages;
 			const s = useWikiStore.getState();
 			if (s.project && msgs.length > 0) {
-				flushAllPendingQa(msgs, s.project.path, s.llmConfig, s.searchApiConfig)
-					.catch((err: unknown) => console.warn("[QA Hook] startup flush failed:", err));
+				flushAllPendingQa(
+					msgs,
+					s.project.path,
+					s.llmConfig,
+					s.searchApiConfig,
+				).catch((err: unknown) =>
+					console.warn("[QA Hook] startup flush failed:", err),
+				);
 			}
 		}
 	}, []);
 
 	const handleAgentSend = useCallback(
 		async (text: string) => {
-			let convId = useChatStore.getState().activeConversationId
+			let convId = useChatStore.getState().activeConversationId;
 			if (!convId) {
-				convId = createConversation()
+				convId = createConversation();
 			}
 
-			const activeConversation = useChatStore.getState().conversations.find(
-				(conversation) => conversation.id === convId,
-			)
-			const agentSessionId = activeConversation?.agentSessionId
+			const activeConversation = useChatStore
+				.getState()
+				.conversations.find((conversation) => conversation.id === convId);
+			const agentSessionId = activeConversation?.agentSessionId;
 			addMessage("user", text, {
 				mode: "agent",
 				agentSessionId,
-			})
+			});
 
-			const messageId = startAgentStreamMessage({ agentSessionId })
-			if (!messageId) return
+			const messageId = startAgentStreamMessage({ agentSessionId });
+			if (!messageId) return;
 
-			let accumulated = ""
-			let settled = false
-			let streamId: string | undefined
+			let accumulated = "";
+			let settled = false;
+			let streamId: string | undefined;
 
 			const formatAgentError = (kind: AgentErrorKind, detail?: string) => {
-				const key = agentErrorI18nKey(kind)
+				const key = agentErrorI18nKey(kind);
 				return key === "agent.error.failed"
 					? t(key, { error: detail || t("agent.status.failed") })
-					: t(key)
-			}
+					: t(key);
+			};
 
 			const finishAgentError = (kind: AgentErrorKind, detail?: string) => {
-				if (settled) return
-				settled = true
-				finishAgentStreamMessage(messageId, formatAgentError(kind, detail), undefined, {
-					agentErrorKind: kind,
-				})
-				abortRef.current = null
-				setAgentRunPhase("idle")
-			}
+				if (settled) return;
+				settled = true;
+				finishAgentStreamMessage(
+					messageId,
+					formatAgentError(kind, detail),
+					undefined,
+					{
+						agentErrorKind: kind,
+					},
+				);
+				abortRef.current = null;
+				setAgentRunPhase("idle");
+			};
 
-			const preflightError = getAgentPreflightError(project, llmConfig)
+			const preflightError = getAgentPreflightError(project, llmConfig);
 			if (preflightError) {
-				finishAgentError(preflightError)
-				return
+				finishAgentError(preflightError);
+				return;
 			}
 
-			const options = buildAgentTransportOptions()
+			const options = buildAgentTransportOptions();
 			if (!options) {
-				finishAgentError("unavailable")
-				return
+				finishAgentError("unavailable");
+				return;
 			}
 
-			const controller = new AbortController()
-			abortRef.current = controller
-			setAgentRunPhase("connecting")
+			const controller = new AbortController();
+			abortRef.current = controller;
+			setAgentRunPhase("connecting");
 
-			const finishAgentMessage = (content: string, stats = agentResultToStats(null)) => {
-				if (settled) return
-				settled = true
-				finishAgentStreamMessage(messageId, content, stats)
-				abortRef.current = null
-				setAgentRunPhase("idle")
-			}
+			const finishAgentMessage = (
+				content: string,
+				stats = agentResultToStats(null),
+			) => {
+				if (settled) return;
+				settled = true;
+				finishAgentStreamMessage(messageId, content, stats);
+				abortRef.current = null;
+				setAgentRunPhase("idle");
+			};
 
 			const markAgentRunning = () => {
-				setAgentRunPhase((phase) => phase === "idle" ? phase : "running")
-			}
+				setAgentRunPhase((phase) => (phase === "idle" ? phase : "running"));
+			};
 
 			try {
 				await streamAgent(
@@ -546,93 +657,101 @@ export function ChatPanel() {
 					options,
 					{
 						onStreamStart: (id) => {
-							streamId = id
+							streamId = id;
 						},
 						onToken: (token) => {
-							markAgentRunning()
-							accumulated += token
-							updateAgentStreamMessage(messageId, { content: accumulated })
+							markAgentRunning();
+							accumulated += token;
+							updateAgentStreamMessage(messageId, { content: accumulated });
 						},
 						onMessage: (message) => {
-							markAgentRunning()
+							markAgentRunning();
 							if (isSdkUserMessage(message) && message.uuid) {
 								markAgentMessageRewindable(messageId, {
 									streamId,
 									userMessageId: message.uuid,
-								})
-								return
+								});
+								return;
 							}
-							if (!isSdkAssistantMessage(message)) return
+							if (!isSdkAssistantMessage(message)) return;
 							updateAgentStreamMessage(messageId, {
 								agentBlocks: message.message.content,
-							})
+							});
 							markAgentMessageRewindable(messageId, {
 								streamId,
 								assistantMessageId: message.uuid,
-							})
+							});
 						},
 						onDone: (result) => {
-							markAgentRunning()
-							const stats = agentResultToStats(result)
-							const finalContent = accumulated || result?.result || ""
+							markAgentRunning();
+							const stats = agentResultToStats(result);
+							const finalContent = accumulated || result?.result || "";
 							if (!controller.signal.aborted) {
-								markConversationDirty(convId)
+								markConversationDirty(convId);
 							}
-							finishAgentMessage(finalContent, stats)
+							finishAgentMessage(finalContent, stats);
 						},
 						onError: (err) => {
-							const kind = classifyAgentError(err.message)
-							finishAgentError(kind, err.message)
+							const kind = classifyAgentError(err.message);
+							finishAgentError(kind, err.message);
 						},
 						onToolEvent: (event) => {
-							markAgentRunning()
+							markAgentRunning();
 							if (event.phase === "batch") {
-								const records = agentToolBatchToRecords(event)
-								if (records.length > 0) setAgentToolCalls(messageId, records)
-								return
+								const records = agentToolBatchToRecords(event);
+								if (records.length > 0) setAgentToolCalls(messageId, records);
+								return;
 							}
-							updateAgentProgress(messageId, agentToolEventToRecord(event))
+							updateAgentProgress(messageId, agentToolEventToRecord(event));
 						},
 						onPermissionRequest: (payload) => {
-							markAgentRunning()
-							return requestAgentPermission(payload)
+							markAgentRunning();
+							return requestAgentPermission(payload);
 						},
 						onWikiChanged: (payload) => {
-							markAgentRunning()
-							appendAgentWikiChange(messageId, payload)
-							const projectPath = options.projectPath ?? options.cwd ?? project?.path
+							markAgentRunning();
+							appendAgentWikiChange(messageId, payload);
+							const projectPath =
+								options.projectPath ?? options.cwd ?? project?.path;
 							refreshAgentFileTree(projectPath).catch((err) => {
-								console.warn("[agent] failed to refresh file tree:", err)
-							})
+								console.warn("[agent] failed to refresh file tree:", err);
+							});
 						},
 						onAgentSummary: (payload) => {
-							console.debug("[agent] summary:", payload)
+							console.debug("[agent] summary:", payload);
 						},
 						onActionRequired: (payload) => {
-							markAgentRunning()
-							const paths = changedPathsFromAction(payload)
-							enqueueAgentLintFromPaths(options.projectPath ?? options.cwd ?? project?.path, paths)
+							markAgentRunning();
+							const paths = changedPathsFromAction(payload);
+							enqueueAgentLintFromPaths(
+								options.projectPath ?? options.cwd ?? project?.path,
+								paths,
+							);
 						},
 						onRewindFiles: (payload: AgentRewindFilesPayload) => {
-							markAgentRunning()
+							markAgentRunning();
 							if (!payload.ok) {
-								console.warn("[agent] rewind failed:", payload.error)
-								return
+								console.warn("[agent] rewind failed:", payload.error);
+								return;
 							}
-							const paths = payload.result?.filesChanged ?? []
-							const projectPath = options.projectPath ?? options.cwd ?? project?.path
-							enqueueAgentLintFromPaths(projectPath, paths)
+							const paths = payload.result?.filesChanged ?? [];
+							const projectPath =
+								options.projectPath ?? options.cwd ?? project?.path;
+							enqueueAgentLintFromPaths(projectPath, paths);
 							refreshAgentFileTree(projectPath).catch((err) => {
-								console.warn("[agent] failed to refresh file tree after rewind:", err)
-							})
+								console.warn(
+									"[agent] failed to refresh file tree after rewind:",
+									err,
+								);
+							});
 						},
 					},
 					controller.signal,
-				)
+				);
 			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err)
-				const kind = classifyAgentError(message)
-				finishAgentError(kind, message)
+				const message = err instanceof Error ? err.message : String(err);
+				const kind = classifyAgentError(message);
+				finishAgentError(kind, message);
 			}
 		},
 		[
@@ -650,33 +769,39 @@ export function ChatPanel() {
 			updateAgentProgress,
 			updateAgentStreamMessage,
 		],
-	)
+	);
 
- 	const handleSend = useCallback(
-		async (text: string, options: ChatSendOptions = { useWebSearch: false, useAnyTxtSearch: false }) => {
+	const handleSend = useCallback(
+		async (
+			text: string,
+			options: ChatSendOptions = {
+				useWebSearch: false,
+				useAnyTxtSearch: false,
+			},
+		) => {
 			if (mode === "agent") {
-				await handleAgentSend(text)
-				return
+				await handleAgentSend(text);
+				return;
 			}
 
 			// Auto-create a conversation if none is active
-			let convId = useChatStore.getState().activeConversationId
+			let convId = useChatStore.getState().activeConversationId;
 			if (!convId) {
-				convId = createConversation()
+				convId = createConversation();
 			}
- 			addMessage("user", text)
-			setStreaming(true)
- 			// Build system prompt with wiki context using graph-enhanced retrieval
-			const systemMessages: LLMMessage[] = []
-			let queryRefs: MessageReference[] = []
-			let langReminder: string | undefined
+			addMessage("user", text);
+			setStreaming(true);
+			// Build system prompt with wiki context using graph-enhanced retrieval
+			const systemMessages: LLMMessage[] = [];
+			let queryRefs: MessageReference[] = [];
+			let langReminder: string | undefined;
 			// Pure greetings ("hi", "你好", "嗨") don't warrant running the whole
 			// retrieval pipeline — it's slow, costs context, and drags in random
 			// wiki pages the user clearly didn't ask about. Short-circuit with a
 			// minimal system prompt and let the model reply conversationally.
-			const greetingOnly = isGreeting(text)
+			const greetingOnly = isGreeting(text);
 			if (project && greetingOnly) {
-				const outLang = getOutputLanguage(text)
+				const outLang = getOutputLanguage(text);
 				systemMessages.push({
 					role: "system",
 					content: [
@@ -686,12 +811,12 @@ export function ChatPanel() {
 						"",
 						`Respond in ${outLang}.`,
 					].join("\n"),
-				})
+				});
 				// Skip retrieval; queryRefs stays empty so no "Sources" chip is shown.
 			} else if (project) {
-				const pp = normalizePath(project.path)
-				const dataVersion = useWikiStore.getState().dataVersion
- 				// ── Budget allocation (see context-budget.ts) ─────────
+				const pp = normalizePath(project.path);
+				const dataVersion = useWikiStore.getState().dataVersion;
+				// ── Budget allocation (see context-budget.ts) ─────────
 				// Page budget scales with the LLM's context window; we now
 				// also reserve ~15% as headroom for the response so the
 				// model isn't truncated mid-sentence on a packed prompt.
@@ -699,138 +824,178 @@ export function ChatPanel() {
 					indexBudget: INDEX_BUDGET,
 					pageBudget: PAGE_BUDGET,
 					maxPageSize: MAX_PAGE_SIZE,
-				} = computeContextBudget(llmConfig.maxContextSize)
- 				const [rawIndex, purpose] = await Promise.all([
+				} = computeContextBudget(llmConfig.maxContextSize);
+				const [rawIndex, purpose] = await Promise.all([
 					readFile(`${pp}/wiki/index.md`).catch(() => ""),
 					readFile(`${pp}/purpose.md`).catch(() => ""),
-				])
- 				// ── Phase 1: Tokenized search → top 10 ────────────────
-				const searchResults = await searchWiki(pp, text)
-				const topSearchResults = searchResults.slice(0, 10)
- 				const resolvedExternalSearchConfig = resolveSearchConfig(searchApiConfig)
-				const externalSearchResults: WebSearchResult[] = []
-				const externalSearchErrors: string[] = []
-				const externalCalls: Promise<WebSearchResult[]>[] = []
- 				if (options.useWebSearch) {
+				]);
+				// ── Phase 1: Tokenized search → top 10 ────────────────
+				const searchResults = await searchWiki(pp, text);
+				const topSearchResults = searchResults.slice(0, 10);
+				const resolvedExternalSearchConfig =
+					resolveSearchConfig(searchApiConfig);
+				const externalSearchResults: WebSearchResult[] = [];
+				const externalSearchErrors: string[] = [];
+				const externalCalls: Promise<WebSearchResult[]>[] = [];
+				if (options.useWebSearch) {
 					externalCalls.push(
 						webSearch(text, resolvedExternalSearchConfig, 5).catch((err) => {
 							externalSearchErrors.push(
 								`Web Search: ${err instanceof Error ? err.message : String(err)}`,
-							)
-							return []
+							);
+							return [];
 						}),
-					)
+					);
 				}
- 				if (options.useAnyTxtSearch) {
+				if (options.useAnyTxtSearch) {
 					externalCalls.push(
-						anyTxtSearchSmart(text, resolvedExternalSearchConfig.anyTxt, llmConfig, 5, pp).catch((err) => {
+						anyTxtSearchSmart(
+							text,
+							resolvedExternalSearchConfig.anyTxt,
+							llmConfig,
+							5,
+							pp,
+						).catch((err) => {
 							externalSearchErrors.push(
 								`AnyTXT: ${err instanceof Error ? err.message : String(err)}`,
-							)
-							return []
+							);
+							return [];
 						}),
-					)
+					);
 				}
- 				if (externalCalls.length > 0) {
-					const batches = await Promise.all(externalCalls)
-					const seenExternal = new Set<string>()
+				if (externalCalls.length > 0) {
+					const batches = await Promise.all(externalCalls);
+					const seenExternal = new Set<string>();
 					for (const result of batches.flat()) {
-						const key = result.url || `${result.source}:${result.title}:${result.snippet}`
-						if (seenExternal.has(key)) continue
-						seenExternal.add(key)
-						externalSearchResults.push(result)
-						if (externalSearchResults.length >= 10) break
+						const key =
+							result.url ||
+							`${result.source}:${result.title}:${result.snippet}`;
+						if (seenExternal.has(key)) continue;
+						seenExternal.add(key);
+						externalSearchResults.push(result);
+						if (externalSearchResults.length >= 10) break;
 					}
 				}
- 				// ── Trim index by relevance if over budget ─────────────
-				let index = rawIndex
+				// ── Trim index by relevance if over budget ─────────────
+				let index = rawIndex;
 				if (rawIndex.length > INDEX_BUDGET) {
-					const { tokenizeQuery } = await import("@/lib/search")
-					const tokens = tokenizeQuery(text)
-					const lines = rawIndex.split("\n")
-					const keptLines: string[] = []
-					let keptSize = 0
- 					for (const line of lines) {
-						const isHeader = line.startsWith("##")
-						const lower = line.toLowerCase()
-						const isRelevant = tokens.some((t) => lower.includes(t))
- 						if (isHeader || isRelevant) {
+					const { tokenizeQuery } = await import("@/lib/search");
+					const tokens = tokenizeQuery(text);
+					const lines = rawIndex.split("\n");
+					const keptLines: string[] = [];
+					let keptSize = 0;
+					for (const line of lines) {
+						const isHeader = line.startsWith("##");
+						const lower = line.toLowerCase();
+						const isRelevant = tokens.some((t) => lower.includes(t));
+						if (isHeader || isRelevant) {
 							if (keptSize + line.length + 1 <= INDEX_BUDGET) {
-								keptLines.push(line)
-								keptSize += line.length + 1
+								keptLines.push(line);
+								keptSize += line.length + 1;
 							}
 						}
 					}
-					index = keptLines.join("\n")
+					index = keptLines.join("\n");
 					if (index.length < rawIndex.length) {
-						index += "\n\n[...index trimmed to relevant entries...]"
+						index += "\n\n[...index trimmed to relevant entries...]";
 					}
 				}
- 				// ── Phase 2: Graph 1-level expansion ───────────────────
+				// ── Phase 2: Graph 1-level expansion ───────────────────
 				// Note: Vector search (if enabled) is already merged into searchResults
 				// by searchWiki() in search.ts — no duplicate code needed here.
-				const graph = await buildRetrievalGraph(pp, dataVersion)
-				const expandedIds = new Set<string>()
-				const searchHitPaths = new Set(topSearchResults.map((r) => r.path))
-				const graphExpansions: { title: string; path: string; relevance: number }[] = []
- 				for (const result of topSearchResults) {
-					const fileName = getFileName(result.path)
-					const nodeId = fileName.replace(/\.md$/, "")
-					const related = getRelatedNodes(nodeId, graph, 3)
+				const graph = await buildRetrievalGraph(pp, dataVersion);
+				const expandedIds = new Set<string>();
+				const searchHitPaths = new Set(topSearchResults.map((r) => r.path));
+				const graphExpansions: {
+					title: string;
+					path: string;
+					relevance: number;
+				}[] = [];
+				for (const result of topSearchResults) {
+					const fileName = getFileName(result.path);
+					const nodeId = fileName.replace(/\.md$/, "");
+					const related = getRelatedNodes(nodeId, graph, 3);
 					for (const { node, relevance } of related) {
-						if (relevance < 2.0) continue
-						if (searchHitPaths.has(node.path)) continue
-						if (expandedIds.has(node.id)) continue
-						expandedIds.add(node.id)
-						graphExpansions.push({ title: node.title, path: node.path, relevance })
+						if (relevance < 2.0) continue;
+						if (searchHitPaths.has(node.path)) continue;
+						if (expandedIds.has(node.id)) continue;
+						expandedIds.add(node.id);
+						graphExpansions.push({
+							title: node.title,
+							path: node.path,
+							relevance,
+						});
 					}
 				}
-				graphExpansions.sort((a, b) => b.relevance - a.relevance)
- 				// ── Phase 3 & 4: Page budget control ───────────────────
-				let usedChars = 0
-				type PageEntry = { title: string; path: string; content: string; priority: number }
-				const relevantPages: PageEntry[] = []
- 				const tryAddPage = async (title: string, filePath: string, priority: number): Promise<boolean> => {
-					if (usedChars >= PAGE_BUDGET) return false
+				graphExpansions.sort((a, b) => b.relevance - a.relevance);
+				// ── Phase 3 & 4: Page budget control ───────────────────
+				let usedChars = 0;
+				type PageEntry = {
+					title: string;
+					path: string;
+					content: string;
+					priority: number;
+				};
+				const relevantPages: PageEntry[] = [];
+				const tryAddPage = async (
+					title: string,
+					filePath: string,
+					priority: number,
+				): Promise<boolean> => {
+					if (usedChars >= PAGE_BUDGET) return false;
 					try {
-						const raw = await readFile(filePath)
-						const relativePath = getRelativePath(filePath, pp)
-						const truncated = raw.length > MAX_PAGE_SIZE
-							? raw.slice(0, MAX_PAGE_SIZE) + "\n\n[...truncated...]"
-							: raw
-						if (usedChars + truncated.length > PAGE_BUDGET) return false
-						usedChars += truncated.length
-						relevantPages.push({ title, path: relativePath, content: truncated, priority })
-						return true
-					} catch { return false }
-				}
- 				// P0: Title matches
+						const raw = await readFile(filePath);
+						const relativePath = getRelativePath(filePath, pp);
+						const truncated =
+							raw.length > MAX_PAGE_SIZE
+								? raw.slice(0, MAX_PAGE_SIZE) + "\n\n[...truncated...]"
+								: raw;
+						if (usedChars + truncated.length > PAGE_BUDGET) return false;
+						usedChars += truncated.length;
+						relevantPages.push({
+							title,
+							path: relativePath,
+							content: truncated,
+							priority,
+						});
+						return true;
+					} catch {
+						return false;
+					}
+				};
+				// P0: Title matches
 				for (const r of topSearchResults.filter((r) => r.titleMatch)) {
-					await tryAddPage(r.title, r.path, 0)
+					await tryAddPage(r.title, r.path, 0);
 				}
 				// P1: Content matches
 				for (const r of topSearchResults.filter((r) => !r.titleMatch)) {
-					await tryAddPage(r.title, r.path, 1)
+					await tryAddPage(r.title, r.path, 1);
 				}
 				// P2: Graph expansions
 				for (const exp of graphExpansions) {
-					await tryAddPage(exp.title, exp.path, 2)
+					await tryAddPage(exp.title, exp.path, 2);
 				}
 				// P3: Overview fallback
 				if (relevantPages.length === 0) {
-					await tryAddPage("Overview", `${pp}/wiki/overview.md`, 3)
+					await tryAddPage("Overview", `${pp}/wiki/overview.md`, 3);
 				}
- 				const pagesContext = relevantPages.length > 0
-					? relevantPages.map((p, i) =>
-							`### [${i + 1}] ${p.title}\nPath: ${p.path}\n\n${p.content}`
-						).join("\n\n---\n\n")
-					: "(No wiki pages found)"
- 				const pageList = relevantPages.map((p, i) =>
-					`[${i + 1}] ${p.title} (${p.path})`
-				).join("\n")
-				const externalContext = formatExternalSearchContext(externalSearchResults)
- 				const outLang = getOutputLanguage(text)
- 				systemMessages.push({
+				const pagesContext =
+					relevantPages.length > 0
+						? relevantPages
+								.map(
+									(p, i) =>
+										`### [${i + 1}] ${p.title}\nPath: ${p.path}\n\n${p.content}`,
+								)
+								.join("\n\n---\n\n")
+						: "(No wiki pages found)";
+				const pageList = relevantPages
+					.map((p, i) => `[${i + 1}] ${p.title} (${p.path})`)
+					.join("\n");
+				const externalContext = formatExternalSearchContext(
+					externalSearchResults,
+				);
+				const outLang = getOutputLanguage(text);
+				systemMessages.push({
 					role: "system",
 					content: [
 						"You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
@@ -867,28 +1032,40 @@ export function ChatPanel() {
 						`Ignore the language of the wiki content. Write in ${outLang} only.`,
 						`Even proper nouns should use standard ${outLang} transliteration when appropriate.`,
 						`DO NOT use any other language. This overrides all other instructions.`,
-					].filter(Boolean).join("\n"),
-				})
- 				// Reminder injected later, right before the user's current message
+					]
+						.filter(Boolean)
+						.join("\n"),
+				});
+				// Reminder injected later, right before the user's current message
 				// (after history so it's the last system instruction the LLM sees).
-				langReminder = buildLanguageReminder(text)
- 				lastQueryPages = relevantPages.map((p) => ({ title: p.title, path: p.path }))
-				const externalRefs: MessageReference[] = externalSearchResults.map((result) => ({
-					title: result.title,
-					path: result.url,
-					kind: "external",
-					source: result.source,
-					url: result.url,
-					snippet: result.snippet,
-				}))
-				queryRefs = [...lastQueryPages.map((page) => ({ ...page, kind: "wiki" as const })), ...externalRefs]
+				langReminder = buildLanguageReminder(text);
+				lastQueryPages = relevantPages.map((p) => ({
+					title: p.title,
+					path: p.path,
+				}));
+				const externalRefs: MessageReference[] = externalSearchResults.map(
+					(result) => ({
+						title: result.title,
+						path: result.url,
+						kind: "external",
+						source: result.source,
+						url: result.url,
+						snippet: result.snippet,
+					}),
+				);
+				queryRefs = [
+					...lastQueryPages.map((page) => ({ ...page, kind: "wiki" as const })),
+					...externalRefs,
+				];
 			}
- 			// ── Conversation history with count limit ────────────────
+			// ── Conversation history with count limit ────────────────
 			// Only include messages from the active conversation, last N messages
-			const activeConvMessages = useChatStore.getState().getActiveMessages()
+			const activeConvMessages = useChatStore
+				.getState()
+				.getActiveMessages()
 				.filter((m) => m.role === "user" || m.role === "assistant")
-				.slice(-maxHistoryMessages)
- 			// Prepend the language reminder onto the final user turn rather than
+				.slice(-maxHistoryMessages);
+			// Prepend the language reminder onto the final user turn rather than
 			// inserting a second {role:"system"} between history and the final
 			// user message. vLLM / llama.cpp / Ollama drive their chat templates
 			// from HF Jinja, and Qwen3-family templates enforce "system only at
@@ -896,134 +1073,154 @@ export function ChatPanel() {
 			// "System message must be at the beginning." (HTTP 400). OpenAI and
 			// Anthropic are more lenient, but keeping a single system at the top
 			// is the safest shape across every OpenAI-compatible backend.
-			const historyMessages = chatMessagesToLLM(activeConvMessages)
-			let llmMessages: LLMMessage[] = [...systemMessages, ...historyMessages]
+			const historyMessages = chatMessagesToLLM(activeConvMessages);
+			let llmMessages: LLMMessage[] = [...systemMessages, ...historyMessages];
 			if (langReminder && historyMessages.length > 0) {
-				const lastIdx = llmMessages.length - 1
-				const last = llmMessages[lastIdx]
+				const lastIdx = llmMessages.length - 1;
+				const last = llmMessages[lastIdx];
 				if (last && last.role === "user") {
 					llmMessages = [
 						...llmMessages.slice(0, lastIdx),
 						{ role: "user", content: `[${langReminder}]\n\n${last.content}` },
-					]
+					];
 				}
 			}
- 			const controller = new AbortController()
-			abortRef.current = controller
- 			let accumulated = ""
-			let thinkingOpen = false
- 			const appendReasoning = (token: string) => {
-				if (!token) return
+			const controller = new AbortController();
+			abortRef.current = controller;
+			let accumulated = "";
+			let thinkingOpen = false;
+			const appendReasoning = (token: string) => {
+				if (!token) return;
 				if (!thinkingOpen) {
-					thinkingOpen = true
-					accumulated += "<think>"
-					appendStreamToken("<think>")
+					thinkingOpen = true;
+					accumulated += "<think>";
+					appendStreamToken("<think>");
 				}
-				accumulated += token
-				appendStreamToken(token)
-			}
- 			const closeReasoning = () => {
-				if (!thinkingOpen) return
-				thinkingOpen = false
-				accumulated += "</think>"
-				appendStreamToken("</think>")
-			}
- 			await streamChat(
+				accumulated += token;
+				appendStreamToken(token);
+			};
+			const closeReasoning = () => {
+				if (!thinkingOpen) return;
+				thinkingOpen = false;
+				accumulated += "</think>";
+				appendStreamToken("</think>");
+			};
+			await streamChat(
 				llmConfig,
 				llmMessages,
 				{
 					onToken: (token) => {
-						closeReasoning()
-						accumulated += token
-						appendStreamToken(token)
+						closeReasoning();
+						accumulated += token;
+						appendStreamToken(token);
 					},
 					onReasoningToken: appendReasoning,
 					onDone: () => {
-						closeReasoning()
-						finalizeStream(accumulated, queryRefs)
+						closeReasoning();
+						finalizeStream(accumulated, queryRefs);
 						// QA Hook: mark conversation dirty (defer extraction to conversation switch)
 						const qaConvId = useChatStore.getState().activeConversationId;
 						if (qaConvId) markConversationDirty(qaConvId);
-						abortRef.current = null
+						abortRef.current = null;
 						// save-worthy detection removed — user has direct "Save to Wiki" button on each message
 					},
 					onError: (err) => {
-						finalizeStream(`Error: ${err.message}`, undefined)
-						abortRef.current = null
+						finalizeStream(`Error: ${err.message}`, undefined);
+						abortRef.current = null;
 					},
 				},
 				controller.signal,
-			)
+			);
 		},
-		[mode, handleAgentSend, llmConfig, searchApiConfig, project, addMessage, setStreaming, appendStreamToken, finalizeStream, createConversation, maxHistoryMessages],
-	)
+		[
+			mode,
+			handleAgentSend,
+			llmConfig,
+			searchApiConfig,
+			project,
+			addMessage,
+			setStreaming,
+			appendStreamToken,
+			finalizeStream,
+			createConversation,
+			maxHistoryMessages,
+		],
+	);
 	const handleStop = useCallback(() => {
-		abortRef.current?.abort()
-		abortRef.current = null
-		setAgentRunPhase("idle")
+		abortRef.current?.abort();
+		abortRef.current = null;
+		setAgentRunPhase("idle");
 		clearAgentPermissionRequests({
 			behavior: "deny",
 			interrupt: true,
 			message: t("agent.permission.stopped"),
 			decisionClassification: "user_reject",
-		})
-	}, [clearAgentPermissionRequests, t])
- 	const handleRegenerate = useCallback(async () => {
-		if (isStreaming) return
+		});
+	}, [clearAgentPermissionRequests, t]);
+	const handleRegenerate = useCallback(async () => {
+		if (isStreaming) return;
 		// Find the last user message in active conversation
-		const active = useChatStore.getState().getActiveMessages()
-		const lastUserMsg = [...active].reverse().find((m) => m.role === "user")
-		if (!lastUserMsg) return
+		const active = useChatStore.getState().getActiveMessages();
+		const lastUserMsg = [...active].reverse().find((m) => m.role === "user");
+		if (!lastUserMsg) return;
 		// Remove the last assistant reply, then re-send
-		removeLastAssistantMessage()
+		removeLastAssistantMessage();
 		// Small delay to let state update
-		await new Promise((r) => setTimeout(r, 50))
+		await new Promise((r) => setTimeout(r, 50));
 		// Trigger send with the same text (handleSend will add a new user message,
 		// so also remove the original to avoid duplication)
 		// Actually: just call handleSend — but it adds a user message. To avoid dupe,
 		// we remove the last user message too and let handleSend re-add it.
-		const store = useChatStore.getState()
-		const updatedActive = store.getActiveMessages()
-		const lastUser = [...updatedActive].reverse().find((m) => m.role === "user")
+		const store = useChatStore.getState();
+		const updatedActive = store.getActiveMessages();
+		const lastUser = [...updatedActive]
+			.reverse()
+			.find((m) => m.role === "user");
 		if (lastUser) {
 			useChatStore.setState((s) => ({
 				messages: s.messages.filter((m) => m.id !== lastUser.id),
-			}))
+			}));
 		}
-		handleSend(lastUserMsg.content)
-	}, [isStreaming, removeLastAssistantMessage, handleSend])
- 	const handleWriteToWiki = useCallback(async () => {
-		if (!project) return
-		const pp = normalizePath(project.path)
+		handleSend(lastUserMsg.content);
+	}, [isStreaming, removeLastAssistantMessage, handleSend]);
+	const handleWriteToWiki = useCallback(async () => {
+		if (!project) return;
+		const pp = normalizePath(project.path);
 		try {
-			await executeIngestWrites(pp, llmConfig, undefined, undefined)
+			await executeIngestWrites(pp, llmConfig, undefined, undefined);
 			try {
-				const tree = await listDirectory(pp)
-				setFileTree(tree)
+				const tree = await listDirectory(pp);
+				setFileTree(tree);
 			} catch {
 				// ignore
 			}
 		} catch (err) {
-			console.error("Failed to write to wiki:", err)
+			console.error("Failed to write to wiki:", err);
 		}
-	}, [project, llmConfig, setFileTree])
-		const agentStatusKey = mode === "agent" && isStreaming
+	}, [project, llmConfig, setFileTree]);
+	const agentStatusKey =
+		mode === "agent" && isStreaming
 			? agentRunPhaseI18nKey(agentRunPhase)
-			: null
-		const hasAssistantMessages = activeMessages.some((m) => m.role === "assistant")
-	const showWriteButton = mode === "ingest" && !isStreaming && hasAssistantMessages
- 	return (
+			: null;
+	const hasAssistantMessages = activeMessages.some(
+		(m) => m.role === "assistant",
+	);
+	const showWriteButton =
+		mode === "ingest" && !isStreaming && hasAssistantMessages;
+	return (
 		<div className="flex h-full flex-row overflow-hidden">
 			<AgentPermissionDialogHost />
 			<AgentRewindDialogHost />
 			<ConversationSidebar />
- 			<div className="flex flex-1 flex-col overflow-hidden">
+			<div className="flex flex-1 flex-col overflow-hidden">
 				{!activeConversationId ? (
 					<div className="flex flex-1 items-center justify-center text-muted-foreground">
 						<div className="text-center">
 							<MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-30" />
 							<p className="text-sm">{t("chat.startNewConversation")}</p>
-							<p className="mt-1 text-xs opacity-60">{t("chat.clickNewChatToBegin")}</p>
+							<p className="mt-1 text-xs opacity-60">
+								{t("chat.clickNewChatToBegin")}
+							</p>
 						</div>
 					</div>
 				) : (
@@ -1035,24 +1232,31 @@ export function ChatPanel() {
 							<div className="flex flex-col gap-3">
 								{activeMessages.map((msg, idx) => {
 									// Check if this is the last assistant message
-									const isLastAssistant = msg.role === "assistant" &&
-										!activeMessages.slice(idx + 1).some((m) => m.role === "assistant")
+									const isLastAssistant =
+										msg.role === "assistant" &&
+										!activeMessages
+											.slice(idx + 1)
+											.some((m) => m.role === "assistant");
 									return (
 										<ChatMessage
 											key={msg.id}
 											message={msg}
 											isLastAssistant={isLastAssistant && !isStreaming}
-											onRegenerate={isLastAssistant ? handleRegenerate : undefined}
+											onRegenerate={
+												isLastAssistant ? handleRegenerate : undefined
+											}
 											canRewind={Boolean(agentRewindTargets[msg.id])}
 											onRewind={requestAgentRewind}
 										/>
-									)
+									);
 								})}
-								{isStreaming && mode !== "agent" && <StreamingMessage content={streamingContent} />}
+								{isStreaming && mode !== "agent" && (
+									<StreamingMessage content={streamingContent} />
+								)}
 								<div ref={bottomRef} />
 							</div>
 						</div>
- 						{showWriteButton && (
+						{showWriteButton && (
 							<div className="border-t px-3 py-2">
 								<Button
 									variant="outline"
@@ -1068,8 +1272,8 @@ export function ChatPanel() {
 					</>
 				)}
 				<div className="border-t bg-muted/20 px-3 py-2">
-						<div className="flex flex-wrap items-center justify-between gap-2">
-							<div className="inline-flex max-w-full flex-wrap rounded-lg bg-muted p-0.5">
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<div className="inline-flex max-w-full flex-wrap rounded-lg bg-muted p-0.5">
 							<ModeButton
 								active={mode === "chat"}
 								disabled={isStreaming}
@@ -1104,7 +1308,8 @@ export function ChatPanel() {
 										</span>
 										<span className="hidden sm:inline">·</span>
 										<span>
-											{t("agent.config.permissionPolicy")}: {t("agent.config.defaultPolicy")}
+											{t("agent.config.permissionPolicy")}:{" "}
+											{t("agent.config.defaultPolicy")}
 										</span>
 									</>
 								) : (
@@ -1113,15 +1318,15 @@ export function ChatPanel() {
 							</div>
 						)}
 					</div>
-					</div>
-					{agentStatusKey && (
-						<div className="border-t bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-							<div className="flex items-center gap-2">
-								<Loader2 className="h-3.5 w-3.5 animate-spin" />
-								<span>{t(agentStatusKey)}</span>
-							</div>
+				</div>
+				{agentStatusKey && (
+					<div className="border-t bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+						<div className="flex items-center gap-2">
+							<Loader2 className="h-3.5 w-3.5 animate-spin" />
+							<span>{t(agentStatusKey)}</span>
 						</div>
-					)}
+					</div>
+				)}
 				<ChatInput
 					onSend={handleSend}
 					onStop={handleStop}
@@ -1132,11 +1337,11 @@ export function ChatPanel() {
 						mode === "agent"
 							? t("agent.placeholder")
 							: mode === "ingest"
-							? t("chat.ingestPlaceholder")
-							: t("chat.typeAMessage")
+								? t("chat.ingestPlaceholder")
+								: t("chat.typeAMessage")
 					}
 				/>
 			</div>
 		</div>
-	)
+	);
 }
