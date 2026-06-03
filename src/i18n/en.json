@@ -139,7 +139,17 @@
     "useAnyTxtSearch": "AnyTXT search",
     "enableAnyTxtInSettings": "Enable AnyTXT in Settings → External Information Sources",
     "sendMessage": "Send message",
-    "stopGeneration": "Stop generation"
+    "stopGeneration": "Stop generation",
+    "qaDelete": {
+      "title": "Extract QA before deleting?",
+      "description": "\"{{title}}\" may contain useful Agent knowledge. Extract it into a QA page before deleting this conversation?",
+      "extractAndDelete": "Extract QA and Delete",
+      "extracting": "Extracting QA...",
+      "deleteWithoutQa": "Delete Without QA",
+      "cancel": "Cancel",
+      "failed": "QA extraction failed.",
+      "failedWithError": "QA extraction failed: {{error}}"
+    }
   },
   "agent": {
     "mode": {
@@ -182,8 +192,14 @@
       "noProject": "Open a project to use Agent"
     },
     "placeholder": "Ask Agent to inspect, edit, or operate on this wiki...",
+    "loading": {
+      "connecting": "Connecting to Agent...",
+      "running": "Agent is running..."
+    },
     "error": {
       "unavailable": "Agent is unavailable: no project is open.",
+      "missingApiKey": "Agent needs an API key. Configure the current provider in Settings.",
+      "timeout": "Agent timed out. You can retry this request.",
       "failed": "Agent failed: {{error}}"
     },
     "wikiChanged": {
@@ -210,7 +226,8 @@
     },
     "actions": {
       "expand": "Expand",
-      "collapse": "Collapse"
+      "collapse": "Collapse",
+      "retry": "Retry"
     },
     "permission": {
       "title": "Agent needs permission",

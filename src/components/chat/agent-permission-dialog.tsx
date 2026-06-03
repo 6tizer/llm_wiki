@@ -92,7 +92,7 @@ export function AgentPermissionDialogBody({
         </p>
       </div>
 
-      <DialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap">
+      <DialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
         <Button variant="outline" onClick={() => onAction("deny")}>
           {t("agent.permission.deny")}
         </Button>
@@ -157,7 +157,7 @@ export function AgentPermissionDialog({ request, onDecision }: AgentPermissionDi
     <Dialog open={Boolean(request)} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[90vh] max-w-2xl grid-rows-[auto_1fr_auto] overflow-hidden"
+        className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl grid-rows-[auto_1fr_auto] overflow-hidden"
         onKeyDown={handleKeyDown}
       >
         {request && (

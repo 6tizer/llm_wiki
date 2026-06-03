@@ -139,7 +139,17 @@
     "useAnyTxtSearch": "AnyTXT 搜索",
     "enableAnyTxtInSettings": "请在设置 → 外部信息源中启用 AnyTXT",
     "sendMessage": "发送消息",
-    "stopGeneration": "停止生成"
+    "stopGeneration": "停止生成",
+    "qaDelete": {
+      "title": "删除前提炼成 QA？",
+      "description": "「{{title}}」可能包含有价值的 Agent 对话知识。删除这个对话前，要先提炼成 QA 页面吗？",
+      "extractAndDelete": "提炼 QA 后删除",
+      "extracting": "正在提炼 QA...",
+      "deleteWithoutQa": "直接删除",
+      "cancel": "取消",
+      "failed": "QA 提炼失败。",
+      "failedWithError": "QA 提炼失败：{{error}}"
+    }
   },
   "agent": {
     "mode": {
@@ -182,8 +192,14 @@
       "noProject": "打开项目后可使用 Agent"
     },
     "placeholder": "让 Agent 检查、编辑或操作这个 Wiki...",
+    "loading": {
+      "connecting": "正在连接 Agent...",
+      "running": "Agent 正在运行..."
+    },
     "error": {
       "unavailable": "Agent 不可用：当前未打开项目。",
+      "missingApiKey": "Agent 需要 API key。请在设置中配置当前 provider。",
+      "timeout": "Agent 已超时。你可以重试这次请求。",
       "failed": "Agent 失败：{{error}}"
     },
     "wikiChanged": {
@@ -210,7 +226,8 @@
     },
     "actions": {
       "expand": "展开",
-      "collapse": "折叠"
+      "collapse": "折叠",
+      "retry": "重试"
     },
     "permission": {
       "title": "Agent 需要权限",

@@ -391,22 +391,17 @@ export async function streamAgent(
 			throw invokeErr;
 		}
 	} catch (err) {
-		console.error(
-			"[agent-transport] OUTER CATCH — error type:",
-			typeof err,
-			"value:",
-			err,
-		);
+		console.error("[agent-transport] error:", err);
 		finishWith(() => {
 			let message: string;
 			if (err instanceof Error) {
-				message = `[outer-catch] ${err.constructor.name}: ${err.message}`;
+				message = err.message;
 			} else if (err === null) {
-				message = "[outer-catch] null error thrown";
+				message = "null error thrown";
 			} else if (err === undefined) {
-				message = "[outer-catch] undefined error thrown";
+				message = "undefined error thrown";
 			} else {
-				message = `[outer-catch] ${typeof err}: ${String(err)}`;
+				message = String(err);
 			}
 			callbacks.onError(new Error(message));
 		});

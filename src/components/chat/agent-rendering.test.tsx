@@ -81,15 +81,33 @@ describe("agent message rendering", () => {
     expect(html).toContain("Found result")
   })
 
-  it("keeps ordinary assistant messages free of agent chrome", () => {
-    const html = renderToStaticMarkup(<ChatMessage message={assistantMessage()} />)
+	  it("keeps ordinary assistant messages free of agent chrome", () => {
+	    const html = renderToStaticMarkup(<ChatMessage message={assistantMessage()} />)
 
     expect(html).toContain("Plain answer")
     expect(html).not.toContain("Tool calls")
     expect(html).not.toContain("Agent run")
-    expect(html).not.toContain("Wiki changes")
-    expect(html).not.toContain("Rewind files")
-  })
+	    expect(html).not.toContain("Wiki changes")
+	    expect(html).not.toContain("Rewind files")
+	    expect(html).not.toContain("Retry")
+	  })
+
+	  it("renders a persistent retry action for the last agent error message", () => {
+	    const html = renderToStaticMarkup(
+	      <ChatMessage
+	        message={assistantMessage({
+	          mode: "agent",
+	          content: "Agent timed out",
+	          agentErrorKind: "timeout",
+	        })}
+	        isLastAssistant
+	        onRegenerate={() => undefined}
+	      />,
+	    )
+
+	    expect(html).toContain("Agent timed out")
+	    expect(html).toContain("Retry")
+	  })
 
   it("renders agent blocks, timeline, and cost for agent messages", () => {
     const html = renderToStaticMarkup(

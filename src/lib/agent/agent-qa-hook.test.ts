@@ -43,11 +43,19 @@ describe("shouldExtractQa", () => {
     expect(shouldExtractQa(messages).extract).toBe(false)
   })
 
-  it("returns true for substantive conversation", () => {
-    const messages = [msg("user", "Explain RAG in detail"), msg("assistant", longAnswer)]
-    expect(shouldExtractQa(messages).extract).toBe(true)
-  })
-})
+	  it("returns true for substantive conversation", () => {
+	    const messages = [msg("user", "Explain RAG in detail"), msg("assistant", longAnswer)]
+	    expect(shouldExtractQa(messages).extract).toBe(true)
+	  })
+
+	  it("accepts substantive Agent assistant content", () => {
+	    const messages = [
+	      msg("user", "Explain RAG in detail"),
+	      { ...msg("assistant", longAnswer), mode: "agent" as const },
+	    ]
+	    expect(shouldExtractQa(messages).extract).toBe(true)
+	  })
+	})
 
 // ── Dirty flag ───────────────────────────────────────────────────────────────
 

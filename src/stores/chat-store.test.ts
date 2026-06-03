@@ -80,7 +80,7 @@ describe("chat store agent data model", () => {
     })
   })
 
-  it("keeps finalizeStream ordinary assistant output free of agent metadata", () => {
+	  it("keeps finalizeStream ordinary assistant output free of agent metadata", () => {
     useChatStore.getState().createConversation()
     useChatStore.setState({ isStreaming: true, streamingContent: "partial" })
 
@@ -92,8 +92,9 @@ describe("chat store agent data model", () => {
       content: "done",
     })
     expect(message.mode).toBeUndefined()
-    expect(message.agentSessionId).toBeUndefined()
-    expect(message.costUsd).toBeUndefined()
+	    expect(message.agentSessionId).toBeUndefined()
+	    expect(message.agentErrorKind).toBeUndefined()
+	    expect(message.costUsd).toBeUndefined()
     expect(useChatStore.getState().isStreaming).toBe(false)
     expect(useChatStore.getState().streamingContent).toBe("")
   })
@@ -235,6 +236,28 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().conversations[0]).toMatchObject({
       id: convId,
       agentSessionId: "session-2",
+    })
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(useChatStore.getState().streamingContent).toBe("")
+  })
+
+  it("finishes an agent stream message with optional error metadata", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      isStreaming: true,
+      streamingContent: "partial",
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().finishAgentStreamMessage("m1", "Agent timed out", undefined, {
+      agentErrorKind: "timeout",
+    })
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      id: "m1",
+      content: "Agent timed out",
+      mode: "agent",
+      agentErrorKind: "timeout",
     })
     expect(useChatStore.getState().isStreaming).toBe(false)
     expect(useChatStore.getState().streamingContent).toBe("")
@@ -416,10 +439,11 @@ describe("chat store agent data model", () => {
         conversationId: "conv-1",
         mode: "agent",
         agentSessionId: "session-1",
-        agentBlocks: [
-          { type: "tool_use", id: "tool-1", name: "wiki_read", input: { path: "wiki/index.md" } },
-        ],
-        toolCalls: [{ toolName: "wiki_read", phase: "post", ok: true }],
+	        agentBlocks: [
+	          { type: "tool_use", id: "tool-1", name: "wiki_read", input: { path: "wiki/index.md" } },
+	        ],
+	        agentErrorKind: "timeout",
+	        toolCalls: [{ toolName: "wiki_read", phase: "post", ok: true }],
         costUsd: 0.1,
         wikiChanges: [{ path: "wiki/page.md", operation: "update", timestamp: 1 }],
         agentUserMessageId: "user-sdk-1",
