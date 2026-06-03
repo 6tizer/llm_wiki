@@ -252,12 +252,35 @@ async function scanExistingQa(projectPath: string): Promise<ExistingQa[]> {
 	return pages;
 }
 
-/** Extract significant tokens (3+ chars) from text for body overlap detection. */
+/** CJK character range (unified ideographs + extensions). */
+const CJK_RE = /[一-鿿㐀-䶿]/;
+
+/**
+ * Extract tokens for body overlap detection.
+ * - English/numbers: word tokens (3+ chars)
+ * - CJK text: character bigrams for better near-duplicate detection
+ */
 function extractTokens(text: string): Set<string> {
 	const cleaned = text.toLowerCase().replace(/[^\w一-鿿]+/g, " ");
 	const tokens = new Set<string>();
+
 	for (const word of cleaned.split(/\s+/)) {
-		if (word.length >= 3) tokens.add(word);
+		if (!word) continue;
+		// Check if word contains CJK characters
+		if (CJK_RE.test(word)) {
+			// Extract CJK bigrams
+			for (let i = 0; i < word.length - 1; i++) {
+				if (CJK_RE.test(word[i]) && CJK_RE.test(word[i + 1])) {
+					tokens.add(word[i] + word[i + 1]);
+				}
+			}
+			// Also add individual CJK chars for single-char overlap
+			for (const ch of word) {
+				if (CJK_RE.test(ch)) tokens.add(ch);
+			}
+		} else if (word.length >= 3) {
+			tokens.add(word);
+		}
 	}
 	return tokens;
 }
@@ -273,7 +296,7 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 }
 
 /** Check if a similar QA already exists (title match or body overlap). */
-function isDuplicateQa(
+export function isDuplicateQa(
 	title: string,
 	body: string | undefined,
 	existing: ExistingQa[],
