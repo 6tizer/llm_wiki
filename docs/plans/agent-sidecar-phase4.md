@@ -1,6 +1,6 @@
 # Phase 4: Agent UI 集成
 
-> 类型：Phase 实施计划 | 创建：2026-06-02 | 状态：待开始
+> 类型：Phase 实施计划 | 创建：2026-06-02 | 状态：已完成
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 前置：[Phase 3.7 计划](./agent-sidecar-phase3.7.md)
 
@@ -408,26 +408,26 @@ PR B 和 PR C 可并行开发（无文件重叠）。PR D 依赖 B 和 C 都完�
 
 Phase 4 完成时：
 
-- [ ] Chat 面板顶部显示模式切换控件（Chat / Agent / Ingest）
-- [ ] 切换到 Agent 模式后，发送消息走 `streamAgent()` 路径
-- [ ] Agent 文本响应实时 streaming 显示
-- [ ] 工具调用以 timeline 形式展示（tool name + 状态 + 耗时，可展开详情）
-- [ ] 工具调用进行中显示 spinner，完成显示绿色，失败显示红色 + error
-- [ ] 工具调用 timeline 可整体折叠/展开
-- [ ] 需要权限的工具调用弹出 Modal，用户可 Allow/Deny
-- [ ] 权限 Modal 60 秒超时自动 Deny
-- [ ] Agent 对话结束后显示成本卡片（cost, tokens, turns, duration）
-- [ ] Agent 写入 wiki 后文件树自动刷新
-- [ ] Agent session ID 自动持久化到 conversation
-- [ ] 重新打开 app 后 Agent session 可 resume
-- [ ] Conversation sidebar 支持 Fork Session
-- [ ] File checkpoint rewind 有确认 dialog
-- [ ] 普通 Chat 模式完全不受影响（回归测试）
-- [ ] 所有 Agent UI 文本有 i18n key
-- [ ] `pnpm test` 全绿
-- [ ] `pnpm lint` 无新增错误
-- [ ] `npm run typecheck` 通过
-- [ ] `npx gitnexus detect_changes` 确认仅涉及预期符号
+- [x] Chat 面板顶部显示模式切换控件（Chat / Agent / Ingest）
+- [x] 切换到 Agent 模式后，发送消息走 `streamAgent()` 路径
+- [x] Agent 文本响应实时 streaming 显示
+- [x] 工具调用以 timeline 形式展示（tool name + 状态 + 耗时，可展开详情）
+- [x] 工具调用进行中显示 spinner，完成显示绿色，失败显示红色 + error
+- [x] 工具调用 timeline 可整体折叠/展开
+- [x] 需要权限的工具调用弹出 Modal，用户可 Allow/Deny
+- [x] 权限 Modal 60 秒超时自动 Deny
+- [x] Agent 对话结束后显示成本卡片（cost, tokens, turns, duration）
+- [x] Agent 写入 wiki 后文件树自动刷新
+- [x] Agent session ID 自动持久化到 conversation
+- [x] 重新打开 app 后 Agent session 可 resume
+- [x] Conversation sidebar 支持 Fork Session
+- [x] File checkpoint rewind 有确认 dialog
+- [x] 普通 Chat 模式完全不受影响（回归测试）
+- [x] 所有 Agent UI 文本有 i18n key
+- [x] `pnpm test` 全绿
+- [x] `pnpm lint` 无新增错误
+- [x] `npm run typecheck` 通过
+- [x] `npx gitnexus detect_changes` 确认仅涉及预期符号
 
 ## 数据流总览
 
