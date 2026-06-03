@@ -118,10 +118,45 @@ function sendPermissionResponse(payload: Record<string, unknown>) {
 	});
 }
 
-export function rewindAgentFiles(streamId: string, messageId?: string) {
-	return invoke("agent_rewind_files", { streamId, messageId }).catch((err) => {
-		console.error("[agent-transport] failed to rewind agent files:", err);
+export async function rewindAgentFiles(
+	streamId: string,
+	messageId?: string,
+): Promise<AgentRewindFilesPayload> {
+	let unlisten: UnlistenFn | undefined;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let resolveResult: (payload: AgentRewindFilesPayload) => void = () => {};
+	let rejectResult: (err: Error) => void = () => {};
+	const result = new Promise<AgentRewindFilesPayload>((resolve, reject) => {
+		resolveResult = resolve;
+		rejectResult = reject;
+		timeout = setTimeout(() => {
+			reject(new Error("Timed out waiting for Agent rewind result"));
+		}, 30_000);
 	});
+
+	try {
+		unlisten = await listen<string>(`agent:${streamId}`, (event) => {
+			try {
+				const wrapper = JSON.parse(event.payload) as {
+					streamId: string;
+					type: string;
+					data: unknown;
+				};
+				if (wrapper.type !== "rewind_files") return;
+				resolveResult({
+					...(wrapper.data as AgentRewindFilesPayload),
+					streamId: wrapper.streamId,
+				});
+			} catch (err) {
+				rejectResult(err instanceof Error ? err : new Error(String(err)));
+			}
+		});
+		await invoke("agent_rewind_files", { streamId, messageId });
+		return await result;
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		unlisten?.();
+	}
 }
 
 function defaultPermissionDecision(): AgentPermissionDecision {
@@ -138,6 +173,7 @@ export async function streamAgent(
 	signal?: AbortSignal,
 ): Promise<void> {
 	const streamId = crypto.randomUUID();
+	callbacks.onStreamStart?.(streamId);
 	let unlistenData: UnlistenFn | undefined;
 	let unlistenDone: UnlistenFn | undefined;
 	let finished = false;
@@ -175,6 +211,11 @@ export async function streamAgent(
 				};
 
 				const msg = wrapper.data;
+				if (wrapper.type === "done") {
+					finishWith(() => callbacks.onDone(resultMessage));
+					return;
+				}
+
 				if (!msg) {
 					return;
 				}
@@ -246,7 +287,10 @@ export async function streamAgent(
 				}
 
 				if (wrapper.type === "rewind_files") {
-					callbacks.onRewindFiles?.(msg as AgentRewindFilesPayload);
+					callbacks.onRewindFiles?.({
+						...(msg as AgentRewindFilesPayload),
+						streamId: wrapper.streamId,
+					});
 					return;
 				}
 
