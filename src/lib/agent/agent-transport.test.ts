@@ -3,15 +3,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const tauriMocks = vi.hoisted(() => {
 	const listeners: Record<string, (event: { payload: unknown }) => void> = {};
 	return {
-		invoke: vi.fn(async (_command: string, _payload?: unknown): Promise<unknown> => undefined),
-		listen: vi.fn(async (event: string, cb: (event: { payload: unknown }) => void) => {
-			listeners[event] = cb;
-			return vi.fn(() => {
-				delete listeners[event];
-			});
-		}),
+		invoke: vi.fn(
+			async (_command: string, _payload?: unknown): Promise<unknown> =>
+				undefined,
+		),
+		listen: vi.fn(
+			async (event: string, cb: (event: { payload: unknown }) => void) => {
+				listeners[event] = cb;
+				return vi.fn(() => {
+					delete listeners[event];
+				});
+			},
+		),
 		emit: (event: string, payload: unknown) => listeners[event]?.({ payload }),
-		emitString: (event: string, payload: string) => listeners[event]?.({ payload }),
+		emitString: (event: string, payload: string) =>
+			listeners[event]?.({ payload }),
 		reset: () => {
 			for (const event of Object.keys(listeners)) {
 				delete listeners[event];
@@ -42,7 +48,10 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	tauriMocks.reset();
 	tauriMocks.invoke.mockResolvedValue(undefined);
-	appToolMocks.runAgentAppTool.mockResolvedValue({ ok: true, result: { value: "ok" } });
+	appToolMocks.runAgentAppTool.mockResolvedValue({
+		ok: true,
+		result: { value: "ok" },
+	});
 });
 
 describe("streamAgent", () => {
@@ -437,7 +446,11 @@ describe("streamAgent", () => {
 			onError: vi.fn(),
 		};
 
-		const stream = streamAgent("run app tool", { apiKey: "test-key" }, callbacks);
+		const stream = streamAgent(
+			"run app tool",
+			{ apiKey: "test-key" },
+			callbacks,
+		);
 
 		await vi.waitFor(() => {
 			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
@@ -497,7 +510,11 @@ describe("streamAgent", () => {
 			})),
 		};
 
-		const stream = streamAgent("run protected tool", { apiKey: "test-key" }, callbacks);
+		const stream = streamAgent(
+			"run protected tool",
+			{ apiKey: "test-key" },
+			callbacks,
+		);
 
 		await vi.waitFor(() => {
 			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
@@ -526,15 +543,18 @@ describe("streamAgent", () => {
 
 		await vi.waitFor(() => {
 			expect(callbacks.onPermissionRequest).toHaveBeenCalledWith(request);
-			expect(tauriMocks.invoke).toHaveBeenCalledWith("agent_permission_response", {
-				streamId: payload.args.streamId,
-				requestId: "permission-1",
-				ok: true,
-				decision: {
-					behavior: "allow",
-					updatedInput: { command: "pwd" },
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_permission_response",
+				{
+					streamId: payload.args.streamId,
+					requestId: "permission-1",
+					ok: true,
+					decision: {
+						behavior: "allow",
+						updatedInput: { command: "pwd" },
+					},
 				},
-			});
+			);
 		});
 
 		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
@@ -556,7 +576,11 @@ describe("streamAgent", () => {
 			onError: vi.fn(),
 		};
 
-		const stream = streamAgent("run protected tool", { apiKey: "test-key" }, callbacks);
+		const stream = streamAgent(
+			"run protected tool",
+			{ apiKey: "test-key" },
+			callbacks,
+		);
 
 		await vi.waitFor(() => {
 			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
@@ -580,15 +604,18 @@ describe("streamAgent", () => {
 		);
 
 		await vi.waitFor(() => {
-			expect(tauriMocks.invoke).toHaveBeenCalledWith("agent_permission_response", {
-				streamId: payload.args.streamId,
-				requestId: "permission-2",
-				ok: true,
-				decision: {
-					behavior: "deny",
-					message: "Permission request was not handled",
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_permission_response",
+				{
+					streamId: payload.args.streamId,
+					requestId: "permission-2",
+					ok: true,
+					decision: {
+						behavior: "deny",
+						message: "Permission request was not handled",
+					},
 				},
-			});
+			);
 		});
 
 		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
@@ -620,7 +647,33 @@ describe("streamAgent", () => {
 				message: "Failed to spawn agent sidecar: denied",
 			}),
 		);
-		expect(callbacks.onError.mock.calls[0]?.[0].message).not.toContain("[outer-catch]");
+		expect(callbacks.onError.mock.calls[0]?.[0].message).not.toContain(
+			"[outer-catch]",
+		);
 		expect(callbacks.onDone).not.toHaveBeenCalled();
 	});
+
+	it("does not spawn when the signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamAgent(
+			"run agent",
+			{ apiKey: "test-key" },
+			callbacks,
+			controller.signal,
+		);
+
+		expect(tauriMocks.invoke).not.toHaveBeenCalled();
+		expect(tauriMocks.listen).not.toHaveBeenCalled();
+		expect(callbacks.onDone).toHaveBeenCalledWith(null);
+		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
+});
