@@ -45,12 +45,12 @@ export function AgentToolTimeline({ toolCalls, defaultCollapsed = true }: AgentT
         onClick={() => setCollapsed((v) => !v)}
         title={collapsed ? t("agent.actions.expand") : t("agent.actions.collapse")}
         aria-label={collapsed ? t("agent.actions.expand") : t("agent.actions.collapse")}
-        className="flex w-full items-center gap-1.5 px-2.5 py-2 text-left text-muted-foreground hover:text-foreground"
+        className="flex w-full min-w-0 flex-wrap items-center gap-1.5 px-2.5 py-2 text-left text-muted-foreground hover:text-foreground"
       >
         {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         <Wrench className="h-3.5 w-3.5" />
-        <span className="font-medium">{t("agent.timeline.title")}</span>
-        <span className="ml-auto text-[10px]">
+        <span className="min-w-0 font-medium">{t("agent.timeline.title")}</span>
+        <span className="ml-auto min-w-0 text-right text-[10px]">
           {toolCalls.length}
           {running > 0 ? ` / ${t("agent.status.running")}: ${running}` : ""}
           {failed > 0 ? ` / ${t("agent.status.failed")}: ${failed}` : ""}
@@ -62,7 +62,7 @@ export function AgentToolTimeline({ toolCalls, defaultCollapsed = true }: AgentT
             const status = getAgentToolStatus(call)
             const hasDetails = call.inputPreview !== undefined || call.error
             return (
-              <div key={`${call.toolUseId ?? call.toolName}-${index}`} className="rounded border border-border/50 bg-muted/20 p-2">
+              <div key={`${call.toolUseId ?? call.toolName}-${index}`} className="min-w-0 rounded border border-border/50 bg-muted/20 p-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${STATUS_CLASS[status]}`}>
                     <StatusIcon status={status} />
@@ -77,12 +77,12 @@ export function AgentToolTimeline({ toolCalls, defaultCollapsed = true }: AgentT
                       {status === "failed" ? t("agent.timeline.error") : t("agent.timeline.input")}
                     </summary>
                     {call.error && (
-                      <pre className="mt-1 max-h-28 overflow-auto rounded bg-red-950/5 p-2 text-[10px] text-red-700 dark:text-red-300">
+                      <pre className="mt-1 max-h-28 max-w-full overflow-auto rounded bg-red-950/5 p-2 text-[10px] text-red-700 dark:text-red-300">
                         {call.error}
                       </pre>
                     )}
                     {call.inputPreview !== undefined && (
-                      <pre className="mt-1 max-h-36 overflow-auto rounded bg-background/80 p-2 text-[10px] text-muted-foreground">
+                      <pre className="mt-1 max-h-36 max-w-full overflow-auto rounded bg-background/80 p-2 text-[10px] text-muted-foreground">
                         {safeStringify(call.inputPreview)}
                       </pre>
                     )}

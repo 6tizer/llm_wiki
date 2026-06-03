@@ -182,8 +182,14 @@
       "noProject": "Open a project to use Agent"
     },
     "placeholder": "Ask Agent to inspect, edit, or operate on this wiki...",
+    "loading": {
+      "connecting": "Connecting to Agent...",
+      "running": "Agent is running..."
+    },
     "error": {
       "unavailable": "Agent is unavailable: no project is open.",
+      "missingApiKey": "Agent needs an API key. Configure the current provider in Settings.",
+      "timeout": "Agent timed out. You can retry this request.",
       "failed": "Agent failed: {{error}}"
     },
     "wikiChanged": {
@@ -210,7 +216,8 @@
     },
     "actions": {
       "expand": "Expand",
-      "collapse": "Collapse"
+      "collapse": "Collapse",
+      "retry": "Retry"
     },
     "permission": {
       "title": "Agent needs permission",

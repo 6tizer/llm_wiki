@@ -182,8 +182,14 @@
       "noProject": "打开项目后可使用 Agent"
     },
     "placeholder": "让 Agent 检查、编辑或操作这个 Wiki...",
+    "loading": {
+      "connecting": "正在连接 Agent...",
+      "running": "Agent 正在运行..."
+    },
     "error": {
       "unavailable": "Agent 不可用：当前未打开项目。",
+      "missingApiKey": "Agent 需要 API key。请在设置中配置当前 provider。",
+      "timeout": "Agent 已超时。你可以重试这次请求。",
       "failed": "Agent 失败：{{error}}"
     },
     "wikiChanged": {
@@ -210,7 +216,8 @@
     },
     "actions": {
       "expand": "展开",
-      "collapse": "折叠"
+      "collapse": "折叠",
+      "retry": "重试"
     },
     "permission": {
       "title": "Agent 需要权限",

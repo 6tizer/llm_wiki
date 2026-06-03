@@ -601,4 +601,26 @@ describe("streamAgent", () => {
 		expect(callbacks.onDone).toHaveBeenCalledWith(null);
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
-});
+
+	it("reports invoke failures without debug prefixes", async () => {
+		tauriMocks.invoke.mockRejectedValueOnce(
+			new Error("Failed to spawn agent sidecar: denied"),
+		);
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Failed to spawn agent sidecar: denied",
+			}),
+		);
+		expect(callbacks.onError.mock.calls[0]?.[0].message).not.toContain("[outer-catch]");
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+	});
+	});

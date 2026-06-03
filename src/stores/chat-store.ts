@@ -7,6 +7,7 @@ import type {
   SDKContentBlock,
 } from "@/lib/agent/agent-types"
 import i18n from "@/i18n"
+import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
 
 export interface Conversation {
   id: string
@@ -38,6 +39,7 @@ export interface DisplayMessage {
   agentUserMessageId?: string
   agentAssistantMessageId?: string
   agentBlocks?: SDKContentBlock[]
+  agentErrorKind?: AgentErrorKind
   wikiChanges?: AgentWikiChangeRecord[]
   toolCalls?: AgentToolCallRecord[]
   costUsd?: number
@@ -102,6 +104,7 @@ interface StartAgentStreamMessageOptions {
 interface AgentStreamMessagePatch {
   content?: string
   agentBlocks?: SDKContentBlock[]
+  agentErrorKind?: AgentErrorKind
   toolCalls?: AgentToolCallRecord[]
   agentUserMessageId?: string
   agentAssistantMessageId?: string
@@ -112,6 +115,10 @@ interface AgentRewindablePatch {
   streamId?: string
   userMessageId?: string
   assistantMessageId?: string
+}
+
+interface FinishAgentStreamMessageOptions {
+  agentErrorKind?: AgentErrorKind
 }
 
 interface ChatState {
@@ -145,7 +152,12 @@ interface ChatState {
   finalizeAgentStream: (content: string, stats?: AgentStreamStats) => void
   startAgentStreamMessage: (options?: StartAgentStreamMessageOptions) => string | null
   updateAgentStreamMessage: (messageId: string, patch: AgentStreamMessagePatch) => void
-  finishAgentStreamMessage: (messageId: string, content: string, stats?: AgentStreamStats) => void
+  finishAgentStreamMessage: (
+    messageId: string,
+    content: string,
+    stats?: AgentStreamStats,
+    options?: FinishAgentStreamMessageOptions
+  ) => void
   setAgentToolCalls: (messageId: string, toolCalls: AgentToolCallRecord[]) => void
   updateAgentProgress: (messageId: string, event: AgentToolCallRecord) => void
   appendAgentWikiChange: (messageId: string, payload: AgentWikiChangedPayload) => void
@@ -471,7 +483,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ),
     })),
 
-  finishAgentStreamMessage: (messageId, content, stats) =>
+  finishAgentStreamMessage: (messageId, content, stats, options) =>
     set((state) => {
       const { activeConversationId, conversations } = state
       return {
@@ -489,6 +501,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 outputTokens: stats?.outputTokens,
                 durationMs: stats?.durationMs,
                 numTurns: stats?.numTurns,
+                agentErrorKind: options?.agentErrorKind,
               }
             : m
         ),

@@ -167,8 +167,9 @@ describe("chat persistence — round-trip (new format)", () => {
         mode: "agent",
         agentSessionId: "agent-session-1",
         agentUserMessageId: "user-sdk-1",
-        agentAssistantMessageId: "assistant-sdk-1",
-        agentBlocks: [
+	        agentAssistantMessageId: "assistant-sdk-1",
+	        agentErrorKind: "failed",
+	        agentBlocks: [
           { type: "text", text: "Agent text" },
           {
             type: "tool_use",

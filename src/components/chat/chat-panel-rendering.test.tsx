@@ -15,5 +15,6 @@ describe("ChatPanel agent mode rendering", () => {
     expect(html).toContain("Agent")
     expect(html).toContain("Ingest")
     expect(html).toContain("Type a message")
+    expect(html).toContain("max-w-full flex-wrap")
   })
 })

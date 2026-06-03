@@ -84,6 +84,7 @@ function ChatMessageImpl({
   const isSystem = message.role === "system"
   const isAssistant = message.role === "assistant"
   const isAgent = isAssistant && message.mode === "agent"
+  const isAgentError = isAgent && Boolean(message.agentErrorKind)
   const hasAgentBlocks = isAgent && (message.agentBlocks?.length ?? 0) > 0
   const content = message.content ?? ""
   const [hovered, setHovered] = useState(false)
@@ -115,7 +116,7 @@ function ChatMessageImpl({
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
       </div>
-      <div className="max-w-[80%] flex flex-col gap-1.5">
+      <div className="flex min-w-0 max-w-[80%] flex-col gap-1.5">
         <div
           className={`rounded-lg px-3 py-2 text-sm ${
             isUser
@@ -152,6 +153,16 @@ function ChatMessageImpl({
             numTurns={message.numTurns}
           />
         )}
+        {isAgentError && isLastAssistant && onRegenerate && (
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="self-start inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+            title={t("agent.actions.retry")}
+          >
+            <RefreshCw className="h-3 w-3" /> {t("agent.actions.retry")}
+          </button>
+        )}
         {isAgent && canRewind && onRewind && (
           <button
             type="button"
@@ -166,7 +177,7 @@ function ChatMessageImpl({
           <div className="flex items-center gap-1">
             <CopyButton content={actionContent} />
             <SaveToWikiButton content={actionContent} visible={true} />
-            {isLastAssistant && onRegenerate && (
+            {isLastAssistant && onRegenerate && !isAgentError && (
               <button
                 type="button"
                 onClick={onRegenerate}

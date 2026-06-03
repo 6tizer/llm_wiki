@@ -29,12 +29,12 @@ export function AgentBlockList({ blocks, renderText }: AgentBlockListProps) {
         }
         if (block.type === "tool_use") {
           return (
-            <details key={block.id || index} className="rounded-md border border-border/60 bg-background/70 px-2 py-1.5">
+            <details key={block.id || index} className="min-w-0 rounded-md border border-border/60 bg-background/70 px-2 py-1.5">
               <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-foreground">
                 <Wrench className="h-3.5 w-3.5" />
                 {t("agent.blocks.toolUse")}: <span className="text-foreground">{block.name}</span>
               </summary>
-              <pre className="mt-1.5 max-h-40 overflow-auto rounded bg-muted/40 p-2 text-[10px] text-muted-foreground">
+              <pre className="mt-1.5 max-h-40 max-w-full overflow-auto rounded bg-muted/40 p-2 text-[10px] text-muted-foreground">
                 {safeStringify(block.input)}
               </pre>
             </details>
@@ -43,14 +43,14 @@ export function AgentBlockList({ blocks, renderText }: AgentBlockListProps) {
         if (block.type === "tool_result") {
           const text = toolResultText(block)
           return (
-            <details key={block.tool_use_id || index} className="rounded-md border border-border/60 bg-background/70 px-2 py-1.5">
+            <details key={block.tool_use_id || index} className="min-w-0 rounded-md border border-border/60 bg-background/70 px-2 py-1.5">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
                 {t("agent.blocks.toolResult")}
               </summary>
               {text ? (
                 <div className="mt-1.5">{renderText(text)}</div>
               ) : (
-                <pre className="mt-1.5 max-h-40 overflow-auto rounded bg-muted/40 p-2 text-[10px] text-muted-foreground">
+                <pre className="mt-1.5 max-h-40 max-w-full overflow-auto rounded bg-muted/40 p-2 text-[10px] text-muted-foreground">
                   {safeStringify(block.content)}
                 </pre>
               )}
