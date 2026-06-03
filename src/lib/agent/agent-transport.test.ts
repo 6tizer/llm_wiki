@@ -36,7 +36,7 @@ vi.mock("./agent-app-tools", () => ({
 	runAgentAppTool: appToolMocks.runAgentAppTool,
 }));
 
-import { streamAgent } from "./agent-transport";
+import { rewindAgentFiles, streamAgent } from "./agent-transport";
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -112,6 +112,37 @@ describe("streamAgent", () => {
 
 		expect(callbacks.onRewindFiles).toHaveBeenCalledWith({
 			streamId: payload.args.streamId,
+			messageId: "user-sdk-1",
+			ok: true,
+			result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+		});
+	});
+
+	it("rewindAgentFiles waits for the rewind result event", async () => {
+		const request = rewindAgentFiles("stream-1", "user-sdk-1");
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith("agent_rewind_files", {
+				streamId: "stream-1",
+				messageId: "user-sdk-1",
+			});
+		});
+
+		tauriMocks.emitString(
+			"agent:stream-1",
+			JSON.stringify({
+				streamId: "stream-1",
+				type: "rewind_files",
+				data: {
+					messageId: "user-sdk-1",
+					ok: true,
+					result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+				},
+			}),
+		);
+
+		await expect(request).resolves.toMatchObject({
+			streamId: "stream-1",
 			messageId: "user-sdk-1",
 			ok: true,
 			result: { canRewind: true, filesChanged: ["wiki/page.md"] },
@@ -216,6 +247,52 @@ describe("streamAgent", () => {
 
 		expect(callbacks.onMessage).toHaveBeenCalledWith(result);
 		expect(callbacks.onToken).toHaveBeenCalledWith("\n");
+		expect(callbacks.onDone).toHaveBeenCalledWith(result);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
+	it("finishes when the sidecar sends a data-channel done event", async () => {
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+		const result = {
+			type: "result",
+			result: "ok",
+			session_id: "11111111-1111-4111-8111-111111111111",
+		};
+
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "message",
+				data: result,
+			}),
+		);
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "done",
+				data: null,
+			}),
+		);
+
+		await stream;
+
 		expect(callbacks.onDone).toHaveBeenCalledWith(result);
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
