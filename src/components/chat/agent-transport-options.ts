@@ -34,7 +34,9 @@ export function buildAgentTransportOptionsFromState({
   const activeConversation = conversations.find(
     (conversation) => conversation.id === activeConversationId,
   )
-  const agentSessionId = activeConversation?.agentSessionId
+  const agentSessionId = activeConversation?.agentSessionId || undefined
+  const forkSession = Boolean(agentSessionId) &&
+    activeConversation?.agentForkSessionPending === true
 
   return {
     cwd: project.path,
@@ -44,7 +46,7 @@ export function buildAgentTransportOptionsFromState({
     apiKey: llmConfig.apiKey || undefined,
     baseUrl: agentBaseUrl(llmConfig),
     resume: agentSessionId,
-    forkSession: activeConversation?.agentForkSessionPending === true,
+    forkSession,
     persistSession: true,
     permissionPolicy: "default",
     enableWikiTools: true,

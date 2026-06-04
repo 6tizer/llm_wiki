@@ -68,6 +68,30 @@ describe("buildAgentTransportOptionsFromState", () => {
     })
   })
 
+  it("does not fork without a resume session", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [
+        {
+          id: "c1",
+          title: "Agent",
+          createdAt: 1,
+          updatedAt: 1,
+          agentForkSessionPending: true,
+        },
+      ],
+      activeConversationId: "c1",
+      resourceConfig: DEFAULT_AGENT_RESOURCE_CONFIG,
+    })
+
+    expect(options).toMatchObject({
+      resume: undefined,
+      forkSession: false,
+    })
+  })
+
   it("returns null without an active project", () => {
     expect(
       buildAgentTransportOptionsFromState({

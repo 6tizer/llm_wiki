@@ -46,6 +46,84 @@ interface PersistedChatData {
   messages: DisplayMessage[]
 }
 
+/** Maximum age for keeping a persisted frontend Agent session reference. */
+export const AGENT_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+/** Summary of a persisted Agent session reference cleanup pass. */
+export interface AgentSessionCleanupResult {
+  scanned: number
+  cleaned: number
+}
+
+function hasValidTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value)
+}
+
+function isExpiredAgentSessionConversation(
+  conversation: Conversation,
+  cutoff: number,
+): boolean {
+  return Boolean(conversation.agentSessionId) &&
+    hasValidTimestamp(conversation.updatedAt) &&
+    conversation.updatedAt < cutoff
+}
+
+function countExpiredAgentSessionRefs(
+  conversations: Conversation[],
+  now: number,
+): number {
+  const cutoff = now - AGENT_SESSION_MAX_AGE_MS
+  return conversations.filter((conversation) =>
+    isExpiredAgentSessionConversation(conversation, cutoff)
+  ).length
+}
+
+/** Remove expired frontend Agent session references without deleting conversations. */
+export function cleanExpiredAgentSessionRefs(
+  conversations: Conversation[],
+  now: number = Date.now(),
+): Conversation[] {
+  const cutoff = now - AGENT_SESSION_MAX_AGE_MS
+  return conversations.map((conversation) => {
+    if (!isExpiredAgentSessionConversation(conversation, cutoff)) {
+      return conversation
+    }
+    const {
+      agentSessionId: _agentSessionId,
+      agentForkSessionPending: _pending,
+      ...cleaned
+    } = conversation
+    return cleaned
+  })
+}
+
+/** Clean expired Agent session references from a project's conversations file. */
+export async function cleanExpiredAgentSessions(
+  projectPath: string,
+  now: number = Date.now(),
+): Promise<AgentSessionCleanupResult> {
+  const pp = normalizePath(projectPath)
+  try {
+    const filePath = `${pp}/.llm-wiki/conversations.json`
+    const content = await readFile(filePath)
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) {
+      return { scanned: 0, cleaned: 0 }
+    }
+    const conversations = parsed as Conversation[]
+    const cleaned = countExpiredAgentSessionRefs(conversations, now)
+    if (cleaned > 0) {
+      await writeFile(
+        filePath,
+        JSON.stringify(cleanExpiredAgentSessionRefs(conversations, now), null, 2),
+      )
+    }
+    return { scanned: conversations.length, cleaned }
+  } catch {
+    return { scanned: 0, cleaned: 0 }
+  }
+}
+
 export async function saveChatHistory(
   projectPath: string,
   conversations: Conversation[],
@@ -78,12 +156,18 @@ export async function saveChatHistory(
   }
 }
 
-export async function loadChatHistory(projectPath: string): Promise<PersistedChatData> {
+export async function loadChatHistory(
+  projectPath: string,
+  now: number = Date.now(),
+): Promise<PersistedChatData> {
   const pp = normalizePath(projectPath)
   try {
     // Try new format: separate files per conversation
     const convContent = await readFile(`${pp}/.llm-wiki/conversations.json`)
-    const conversations = JSON.parse(convContent) as Conversation[]
+    const conversations = cleanExpiredAgentSessionRefs(
+      JSON.parse(convContent) as Conversation[],
+      now,
+    )
 
     const allMessages: DisplayMessage[] = []
     for (const conv of conversations) {
@@ -121,7 +205,10 @@ export async function loadChatHistory(projectPath: string): Promise<PersistedCha
 
       // Old combined format
       const data = parsed as PersistedChatData
-      return data
+      return {
+        conversations: cleanExpiredAgentSessionRefs(data.conversations, now),
+        messages: data.messages,
+      }
     } catch {
       return { conversations: [], messages: [] }
     }
