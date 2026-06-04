@@ -165,7 +165,9 @@
     },
     "session": {
       "fork": "Fork Session",
-      "forkPrefix": "Fork:"
+      "forkPrefix": "Fork:",
+      "contextSummarized": "Context summarized",
+      "contextSummarizedDetail": "Agent compacted the earlier session context. Internal summary details are hidden from the chat."
     },
     "timeline": {
       "title": "Tool calls",

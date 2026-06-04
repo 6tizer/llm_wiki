@@ -187,6 +187,7 @@ describe("chat store agent data model", () => {
 
     useChatStore.getState().updateAgentStreamMessage("m1", {
       content: "partial",
+      sessionCompact: true,
       agentBlocks: [
         { type: "text", text: "partial" },
       ],
@@ -195,6 +196,7 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({
       id: "m1",
       content: "partial",
+      sessionCompact: true,
       agentBlocks: [
         { type: "text", text: "partial" },
       ],
@@ -442,6 +444,7 @@ describe("chat store agent data model", () => {
 	        agentBlocks: [
 	          { type: "tool_use", id: "tool-1", name: "wiki_read", input: { path: "wiki/index.md" } },
 	        ],
+        sessionCompact: true,
 	        agentErrorKind: "timeout",
 	        toolCalls: [{ toolName: "wiki_read", phase: "post", ok: true }],
         costUsd: 0.1,
@@ -455,6 +458,34 @@ describe("chat store agent data model", () => {
       {
         role: "assistant",
         content: "answer",
+      },
+    ])
+  })
+
+  it("chatMessagesToLLM skips compact-only agent status messages", () => {
+    const messages: DisplayMessage[] = [
+      {
+        id: "m1",
+        role: "assistant",
+        content: "",
+        timestamp: 0,
+        conversationId: "conv-1",
+        mode: "agent",
+        sessionCompact: true,
+      },
+      {
+        id: "m2",
+        role: "user",
+        content: "continue",
+        timestamp: 1,
+        conversationId: "conv-1",
+      },
+    ]
+
+    expect(chatMessagesToLLM(messages)).toEqual([
+      {
+        role: "user",
+        content: "continue",
       },
     ])
   })

@@ -175,6 +175,11 @@ export interface AgentSummaryPayload {
 	failedToolCalls: number;
 }
 
+export interface AgentSessionCompactPayload {
+	kind: "compact" | "resume_summary";
+	message?: SDKAssistantMessage;
+}
+
 export interface AgentActionRequiredPayload {
 	kind: "lint_recommended";
 	paths: string[];
@@ -280,6 +285,7 @@ export interface AgentCallbacks {
 	onWikiChanged?: (payload: AgentWikiChangedPayload) => void;
 	onToolEvent?: (payload: AgentToolEventPayload) => void;
 	onAgentSummary?: (payload: AgentSummaryPayload) => void;
+	onSessionCompact?: (payload: AgentSessionCompactPayload) => void;
 	onActionRequired?: (payload: AgentActionRequiredPayload) => void;
 	onTaskEvent?: (type: string, payload: AgentTaskEventPayload) => void;
 	onPermissionRequest?: (

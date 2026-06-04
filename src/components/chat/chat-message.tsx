@@ -87,6 +87,7 @@ function ChatMessageImpl({
   const isAgentError = isAgent && Boolean(message.agentErrorKind)
   const hasAgentBlocks = isAgent && (message.agentBlocks?.length ?? 0) > 0
   const content = message.content ?? ""
+  const isSessionCompactOnly = isAgent && message.sessionCompact && !hasAgentBlocks
   const [hovered, setHovered] = useState(false)
   const agentTextContent = useMemo(
     () => isAgent ? extractAgentTextContent(message.agentBlocks) : "",
@@ -126,6 +127,8 @@ function ChatMessageImpl({
         >
           {isUser ? (
             <p dir="auto" className="whitespace-pre-wrap break-words">{content}</p>
+          ) : isSessionCompactOnly ? (
+            <AgentSessionCompactNotice />
           ) : hasAgentBlocks ? (
             <AgentBlockList
               blocks={message.agentBlocks ?? []}
@@ -138,13 +141,13 @@ function ChatMessageImpl({
         {shouldRenderReferences && (
           <CitedReferencesPanel content={actionContent} savedReferences={message.references} />
         )}
-        {isAgent && message.toolCalls && message.toolCalls.length > 0 && (
+        {!isSessionCompactOnly && isAgent && message.toolCalls && message.toolCalls.length > 0 && (
           <AgentToolTimeline toolCalls={message.toolCalls} />
         )}
-        {isAgent && message.wikiChanges && message.wikiChanges.length > 0 && (
+        {!isSessionCompactOnly && isAgent && message.wikiChanges && message.wikiChanges.length > 0 && (
           <AgentWikiChangeList changes={message.wikiChanges} />
         )}
-        {isAgent && hasAgentCostData(message) && (
+        {!isSessionCompactOnly && isAgent && hasAgentCostData(message) && (
           <AgentCostCard
             costUsd={message.costUsd}
             inputTokens={message.inputTokens}
@@ -163,7 +166,7 @@ function ChatMessageImpl({
             <RefreshCw className="h-3 w-3" /> {t("agent.actions.retry")}
           </button>
         )}
-        {isAgent && canRewind && onRewind && (
+        {!isSessionCompactOnly && isAgent && canRewind && onRewind && (
           <button
             type="button"
             onClick={() => onRewind(message.id)}
@@ -173,7 +176,7 @@ function ChatMessageImpl({
             <RotateCcw className="h-3 w-3" /> {t("agent.rewind.action")}
           </button>
         )}
-        {isAssistant && hovered && (
+        {isAssistant && hovered && !isSessionCompactOnly && (
           <div className="flex items-center gap-1">
             <CopyButton content={actionContent} />
             <SaveToWikiButton content={actionContent} visible={true} />
@@ -201,6 +204,21 @@ export const ChatMessage = memo(ChatMessageImpl, (prev, next) =>
   && prev.canRewind === next.canRewind
   && prev.onRewind === next.onRewind
 )
+
+function AgentSessionCompactNotice() {
+  const { t } = useTranslation()
+
+  return (
+    <details className="min-w-0 rounded-md border border-border/60 bg-background/70 px-2 py-1.5">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+        {t("agent.session.contextSummarized")}
+      </summary>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        {t("agent.session.contextSummarizedDetail")}
+      </p>
+    </details>
+  )
+}
 
 function AgentWikiChangeList({ changes }: { changes: AgentWikiChangeRecord[] }) {
   const { t } = useTranslation()

@@ -165,6 +165,27 @@ describe("agent message rendering", () => {
     expect(html).toContain("Rewind files")
   })
 
+  it("renders compact summaries as a safe collapsed status row", () => {
+    const hiddenSdkText = "The context has run out. Summary: secret sdk internals."
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          content: hiddenSdkText,
+          mode: "agent",
+          sessionCompact: true,
+          agentBlocks: undefined,
+        })}
+      />,
+    )
+
+    expect(html).toContain("Context summarized")
+    expect(html).toContain("Internal summary details are hidden")
+    expect(html).not.toContain(hiddenSdkText)
+    expect(html).not.toContain("Tool calls")
+    expect(html).not.toContain("Agent run")
+    expect(html).not.toContain("Rewind files")
+  })
+
   it("uses agent block text as a fallback for references when content is empty", () => {
     const html = renderToStaticMarkup(
       <ChatMessage

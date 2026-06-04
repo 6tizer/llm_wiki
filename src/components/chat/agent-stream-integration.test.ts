@@ -3,6 +3,7 @@ import {
   agentResultToStats,
   agentToolBatchToRecords,
   agentToolEventToRecord,
+  isSdkCompactSummaryMessage,
   isSdkAssistantMessage,
   sdkBlocksToText,
 } from "./agent-stream-integration"
@@ -21,6 +22,73 @@ describe("agent stream integration helpers", () => {
     expect(isSdkAssistantMessage(message)).toBe(true)
     if (!isSdkAssistantMessage(message)) throw new Error("expected assistant message")
     expect(sdkBlocksToText(message.message.content)).toBe("hello")
+  })
+
+  it("detects SDK compact context summaries", () => {
+    const message: SDKMessage = {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "We need to compact this context because it has run out. Summary follows.",
+          },
+        ],
+      },
+    }
+
+    expect(isSdkCompactSummaryMessage(message)).toBe(true)
+  })
+
+  it("does not treat ordinary assistant replies as compact summaries", () => {
+    const message: SDKMessage = {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Here is a short summary of the wiki page you asked about.",
+          },
+        ],
+      },
+    }
+
+    expect(isSdkCompactSummaryMessage(message)).toBe(false)
+    expect(isSdkCompactSummaryMessage({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Here is a summary of the project context you asked me to explain.",
+          },
+        ],
+      },
+    })).toBe(false)
+    expect(isSdkCompactSummaryMessage({
+      type: "result",
+      result: "context summary",
+    })).toBe(false)
+  })
+
+  it("detects compacted and summarizing context variants", () => {
+    expect(isSdkCompactSummaryMessage({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Context compacted to continue safely." }],
+      },
+    })).toBe(true)
+    expect(isSdkCompactSummaryMessage({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "The context window is summarizing previous turns." }],
+      },
+    })).toBe(true)
   })
 
   it("extracts final stats from SDK result messages", () => {

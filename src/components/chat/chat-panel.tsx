@@ -597,6 +597,7 @@ export function ChatPanel() {
 			let accumulated = "";
 			let settled = false;
 			let streamId: string | undefined;
+			let sawSessionCompact = false;
 
 			const formatAgentError = (kind: AgentErrorKind, detail?: string) => {
 				const key = agentErrorI18nKey(kind);
@@ -685,7 +686,8 @@ export function ChatPanel() {
 						onDone: (result) => {
 							markAgentRunning();
 							const stats = agentResultToStats(result);
-							const finalContent = accumulated || result?.result || "";
+							const finalContent =
+								accumulated || (sawSessionCompact ? "" : result?.result || "");
 							if (!controller.signal.aborted) {
 								markConversationDirty(convId);
 							}
@@ -719,6 +721,13 @@ export function ChatPanel() {
 						},
 						onAgentSummary: (payload) => {
 							console.debug("[agent] summary:", payload);
+						},
+						onSessionCompact: () => {
+							markAgentRunning();
+							sawSessionCompact = true;
+							updateAgentStreamMessage(messageId, {
+								sessionCompact: true,
+							});
 						},
 						onActionRequired: (payload) => {
 							markAgentRunning();
