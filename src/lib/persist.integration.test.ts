@@ -15,6 +15,9 @@ import type { Conversation, DisplayMessage } from "@/stores/chat-store"
 vi.mock("@/commands/fs", () => realFs)
 
 import {
+  AGENT_SESSION_MAX_AGE_MS,
+  cleanExpiredAgentSessionRefs,
+  cleanExpiredAgentSessions,
   saveReviewItems,
   loadReviewItems,
   saveChatHistory,
@@ -146,6 +149,7 @@ describe("chat persistence — round-trip (new format)", () => {
     const convs: Conversation[] = [
       {
         ...makeConv("c1", "Agent Conv"),
+        updatedAt: Date.now(),
         agentSessionId: "agent-session-1",
         agentForkSessionPending: true,
       },
@@ -156,6 +160,109 @@ describe("chat persistence — round-trip (new format)", () => {
     const loaded = await loadChatHistory(tmp.path)
 
     expect(loaded.conversations).toEqual(convs)
+  })
+
+  it("cleans expired agent session refs when loading new-format history", async () => {
+    const now = Date.UTC(2026, 5, 4)
+    const expired = now - AGENT_SESSION_MAX_AGE_MS - 1
+    const fresh = now - AGENT_SESSION_MAX_AGE_MS + 1
+    const convs: Conversation[] = [
+      {
+        ...makeConv("expired", "Expired Agent"),
+        updatedAt: expired,
+        agentSessionId: "expired-session",
+        agentForkSessionPending: true,
+      },
+      {
+        ...makeConv("fresh", "Fresh Agent"),
+        updatedAt: fresh,
+        agentSessionId: "fresh-session",
+        agentForkSessionPending: true,
+      },
+      {
+        ...makeConv("ordinary", "Ordinary"),
+        updatedAt: expired,
+      },
+    ]
+
+    await saveChatHistory(tmp.path, convs, [])
+    const loaded = await loadChatHistory(tmp.path, now)
+    const expiredConv = loaded.conversations.find((conversation) => conversation.id === "expired")
+    const freshConv = loaded.conversations.find((conversation) => conversation.id === "fresh")
+    const ordinaryConv = loaded.conversations.find((conversation) => conversation.id === "ordinary")
+
+    expect(expiredConv).not.toHaveProperty("agentSessionId")
+    expect(expiredConv).not.toHaveProperty("agentForkSessionPending")
+    expect(freshConv).toMatchObject({
+      agentSessionId: "fresh-session",
+      agentForkSessionPending: true,
+    })
+    expect(ordinaryConv).not.toHaveProperty("agentSessionId")
+  })
+
+  it("cleanExpiredAgentSessions writes cleaned conversations back to disk", async () => {
+    const now = Date.UTC(2026, 5, 4)
+    const convs: Conversation[] = [
+      {
+        ...makeConv("old", "Old Agent"),
+        updatedAt: now - AGENT_SESSION_MAX_AGE_MS - 1,
+        agentSessionId: "old-session",
+        agentForkSessionPending: true,
+      },
+      {
+        ...makeConv("recent", "Recent Agent"),
+        updatedAt: now - 29 * 24 * 60 * 60 * 1000,
+        agentSessionId: "recent-session",
+      },
+    ]
+    await saveChatHistory(tmp.path, convs, [])
+
+    await expect(cleanExpiredAgentSessions(tmp.path, now)).resolves.toEqual({
+      scanned: 2,
+      cleaned: 1,
+    })
+
+    const raw = JSON.parse(
+      await readFileRaw(`${tmp.path}/.llm-wiki/conversations.json`),
+    ) as Conversation[]
+    expect(raw[0]).not.toHaveProperty("agentSessionId")
+    expect(raw[0]).not.toHaveProperty("agentForkSessionPending")
+    expect(raw[1].agentSessionId).toBe("recent-session")
+  })
+
+  it("cleanExpiredAgentSessions is fail-soft for missing or corrupted conversations", async () => {
+    await expect(cleanExpiredAgentSessions(tmp.path)).resolves.toEqual({
+      scanned: 0,
+      cleaned: 0,
+    })
+
+    await writeFileRaw(`${tmp.path}/.llm-wiki/conversations.json`, "{broken")
+
+    await expect(cleanExpiredAgentSessions(tmp.path)).resolves.toEqual({
+      scanned: 0,
+      cleaned: 0,
+    })
+  })
+
+  it("keeps exact-boundary and invalid-updatedAt session refs", () => {
+    const now = Date.UTC(2026, 5, 4)
+    const boundary = now - AGENT_SESSION_MAX_AGE_MS
+    const convs = [
+      {
+        ...makeConv("boundary"),
+        updatedAt: boundary,
+        agentSessionId: "boundary-session",
+        agentForkSessionPending: true,
+      },
+      {
+        ...makeConv("invalid"),
+        updatedAt: Number.NaN,
+        agentSessionId: "invalid-session",
+        agentForkSessionPending: true,
+      },
+    ]
+
+    expect(cleanExpiredAgentSessionRefs(convs, now)).toEqual(convs)
   })
 
   it("round-trips agent metadata and tool calls on messages", async () => {
@@ -306,6 +413,31 @@ describe("chat persistence — legacy format fallback", () => {
 
     const loaded = await loadChatHistory(tmp.path)
     expect(loaded.conversations).toHaveLength(1)
+    expect(loaded.messages).toHaveLength(1)
+  })
+
+  it("cleans expired agent session refs when loading combined legacy history", async () => {
+    const now = Date.UTC(2026, 5, 4)
+    const old = {
+      conversations: [
+        {
+          ...makeConv("c1"),
+          updatedAt: now - AGENT_SESSION_MAX_AGE_MS - 1,
+          agentSessionId: "legacy-session",
+          agentForkSessionPending: true,
+        },
+      ],
+      messages: [makeMsg("m1", "c1")],
+    }
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/chat-history.json`,
+      JSON.stringify(old),
+    )
+
+    const loaded = await loadChatHistory(tmp.path, now)
+
+    expect(loaded.conversations[0]).not.toHaveProperty("agentSessionId")
+    expect(loaded.conversations[0]).not.toHaveProperty("agentForkSessionPending")
     expect(loaded.messages).toHaveLength(1)
   })
 

@@ -9,7 +9,7 @@ import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { listDirectory, openProject } from "@/commands/fs"
 import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig } from "@/lib/project-store"
 import { loadAgentResourceConfig } from "@/lib/agent/agent-settings"
-import { loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
+import { cleanExpiredAgentSessions, loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
 import { AppLayout } from "@/components/layout/app-layout"
@@ -387,6 +387,7 @@ function App() {
     }
     // Load persisted chat history
     try {
+      await cleanExpiredAgentSessions(proj.path)
       const savedChat = await loadChatHistory(proj.path)
       if (savedChat.conversations.length > 0) {
         useChatStore.getState().setConversations(savedChat.conversations)

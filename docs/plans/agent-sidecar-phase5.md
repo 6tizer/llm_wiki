@@ -273,15 +273,14 @@ Phase 5 拆 7 个 PR，分 4 个子阶段。子阶段之间有依赖，子阶段
 **范围**：
 - `persist.ts`：
   - `saveChatHistory` 已序列化 `Conversation.agentSessionId`
-  - 新增清理逻辑：超过 30 天未更新的 conversation 的 `agentSessionId` 清空
-  - 新增 `cleanExpiredAgentSessions(projectPath)` 函数
+  - [x] 新增清理逻辑：超过 30 天未更新的 conversation 的 `agentSessionId` 清空
+  - [x] 新增 `cleanExpiredAgentSessions(projectPath)` 函数
 - `chat-store.ts`：
-  - app 启动时调用 `cleanExpiredAgentSessions`
-  - `loadChatHistory` 后清理过期 session
+  - [x] app 启动时调用 `cleanExpiredAgentSessions`
+  - [x] `loadChatHistory` 后清理过期 session
 - SDK session 文件管理：
-  - 评估 SDK session 文件存储位置（通常在 `~/.claude/sessions/` 或类似路径）
-  - 不主动删除 SDK session 文件（SDK 自行管理）
-  - 只清理前端的 `agentSessionId` 引用
+  - [x] 不主动删除 SDK session 文件（SDK 自行管理）
+  - [x] 只清理前端的 `agentSessionId` 引用
 
 **影响分析**：
 - `persist.ts` — 新增清理函数
@@ -399,7 +398,7 @@ Phase 5 完成时：
 - [ ] Agent 默认 maxFilesChanged 提高到 10，批量修复不 3 个文件就中断
 - [ ] maxFilesChanged 超限时显示前端状态提示（PR D 已完成结构化 MCP error）
 - [ ] Agent 配置（maxTurns/maxFilesChanged/maxWriteBytes）可在 Settings 中修改
-- [ ] 过期的 agentSessionId 在启动时自动清理
+- [x] 过期的 agentSessionId 在启动时自动清理
 - [ ] React duplicate key warnings 消除（#59）
 - [ ] Tauri resource id 错误消除（#63）
 - [ ] QA hook 删除时不提取已删内容的 topic（#69）
