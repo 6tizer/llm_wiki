@@ -8,6 +8,7 @@ import type {
 } from "@/lib/agent/agent-types"
 import i18n from "@/i18n"
 import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
+import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
 
 export interface Conversation {
   id: string
@@ -717,7 +718,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
 export function chatMessagesToLLM(messages: DisplayMessage[]): ChatMessage[] {
   return messages
-    .filter((m) => !(m.mode === "agent" && m.sessionCompact && !m.content.trim() && !(m.agentBlocks?.length)))
+    .filter((m) => !isCompactOnlyAgentMessage(m))
     .map((m) => ({
       role: m.role,
       content: m.content,

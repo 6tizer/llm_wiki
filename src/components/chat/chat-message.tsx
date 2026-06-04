@@ -30,6 +30,7 @@ import { AgentBlockList } from "./agent-block-list"
 import { AgentCostCard, hasAgentCostData } from "./agent-cost-card"
 import { extractAgentTextContent } from "./agent-format"
 import { AgentToolTimeline } from "./agent-tool-timeline"
+import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -87,7 +88,7 @@ function ChatMessageImpl({
   const isAgentError = isAgent && Boolean(message.agentErrorKind)
   const hasAgentBlocks = isAgent && (message.agentBlocks?.length ?? 0) > 0
   const content = message.content ?? ""
-  const isSessionCompactOnly = isAgent && message.sessionCompact && !hasAgentBlocks
+  const isSessionCompactOnly = isAgent && isCompactOnlyAgentMessage(message)
   const [hovered, setHovered] = useState(false)
   const agentTextContent = useMemo(
     () => isAgent ? extractAgentTextContent(message.agentBlocks) : "",
