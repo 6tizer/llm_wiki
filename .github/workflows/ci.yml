@@ -50,6 +50,9 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install frontend dependencies
         run: npm install
 
@@ -64,6 +67,9 @@ jobs:
 
       - name: Install sidecar dependencies
         run: npm --prefix src-tauri/sidecar install
+
+      - name: Build sidecar binary
+        run: npm --prefix src-tauri/sidecar run build:binary
 
       - name: Sidecar tests
         run: npm --prefix src-tauri/sidecar test

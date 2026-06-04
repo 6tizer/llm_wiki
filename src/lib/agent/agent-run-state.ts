@@ -39,6 +39,7 @@ export function classifyAgentError(message: string): AgentErrorKind {
   }
   if (
     lower.includes("sidecar dist missing") ||
+    lower.includes("sidecar binary missing") ||
     lower.includes("failed to spawn agent sidecar") ||
     lower.includes("agent sidecar not available") ||
     lower.includes("cannot resolve sidecar path")

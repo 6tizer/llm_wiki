@@ -1,5 +1,6 @@
 {
   "bundle": {
+    "resources": ["sidecar/dist-bin/sidecar"],
     "macOS": {
       "frameworks": ["pdfium/libpdfium.dylib"]
     }

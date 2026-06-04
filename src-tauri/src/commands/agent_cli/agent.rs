@@ -6,17 +6,24 @@
 //! emit/listen pattern as claude_cli.rs.
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 
 use crate::api_server;
+
+const SIDECAR_PLACEHOLDER_PREFIX: &[u8] = b"Placeholder for Tauri resource validation.";
 
 /// Shared state holding running agent sidecar processes keyed by stream id.
 #[derive(Default)]
@@ -263,7 +270,7 @@ pub async fn agent_spawn(
         "[agent_spawn] stream_id={}, model={:?}, base_url={:?}",
         args.stream_id, args.model, args.base_url
     );
-    let sidecar_cmd = find_sidecar_command()?;
+    let sidecar_cmd = find_sidecar_command(&app)?;
 
     let mut cmd = Command::new(&sidecar_cmd[0]);
     if sidecar_cmd.len() > 1 {
@@ -459,7 +466,6 @@ pub async fn agent_permission_response(
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn agent_rewind_files(
     state: State<'_, AgentState>,
@@ -509,13 +515,17 @@ mod tests {
         let options = value.get("options").unwrap();
 
         assert_eq!(
-            options.get("enableFileCheckpointing").and_then(Value::as_bool),
+            options
+                .get("enableFileCheckpointing")
+                .and_then(Value::as_bool),
             Some(true)
         );
         let sandbox = options.get("sandbox").unwrap();
         assert_eq!(sandbox.get("enabled").and_then(Value::as_bool), Some(true));
         assert_eq!(
-            sandbox.get("autoAllowBashIfSandboxed").and_then(Value::as_bool),
+            sandbox
+                .get("autoAllowBashIfSandboxed")
+                .and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
@@ -538,6 +548,70 @@ mod tests {
 
     use super::*;
     use serde_json::Value;
+    use std::fs;
+    use std::ops::Deref;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempSidecarDir(PathBuf);
+
+    impl TempSidecarDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Deref for TempSidecarDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.path()
+        }
+    }
+
+    impl Drop for TempSidecarDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_sidecar_dir(label: &str) -> TempSidecarDir {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "llm-wiki-agent-sidecar-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        TempSidecarDir(dir)
+    }
+
+    fn write_file(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "test").unwrap();
+    }
+
+    fn write_binary(path: &Path) {
+        write_file(path);
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    fn write_empty_binary(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "").unwrap();
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
 
     fn args_with_optional_fields_none() -> AgentSpawnArgs {
         AgentSpawnArgs {
@@ -610,6 +684,112 @@ mod tests {
         assert!(options.get("intentOverride").is_none());
         assert!(options.get("title").is_none());
         assert!(options.get("apiKey").is_none());
+    }
+
+    #[test]
+    fn sidecar_command_uses_dev_node_fallback() {
+        let cwd = temp_sidecar_dir("dev");
+        let entry = cwd.join("sidecar").join("dist").join("main.js");
+        write_file(&entry);
+
+        let command = resolve_sidecar_command(None, &cwd, true).unwrap();
+
+        assert_eq!(command[0], "node");
+        assert_eq!(command[1], entry.to_string_lossy());
+    }
+
+    #[test]
+    fn sidecar_command_prefers_dist_binary_over_node_fallback() {
+        let cwd = temp_sidecar_dir("dist-bin");
+        let binary = cwd
+            .join("sidecar")
+            .join("dist-bin")
+            .join(sidecar_binary_name());
+        let entry = cwd.join("sidecar").join("dist").join("main.js");
+        write_binary(&binary);
+        write_file(&entry);
+
+        let command = resolve_sidecar_command(None, &cwd, true).unwrap();
+
+        assert_eq!(command, vec![binary.to_string_lossy().to_string()]);
+    }
+
+    #[test]
+    fn sidecar_command_prefers_bundled_resource_binary() {
+        let resource_dir = temp_sidecar_dir("resource");
+        let cwd = temp_sidecar_dir("resource-cwd");
+        let bundled = resource_dir
+            .join("sidecar")
+            .join("dist-bin")
+            .join(sidecar_binary_name());
+        let local = cwd
+            .join("sidecar")
+            .join("dist-bin")
+            .join(sidecar_binary_name());
+        write_binary(&bundled);
+        write_binary(&local);
+
+        let command = resolve_sidecar_command(Some(&resource_dir), &cwd, true).unwrap();
+
+        assert_eq!(command, vec![bundled.to_string_lossy().to_string()]);
+        assert!(sidecar_available(Some(&resource_dir), &cwd, false));
+    }
+
+    #[test]
+    fn sidecar_command_skips_non_executable_placeholder_on_unix() {
+        let cwd = temp_sidecar_dir("placeholder");
+        let placeholder = cwd
+            .join("sidecar")
+            .join("dist-bin")
+            .join(sidecar_binary_name());
+        let entry = cwd.join("sidecar").join("dist").join("main.js");
+        write_file(&placeholder);
+        write_file(&entry);
+
+        let command = resolve_sidecar_command(None, &cwd, true).unwrap();
+
+        assert_eq!(command[0], "node");
+        assert_eq!(command[1], entry.to_string_lossy());
+    }
+
+    #[test]
+    fn sidecar_command_skips_empty_binary_candidate() {
+        let cwd = temp_sidecar_dir("empty-binary");
+        let binary = cwd
+            .join("sidecar")
+            .join("dist-bin")
+            .join(sidecar_binary_name());
+        let entry = cwd.join("sidecar").join("dist").join("main.js");
+        write_empty_binary(&binary);
+        write_file(&entry);
+
+        let command = resolve_sidecar_command(None, &cwd, true).unwrap();
+
+        assert_eq!(command[0], "node");
+        assert_eq!(command[1], entry.to_string_lossy());
+    }
+
+    #[test]
+    fn sidecar_command_reports_missing_build_instead_of_release_unavailable() {
+        let cwd = temp_sidecar_dir("missing");
+
+        let error = resolve_sidecar_command(None, &cwd, false).unwrap_err();
+
+        assert!(error.contains("Agent sidecar binary missing"));
+        assert!(!error.contains("release mode"));
+        assert!(!sidecar_available(None, &cwd, false));
+    }
+
+    #[test]
+    fn sidecar_availability_requires_binary_or_dev_entry() {
+        let cwd = temp_sidecar_dir("detect");
+
+        assert!(!sidecar_available(None, &cwd, true));
+
+        let entry = cwd.join("sidecar").join("dist").join("main.js");
+        write_file(&entry);
+        assert!(sidecar_available(None, &cwd, true));
+        assert!(!sidecar_available(None, &cwd, false));
     }
 
     #[test]
@@ -767,34 +947,102 @@ pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Resu
 }
 
 #[tauri::command]
-pub fn agent_detect() -> Result<bool, String> {
-    which::which("node")
-        .map(|_| true)
-        .map_err(|e| e.to_string())
+pub fn agent_detect(app: AppHandle) -> Result<bool, String> {
+    let resource_dir = app.path().resource_dir().ok();
+    let cwd = std::env::current_dir().map_err(|e| format!("Cannot resolve current dir: {e}"))?;
+    Ok(sidecar_available(
+        resource_dir.as_deref(),
+        &cwd,
+        which::which("node").is_ok(),
+    ))
 }
 
-fn find_sidecar_command() -> Result<Vec<String>, String> {
-    #[cfg(debug_assertions)]
-    {
-        let sidecar_entry = std::env::current_dir()
-            .map(|d| d.join("sidecar/dist/main.js"))
-            .map_err(|e| format!("Cannot resolve sidecar path: {e}"))?;
+fn find_sidecar_command(app: &AppHandle) -> Result<Vec<String>, String> {
+    let resource_dir = app.path().resource_dir().ok();
+    let cwd = std::env::current_dir().map_err(|e| format!("Cannot resolve sidecar path: {e}"))?;
+    resolve_sidecar_command(resource_dir.as_deref(), &cwd, which::which("node").is_ok())
+}
 
-        if !sidecar_entry.exists() {
-            return Err(
-                "Agent sidecar dist missing; run `npm --prefix src-tauri/sidecar run build` first"
-                    .to_string(),
-            );
+fn sidecar_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "sidecar.exe"
+    } else {
+        "sidecar"
+    }
+}
+
+fn sidecar_binary_candidates(resource_dir: Option<&Path>, cwd: &Path) -> Vec<PathBuf> {
+    let binary = sidecar_binary_name();
+    let mut candidates = Vec::new();
+    if let Some(dir) = resource_dir {
+        candidates.push(dir.join("sidecar").join("dist-bin").join(binary));
+    }
+    candidates.push(cwd.join("sidecar").join("dist-bin").join(binary));
+    candidates
+}
+
+fn resolve_sidecar_command(
+    resource_dir: Option<&Path>,
+    cwd: &Path,
+    node_on_path: bool,
+) -> Result<Vec<String>, String> {
+    for candidate in sidecar_binary_candidates(resource_dir, cwd) {
+        if is_sidecar_binary(&candidate) {
+            return Ok(vec![candidate.to_string_lossy().to_string()]);
         }
-
-        Ok(vec![
-            "node".to_string(),
-            sidecar_entry.to_string_lossy().to_string(),
-        ])
     }
 
-    #[cfg(not(debug_assertions))]
+    let sidecar_entry = cwd.join("sidecar").join("dist").join("main.js");
+    if sidecar_entry.is_file() {
+        if node_on_path {
+            return Ok(vec![
+                "node".to_string(),
+                sidecar_entry.to_string_lossy().to_string(),
+            ]);
+        }
+        return Err("Agent sidecar dev fallback requires node on PATH".to_string());
+    }
+
+    Err(
+        "Agent sidecar binary missing; run `npm --prefix src-tauri/sidecar run build:binary` for production or `npm --prefix src-tauri/sidecar run build` for development"
+            .to_string(),
+    )
+}
+
+fn sidecar_available(resource_dir: Option<&Path>, cwd: &Path, node_on_path: bool) -> bool {
+    resolve_sidecar_command(resource_dir, cwd, node_on_path).is_ok()
+}
+
+fn is_sidecar_binary(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if path
+        .metadata()
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(true)
     {
-        Err("Agent sidecar not available in release mode yet".to_string())
+        return false;
     }
+    if is_sidecar_placeholder(path) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn is_sidecar_placeholder(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut bytes = vec![0; SIDECAR_PLACEHOLDER_PREFIX.len()];
+    file.read_exact(&mut bytes).is_ok() && bytes == SIDECAR_PLACEHOLDER_PREFIX
 }

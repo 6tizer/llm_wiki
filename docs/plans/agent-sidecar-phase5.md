@@ -331,18 +331,18 @@ Phase 5 拆 7 个 PR，分 4 个子阶段。子阶段之间有依赖，子阶段
 
 **范围**：
 - `src-tauri/sidecar/`：
-  - 添加 `bun build --compile` 构建脚本
-  - 输出单文件 binary `sidecar` (或 `sidecar.exe` on Windows)
-  - 确保所有依赖（`@anthropic-ai/claude-agent-sdk`、`zod` 等）打包进 binary
+  - [x] 添加 `bun build --compile` 构建脚本
+  - [x] 输出单文件 binary `sidecar` (或 `sidecar.exe` on Windows)
+  - [x] 确保所有依赖（`@anthropic-ai/claude-agent-sdk`、`zod` 等）打包进 binary
 - `agent.rs`：
-  - `find_sidecar_command()` 优先查找编译后的 binary
-  - fallback 到 `bun run src/main.ts`（开发模式）
+  - [x] `find_sidecar_command()` 优先查找编译后的 binary
+  - [x] fallback 到 `node sidecar/dist/main.js`（开发模式）
 - `package.json`（sidecar）：
-  - 新增 `build:binary` script
-  - 新增 `postinstall` 自动编译
+  - [x] 新增 `build:binary` script
+  - [x] 新增安全 `postinstall` 自动编译（无 Bun 时不阻塞普通 install）
 - CI/CD：
-  - 构建时自动编译 sidecar binary
-  - Tauri bundler 包含 sidecar binary
+  - [x] 构建时自动编译 sidecar binary
+  - [x] Tauri bundler 包含 sidecar binary
 
 **影响分析**：
 - Sidecar 构建流程
@@ -402,7 +402,7 @@ Phase 5 完成时：
 - [x] React duplicate key warnings 消除（#59）
 - [x] Tauri resource id 错误消除（#63）
 - [x] QA hook 删除时不提取已删内容的 topic（#69）
-- [ ] Sidecar 可编译为单文件 binary（可选）
+- [x] Sidecar 可编译为单文件 binary（可选）
 - [ ] 普通 Chat/Ingest 模式完全不受影响（回归测试）
 - [ ] `pnpm test` 全绿
 - [ ] `pnpm lint` 无新增错误

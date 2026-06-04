@@ -162,9 +162,11 @@ Download from [Releases](https://github.com/6tizer/llm_wiki/releases):
 
 ```bash
 # Prerequisites: Node.js 20+, Rust 1.70+
+# Production Tauri builds also require Bun for the Agent sidecar binary.
 git clone https://github.com/6tizer/llm_wiki.git
 cd llm_wiki
 npm install
+npm --prefix src-tauri/sidecar install
 npm run tauri dev      # Development
 npm run tauri build    # Production build
 ```
@@ -189,7 +191,7 @@ npm run tauri build    # Production build
 
 ### Built-in Agent Sidecar
 
-LLM Wiki ships a built-in agent powered by the **Claude Agent SDK**, running as a Node.js sidecar that communicates with the Rust backend over stdin/stdout JSON-lines.
+LLM Wiki ships a built-in agent powered by the **Claude Agent SDK**, running as a bundled sidecar binary in production and a Node.js sidecar in development. It communicates with the Rust backend over stdin/stdout JSON-lines.
 
 - **Wiki MCP tools** — `read_page`, `search_pages`, `update_page`, `create_entity` / `create_concept`, `get_graph`
 - **Hooks & permissions** — wiki tools auto-allowed within safe boundaries (writes restricted to `wiki/**/*.md`); built-in tools go through SDK permission approval
