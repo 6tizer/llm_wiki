@@ -10,6 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { runAgentAppTool } from "./agent-app-tools";
+import { isSdkCompactSummaryMessage } from "./agent-summary";
 import type {
 	AgentActionRequiredPayload,
 	AgentAppToolRequestPayload,
@@ -346,10 +347,19 @@ export async function streamAgent(
 					return;
 				}
 
-				callbacks.onMessage(msg as SDKMessage);
+				const sdkMessage = msg as SDKMessage;
+				if (isSdkCompactSummaryMessage(sdkMessage)) {
+					callbacks.onSessionCompact?.({
+						kind: "compact",
+						message: sdkMessage,
+					});
+					return;
+				}
 
-				if ((msg as SDKMessage).type === "assistant") {
-					const assistant = msg as SDKAssistantMessage;
+				callbacks.onMessage(sdkMessage);
+
+				if (sdkMessage.type === "assistant") {
+					const assistant = sdkMessage as unknown as SDKAssistantMessage;
 					const content = assistant.message?.content;
 					if (!Array.isArray(content)) {
 						return;
@@ -365,8 +375,8 @@ export async function streamAgent(
 					}
 				}
 
-				if ((msg as SDKMessage).type === "result") {
-					resultMessage = msg as SDKResultMessage;
+				if (sdkMessage.type === "result") {
+					resultMessage = sdkMessage as SDKResultMessage;
 					emittedText = "";
 					callbacks.onToken("\n");
 				}

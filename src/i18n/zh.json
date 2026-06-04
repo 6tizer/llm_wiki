@@ -165,7 +165,9 @@
     },
     "session": {
       "fork": "Fork Session",
-      "forkPrefix": "Fork:"
+      "forkPrefix": "Fork:",
+      "contextSummarized": "上下文已摘要",
+      "contextSummarizedDetail": "Agent 已压缩前面的会话上下文。内部摘要细节不会显示在对话中。"
     },
     "timeline": {
       "title": "工具调用",

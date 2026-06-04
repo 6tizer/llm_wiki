@@ -8,6 +8,7 @@ import type {
 } from "@/lib/agent/agent-types"
 import i18n from "@/i18n"
 import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
+import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
 
 export interface Conversation {
   id: string
@@ -39,6 +40,7 @@ export interface DisplayMessage {
   agentUserMessageId?: string
   agentAssistantMessageId?: string
   agentBlocks?: SDKContentBlock[]
+  sessionCompact?: boolean
   agentErrorKind?: AgentErrorKind
   wikiChanges?: AgentWikiChangeRecord[]
   toolCalls?: AgentToolCallRecord[]
@@ -109,6 +111,7 @@ interface AgentStreamMessagePatch {
   agentUserMessageId?: string
   agentAssistantMessageId?: string
   wikiChanges?: AgentWikiChangeRecord[]
+  sessionCompact?: boolean
 }
 
 interface AgentRewindablePatch {
@@ -714,8 +717,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }))
 
 export function chatMessagesToLLM(messages: DisplayMessage[]): ChatMessage[] {
-  return messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }))
+  return messages
+    .filter((m) => !isCompactOnlyAgentMessage(m))
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+    }))
 }

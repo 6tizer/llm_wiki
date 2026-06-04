@@ -10,6 +10,7 @@ import type {
   SDKResultMessage,
   SDKUserMessage,
 } from "@/lib/agent/agent-types"
+export { isSdkCompactSummaryMessage } from "@/lib/agent/agent-summary"
 
 /** Return true when an SDK message is an assistant content-block message. */
 export function isSdkAssistantMessage(message: SDKMessage): message is SDKAssistantMessage {
