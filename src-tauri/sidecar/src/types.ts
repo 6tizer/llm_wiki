@@ -25,6 +25,7 @@ export interface AgentRequest {
 		continue?: boolean;
 		forkSession?: boolean;
 		resumeSessionAt?: string;
+		intentOverride?: string;
 		apiKey?: string;
 		baseUrl?: string;
 		persistSession?: boolean;

@@ -117,6 +117,70 @@ test("query request forwards session options to the SDK", async () => {
 	assert.equal(capturedInput?.options?.title, "Wiki Agent");
 });
 
+test("query request appends intent override to system prompt without forwarding it", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			systemPrompt: "base system",
+			intentOverride: "Treat the latest user message as primary.",
+		},
+	});
+
+	assert.equal(
+		capturedInput?.options?.systemPrompt,
+		"base system\n\nTreat the latest user message as primary.",
+	);
+	assert.equal(
+		"intentOverride" in (capturedInput?.options ?? {}),
+		false,
+	);
+});
+
+test("query request uses intent override as system prompt when no system prompt exists", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			systemPrompt: undefined,
+			intentOverride: "Treat the latest user message as primary.",
+		},
+	});
+
+	assert.equal(
+		capturedInput?.options?.systemPrompt,
+		"Treat the latest user message as primary.",
+	);
+	assert.equal(
+		"intentOverride" in (capturedInput?.options ?? {}),
+		false,
+	);
+});
+
 test("canUseTool pre-approves allowed Wiki tools and denies disabled Wiki writes", async () => {
 	let capturedInput: Parameters<QueryFn>[0] | undefined;
 	let bridgeCalls = 0;

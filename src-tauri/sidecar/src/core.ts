@@ -48,6 +48,15 @@ export function omitNullish<T extends Record<string, unknown>>(
 	) as Partial<T>;
 }
 
+export function appendIntentOverride(
+	systemPrompt: string | undefined,
+	intentOverride: string | undefined,
+): string | undefined {
+	if (!intentOverride?.trim()) return systemPrompt;
+	if (!systemPrompt?.trim()) return intentOverride;
+	return `${systemPrompt}\n\n${intentOverride}`;
+}
+
 export function createRequestHandler({
 	queryFn,
 	send,
@@ -196,7 +205,10 @@ export function createRequestHandler({
 					}
 				: undefined;
 			const rawOptions: Record<string, unknown> = {
-				systemPrompt: req.options.systemPrompt,
+				systemPrompt: appendIntentOverride(
+					req.options.systemPrompt,
+					req.options.intentOverride,
+				),
 				cwd: req.options.cwd,
 				model: req.options.model,
 				maxTurns: req.options.maxTurns ?? 10,
