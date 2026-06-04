@@ -323,6 +323,7 @@
       "sourceWatch": "Source Watch",
       "scheduledImport": "Scheduled Import",
       "apiServer": "API Server",
+      "agent": "Agent",
       "output": "Output",
       "interface": "Interface",
       "maintenance": "Maintenance",
@@ -588,6 +589,17 @@
         "endpointGraphNote": "?q=…&nodeType=…&limit=N — wikilinks graph derived from wiki/*.md.",
         "endpointRescanNote": "Triggers a backend rescan using your Source Watch config.",
         "endpointChatNote": "Not implemented yet (returns 501)."
+      },
+      "agent": {
+        "title": "Agent",
+        "description": "Per-project resource limits for Agent runs. These settings apply only to the currently open project.",
+        "noProject": "Open a project first to edit Agent limits.",
+        "maxTurns": "Max turns",
+        "maxTurnsHint": "Maximum SDK turns per Agent run. Higher values allow longer multi-step tasks.",
+        "maxFilesChanged": "Max files changed",
+        "maxFilesChangedHint": "Maximum distinct wiki files the Agent may change in one run.",
+        "maxWriteKiB": "Max write size (KiB)",
+        "maxWriteKiBHint": "Maximum size of a single write operation."
       },
       "output": {
         "title": "Output Preferences",

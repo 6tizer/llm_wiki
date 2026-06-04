@@ -73,6 +73,11 @@ export interface SettingsDraft {
   apiEnabled: boolean
   apiAllowUnauthenticated: boolean
   apiToken: string
+
+  // Per-project Agent resource limits
+  agentMaxTurns: number
+  agentMaxFilesChanged: number
+  agentMaxWriteKiB: number
 }
 
 export type DraftSetter = <K extends keyof SettingsDraft>(

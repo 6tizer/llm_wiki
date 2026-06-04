@@ -12,6 +12,9 @@ import {
 } from "./agent-policy.js";
 import { createLlmWikiMcpServer } from "./wiki-tools.js";
 
+// Keep this default in sync with DEFAULT_AGENT_RESOURCE_CONFIG in the frontend.
+export const DEFAULT_AGENT_MAX_TURNS = 30;
+
 type QueryInput = Parameters<typeof sdkQuery>[0];
 export interface RewindFilesResult {
 	canRewind: boolean;
@@ -188,7 +191,7 @@ export function createRequestHandler({
 				),
 				cwd: req.options.cwd,
 				model: req.options.model,
-				maxTurns: req.options.maxTurns ?? 10,
+				maxTurns: req.options.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
 				maxBudgetUsd: req.options.maxBudgetUsd,
 				sessionId: req.options.sessionId,
 				resume: req.options.resume,

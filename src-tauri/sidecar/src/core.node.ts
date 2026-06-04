@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { createRequestHandler, omitNullish, type QueryControl, type QueryFn } from "./core.js";
 import { handleRewindFilesRequest } from "./rewind-bridge.js";
 import type { AgentMessage, AgentRequest } from "./types.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 const baseRequest: AgentRequest = {
 	type: "query",
@@ -19,6 +23,17 @@ const baseRequest: AgentRequest = {
 		persistSession: false,
 	},
 };
+
+type RegisteredTool = {
+	handler: (args: Record<string, unknown>, extra: Record<string, unknown>) => Promise<CallToolResult>;
+};
+
+async function tempWikiProject(): Promise<string> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llm-wiki-core-"));
+	await fs.mkdir(path.join(dir, "wiki"), { recursive: true });
+	await fs.writeFile(path.join(dir, "wiki", "index.md"), "# Index\n", "utf8");
+	return dir;
+}
 
 test("omitNullish removes null and undefined but keeps falsey values", () => {
 	assert.deepEqual(
@@ -64,7 +79,7 @@ test("query request strips nullish SDK options and emits message then done", asy
 	assert.equal(capturedInput?.prompt, "hello");
 	assert.equal(capturedInput?.options?.cwd, undefined);
 	assert.equal(capturedInput?.options?.maxBudgetUsd, undefined);
-	assert.equal(capturedInput?.options?.maxTurns, 10);
+	assert.equal(capturedInput?.options?.maxTurns, 30);
 	assert.equal(capturedInput?.options?.tools, undefined);
 	assert.deepEqual(capturedInput?.options?.allowedTools, []);
 	assert.equal(capturedInput?.options?.permissionMode, "default");
@@ -73,6 +88,30 @@ test("query request strips nullish SDK options and emits message then done", asy
 		false,
 	);
 	assert.deepEqual(sent.map((msg) => msg.type), ["message", "done"]);
+});
+
+test("query request preserves provided maxTurns", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			maxTurns: 44,
+		},
+	});
+
+	assert.equal(capturedInput?.options?.maxTurns, 44);
 });
 
 test("query request forwards session options to the SDK", async () => {
@@ -360,6 +399,72 @@ test("query request enables LLM Wiki MCP tools when project context is present",
 	]);
 	assert.ok(capturedInput?.options?.mcpServers);
 	assert.ok(capturedInput?.options?.hooks);
+});
+
+test("query request forwards wiki write resource limits to MCP tools", async () => {
+	const projectPath = await tempWikiProject();
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath,
+			enableWikiTools: true,
+			enableWriteTools: true,
+			maxFilesChanged: 1,
+			maxWriteBytes: 512,
+		},
+	});
+
+	const server = capturedInput?.options?.mcpServers?.llm_wiki as
+		| { instance?: { _registeredTools?: Record<string, RegisteredTool> } }
+		| undefined;
+	const updatePage = server?.instance?._registeredTools?.update_page;
+	const createEntity = server?.instance?._registeredTools?.create_entity;
+	assert.ok(updatePage);
+	assert.ok(createEntity);
+
+	const first = await updatePage.handler(
+		{
+			path: "wiki/index.md",
+			contents: "# Index\n\nThis page now contains a concrete update about agent resource testing.",
+		},
+		{},
+	);
+	const oversized = await updatePage.handler(
+		{
+			path: "wiki/index.md",
+			contents: `# Index\n\n${"Too large. ".repeat(80)}`,
+		},
+		{},
+	);
+	const secondFile = await createEntity.handler(
+		{
+			name: "Second File",
+			summary: "This second file should exceed the write limit.",
+		},
+		{},
+	);
+
+	assert.equal(first.isError, undefined);
+	assert.equal(oversized.isError, true);
+	assert.equal(oversized.structuredContent?.kind, "max_write_bytes");
+	assert.equal(oversized.structuredContent?.limit, 512);
+	assert.match(String(oversized.structuredContent?.error), /maxWriteBytes/);
+	assert.equal(secondFile.isError, true);
+	assert.equal(secondFile.structuredContent?.kind, "max_files_changed");
+	assert.equal(secondFile.structuredContent?.limit, 1);
 });
 
 test("query request can restrict tools to pre-approved Wiki MCP tools", async () => {
