@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => {
-	const listeners: Record<string, (event: { payload: unknown }) => void> = {};
+	const listeners: Record<
+		string,
+		Array<(event: { payload: unknown }) => void>
+	> = {};
+	const emit = (event: string, payload: unknown) => {
+		for (const listener of listeners[event] ?? []) {
+			listener({ payload });
+		}
+	};
 	return {
 		invoke: vi.fn(
 			async (_command: string, _payload?: unknown): Promise<unknown> =>
@@ -9,15 +17,19 @@ const tauriMocks = vi.hoisted(() => {
 		),
 		listen: vi.fn(
 			async (event: string, cb: (event: { payload: unknown }) => void) => {
-				listeners[event] = cb;
+				listeners[event] = [...(listeners[event] ?? []), cb];
 				return vi.fn(() => {
-					delete listeners[event];
+					listeners[event] = (listeners[event] ?? []).filter(
+						(listener) => listener !== cb,
+					);
+					if (listeners[event]?.length === 0) {
+						delete listeners[event];
+					}
 				});
 			},
 		),
-		emit: (event: string, payload: unknown) => listeners[event]?.({ payload }),
-		emitString: (event: string, payload: string) =>
-			listeners[event]?.({ payload }),
+		emit,
+		emitString: emit,
 		reset: () => {
 			for (const event of Object.keys(listeners)) {
 				delete listeners[event];
@@ -199,6 +211,64 @@ describe("streamAgent", () => {
 
 		await expect(request).resolves.toMatchObject({
 			streamId: "stream-1",
+			messageId: "user-sdk-1",
+			ok: true,
+			result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+		});
+	});
+
+	it("allows stream and one-shot rewind listeners to consume the same rewind event", async () => {
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+			onRewindFiles: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+		const rewind = rewindAgentFiles(payload.args.streamId, "user-sdk-1");
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith("agent_rewind_files", {
+				streamId: payload.args.streamId,
+				messageId: "user-sdk-1",
+			});
+		});
+
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "rewind_files",
+				data: {
+					messageId: "user-sdk-1",
+					ok: true,
+					result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+				},
+			}),
+		);
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+
+		await expect(rewind).resolves.toMatchObject({
+			streamId: payload.args.streamId,
+			messageId: "user-sdk-1",
+			ok: true,
+		});
+		await stream;
+		expect(callbacks.onRewindFiles).toHaveBeenCalledWith({
+			streamId: payload.args.streamId,
 			messageId: "user-sdk-1",
 			ok: true,
 			result: { canRewind: true, filesChanged: ["wiki/page.md"] },

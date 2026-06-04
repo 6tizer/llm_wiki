@@ -34,6 +34,7 @@ function sendUnavailable(
 
 function isTransportClosedError(err: unknown): boolean {
 	const message = err instanceof Error ? err.message : String(err);
+	// SDK ProcessTransport wording; review this matcher when upgrading the Agent SDK.
 	return /not ready for writing|terminated process|transport is closed|ended stdin/i.test(message);
 }
 
