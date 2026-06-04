@@ -459,6 +459,8 @@ test("query request forwards wiki write resource limits to MCP tools", async () 
 
 	assert.equal(first.isError, undefined);
 	assert.equal(oversized.isError, true);
+	assert.equal(oversized.structuredContent?.kind, "max_write_bytes");
+	assert.equal(oversized.structuredContent?.limit, 512);
 	assert.match(String(oversized.structuredContent?.error), /maxWriteBytes/);
 	assert.equal(secondFile.isError, true);
 	assert.equal(secondFile.structuredContent?.kind, "max_files_changed");

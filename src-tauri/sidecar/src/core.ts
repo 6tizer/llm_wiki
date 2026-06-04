@@ -12,6 +12,7 @@ import {
 } from "./agent-policy.js";
 import { createLlmWikiMcpServer } from "./wiki-tools.js";
 
+// Keep this default in sync with DEFAULT_AGENT_RESOURCE_CONFIG in the frontend.
 export const DEFAULT_AGENT_MAX_TURNS = 30;
 
 type QueryInput = Parameters<typeof sdkQuery>[0];

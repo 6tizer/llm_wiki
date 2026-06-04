@@ -7,6 +7,7 @@ export interface AgentResourceConfig {
   maxWriteBytes: number
 }
 
+// Keep these defaults in sync with the sidecar defaults in core.ts and wiki-tools.ts.
 export const DEFAULT_AGENT_RESOURCE_CONFIG: AgentResourceConfig = {
   maxTurns: 30,
   maxFilesChanged: 10,

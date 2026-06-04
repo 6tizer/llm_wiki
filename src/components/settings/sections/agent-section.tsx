@@ -10,9 +10,19 @@ interface Props {
   projectReady: boolean
 }
 
-function parsePositiveInteger(value: string, fallback: number): number {
+const MAX_TURNS = 200
+const MAX_FILES_CHANGED = 200
+const MAX_WRITE_KIB = 10240
+
+function parseBoundedInteger(
+  value: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const parsed = Number.parseInt(value, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, parsed))
 }
 
 export function AgentSection({ draft, setDraft, projectReady }: Props) {
@@ -46,12 +56,12 @@ export function AgentSection({ draft, setDraft, projectReady }: Props) {
             id="agent-max-turns"
             type="number"
             min={1}
-            max={200}
+            max={MAX_TURNS}
             value={draft.agentMaxTurns}
             onChange={(event) =>
               setDraft(
                 "agentMaxTurns",
-                parsePositiveInteger(event.target.value, draft.agentMaxTurns),
+                parseBoundedInteger(event.target.value, draft.agentMaxTurns, 1, MAX_TURNS),
               )
             }
             disabled={disabled}
@@ -69,14 +79,16 @@ export function AgentSection({ draft, setDraft, projectReady }: Props) {
             id="agent-max-files-changed"
             type="number"
             min={1}
-            max={200}
+            max={MAX_FILES_CHANGED}
             value={draft.agentMaxFilesChanged}
             onChange={(event) =>
               setDraft(
                 "agentMaxFilesChanged",
-                parsePositiveInteger(
+                parseBoundedInteger(
                   event.target.value,
                   draft.agentMaxFilesChanged,
+                  1,
+                  MAX_FILES_CHANGED,
                 ),
               )
             }
@@ -95,12 +107,12 @@ export function AgentSection({ draft, setDraft, projectReady }: Props) {
             id="agent-max-write-kib"
             type="number"
             min={1}
-            max={10240}
+            max={MAX_WRITE_KIB}
             value={draft.agentMaxWriteKiB}
             onChange={(event) =>
               setDraft(
                 "agentMaxWriteKiB",
-                parsePositiveInteger(event.target.value, draft.agentMaxWriteKiB),
+                parseBoundedInteger(event.target.value, draft.agentMaxWriteKiB, 1, MAX_WRITE_KIB),
               )
             }
             disabled={disabled}

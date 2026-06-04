@@ -193,7 +193,10 @@ test("update_page rejects unsafe and oversized writes", async () => {
 	assert.equal(absoluteResult.isError, true);
 	assert.match(resultText(absoluteResult), /safe project-relative path/);
 	assert.equal(bigResult.isError, true);
-	assert.match(resultText(bigResult), /maxWriteBytes/);
+	assert.equal(bigResult.structuredContent?.kind, "max_write_bytes");
+	assert.equal(bigResult.structuredContent?.limit, 30);
+	assert.equal(bigResult.structuredContent?.bytes, 48);
+	assert.match(String(bigResult.structuredContent?.error), /maxWriteBytes/);
 });
 
 test("update_page rejects real writes when write tools are disabled", async () => {

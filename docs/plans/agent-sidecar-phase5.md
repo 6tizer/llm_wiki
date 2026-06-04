@@ -264,7 +264,7 @@ Phase 5 拆 7 个 PR，分 4 个子阶段。子阶段之间有依赖，子阶段
 - UI 手动验证：
   - Agent 默认 maxTurns=30，多步任务不再中途失败
   - Agent 默认 maxFilesChanged=10，批量修复不再 3 个文件就中断
-  - maxFilesChanged 超限时显示结构化提示（"已修改 N 个文件，达到上限。发送 '继续' 重置配额"）
+  - PR D 已返回结构化 MCP error（`kind: "max_files_changed"`）；专门的前端状态提示留到后续 UI PR
   - Settings 中可修改 Agent 配置
   - 修改后重启 app 配置保留
 
@@ -397,7 +397,7 @@ Phase 5 完成时：
 - [ ] Agent rewind 在 stream 完成后给出明确提示（不可用或正常工作）
 - [ ] Agent 默认 maxTurns 提高到 30，多步任务不中途失败
 - [ ] Agent 默认 maxFilesChanged 提高到 10，批量修复不 3 个文件就中断
-- [ ] maxFilesChanged 超限时显示结构化提示
+- [ ] maxFilesChanged 超限时显示前端状态提示（PR D 已完成结构化 MCP error）
 - [ ] Agent 配置（maxTurns/maxFilesChanged/maxWriteBytes）可在 Settings 中修改
 - [ ] 过期的 agentSessionId 在启动时自动清理
 - [ ] React duplicate key warnings 消除（#59）

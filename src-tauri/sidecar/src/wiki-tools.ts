@@ -24,6 +24,7 @@ import {
 	sha256,
 } from "./wiki-paths.js";
 
+// Keep these defaults in sync with DEFAULT_AGENT_RESOURCE_CONFIG in the frontend.
 export const DEFAULT_MAX_WRITE_BYTES = 256 * 1024;
 export const DEFAULT_MAX_FILES_CHANGED = 10;
 const STRING_ARRAY = z.array(z.string());
@@ -346,6 +347,19 @@ async function writePage(args: {
 	}
 
 	const newText = args.mode === "append" && exists ? `${oldText.trimEnd()}\n\n${args.contents.trim()}\n` : args.contents;
+	const writeBytes = Buffer.byteLength(newText, "utf8");
+	if (writeBytes > maxWriteBytes) {
+		return jsonResult(
+			{
+				ok: false,
+				kind: "max_write_bytes",
+				limit: maxWriteBytes,
+				bytes: writeBytes,
+				error: `Write exceeds maxWriteBytes (${writeBytes} > ${maxWriteBytes})`,
+			},
+			true,
+		);
+	}
 	assertWritableContents(newText, maxWriteBytes);
 	const newSha256 = sha256(newText);
 	const summary = diffSummary(oldText, newText);
