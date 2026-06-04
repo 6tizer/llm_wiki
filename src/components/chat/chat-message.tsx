@@ -369,6 +369,17 @@ function displayExternalPath(page: CitedPage): string {
   return raw
 }
 
+function citedPageKey(page: CitedPage, index: number): string {
+  return [
+    page.kind ?? "wiki",
+    page.source ?? "",
+    page.path,
+    page.url ?? "",
+    page.title,
+    index,
+  ].join(":")
+}
+
 /**
  * Markdown image-reference regex used to count `![](url)` occurrences
  * in cited pages AND extract the first URL (so the image-badge
@@ -602,7 +613,7 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
             // event delegation. Hover effect shifts to the inner
             // buttons individually so each gives feedback.
             <div
-              key={page.path}
+              key={citedPageKey(page, i)}
               className="flex w-full items-center gap-1.5 rounded text-left"
               title={page.kind === "external" ? `${page.source ?? "External"}: ${page.url ?? page.path}` : page.path}
             >

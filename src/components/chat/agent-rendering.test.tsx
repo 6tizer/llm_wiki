@@ -81,6 +81,26 @@ describe("agent message rendering", () => {
     expect(html).toContain("Found result")
   })
 
+  it("does not warn when tool use and result share the same SDK id", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    renderToStaticMarkup(
+      <AgentBlockList
+        blocks={[
+          { type: "tool_use", id: "1", name: "wiki_search", input: { q: "rope" } },
+          { type: "tool_result", tool_use_id: "1", content: [{ type: "text", text: "Found result" }] },
+        ]}
+        renderText={(text) => <p>{text}</p>}
+      />,
+    )
+
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("same key"),
+      expect.anything(),
+    )
+    errorSpy.mockRestore()
+  })
+
 	  it("keeps ordinary assistant messages free of agent chrome", () => {
 	    const html = renderToStaticMarkup(<ChatMessage message={assistantMessage()} />)
 
@@ -222,5 +242,27 @@ describe("agent message rendering", () => {
 
     expect(html).toContain("wikilink:Phase 4 Notes")
     expect(html).toContain("References (1)")
+  })
+
+  it("does not warn when saved references contain duplicate paths", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          content: "Answer with saved refs",
+          references: [
+            { title: "Same Page", path: "wiki/entities/same.md" },
+            { title: "Same Page Again", path: "wiki/entities/same.md" },
+          ],
+        })}
+      />,
+    )
+
+    expect(html).toContain("References (2)")
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("same key"),
+      expect.anything(),
+    )
+    errorSpy.mockRestore()
   })
 })

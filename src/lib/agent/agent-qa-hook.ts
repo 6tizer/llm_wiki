@@ -41,6 +41,15 @@ export interface QaHookResult {
 	error?: string;
 }
 
+/** Source of a QA flush, used to tune extraction without changing queue behavior. */
+export type QaHookTrigger = "auto" | "delete";
+
+/** Optional controls for a single QA flush. */
+export interface QaHookFlushOptions {
+	/** Describes why QA extraction is running; defaults to the delayed auto hook. */
+	trigger?: QaHookTrigger;
+}
+
 // ── Pending Queue (dirty flag) ───────────────────────────────────────────────
 
 const pendingQa = new Set<string>();
@@ -116,6 +125,7 @@ export async function flushQaForConversation(
 	projectPath: string,
 	llmConfig: LlmConfig,
 	searchConfig: SearchApiConfig,
+	options: QaHookFlushOptions = {},
 ): Promise<QaHookResult> {
 	// Only process if actually pending
 	if (!pendingQa.has(convId)) {
@@ -136,6 +146,7 @@ export async function flushQaForConversation(
 			llmConfig,
 			searchConfig,
 			convMessages,
+			options.trigger ?? "auto",
 		);
 		return result;
 	} finally {
@@ -183,9 +194,31 @@ export async function flushAllPendingQa(
 // ── Skip Logic ───────────────────────────────────────────────────────────────
 
 const GREETING_RE = /^(hi|hello|hey|你好|您好|嗨|哈喽|yo|sup)\s*[!?.。！？]*$/i;
+const DELETE_OPERATION_RE =
+	/(delete|deleted|deleting|remove|removed|removing|cleanup|cleaned up|purge|删除|移除|删掉|清理|已删|已删除|已经删除)/i;
+const KNOWLEDGE_SIGNAL_RE =
+	/(why|how|because|root cause|workaround|regression|warning|error|bug|insight|lesson|原因|原理|机制|策略|表现|应对|解决|观察|问题|错误|报错|警告|回归|限制|配置)/i;
+
+function isDeleteOnlyConversation(
+	userMsgs: DisplayMessage[],
+	assistantMsgs: DisplayMessage[],
+): boolean {
+	const lastUser = userMsgs[userMsgs.length - 1]?.content.trim() ?? "";
+	const lastAssistant = assistantMsgs[assistantMsgs.length - 1]?.content.trim() ?? "";
+	const tail = `${lastUser}\n${lastAssistant}`;
+
+	if (!DELETE_OPERATION_RE.test(tail)) return false;
+	if (/[?？]/.test(lastUser)) return false;
+	if (KNOWLEDGE_SIGNAL_RE.test(tail)) return false;
+
+	return DELETE_OPERATION_RE.test(lastUser) || DELETE_OPERATION_RE.test(lastAssistant);
+}
 
 /** Decide whether a conversation is worth extracting a QA from. */
-export function shouldExtractQa(messages: DisplayMessage[]): {
+export function shouldExtractQa(
+	messages: DisplayMessage[],
+	options: QaHookFlushOptions = {},
+): {
 	extract: boolean;
 	reason?: string;
 } {
@@ -203,6 +236,13 @@ export function shouldExtractQa(messages: DisplayMessage[]): {
 	);
 	if (allGreetings) {
 		return { extract: false, reason: "greeting-only" };
+	}
+
+	if (
+		(options.trigger ?? "auto") === "delete" &&
+		isDeleteOnlyConversation(userMsgs, assistantMsgs)
+	) {
+		return { extract: false, reason: "delete-only" };
 	}
 
 	// Skip if the last assistant message is too short
@@ -302,6 +342,7 @@ export function isDuplicateQa(
 	existing: ExistingQa[],
 ): boolean {
 	const normalizedTitle = title.toLowerCase().trim();
+	const titleTokens = extractTokens(normalizedTitle);
 	const bodyTokens = body ? extractTokens(body) : new Set<string>();
 
 	for (const qa of existing) {
@@ -316,6 +357,12 @@ export function isDuplicateQa(
 				existingTitle.includes(normalizedTitle))
 		) {
 			return true;
+		}
+		if (titleTokens.size > 5) {
+			const existingTitleTokens = extractTokens(existingTitle);
+			if (jaccardSimilarity(titleTokens, existingTitleTokens) > 0.45) {
+				return true;
+			}
 		}
 		// Body content overlap: Jaccard similarity > 0.3 on significant tokens
 		if (bodyTokens.size > 5 && qa.body) {
@@ -335,6 +382,7 @@ function buildQaExtractionPrompt(
 	wikiContext: string,
 	externalResults: WebSearchResult[],
 	languageHint: string,
+	trigger: QaHookTrigger,
 ): string {
 	const conversation = messages
 		.map((m) => `[${m.role}]: ${m.content}`)
@@ -347,6 +395,18 @@ function buildQaExtractionPrompt(
 					.map((r) => `- **${r.title}**: ${r.snippet} (${r.url})`)
 					.join("\n")}`
 			: "";
+	const deleteTriggerRules =
+		trigger === "delete"
+			? [
+					"",
+					"## Delete-Triggered Extraction",
+					"",
+					"The user is deleting this conversation. Extract only the most useful NEW knowledge from the final turns.",
+					"Strongly prefer the latest user-observed issue, correction, or conclusion over older operational topics.",
+					"If the final turns only describe deleting/removing files or conversation cleanup, output ONLY: SKIP.",
+					"If the best candidate duplicates an existing QA topic, output ONLY: SKIP.",
+				].join("\n")
+			: "";
 
 	return `You are a knowledge extraction expert. Analyze the following conversation and extract the key question and its answer into a structured QA document.
 
@@ -357,6 +417,7 @@ ${languageHint}
 ${conversation}
 ${externalSection}
 ${wikiContext ? `\n## Existing Wiki Context\n\n${wikiContext}\n` : ""}
+${deleteTriggerRules}
 
 ## Your Task
 
@@ -403,9 +464,10 @@ async function runQaExtraction(
 	llmConfig: LlmConfig,
 	searchConfig: SearchApiConfig,
 	messages: DisplayMessage[],
+	trigger: QaHookTrigger,
 ): Promise<QaHookResult> {
 	// Step 1: Check skip conditions
-	const { extract, reason } = shouldExtractQa(messages);
+	const { extract, reason } = shouldExtractQa(messages, { trigger });
 	if (!extract) {
 		return { ok: true, skipped: true, skipReason: reason };
 	}
@@ -458,6 +520,7 @@ async function runQaExtraction(
 		wikiContext,
 		externalResults,
 		languageHint,
+		trigger,
 	);
 
 	let accumulated = "";
