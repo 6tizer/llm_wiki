@@ -13,6 +13,7 @@ import {
   Clock,
   FolderSync,
   Server,
+  SlidersHorizontal,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -20,8 +21,10 @@ import i18n from "@/i18n"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
+import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { loadSourceWatchConfig, saveLanguage } from "@/lib/project-store"
+import { saveAgentResourceConfig } from "@/lib/agent/agent-settings"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { LlmProviderSection } from "./sections/llm-provider-section"
@@ -34,6 +37,7 @@ import { NetworkSection } from "./sections/network-section"
 import { ScheduledImportSection } from "./sections/scheduled-import-section"
 import { SourceWatchSection } from "./sections/source-watch-section"
 import { ApiServerSection } from "./sections/api-server-section"
+import { AgentSection } from "./sections/agent-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -47,6 +51,7 @@ type CategoryId =
   | "source-watch"
   | "scheduled-import"
   | "api-server"
+  | "agent"
   | "output"
   | "interface"
   | "maintenance"
@@ -71,6 +76,7 @@ const CATEGORIES: Category[] = [
   { id: "source-watch", labelKey: "settings.categories.sourceWatch", icon: FolderSync },
   { id: "scheduled-import", labelKey: "settings.categories.scheduledImport", icon: Clock },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
+  { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
@@ -87,6 +93,7 @@ function initialDraft(
   scheduledImport: ReturnType<typeof useWikiStore.getState>["scheduledImportConfig"],
   sourceWatch: ReturnType<typeof useWikiStore.getState>["sourceWatchConfig"],
   apiConfig: ReturnType<typeof useWikiStore.getState>["apiConfig"],
+  agentConfig: ReturnType<typeof useAgentSettingsStore.getState>["resourceConfig"],
   maxHistoryMessages: number,
   uiLanguage: string,
   projectPath?: string,
@@ -144,6 +151,9 @@ function initialDraft(
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
     apiToken: apiConfig.token,
+    agentMaxTurns: agentConfig.maxTurns,
+    agentMaxFilesChanged: agentConfig.maxFilesChanged,
+    agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
     uiLanguage,
   }
 }
@@ -167,6 +177,8 @@ export function SettingsView() {
   const setSourceWatchConfig = useWikiStore((s) => s.setSourceWatchConfig)
   const apiConfig = useWikiStore((s) => s.apiConfig)
   const setApiConfig = useWikiStore((s) => s.setApiConfig)
+  const agentConfig = useAgentSettingsStore((s) => s.resourceConfig)
+  const setAgentResourceConfig = useAgentSettingsStore((s) => s.setResourceConfig)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
   const setMaxHistoryMessages = useChatStore((s) => s.setMaxHistoryMessages)
   // Drives the red dot next to the "About" row in the settings
@@ -191,6 +203,7 @@ export function SettingsView() {
       scheduledImportConfig,
       sourceWatchConfig,
       apiConfig,
+      agentConfig,
       maxHistoryMessages,
       i18n.language,
       project?.path,
@@ -234,6 +247,7 @@ export function SettingsView() {
         scheduledImportConfig,
         sourceWatchConfig,
         apiConfig,
+        agentConfig,
         maxHistoryMessages,
         prev.uiLanguage,
         project?.path,
@@ -248,6 +262,7 @@ export function SettingsView() {
     scheduledImportConfig,
     sourceWatchConfig,
     apiConfig,
+    agentConfig,
     maxHistoryMessages,
     project,
   ])
@@ -389,6 +404,15 @@ export function SettingsView() {
       console.warn("[api] failed to reload API server config cache:", err)
     }
 
+    if (project) {
+      const newAgentConfig = await saveAgentResourceConfig(project.path, {
+        maxTurns: draft.agentMaxTurns,
+        maxFilesChanged: draft.agentMaxFilesChanged,
+        maxWriteBytes: draft.agentMaxWriteKiB * 1024,
+      })
+      setAgentResourceConfig(newAgentConfig)
+    }
+
     if (draft.uiLanguage !== i18n.language) {
       await i18n.changeLanguage(draft.uiLanguage)
       await saveLanguage(draft.uiLanguage)
@@ -406,6 +430,7 @@ export function SettingsView() {
     setScheduledImportConfig,
     setSourceWatchConfig,
     setApiConfig,
+    setAgentResourceConfig,
     scheduledImportConfig,
     setMaxHistoryMessages,
     outputLanguage,
@@ -432,6 +457,8 @@ export function SettingsView() {
         return <ScheduledImportSection draft={draft} setDraft={setDraft} />
       case "api-server":
         return <ApiServerSection draft={draft} setDraft={setDraft} />
+      case "agent":
+        return <AgentSection draft={draft} setDraft={setDraft} projectReady={!!project} />
       case "output":
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":

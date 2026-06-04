@@ -5,8 +5,13 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
+import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { listDirectory, openProject } from "@/commands/fs"
 import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig } from "@/lib/project-store"
+import {
+  DEFAULT_AGENT_RESOURCE_CONFIG,
+  loadAgentResourceConfig,
+} from "@/lib/agent/agent-settings"
 import { loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
@@ -269,6 +274,13 @@ function App() {
     const { resetProjectState } = await import("@/lib/reset-project-state")
     await resetProjectState()
 
+    let agentConfig = DEFAULT_AGENT_RESOURCE_CONFIG
+    try {
+      agentConfig = await loadAgentResourceConfig(proj.path)
+    } catch {
+      agentConfig = DEFAULT_AGENT_RESOURCE_CONFIG
+    }
+    useAgentSettingsStore.getState().setResourceConfig(agentConfig)
     setProject(proj)
     const projectOutputLang = await loadOutputLanguage(proj.id)
     useWikiStore.getState().setOutputLanguage(projectOutputLang ?? "auto")

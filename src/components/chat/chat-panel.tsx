@@ -48,10 +48,8 @@ import { streamAgent } from "@/lib/agent/agent-transport";
 import type {
 	AgentActionRequiredPayload,
 	AgentRewindFilesPayload,
-	AgentTransportOptions,
 } from "@/lib/agent/agent-types";
 import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search";
-import { API_SERVER_PORT } from "@/lib/api-server-constants";
 import { computeContextBudget } from "@/lib/context-budget";
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance";
 import { isGreeting } from "@/lib/greeting-detector";
@@ -74,10 +72,12 @@ import {
 	type MessageReference,
 	useChatStore,
 } from "@/stores/chat-store";
+import { useAgentSettingsStore } from "@/stores/agent-settings-store";
 import { useWikiStore } from "@/stores/wiki-store";
 import { AgentPermissionDialogHost } from "./agent-permission-dialog";
 import { AgentRewindDialogHost } from "./agent-rewind-dialog";
 import { buildAgentResumeIntentOverrideForConversation } from "./agent-resume-intent";
+import { buildAgentTransportOptionsFromState } from "./agent-transport-options";
 import {
 	agentResultToStats,
 	agentToolBatchToRecords,
@@ -131,18 +131,6 @@ export function shouldPromptForQaBeforeConversationDelete(
 	);
 }
 
-function agentBaseUrl(
-	config: ReturnType<typeof useWikiStore.getState>["llmConfig"],
-): string | undefined {
-	if (config.provider === "custom") return config.customEndpoint || undefined;
-	if (config.provider === "ollama") return config.ollamaUrl || undefined;
-	return undefined;
-}
-
-function agentApiServerBaseUrl(): string {
-	return `http://127.0.0.1:${API_SERVER_PORT}`;
-}
-
 async function refreshAgentFileTree(projectPath?: string): Promise<void> {
 	if (!projectPath) return;
 	const tree = await listDirectory(projectPath);
@@ -163,33 +151,19 @@ function changedPathsFromAction(payload: AgentActionRequiredPayload): string[] {
 	return payload.kind === "lint_recommended" ? payload.paths : [];
 }
 
-function buildAgentTransportOptions(): AgentTransportOptions | null {
+function buildAgentTransportOptions() {
 	const wikiState = useWikiStore.getState();
 	const chatState = useChatStore.getState();
-	const project = wikiState.project;
-	if (!project) return null;
-	const activeConversation = chatState.conversations.find(
-		(conversation) => conversation.id === chatState.activeConversationId,
-	);
-	const agentSessionId = activeConversation?.agentSessionId;
+	const agentSettings = useAgentSettingsStore.getState();
 
-	return {
-		cwd: project.path,
-		projectId: project.id,
-		projectPath: project.path,
-		model: wikiState.llmConfig.model || undefined,
-		apiKey: wikiState.llmConfig.apiKey || undefined,
-		baseUrl: agentBaseUrl(wikiState.llmConfig),
-		resume: agentSessionId,
-		forkSession: activeConversation?.agentForkSessionPending === true,
-		persistSession: true,
-		permissionPolicy: "default",
-		enableWikiTools: true,
-		enableWriteTools: true,
-		enableFileCheckpointing: true,
-		apiServerBaseUrl: agentApiServerBaseUrl(),
-		apiToken: wikiState.apiConfig.token || undefined,
-	};
+	return buildAgentTransportOptionsFromState({
+		project: wikiState.project,
+		llmConfig: wikiState.llmConfig,
+		apiConfig: wikiState.apiConfig,
+		conversations: chatState.conversations,
+		activeConversationId: chatState.activeConversationId,
+		resourceConfig: agentSettings.resourceConfig,
+	});
 }
 
 function ModeButton({

@@ -323,6 +323,7 @@
       "sourceWatch": "资料文件夹监控",
       "scheduledImport": "定时导入",
       "apiServer": "API 服务",
+      "agent": "Agent",
       "output": "输出偏好",
       "interface": "界面",
       "maintenance": "维护",
@@ -588,6 +589,17 @@
         "endpointGraphNote": "?q=…&nodeType=…&limit=N —— 基于 wiki/*.md 的双链图谱。",
         "endpointRescanNote": "使用你的资料文件夹监控配置触发后端重新扫描。",
         "endpointChatNote": "尚未实现（返回 501）。"
+      },
+      "agent": {
+        "title": "Agent",
+        "description": "当前项目的 Agent 运行资源限制。设置只作用于当前打开的项目。",
+        "noProject": "请先打开一个项目再编辑 Agent 限制。",
+        "maxTurns": "最大轮数",
+        "maxTurnsHint": "单次 Agent 运行允许的 SDK 最大轮数。调高后可完成更长的多步骤任务。",
+        "maxFilesChanged": "最大改动文件数",
+        "maxFilesChangedHint": "单次 Agent 运行最多可修改的不同 wiki 文件数量。",
+        "maxWriteKiB": "单次写入大小上限（KiB）",
+        "maxWriteKiBHint": "单次写入操作允许的最大文件大小。"
       },
       "output": {
         "title": "输出偏好",

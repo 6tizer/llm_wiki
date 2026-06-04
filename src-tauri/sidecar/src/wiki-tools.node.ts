@@ -252,6 +252,41 @@ test("write tools enforce maxFilesChanged per tool context", async () => {
 	assert.equal(first.isError, undefined);
 	assert.equal(second.isError, true);
 	assert.match(resultText(second), /maxFilesChanged/);
+	assert.deepEqual(second.structuredContent, {
+		ok: false,
+		kind: "max_files_changed",
+		limit: 1,
+		changedCount: 1,
+		changedPaths: ["wiki/index.md"],
+		error: "Write would exceed maxFilesChanged (1)",
+	});
+});
+
+test("write tools default maxFilesChanged allows ten changed files", async () => {
+	const projectPath = await tempProject();
+	const createEntity = toolByName("create_entity", { projectPath });
+
+	for (let i = 0; i < 10; i += 1) {
+		const result = await createEntity.handler(
+			{
+				name: `Page ${i}`,
+				summary: `Allowed changed file ${i}.`,
+			},
+			{},
+		);
+		assert.equal(result.isError, undefined);
+	}
+	const eleventh = await createEntity.handler(
+		{
+			name: "Page 10",
+			summary: "This file should exceed the default changed file limit.",
+		},
+		{},
+	);
+
+	assert.equal(eleventh.isError, true);
+	assert.equal(eleventh.structuredContent?.kind, "max_files_changed");
+	assert.equal(eleventh.structuredContent?.limit, 10);
 });
 
 test("create_entity writes fixed directory and refuses overwrite", async () => {

@@ -24,8 +24,8 @@ import {
 	sha256,
 } from "./wiki-paths.js";
 
-const DEFAULT_MAX_WRITE_BYTES = 256 * 1024;
-const DEFAULT_MAX_FILES_CHANGED = 3;
+export const DEFAULT_MAX_WRITE_BYTES = 256 * 1024;
+export const DEFAULT_MAX_FILES_CHANGED = 10;
 const STRING_ARRAY = z.array(z.string());
 const SOURCE_MODE_SCHEMA = z.enum(["web", "anytxt", "both"]);
 const RESEARCH_SEED_ERROR = "Provide topic or at least one searchQueries/queries item";
@@ -366,7 +366,17 @@ async function writePage(args: {
 	const changedPaths = (args.context.changedPaths =
 		args.context.changedPaths ?? new Set<string>());
 	if (!changedPaths.has(plan.relativePath) && changedPaths.size >= maxFilesChanged) {
-		throw new Error(`Write would exceed maxFilesChanged (${maxFilesChanged})`);
+		return jsonResult(
+			{
+				ok: false,
+				kind: "max_files_changed",
+				limit: maxFilesChanged,
+				changedCount: changedPaths.size,
+				changedPaths: Array.from(changedPaths).sort(),
+				error: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+			},
+			true,
+		);
 	}
 
 	await fsLike.writeFile(plan.absolutePath, newText, "utf8");
