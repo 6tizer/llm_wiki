@@ -302,15 +302,15 @@ Phase 5 拆 7 个 PR，分 4 个子阶段。子阶段之间有依赖，子阶段
 
 **范围**：
 - **#59 React key warnings**：
-  - 调查 `chat-message.tsx` 和 `agent-block-list.tsx` 中的列表渲染
-  - 确保 `key` 属性唯一且稳定
+  - [x] `chat-message.tsx` 和 `agent-block-list.tsx` 中列表渲染 key 唯一且稳定
+  - [x] SDK `tool_use` / `tool_result` 共享 id 时不产生 duplicate key warning
 - **#63 Tauri resource id 错误**：
-  - 调查 `agent_spawn` 后的 `emit` / `listen` 是否有 race condition
-  - 检查 `listen` 是否在 `emit` 之后注册导致丢失事件
-  - 可能需要在 `invoke("agent_spawn")` 之前完成 `listen` 注册
+  - [x] `agent_spawn` 仍保持 `listen` 先于 `invoke`
+  - [x] listener cleanup 捕获 stale Tauri resource 的 sync/async error，避免 unhandled rejection
 - **#69 QA hook topic 提取**：
-  - 调查 `agent-qa-hook.ts` 在删除场景下的 topic 提取逻辑
-  - 修复删除时不提取被删内容的 topic
+  - [x] 删除 conversation 触发 QA 时优先最后几轮用户观察和新知识
+  - [x] 删除/移除型无新知识对话跳过 QA
+  - [x] 近重复中文 topic 在 LLM 调用前/写入前被 dedup
 
 **影响分析**：
 - 三个独立 bug，互不耦合
@@ -399,9 +399,9 @@ Phase 5 完成时：
 - [ ] maxFilesChanged 超限时显示前端状态提示（PR D 已完成结构化 MCP error）
 - [ ] Agent 配置（maxTurns/maxFilesChanged/maxWriteBytes）可在 Settings 中修改
 - [x] 过期的 agentSessionId 在启动时自动清理
-- [ ] React duplicate key warnings 消除（#59）
-- [ ] Tauri resource id 错误消除（#63）
-- [ ] QA hook 删除时不提取已删内容的 topic（#69）
+- [x] React duplicate key warnings 消除（#59）
+- [x] Tauri resource id 错误消除（#63）
+- [x] QA hook 删除时不提取已删内容的 topic（#69）
 - [ ] Sidecar 可编译为单文件 binary（可选）
 - [ ] 普通 Chat/Ingest 模式完全不受影响（回归测试）
 - [ ] `pnpm test` 全绿

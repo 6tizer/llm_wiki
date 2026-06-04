@@ -120,6 +120,15 @@ function sendPermissionResponse(payload: Record<string, unknown>) {
 	});
 }
 
+function safeUnlisten(unlisten: UnlistenFn | undefined, label: string): void {
+	if (!unlisten) return;
+	void Promise.resolve()
+		.then(() => unlisten())
+		.catch((err) => {
+			console.warn(`[agent-transport] failed to unlisten ${label}:`, err);
+		});
+}
+
 export async function rewindAgentFiles(
 	streamId: string,
 	messageId?: string,
@@ -157,7 +166,9 @@ export async function rewindAgentFiles(
 		return await result;
 	} finally {
 		if (timeout) clearTimeout(timeout);
-		unlisten?.();
+		const off = unlisten;
+		unlisten = undefined;
+		safeUnlisten(off, `agent:${streamId}:rewind`);
 	}
 }
 
@@ -187,8 +198,12 @@ export async function streamAgent(
 	let finished = false;
 
 	const cleanup = () => {
-		unlistenData?.();
-		unlistenDone?.();
+		const offData = unlistenData;
+		const offDone = unlistenDone;
+		unlistenData = undefined;
+		unlistenDone = undefined;
+		safeUnlisten(offData, `agent:${streamId}`);
+		safeUnlisten(offDone, `agent:${streamId}:done`);
 	};
 
 	const finishWith = (cb: () => void) => {

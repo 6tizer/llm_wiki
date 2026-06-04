@@ -5,6 +5,10 @@ const tauriMocks = vi.hoisted(() => {
 		string,
 		Array<(event: { payload: unknown }) => void>
 	> = {};
+	const listenerEvents: string[] = [];
+	let unlistenImpl:
+		| undefined
+		| ((event: string) => void | Promise<void>) = undefined;
 	const emit = (event: string, payload: unknown) => {
 		for (const listener of listeners[event] ?? []) {
 			listener({ payload });
@@ -17,6 +21,7 @@ const tauriMocks = vi.hoisted(() => {
 		),
 		listen: vi.fn(
 			async (event: string, cb: (event: { payload: unknown }) => void) => {
+				listenerEvents.push(event);
 				listeners[event] = [...(listeners[event] ?? []), cb];
 				return vi.fn(() => {
 					listeners[event] = (listeners[event] ?? []).filter(
@@ -25,15 +30,24 @@ const tauriMocks = vi.hoisted(() => {
 					if (listeners[event]?.length === 0) {
 						delete listeners[event];
 					}
+					return unlistenImpl?.(event);
 				});
 			},
 		),
 		emit,
 		emitString: emit,
+		listenerEvents,
+		setUnlistenImpl: (
+			next: undefined | ((event: string) => void | Promise<void>),
+		) => {
+			unlistenImpl = next;
+		},
 		reset: () => {
 			for (const event of Object.keys(listeners)) {
 				delete listeners[event];
 			}
+			listenerEvents.length = 0;
+			unlistenImpl = undefined;
 		},
 	};
 });
@@ -92,6 +106,127 @@ describe("streamAgent", () => {
 			stderr: "",
 		});
 		await stream;
+	});
+
+	it("registers data and done listeners before invoking agent_spawn", async () => {
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+		expect(tauriMocks.listenerEvents).toEqual([
+			`agent:${payload.args.streamId}`,
+			`agent:${payload.args.streamId}:done`,
+		]);
+		expect(tauriMocks.listen.mock.invocationCallOrder[0]).toBeLessThan(
+			tauriMocks.invoke.mock.invocationCallOrder[0],
+		);
+		expect(tauriMocks.listen.mock.invocationCallOrder[1]).toBeLessThan(
+			tauriMocks.invoke.mock.invocationCallOrder[0],
+		);
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+	});
+
+	it("swallows stale listener cleanup errors when a stream finishes", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		tauriMocks.setUnlistenImpl(() => {
+			throw new Error("The resource id 123 is invalid.");
+		});
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "done",
+				data: null,
+			}),
+		);
+
+		await stream;
+
+		expect(callbacks.onDone).toHaveBeenCalledWith(null);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+		await vi.waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("failed to unlisten"),
+				expect.any(Error),
+			);
+		});
+		warnSpy.mockRestore();
+	});
+
+	it("swallows async cleanup rejections from one-shot rewind listeners", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		tauriMocks.setUnlistenImpl(() =>
+			Promise.reject(new Error("The resource id 456 is invalid.")),
+		);
+
+		const request = rewindAgentFiles("stream-1", "user-sdk-1");
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith("agent_rewind_files", {
+				streamId: "stream-1",
+				messageId: "user-sdk-1",
+			});
+		});
+
+		tauriMocks.emitString(
+			"agent:stream-1",
+			JSON.stringify({
+				streamId: "stream-1",
+				type: "rewind_files",
+				data: {
+					messageId: "user-sdk-1",
+					ok: true,
+					result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+				},
+			}),
+		);
+
+		await expect(request).resolves.toMatchObject({
+			streamId: "stream-1",
+			messageId: "user-sdk-1",
+			ok: true,
+		});
+		await vi.waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("failed to unlisten"),
+				expect.any(Error),
+			);
+		});
+		warnSpy.mockRestore();
 	});
 
 	it("passes rewind result events through with the stream id", async () => {

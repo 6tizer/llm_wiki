@@ -76,6 +76,56 @@ describe("shouldExtractQa", () => {
 		];
 		expect(shouldExtractQa(messages).extract).toBe(true);
 	});
+
+	it("skips delete-only conversations without new knowledge", () => {
+		const messages = [
+			msg("user", "删除 wiki/entities/old-page.md"),
+			msg(
+				"assistant",
+				"已删除 wiki/entities/old-page.md，并清理了对应引用。".repeat(8),
+			),
+		];
+		const result = shouldExtractQa(messages, { trigger: "delete" });
+		expect(result.extract).toBe(false);
+		expect(result.reason).toBe("delete-only");
+	});
+
+	it("does not apply delete-only skip to ordinary auto QA eligibility", () => {
+		const messages = [
+			msg("user", "删除 wiki/entities/old-page.md"),
+			msg(
+				"assistant",
+				"已删除 wiki/entities/old-page.md，并清理了对应引用。".repeat(8),
+			),
+		];
+		expect(shouldExtractQa(messages).extract).toBe(true);
+	});
+
+	it("keeps delete conversations that include a new issue or insight", () => {
+		const messages = [
+			msg("user", "删除旧页面，并说明为什么会出现重复 QA"),
+			msg(
+				"assistant",
+				"删除完成。重复 QA 的原因是删除触发的提取流程过度依赖旧消息，没有足够强调最后几轮用户观察和 dedup 策略。".repeat(3),
+			),
+		];
+		expect(shouldExtractQa(messages).extract).toBe(true);
+	});
+
+	it("does not treat generic cleanup work as delete-only", () => {
+		const messages = [
+			msg("user", "cleanup the code around the QA hook"),
+			msg(
+				"assistant",
+				"I cleaned up the QA hook implementation and kept the behavior focused on the existing auto extraction path without changing stored conversation data.".repeat(
+					2,
+				),
+			),
+		];
+		expect(shouldExtractQa(messages, { trigger: "delete" }).extract).toBe(
+			true,
+		);
+	});
 });
 
 // ── Dirty flag ───────────────────────────────────────────────────────────────
@@ -255,6 +305,55 @@ describe("flushQaForConversation", () => {
 		expect(isConversationPending("conv-1")).toBe(false);
 	});
 
+	it("keeps auto-trigger prompt free of delete-only instructions", async () => {
+		markConversationDirty("conv-auto");
+		const messages = [
+			msg("user", "What is RAG?", "conv-auto"),
+			msg("assistant", longAnswer, "conv-auto"),
+		];
+
+		await flushQaForConversation(
+			"conv-auto",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		const llmMessages = streamChatMock.mock.calls[0]?.[1] as Array<{
+			content: string;
+		}>;
+		expect(llmMessages[0].content).not.toContain(
+			"Delete-Triggered Extraction",
+		);
+	});
+
+	it("adds recency and delete-intent guidance for delete-triggered extraction", async () => {
+		markConversationDirty("conv-delete");
+		const messages = [
+			msg("user", "What causes duplicate QA pages?", "conv-delete"),
+			msg("assistant", longAnswer, "conv-delete"),
+		];
+
+		const result = await flushQaForConversation(
+			"conv-delete",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+			{ trigger: "delete" },
+		);
+
+		const llmMessages = streamChatMock.mock.calls[0]?.[1] as Array<{
+			content: string;
+		}>;
+		expect(result.ok).toBe(true);
+		expect(result.saved).toBe(true);
+		expect(llmMessages[0].content).toContain("Delete-Triggered Extraction");
+		expect(llmMessages[0].content).toContain("latest user-observed issue");
+		expect(llmMessages[0].content).toContain("conversation cleanup");
+	});
+
 	it("filters messages by conversationId", async () => {
 		markConversationDirty("conv-1");
 		const messages = [
@@ -337,6 +436,42 @@ describe("flushQaForConversation", () => {
 		expect(result.skipped).toBe(true);
 		expect(result.skipReason).toBe("duplicate");
 		expect(isConversationPending("conv-dedup")).toBe(false);
+	});
+
+	it("skips near-duplicate Chinese operational topics before calling the LLM", async () => {
+		markConversationDirty("conv-near-dedup");
+		listDirectoryMock.mockResolvedValueOnce([
+			{
+				name: "existing.md",
+				path: "/project/wiki/qa/existing.md",
+				is_dir: false,
+			},
+		]);
+		fsMock.files.set(
+			"/project/wiki/qa/existing.md",
+			"---\ntype: qa\ntitle: llm-wiki工具中文件修改限制的具体表现和应对策略是什么\ntags: [qa]\n---\n\n# Q: llm-wiki工具中文件修改限制的具体表现和应对策略是什么\n\n## A: mcp__llm_wiki__update_page 默认限制单次最多修改 3 个文件，Agent 批量修复时会在第三个文件后停止，需要用户手动继续。",
+		);
+		const messages = [
+			msg(
+				"user",
+				"wiki维护工具中文件修改限制的具体情况是什么",
+				"conv-near-dedup",
+			),
+			msg("assistant", longAnswer, "conv-near-dedup"),
+		];
+
+		const result = await flushQaForConversation(
+			"conv-near-dedup",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		expect(result.ok).toBe(true);
+		expect(result.skipped).toBe(true);
+		expect(result.skipReason).toBe("duplicate");
+		expect(streamChatMock).not.toHaveBeenCalled();
 	});
 });
 

@@ -118,7 +118,9 @@ export function shouldPromptForQaBeforeConversationDelete(
 	options: { hasProject: boolean; isPending: boolean },
 ): boolean {
 	if (!options.hasProject) return false;
-	if (!shouldExtractQa(conversationMessages).extract) return false;
+	if (!shouldExtractQa(conversationMessages, { trigger: "delete" }).extract) {
+		return false;
+	}
 	return (
 		options.isPending ||
 		conversationMessages.some(
@@ -269,6 +271,7 @@ function ConversationSidebar() {
 				s.project.path,
 				s.llmConfig,
 				s.searchApiConfig,
+				{ trigger: "delete" },
 			);
 			if (!result.ok) {
 				setQaDeleteError(result.error || t("chat.qaDelete.failed"));

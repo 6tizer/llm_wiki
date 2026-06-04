@@ -21,6 +21,15 @@ function toolResultText(block: SDKToolResultBlock): string {
 		.join("");
 }
 
+function blockKey(block: SDKContentBlock, index: number): string {
+	if (block.type === "text") return `text:${index}`;
+	if (block.type === "tool_use") return `tool_use:${block.id || index}:${index}`;
+	if (block.type === "tool_result") {
+		return `tool_result:${block.tool_use_id || index}:${index}`;
+	}
+	return `block:${index}`;
+}
+
 export function AgentBlockList({ blocks, renderText }: AgentBlockListProps) {
 	const { t } = useTranslation();
 	if (blocks.length === 0) return null;
@@ -28,9 +37,10 @@ export function AgentBlockList({ blocks, renderText }: AgentBlockListProps) {
 	return (
 		<div className="space-y-2">
 			{blocks.map((block, index) => {
+				const key = blockKey(block, index);
 				if (block.type === "text") {
 					return (
-						<div key={`text-${block.text.slice(0, 30)}-${index}`}>
+						<div key={key}>
 							{renderText(block.text)}
 						</div>
 					);
@@ -38,7 +48,7 @@ export function AgentBlockList({ blocks, renderText }: AgentBlockListProps) {
 				if (block.type === "tool_use") {
 					return (
 						<details
-							key={block.id || index}
+							key={key}
 							className="min-w-0 rounded-md border border-border/60 bg-background/70 px-2 py-1.5"
 						>
 							<summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -56,7 +66,7 @@ export function AgentBlockList({ blocks, renderText }: AgentBlockListProps) {
 					const text = toolResultText(block);
 					return (
 						<details
-							key={block.tool_use_id || index}
+							key={key}
 							className="min-w-0 rounded-md border border-border/60 bg-background/70 px-2 py-1.5"
 						>
 							<summary className="cursor-pointer text-xs font-medium text-muted-foreground">

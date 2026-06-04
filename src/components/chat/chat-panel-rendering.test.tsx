@@ -76,4 +76,16 @@ describe("shouldPromptForQaBeforeConversationDelete", () => {
       ),
     ).toBe(false)
   })
+
+  it("does not prompt for delete-only conversations without new knowledge", () => {
+    expect(
+      shouldPromptForQaBeforeConversationDelete(
+        [
+          msg("user", "删除 wiki/entities/old-page.md"),
+          msg("assistant", "已删除 wiki/entities/old-page.md，并清理了对应引用。".repeat(8), "agent"),
+        ],
+        { hasProject: true, isPending: true },
+      ),
+    ).toBe(false)
+  })
 })
