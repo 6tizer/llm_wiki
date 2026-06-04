@@ -178,10 +178,12 @@ describe("streamAgent", () => {
 
 		expect(callbacks.onDone).toHaveBeenCalledWith(null);
 		expect(callbacks.onError).not.toHaveBeenCalled();
-		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining("failed to unlisten"),
-			expect.any(Error),
-		);
+		await vi.waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("failed to unlisten"),
+				expect.any(Error),
+			);
+		});
 		warnSpy.mockRestore();
 	});
 

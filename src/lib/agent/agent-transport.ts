@@ -122,16 +122,11 @@ function sendPermissionResponse(payload: Record<string, unknown>) {
 
 function safeUnlisten(unlisten: UnlistenFn | undefined, label: string): void {
 	if (!unlisten) return;
-	try {
-		const result = unlisten() as unknown;
-		if (result && typeof (result as Promise<unknown>).catch === "function") {
-			void (result as Promise<unknown>).catch((err) => {
-				console.warn(`[agent-transport] failed to unlisten ${label}:`, err);
-			});
-		}
-	} catch (err) {
-		console.warn(`[agent-transport] failed to unlisten ${label}:`, err);
-	}
+	void Promise.resolve()
+		.then(() => unlisten())
+		.catch((err) => {
+			console.warn(`[agent-transport] failed to unlisten ${label}:`, err);
+		});
 }
 
 export async function rewindAgentFiles(

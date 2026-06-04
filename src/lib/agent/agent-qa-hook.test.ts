@@ -111,6 +111,21 @@ describe("shouldExtractQa", () => {
 		];
 		expect(shouldExtractQa(messages).extract).toBe(true);
 	});
+
+	it("does not treat generic cleanup work as delete-only", () => {
+		const messages = [
+			msg("user", "cleanup the code around the QA hook"),
+			msg(
+				"assistant",
+				"I cleaned up the QA hook implementation and kept the behavior focused on the existing auto extraction path without changing stored conversation data.".repeat(
+					2,
+				),
+			),
+		];
+		expect(shouldExtractQa(messages, { trigger: "delete" }).extract).toBe(
+			true,
+		);
+	});
 });
 
 // ── Dirty flag ───────────────────────────────────────────────────────────────

@@ -195,7 +195,7 @@ export async function flushAllPendingQa(
 
 const GREETING_RE = /^(hi|hello|hey|你好|您好|嗨|哈喽|yo|sup)\s*[!?.。！？]*$/i;
 const DELETE_OPERATION_RE =
-	/(delete|deleted|deleting|remove|removed|removing|cleanup|cleaned up|purge|删除|移除|删掉|清理|已删|已删除|已经删除)/i;
+	/(delete|deleted|deleting|remove|removed|removing|purge|删除|移除|删掉|已删|已删除|已经删除)/i;
 const KNOWLEDGE_SIGNAL_RE =
 	/(why|how|because|root cause|workaround|regression|warning|error|bug|insight|lesson|原因|原理|机制|策略|表现|应对|解决|观察|问题|错误|报错|警告|回归|限制|配置)/i;
 
