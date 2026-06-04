@@ -523,6 +523,9 @@ export function ChatPanel() {
 	const markAgentMessageRewindable = useChatStore(
 		(s) => s.markAgentMessageRewindable,
 	);
+	const clearAgentMessageRewindable = useChatStore(
+		(s) => s.clearAgentMessageRewindable,
+	);
 	const requestAgentRewind = useChatStore((s) => s.requestAgentRewind);
 	const requestAgentPermission = useChatStore((s) => s.requestAgentPermission);
 	const clearAgentPermissionRequests = useChatStore(
@@ -616,6 +619,7 @@ export function ChatPanel() {
 			const finishAgentError = (kind: AgentErrorKind, detail?: string) => {
 				if (settled) return;
 				settled = true;
+				clearAgentMessageRewindable(messageId);
 				finishAgentStreamMessage(
 					messageId,
 					formatAgentError(kind, detail),
@@ -653,6 +657,7 @@ export function ChatPanel() {
 			) => {
 				if (settled) return;
 				settled = true;
+				clearAgentMessageRewindable(messageId);
 				finishAgentStreamMessage(messageId, content, stats);
 				abortRef.current = null;
 				setAgentRunPhase("idle");
@@ -751,6 +756,9 @@ export function ChatPanel() {
 							markAgentRunning();
 							if (!payload.ok) {
 								console.warn("[agent] rewind failed:", payload.error);
+								if (payload.unavailableReason) {
+									clearAgentMessageRewindable(messageId);
+								}
 								return;
 							}
 							const paths = payload.result?.filesChanged ?? [];
@@ -776,6 +784,7 @@ export function ChatPanel() {
 		[
 			addMessage,
 			appendAgentWikiChange,
+			clearAgentMessageRewindable,
 			createConversation,
 			finishAgentStreamMessage,
 			llmConfig,

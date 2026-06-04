@@ -36,7 +36,6 @@ interface RequestHandlerDeps {
 	appToolBridge?: AppToolBridge;
 	permissionBridge?: PermissionBridge;
 	activeSdkQueries?: Map<string, QueryControl>;
-	activeSdkQueryRetentionMs?: number;
 	onActiveSdkQueryReleased?: () => void;
 }
 
@@ -66,37 +65,15 @@ export function createRequestHandler({
 	appToolBridge,
 	permissionBridge,
 	activeSdkQueries = new Map<string, QueryControl>(),
-	activeSdkQueryRetentionMs = 5 * 60_000,
 	onActiveSdkQueryReleased,
 }: RequestHandlerDeps) {
-	const activeSdkQueryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
 	function releaseActiveSdkQuery(streamId: string): void {
-		const timer = activeSdkQueryTimers.get(streamId);
-		if (timer) clearTimeout(timer);
-		activeSdkQueryTimers.delete(streamId);
 		activeSdkQueries.delete(streamId);
 		onActiveSdkQueryReleased?.();
 	}
 
 	function retainActiveSdkQuery(streamId: string, query: QueryControl): void {
-		const previousTimer = activeSdkQueryTimers.get(streamId);
-		if (previousTimer) clearTimeout(previousTimer);
 		activeSdkQueries.set(streamId, query);
-	}
-
-	function scheduleActiveSdkQueryRelease(streamId: string, query: QueryControl): void {
-		if (!query.rewindFiles || activeSdkQueryRetentionMs <= 0) {
-			releaseActiveSdkQuery(streamId);
-			return;
-		}
-
-		const timer = setTimeout(() => {
-			activeSdkQueryTimers.delete(streamId);
-			activeSdkQueries.delete(streamId);
-			onActiveSdkQueryReleased?.();
-		}, activeSdkQueryRetentionMs);
-		activeSdkQueryTimers.set(streamId, timer);
 	}
 
 	return async function handleRequest(
@@ -298,8 +275,7 @@ export function createRequestHandler({
 			});
 		} finally {
 			activeQueries.delete(req.streamId);
-			const q = activeSdkQueries.get(req.streamId);
-			if (q) scheduleActiveSdkQueryRelease(req.streamId, q);
+			releaseActiveSdkQuery(req.streamId);
 		}
 	};
 }

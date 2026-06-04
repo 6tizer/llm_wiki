@@ -474,6 +474,7 @@ test("kill request aborts active query and removes it from tracking", async () =
 test("query errors emit error message and cleanup active query", async () => {
 	const sent: AgentMessage[] = [];
 	const activeQueries = new Map<string, AbortController>();
+	const activeSdkQueries = new Map<string, QueryControl>();
 	const queryFn: QueryFn = async function* () {
 		throw new Error("boom");
 	};
@@ -483,15 +484,52 @@ test("query errors emit error message and cleanup active query", async () => {
 		send: (msg) => sent.push(msg),
 		error: () => {},
 		activeQueries,
+		activeSdkQueries,
 		env: {},
 	});
 
 	await handleRequest(baseRequest);
 
 	assert.equal(activeQueries.size, 0);
+	assert.equal(activeSdkQueries.size, 0);
 	assert.equal(sent.length, 1);
 	assert.equal(sent[0]?.type, "error");
 	assert.match(String((sent[0]?.data as { error?: string }).error), /boom/);
+});
+
+test("query completion releases retained active SDK query", async () => {
+	const activeSdkQueries = new Map<string, QueryControl>();
+	let releaseQuery: (() => void) | undefined;
+	let releasedCount = 0;
+	const query = (async function* () {
+		await new Promise<void>((resolve) => {
+			releaseQuery = resolve;
+		});
+		yield { type: "assistant", message: { content: [] } };
+	})() as QueryControl;
+	query.rewindFiles = async () => ({ canRewind: true });
+	const queryFn: QueryFn = () => query;
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		activeSdkQueries,
+		env: {},
+		onActiveSdkQueryReleased: () => {
+			releasedCount += 1;
+		},
+	});
+
+	const running = handleRequest(baseRequest);
+	await Promise.resolve();
+
+	assert.equal(activeSdkQueries.get("stream-1"), query);
+	releaseQuery?.();
+	await running;
+
+	assert.equal(activeSdkQueries.has("stream-1"), false);
+	assert.equal(releasedCount, 1);
 });
 
 
@@ -582,6 +620,73 @@ test("rewind bridge reports missing active query", () => {
 	});
 
 	assert.equal(sent[0]?.type, "rewind_files");
-	assert.equal((sent[0]?.data as { ok?: boolean }).ok, false);
-	assert.match(String((sent[0]?.data as { error?: string }).error), /no longer active/);
+	const data = sent[0]?.data as { ok?: boolean; error?: string; unavailableReason?: string };
+	assert.equal(data.ok, false);
+	assert.equal(data.unavailableReason, "inactive_stream");
+	assert.match(String(data.error), /no longer active/);
+});
+
+test("rewind bridge reports missing message id as unavailable", () => {
+	const sent: AgentMessage[] = [];
+	const query = (async function* () {})() as QueryControl;
+	query.rewindFiles = async () => ({ canRewind: true });
+
+	handleRewindFilesRequest({
+		request: {
+			type: "rewind_files",
+			streamId: "stream-1",
+		},
+		activeSdkQueries: new Map([["stream-1", query]]),
+		send: (msg) => sent.push(msg),
+	});
+
+	const data = sent[0]?.data as { ok?: boolean; unavailableReason?: string };
+	assert.equal(data.ok, false);
+	assert.equal(data.unavailableReason, "missing_message_id");
+});
+
+test("rewind bridge reports unsupported active query", () => {
+	const sent: AgentMessage[] = [];
+	const query = (async function* () {})() as QueryControl;
+
+	handleRewindFilesRequest({
+		request: {
+			type: "rewind_files",
+			streamId: "stream-1",
+			messageId: "user-sdk-1",
+		},
+		activeSdkQueries: new Map([["stream-1", query]]),
+		send: (msg) => sent.push(msg),
+	});
+
+	const data = sent[0]?.data as { ok?: boolean; unavailableReason?: string };
+	assert.equal(data.ok, false);
+	assert.equal(data.unavailableReason, "unsupported");
+});
+
+test("rewind bridge removes stale query when transport is closed", async () => {
+	const sent: AgentMessage[] = [];
+	const query = (async function* () {})() as QueryControl;
+	query.rewindFiles = async () => {
+		throw new Error("ProcessTransport is not ready for writing");
+	};
+	const activeSdkQueries = new Map<string, QueryControl>([["stream-1", query]]);
+
+	handleRewindFilesRequest({
+		request: {
+			type: "rewind_files",
+			streamId: "stream-1",
+			messageId: "user-sdk-1",
+		},
+		activeSdkQueries,
+		send: (msg) => sent.push(msg),
+	});
+
+	await new Promise((resolve) => setImmediate(resolve));
+
+	const data = sent[0]?.data as { ok?: boolean; error?: string; unavailableReason?: string };
+	assert.equal(data.ok, false);
+	assert.equal(data.unavailableReason, "transport_closed");
+	assert.match(String(data.error), /no longer available/);
+	assert.equal(activeSdkQueries.has("stream-1"), false);
 });

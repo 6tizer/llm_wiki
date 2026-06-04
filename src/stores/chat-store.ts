@@ -120,6 +120,10 @@ interface AgentRewindablePatch {
   assistantMessageId?: string
 }
 
+interface ClearAgentRewindableOptions {
+  keepActiveRequest?: boolean
+}
+
 interface FinishAgentStreamMessageOptions {
   agentErrorKind?: AgentErrorKind
 }
@@ -165,6 +169,10 @@ interface ChatState {
   updateAgentProgress: (messageId: string, event: AgentToolCallRecord) => void
   appendAgentWikiChange: (messageId: string, payload: AgentWikiChangedPayload) => void
   markAgentMessageRewindable: (messageId: string, payload: AgentRewindablePatch) => void
+  clearAgentMessageRewindable: (
+    messageId: string,
+    options?: ClearAgentRewindableOptions
+  ) => void
   requestAgentRewind: (messageId: string) => void
   clearAgentRewindRequest: () => void
   /** Queue an Agent permission request and resolve when the user decides or timeout denies it. */
@@ -601,6 +609,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...state.agentRewindTargets,
           [messageId]: target,
         },
+      }
+    }),
+
+  clearAgentMessageRewindable: (messageId, options) =>
+    set((state) => {
+      if (!state.agentRewindTargets[messageId]) return {}
+      const agentRewindTargets = { ...state.agentRewindTargets }
+      delete agentRewindTargets[messageId]
+      return {
+        agentRewindTargets,
+        activeAgentRewindRequest:
+          !options?.keepActiveRequest &&
+          state.activeAgentRewindRequest?.chatMessageId === messageId
+            ? null
+            : state.activeAgentRewindRequest,
       }
     }),
 
