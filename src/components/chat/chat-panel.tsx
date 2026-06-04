@@ -77,6 +77,7 @@ import {
 import { useWikiStore } from "@/stores/wiki-store";
 import { AgentPermissionDialogHost } from "./agent-permission-dialog";
 import { AgentRewindDialogHost } from "./agent-rewind-dialog";
+import { buildAgentResumeIntentOverrideForConversation } from "./agent-resume-intent";
 import {
 	agentResultToStats,
 	agentToolBatchToRecords,
@@ -586,6 +587,12 @@ export function ChatPanel() {
 				.getState()
 				.conversations.find((conversation) => conversation.id === convId);
 			const agentSessionId = activeConversation?.agentSessionId;
+			const intentOverride = buildAgentResumeIntentOverrideForConversation({
+				messages: useChatStore.getState().messages,
+				conversationId: convId,
+				resumeSessionId: agentSessionId,
+				latestUserText: text,
+			});
 			addMessage("user", text, {
 				mode: "agent",
 				agentSessionId,
@@ -631,6 +638,9 @@ export function ChatPanel() {
 			if (!options) {
 				finishAgentError("unavailable");
 				return;
+			}
+			if (intentOverride) {
+				options.intentOverride = intentOverride;
 			}
 
 			const controller = new AbortController();

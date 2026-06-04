@@ -45,6 +45,7 @@ type InvokePayload = Record<string, unknown> & {
 	continueSession?: boolean;
 	forkSession?: boolean;
 	resumeSessionAt?: string;
+	intentOverride?: string;
 	persistSession?: boolean;
 	title?: string;
 	apiKey?: string;

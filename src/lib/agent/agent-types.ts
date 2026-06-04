@@ -224,6 +224,7 @@ export interface AgentTransportOptions {
 	continueSession?: boolean;
 	forkSession?: boolean;
 	resumeSessionAt?: string;
+	intentOverride?: string;
 	persistSession?: boolean;
 	title?: string;
 	apiKey?: string;

@@ -175,6 +175,7 @@ describe("streamAgent", () => {
 				continueSession: true,
 				forkSession: true,
 				resumeSessionAt: "msg-1",
+				intentOverride: "Treat the latest user message as primary.",
 				persistSession: true,
 				title: "Wiki Agent",
 			},
@@ -195,6 +196,7 @@ describe("streamAgent", () => {
 			continueSession: true,
 			forkSession: true,
 			resumeSessionAt: "msg-1",
+			intentOverride: "Treat the latest user message as primary.",
 			persistSession: true,
 			title: "Wiki Agent",
 		});

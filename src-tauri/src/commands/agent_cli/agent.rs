@@ -57,6 +57,7 @@ pub struct AgentSpawnArgs {
     continue_session: Option<bool>,
     fork_session: Option<bool>,
     resume_session_at: Option<String>,
+    intent_override: Option<String>,
     persist_session: Option<bool>,
     title: Option<String>,
     api_key: Option<String>,
@@ -116,6 +117,8 @@ struct AgentRequestOptions {
     fork_session: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resume_session_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intent_override: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +207,7 @@ fn build_agent_request(args: AgentSpawnArgs) -> AgentRequest {
             continue_session: args.continue_session,
             fork_session: args.fork_session,
             resume_session_at: args.resume_session_at,
+            intent_override: args.intent_override,
             title: args.title,
             api_key: args.api_key,
             base_url: args.base_url,
@@ -549,6 +553,7 @@ mod tests {
             continue_session: None,
             fork_session: None,
             resume_session_at: None,
+            intent_override: None,
             persist_session: None,
             title: None,
             api_key: None,
@@ -602,6 +607,7 @@ mod tests {
         assert!(options.get("continue").is_none());
         assert!(options.get("forkSession").is_none());
         assert!(options.get("resumeSessionAt").is_none());
+        assert!(options.get("intentOverride").is_none());
         assert!(options.get("title").is_none());
         assert!(options.get("apiKey").is_none());
     }
@@ -619,6 +625,7 @@ mod tests {
         args.continue_session = Some(true);
         args.fork_session = Some(true);
         args.resume_session_at = Some("msg-1".to_string());
+        args.intent_override = Some("Treat latest user message as primary.".to_string());
         args.persist_session = Some(true);
         args.title = Some("Wiki Agent".to_string());
         args.api_key = Some("test-key".to_string());
@@ -666,6 +673,10 @@ mod tests {
         assert_eq!(
             options.get("resumeSessionAt").and_then(Value::as_str),
             Some("msg-1")
+        );
+        assert_eq!(
+            options.get("intentOverride").and_then(Value::as_str),
+            Some("Treat latest user message as primary.")
         );
         assert_eq!(
             options.get("persistSession").and_then(Value::as_bool),
