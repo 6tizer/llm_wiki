@@ -5,6 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"build": "tsc",
+		"build:binary": "node scripts/build-binary.mjs",
+		"postinstall": "node scripts/build-binary.mjs --optional",
 		"test": "npm run build && node --test dist/core.node.js dist/agent-policy.node.js dist/permission-bridge.node.js",
 		"start": "node dist/main.js"
 	},

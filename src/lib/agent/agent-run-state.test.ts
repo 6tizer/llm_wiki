@@ -45,6 +45,7 @@ describe("agent run state helpers", () => {
 
   it("classifies runtime errors", () => {
     expect(classifyAgentError("Agent sidecar dist missing")).toBe("unavailable")
+    expect(classifyAgentError("Agent sidecar binary missing")).toBe("unavailable")
     expect(classifyAgentError("Failed to spawn agent sidecar: denied")).toBe("unavailable")
     expect(classifyAgentError("Timed out waiting for Agent rewind result")).toBe("timeout")
     expect(classifyAgentError("ANTHROPIC_API_KEY is missing")).toBe("missing_api_key")

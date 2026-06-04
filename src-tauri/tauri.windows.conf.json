@@ -1,5 +1,5 @@
 {
   "bundle": {
-    "resources": ["pdfium/pdfium.dll"]
+    "resources": ["pdfium/pdfium.dll", "sidecar/dist-bin/sidecar.exe"]
   }
 }
