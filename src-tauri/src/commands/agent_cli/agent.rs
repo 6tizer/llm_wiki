@@ -549,9 +549,32 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::fs;
+    use std::ops::Deref;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_sidecar_dir(label: &str) -> PathBuf {
+    struct TempSidecarDir(PathBuf);
+
+    impl TempSidecarDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Deref for TempSidecarDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.path()
+        }
+    }
+
+    impl Drop for TempSidecarDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_sidecar_dir(label: &str) -> TempSidecarDir {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -561,7 +584,7 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(&dir).unwrap();
-        dir
+        TempSidecarDir(dir)
     }
 
     fn write_file(path: &Path) {
@@ -571,6 +594,17 @@ mod tests {
 
     fn write_binary(path: &Path) {
         write_file(path);
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    fn write_empty_binary(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "").unwrap();
         #[cfg(unix)]
         {
             let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -710,6 +744,23 @@ mod tests {
             .join(sidecar_binary_name());
         let entry = cwd.join("sidecar").join("dist").join("main.js");
         write_file(&placeholder);
+        write_file(&entry);
+
+        let command = resolve_sidecar_command(None, &cwd, true).unwrap();
+
+        assert_eq!(command[0], "node");
+        assert_eq!(command[1], entry.to_string_lossy());
+    }
+
+    #[test]
+    fn sidecar_command_skips_empty_binary_candidate() {
+        let cwd = temp_sidecar_dir("empty-binary");
+        let binary = cwd
+            .join("sidecar")
+            .join("dist-bin")
+            .join(sidecar_binary_name());
+        let entry = cwd.join("sidecar").join("dist").join("main.js");
+        write_empty_binary(&binary);
         write_file(&entry);
 
         let command = resolve_sidecar_command(None, &cwd, true).unwrap();
@@ -925,7 +976,6 @@ fn sidecar_binary_candidates(resource_dir: Option<&Path>, cwd: &Path) -> Vec<Pat
     let mut candidates = Vec::new();
     if let Some(dir) = resource_dir {
         candidates.push(dir.join("sidecar").join("dist-bin").join(binary));
-        candidates.push(dir.join(binary));
     }
     candidates.push(cwd.join("sidecar").join("dist-bin").join(binary));
     candidates
@@ -965,6 +1015,13 @@ fn sidecar_available(resource_dir: Option<&Path>, cwd: &Path, node_on_path: bool
 
 fn is_sidecar_binary(path: &Path) -> bool {
     if !path.is_file() {
+        return false;
+    }
+    if path
+        .metadata()
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(true)
+    {
         return false;
     }
     if is_sidecar_placeholder(path) {
