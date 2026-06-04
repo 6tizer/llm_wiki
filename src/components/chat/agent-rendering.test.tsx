@@ -165,6 +165,27 @@ describe("agent message rendering", () => {
     expect(html).toContain("Rewind files")
   })
 
+  it("does not render rewind action without a rewind target", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          mode: "agent",
+          wikiChanges: [
+            {
+              path: "wiki/page.md",
+              operation: "update",
+              timestamp: 123,
+            },
+          ],
+        })}
+        onRewind={() => undefined}
+      />,
+    )
+
+    expect(html).toContain("Wiki changes")
+    expect(html).not.toContain("Rewind files")
+  })
+
   it("renders compact summaries as a safe collapsed status row", () => {
     const hiddenSdkText = "The context has run out. Summary: secret sdk internals."
     const html = renderToStaticMarkup(

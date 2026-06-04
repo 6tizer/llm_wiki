@@ -127,6 +127,53 @@ describe("streamAgent", () => {
 		});
 	});
 
+	it("passes rewind unavailable reasons through with the stream id", async () => {
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+			onRewindFiles: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "rewind_files",
+				data: {
+					messageId: "user-sdk-1",
+					ok: false,
+					error: "Agent stream is no longer active",
+					unavailableReason: "inactive_stream",
+				},
+			}),
+		);
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+
+		expect(callbacks.onRewindFiles).toHaveBeenCalledWith({
+			streamId: payload.args.streamId,
+			messageId: "user-sdk-1",
+			ok: false,
+			error: "Agent stream is no longer active",
+			unavailableReason: "inactive_stream",
+		});
+	});
+
 	it("rewindAgentFiles waits for the rewind result event", async () => {
 		const request = rewindAgentFiles("stream-1", "user-sdk-1");
 

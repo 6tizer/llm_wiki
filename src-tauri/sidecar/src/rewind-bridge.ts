@@ -8,6 +8,35 @@ interface RewindBridgeArgs {
 	onSettled?: () => void;
 }
 
+type RewindUnavailableReason =
+	| "inactive_stream"
+	| "unsupported"
+	| "missing_message_id"
+	| "transport_closed";
+
+function sendUnavailable(
+	request: RewindFilesRequest,
+	send: (msg: AgentMessage) => void,
+	error: string,
+	unavailableReason: RewindUnavailableReason,
+): void {
+	send({
+		streamId: request.streamId,
+		type: "rewind_files",
+		data: {
+			messageId: request.messageId,
+			ok: false,
+			error,
+			unavailableReason,
+		},
+	});
+}
+
+function isTransportClosedError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /not ready for writing|terminated process|transport is closed|ended stdin/i.test(message);
+}
+
 export function handleRewindFilesRequest({
 	request,
 	activeSdkQueries,
@@ -16,40 +45,32 @@ export function handleRewindFilesRequest({
 }: RewindBridgeArgs): void {
 	const activeQuery = activeSdkQueries.get(request.streamId);
 	if (!activeQuery) {
-		send({
-			streamId: request.streamId,
-			type: "rewind_files",
-			data: {
-				messageId: request.messageId,
-				ok: false,
-				error: "Agent stream is no longer active",
-			},
-		});
+		sendUnavailable(
+			request,
+			send,
+			"Agent stream is no longer active",
+			"inactive_stream",
+		);
 		onSettled?.();
 		return;
 	}
 	if (!activeQuery.rewindFiles) {
-		send({
-			streamId: request.streamId,
-			type: "rewind_files",
-			data: {
-				messageId: request.messageId,
-				ok: false,
-				error: "Active Agent query does not support file rewind",
-			},
-		});
+		sendUnavailable(
+			request,
+			send,
+			"Active Agent query does not support file rewind",
+			"unsupported",
+		);
 		onSettled?.();
 		return;
 	}
 	if (!request.messageId) {
-		send({
-			streamId: request.streamId,
-			type: "rewind_files",
-			data: {
-				ok: false,
-				error: "Missing SDK user message id",
-			},
-		});
+		sendUnavailable(
+			request,
+			send,
+			"Missing SDK user message id",
+			"missing_message_id",
+		);
 		onSettled?.();
 		return;
 	}
@@ -67,6 +88,16 @@ export function handleRewindFilesRequest({
 			});
 		})
 		.catch((err) => {
+			if (isTransportClosedError(err)) {
+				activeSdkQueries.delete(request.streamId);
+				sendUnavailable(
+					request,
+					send,
+					"Agent stream is no longer available for file rewind",
+					"transport_closed",
+				);
+				return;
+			}
 			send({
 				streamId: request.streamId,
 				type: "rewind_files",

@@ -17,6 +17,7 @@ export function AgentRewindDialogHost() {
   const { t } = useTranslation()
   const request = useChatStore((s) => s.activeAgentRewindRequest)
   const clearAgentRewindRequest = useChatStore((s) => s.clearAgentRewindRequest)
+  const clearAgentMessageRewindable = useChatStore((s) => s.clearAgentMessageRewindable)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
@@ -34,6 +35,11 @@ export function AgentRewindDialogHost() {
         if (!payload.ok) {
           const message = payload.error ?? "Unknown rewind error"
           console.warn("[agent] rewind failed:", message)
+          if (payload.unavailableReason) {
+            clearAgentMessageRewindable(request.chatMessageId, {
+              keepActiveRequest: true,
+            })
+          }
           setError(message)
           return
         }
@@ -46,7 +52,7 @@ export function AgentRewindDialogHost() {
       .finally(() => {
         setPending(false)
       })
-  }, [clearAgentRewindRequest, pending, request])
+  }, [clearAgentMessageRewindable, clearAgentRewindRequest, pending, request])
 
   return (
     <Dialog open={Boolean(request)} onOpenChange={(open) => {

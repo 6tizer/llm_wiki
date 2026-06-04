@@ -431,6 +431,74 @@ describe("chat store agent data model", () => {
     })
   })
 
+  it("clears an agent rewind target without removing message metadata", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().markAgentMessageRewindable("m1", {
+      streamId: "stream-1",
+      userMessageId: "user-sdk-1",
+      assistantMessageId: "assistant-sdk-1",
+    })
+    useChatStore.getState().clearAgentMessageRewindable("m1")
+
+    expect(useChatStore.getState().agentRewindTargets.m1).toBeUndefined()
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      agentUserMessageId: "user-sdk-1",
+      agentAssistantMessageId: "assistant-sdk-1",
+    })
+  })
+
+  it("closes the active rewind request when clearing the same message target", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId), makeAssistantMessage("m2", convId)],
+    })
+
+    useChatStore.getState().markAgentMessageRewindable("m1", {
+      streamId: "stream-1",
+      userMessageId: "user-sdk-1",
+    })
+    useChatStore.getState().markAgentMessageRewindable("m2", {
+      streamId: "stream-2",
+      userMessageId: "user-sdk-2",
+    })
+    useChatStore.getState().requestAgentRewind("m1")
+    useChatStore.getState().clearAgentMessageRewindable("m1")
+
+    expect(useChatStore.getState().activeAgentRewindRequest).toBeNull()
+    expect(useChatStore.getState().agentRewindTargets.m1).toBeUndefined()
+    expect(useChatStore.getState().agentRewindTargets.m2).toMatchObject({
+      streamId: "stream-2",
+      userMessageId: "user-sdk-2",
+    })
+  })
+
+  it("can clear a rewind target while keeping the active rewind request open", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().markAgentMessageRewindable("m1", {
+      streamId: "stream-1",
+      userMessageId: "user-sdk-1",
+    })
+    useChatStore.getState().requestAgentRewind("m1")
+    useChatStore.getState().clearAgentMessageRewindable("m1", {
+      keepActiveRequest: true,
+    })
+
+    expect(useChatStore.getState().agentRewindTargets.m1).toBeUndefined()
+    expect(useChatStore.getState().activeAgentRewindRequest).toMatchObject({
+      chatMessageId: "m1",
+      streamId: "stream-1",
+      userMessageId: "user-sdk-1",
+    })
+  })
+
   it("chatMessagesToLLM drops agent metadata", () => {
     const messages: DisplayMessage[] = [
       {

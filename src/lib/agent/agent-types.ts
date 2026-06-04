@@ -166,6 +166,11 @@ export interface AgentRewindFilesPayload {
 	ok?: boolean;
 	result?: AgentRewindFilesResult;
 	error?: string;
+	unavailableReason?:
+		| "inactive_stream"
+		| "unsupported"
+		| "missing_message_id"
+		| "transport_closed";
 }
 
 export interface AgentSummaryPayload {
