@@ -232,9 +232,11 @@ function AgentResourceLimitNotice({
     bytes,
     path: limit.path,
   })
-  const recovery = limit.recovery === "split_task"
-    ? t("agent.resourceLimit.recovery.splitTask")
-    : t("agent.resourceLimit.recovery.settingsAgent")
+  const recovery = limit.limitKind === "max_write_bytes"
+    ? t("agent.resourceLimit.recovery.maxWriteBytes")
+    : limit.recovery === "split_task"
+      ? t("agent.resourceLimit.recovery.splitTask")
+      : t("agent.resourceLimit.recovery.settingsAgent")
 
   return (
     <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">

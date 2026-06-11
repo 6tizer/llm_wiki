@@ -285,6 +285,46 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().streamingContent).toBe("")
   })
 
+  it("preserves resource limit notice when a later error finishes the agent message", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      isStreaming: true,
+      streamingContent: "",
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().updateAgentStreamMessage("m1", {
+      agentResourceLimit: {
+        kind: "resource_limit",
+        limitKind: "max_turns_exceeded",
+        limit: 10,
+        used: 10,
+        attempted: 10,
+        message: "Reached maximum number of turns (10)",
+        recovery: "settings_agent",
+      },
+    })
+    useChatStore.getState().finishAgentStreamMessage(
+      "m1",
+      "Agent reached the max turn limit.",
+      undefined,
+      { agentErrorKind: "max_turns_exceeded" },
+    )
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      id: "m1",
+      content: "Agent reached the max turn limit.",
+      agentErrorKind: "max_turns_exceeded",
+      agentResourceLimit: {
+        kind: "resource_limit",
+        limitKind: "max_turns_exceeded",
+        limit: 10,
+        used: 10,
+        attempted: 10,
+      },
+    })
+  })
+
   it("clears fork pending when an agent stream returns a new session", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({

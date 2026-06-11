@@ -71,6 +71,10 @@ function parseMaxTurnsExceeded(message: string): number | undefined {
 	return Number.parseInt(match[1] ?? "", 10);
 }
 
+function looksLikeMaxTurnsExceeded(message: string): boolean {
+	return /max(?:imum)?[_\s-]+(?:number\s+of\s+)?turns?/i.test(message);
+}
+
 export function createRequestHandler({
 	queryFn,
 	send,
@@ -297,6 +301,8 @@ export function createRequestHandler({
 						recovery: "settings_agent",
 					},
 				});
+			} else if (looksLikeMaxTurnsExceeded(message)) {
+				error("[sidecar] could not parse max turns limit from error:", message);
 			}
 			send({
 				streamId: req.streamId,

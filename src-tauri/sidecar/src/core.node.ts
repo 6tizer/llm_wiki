@@ -671,6 +671,31 @@ test("max turns errors emit resource limit action before error", async () => {
 	assert.equal(sent[1]?.type, "error");
 });
 
+test("max turns-like errors log a diagnostic when the turn count cannot be parsed", async () => {
+	const sent: AgentMessage[] = [];
+	const errors: unknown[][] = [];
+	const queryFn: QueryFn = async function* () {
+		throw new Error("Claude Code returned an error result: max turns exhausted");
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: (msg) => sent.push(msg),
+		error: (...args) => errors.push(args),
+		env: {},
+	});
+
+	await handleRequest(baseRequest);
+
+	assert.equal(sent.length, 1);
+	assert.equal(sent[0]?.type, "error");
+	assert.equal(errors.length, 2);
+	assert.deepEqual(errors[1], [
+		"[sidecar] could not parse max turns limit from error:",
+		"Claude Code returned an error result: max turns exhausted",
+	]);
+});
+
 test("query completion releases retained active SDK query", async () => {
 	const activeSdkQueries = new Map<string, QueryControl>();
 	let releaseQuery: (() => void) | undefined;

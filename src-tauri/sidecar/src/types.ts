@@ -119,11 +119,13 @@ export type AgentResourceLimitKind =
 	| "max_write_bytes"
 	| "max_turns_exceeded";
 
+// Keep in sync with src/lib/agent/agent-types.ts.
 export interface AgentResourceLimitPayload {
 	kind: "resource_limit";
 	limitKind: AgentResourceLimitKind;
 	limit?: number;
 	used?: number;
+	/** For max_turns_exceeded, attempted matches used because the SDK only reports the reached turn count. */
 	attempted?: number;
 	changedPaths?: string[];
 	path?: string;

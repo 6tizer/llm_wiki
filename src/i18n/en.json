@@ -223,7 +223,8 @@
       "changedPathsMore": "Changed files: {{paths}}, plus {{extra}} more",
       "recovery": {
         "splitTask": "Next step: send \"continue\" for the next batch, or split the task into smaller pieces.",
-        "settingsAgent": "Next step: split the task, or adjust resource limits in Settings > Agent and retry."
+        "settingsAgent": "Next step: split the task, or adjust resource limits in Settings > Agent and retry.",
+        "maxWriteBytes": "Next step: ask Agent to make the page shorter or split it across files, or adjust resource limits in Settings > Agent and retry."
       }
     },
     "wikiChanged": {

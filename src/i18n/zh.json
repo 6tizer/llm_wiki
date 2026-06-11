@@ -223,7 +223,8 @@
       "changedPathsMore": "已改文件：{{paths}}，另有 {{extra}} 个",
       "recovery": {
         "splitTask": "下一步：发送“继续”让 Agent 处理下一批，或把任务拆小。",
-        "settingsAgent": "下一步：把任务拆小，或到 Settings > Agent 调整资源限制后重试。"
+        "settingsAgent": "下一步：把任务拆小，或到 Settings > Agent 调整资源限制后重试。",
+        "maxWriteBytes": "下一步：让 Agent 精简页面或拆成多个文件，或到 Settings > Agent 调整资源限制后重试。"
       }
     },
     "wikiChanged": {

@@ -372,7 +372,7 @@ test("app-level tools call bridge and emit wiki change/task events", async () =>
 	assert.match(resultText(result), /wiki\/queries\/saved.md/);
 });
 
-test("save_query_page preflights resource limits before calling app bridge", async () => {
+test("save_query_page preflights maxFilesChanged before calling app bridge", async () => {
 	const sent: Array<{ type: string; data: unknown }> = [];
 	const changedPaths = new Set<string>(["wiki/index.md"]);
 	let bridgeCalled = false;

@@ -110,6 +110,7 @@ function resourceLimitResult(
 			bytes: payload.bytes,
 			error: payload.message,
 			resourceLimit: payload,
+			// Legacy structuredContent consumers still read changedCount directly.
 			...extra,
 		},
 		true,
