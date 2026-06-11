@@ -30,6 +30,12 @@ export type QueryControl = AsyncIterable<SDKMessage | { type: string; [k: string
 };
 export type QueryFn = (input: QueryInput) => QueryControl;
 
+let bundledClaudeCodeExecutablePath: string | undefined;
+
+export function setBundledClaudeCodeExecutablePath(path: string | undefined): void {
+	bundledClaudeCodeExecutablePath = path;
+}
+
 interface RequestHandlerDeps {
 	queryFn: QueryFn;
 	send: (msg: AgentMessage) => void;
@@ -209,6 +215,7 @@ export function createRequestHandler({
 				hooks,
 				abortController,
 				env,
+				pathToClaudeCodeExecutable: bundledClaudeCodeExecutablePath,
 
 				// PR D: structured output
 				outputFormat: req.options.outputFormat,

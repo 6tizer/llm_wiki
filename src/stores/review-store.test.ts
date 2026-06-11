@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { useReviewStore, type ReviewItem } from "./review-store"
+import { resetReviewIdCounterForTest, useReviewStore, type ReviewItem } from "./review-store"
 
 // Minimal builder so each test only specifies what it cares about.
 function makeInput(overrides: Partial<Omit<ReviewItem, "id" | "resolved" | "createdAt">> = {}) {
@@ -14,6 +14,7 @@ function makeInput(overrides: Partial<Omit<ReviewItem, "id" | "resolved" | "crea
 
 // Reset the store between tests — Zustand stores are module-level singletons.
 beforeEach(() => {
+  resetReviewIdCounterForTest()
   useReviewStore.setState({ items: [] })
 })
 
@@ -33,6 +34,67 @@ describe("review-store addItem", () => {
     store.addItem(makeInput({ title: "Same" }))
     store.addItem(makeInput({ title: "Same" }))
     expect(useReviewStore.getState().items).toHaveLength(2)
+  })
+
+  it("continues generated ids after persisted review items are loaded", () => {
+    useReviewStore.getState().setItems([
+      {
+        ...makeInput({ title: "Persisted" }),
+        id: "review-6",
+        resolved: false,
+        createdAt: 1,
+      },
+    ])
+    useReviewStore.getState().addItem(makeInput({ title: "Fresh" }))
+    expect(useReviewStore.getState().items.map((item) => item.id)).toEqual([
+      "review-6",
+      "review-7",
+    ])
+  })
+
+  it("skips an existing id even when the persisted counter is stale", () => {
+    useReviewStore.getState().setItems([
+      {
+        ...makeInput({ title: "Custom" }),
+        id: "external-id",
+        resolved: false,
+        createdAt: 1,
+      },
+      {
+        ...makeInput({ title: "Persisted" }),
+        id: "review-8",
+        resolved: false,
+        createdAt: 2,
+      },
+    ])
+    useReviewStore.getState().addItems([makeInput({ title: "Fresh" })])
+    expect(useReviewStore.getState().items.map((item) => item.id)).toEqual([
+      "external-id",
+      "review-8",
+      "review-9",
+    ])
+  })
+
+  it("rekeys duplicate ids when persisted review items are loaded", () => {
+    useReviewStore.getState().setItems([
+      {
+        ...makeInput({ title: "First" }),
+        id: "review-3",
+        resolved: false,
+        createdAt: 1,
+      },
+      {
+        ...makeInput({ title: "Second" }),
+        id: "review-3",
+        resolved: false,
+        createdAt: 2,
+      },
+    ])
+    const ids = useReviewStore.getState().items.map((item) => item.id)
+    expect(ids[0]).toBe("review-3")
+    expect(ids[1]).toMatch(/^review-\d+$/)
+    expect(ids[1]).not.toBe("review-3")
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })
 

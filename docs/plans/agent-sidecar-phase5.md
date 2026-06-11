@@ -1,6 +1,6 @@
 # Phase 5: Agent 稳定性、资源控制与打包优化
 
-> 类型：Phase 实施计划 | 创建：2026-06-04 | 状态：待开始
+> 类型：Phase 实施计划 | 创建：2026-06-04 | 状态：开发完成，待 UI 验证
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 前置：[Phase 4 计划](./agent-sidecar-phase4.md)（已完成）
 
@@ -391,23 +391,23 @@ Phase 5 拆 7 个 PR，分 4 个子阶段。子阶段之间有依赖，子阶段
 
 Phase 5 完成时：
 
-- [ ] Agent compact/resume 摘要显示为折叠状态行，不暴露 SDK 内部细节
-- [ ] 用户纠正输入（"不对"、"不是"）在 resume 场景下被 Agent 正确识别
-- [ ] Agent rewind 在 stream 完成后给出明确提示（不可用或正常工作）
-- [ ] Agent 默认 maxTurns 提高到 30，多步任务不中途失败
-- [ ] Agent 默认 maxFilesChanged 提高到 10，批量修复不 3 个文件就中断
+- [x] Agent compact/resume 摘要显示为折叠状态行，不暴露 SDK 内部细节
+- [x] 用户纠正输入（"不对"、"不是"）在 resume 场景下被 Agent 正确识别
+- [x] Agent rewind 在 stream 完成后隐藏不可用入口，避免调用已关闭 transport
+- [x] Agent 默认 maxTurns 提高到 30，多步任务不中途失败
+- [x] Agent 默认 maxFilesChanged 提高到 10，批量修复不 3 个文件就中断
 - [ ] maxFilesChanged 超限时显示前端状态提示（PR D 已完成结构化 MCP error）
-- [ ] Agent 配置（maxTurns/maxFilesChanged/maxWriteBytes）可在 Settings 中修改
+- [x] Agent 配置（maxTurns/maxFilesChanged/maxWriteBytes）可在 Settings 中修改
 - [x] 过期的 agentSessionId 在启动时自动清理
 - [x] React duplicate key warnings 消除（#59）
 - [x] Tauri resource id 错误消除（#63）
 - [x] QA hook 删除时不提取已删内容的 topic（#69）
 - [x] Sidecar 可编译为单文件 binary（可选）
-- [ ] 普通 Chat/Ingest 模式完全不受影响（回归测试）
+- [x] 普通 Chat/Ingest 模式完全不受影响（回归测试）
 - [ ] `pnpm test` 全绿
-- [ ] `pnpm lint` 无新增错误
-- [ ] `npm run typecheck` 通过
-- [ ] `npx gitnexus detect_changes` 确认仅涉及预期符号
+- [x] `pnpm lint` 无新增错误
+- [x] `npm run typecheck` 通过
+- [x] `npx gitnexus detect_changes` 确认仅涉及预期符号
 
 ## 风险与缓解
 
