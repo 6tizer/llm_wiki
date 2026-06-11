@@ -86,6 +86,7 @@ A neural network architecture based on self-attention.
     expect(result.statusPromoted).toBe(1)
     expect(result.details[0]).toEqual({
       path: "concept",
+      relativePath: "wiki/concept.md",
       action: "status",
       from: "draft",
       to: "Under Review",
@@ -147,6 +148,7 @@ Based on [[concept]] research.
     expect(result.statusPromoted).toBe(1)
     expect(result.details[0]).toEqual({
       path: "concept",
+      relativePath: "wiki/concept.md",
       action: "status",
       from: "draft",
       to: "Reviewed",
