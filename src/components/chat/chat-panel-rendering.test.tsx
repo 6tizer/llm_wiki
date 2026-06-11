@@ -88,4 +88,28 @@ describe("shouldPromptForQaBeforeConversationDelete", () => {
       ),
     ).toBe(false)
   })
+
+  it("does not prompt for pending Agent cleanup-only conversations", () => {
+    expect(
+      shouldPromptForQaBeforeConversationDelete(
+        [
+          msg("user", "cleanup stale references for the deleted page"),
+          msg("assistant", "Cleaned up stale references and found no changes left to apply. ".repeat(3), "agent"),
+        ],
+        { hasProject: true, isPending: true },
+      ),
+    ).toBe(false)
+  })
+
+  it("still prompts for Agent cleanup conversations with new knowledge", () => {
+    expect(
+      shouldPromptForQaBeforeConversationDelete(
+        [
+          msg("user", "cleanup the QA hook and explain the root cause"),
+          msg("assistant", "Cleanup is complete. The root cause was that operation-only deletion messages were treated as reusable knowledge. ".repeat(2), "agent"),
+        ],
+        { hasProject: true, isPending: false },
+      ),
+    ).toBe(true)
+  })
 })

@@ -194,8 +194,11 @@ export async function flushAllPendingQa(
 // ── Skip Logic ───────────────────────────────────────────────────────────────
 
 const GREETING_RE = /^(hi|hello|hey|你好|您好|嗨|哈喽|yo|sup)\s*[!?.。！？]*$/i;
-const DELETE_OPERATION_RE =
-	/(delete|deleted|deleting|remove|removed|removing|purge|删除|移除|删掉|已删|已删除|已经删除)/i;
+// Only used for delete-triggered last-turn filtering. Keep this to explicit
+// operation phrases rather than a bare "clean" so topics like clean code do
+// not look like cleanup work.
+const OPERATION_ONLY_RE =
+	/(delete|deleted|deleting|remove|removed|removing|purge|cleanup|cleaned up|clean up|clean references|no changes?|nothing to delete|not deleted|permission denied|access denied|cancelled|canceled|删除|移除|删掉|清理|清除|已删|已删除|已经删除|无需删除|不用删除|未删除|没有删除|没有变更|无变更|无需更改|权限拒绝|权限不足|已取消|取消)/i;
 const KNOWLEDGE_SIGNAL_RE =
 	/(why|how|because|root cause|workaround|regression|warning|error|bug|insight|lesson|原因|原理|机制|策略|表现|应对|解决|观察|问题|错误|报错|警告|回归|限制|配置)/i;
 
@@ -207,11 +210,28 @@ function isDeleteOnlyConversation(
 	const lastAssistant = assistantMsgs[assistantMsgs.length - 1]?.content.trim() ?? "";
 	const tail = `${lastUser}\n${lastAssistant}`;
 
-	if (!DELETE_OPERATION_RE.test(tail)) return false;
+	// Delete-triggered QA is intentionally last-turn biased: if the final
+	// exchange is only deletion or cleanup bookkeeping, skip extraction even
+	// when older turns had reusable knowledge.
+	if (!OPERATION_ONLY_RE.test(tail)) return false;
 	if (/[?？]/.test(lastUser)) return false;
 	if (KNOWLEDGE_SIGNAL_RE.test(tail)) return false;
 
-	return DELETE_OPERATION_RE.test(lastUser) || DELETE_OPERATION_RE.test(lastAssistant);
+	return OPERATION_ONLY_RE.test(lastUser) || OPERATION_ONLY_RE.test(lastAssistant);
+}
+
+/**
+ * Strip a single complete outer Markdown code fence from LLM QA output.
+ * Inner fences in the QA body are preserved because only the file wrapper is removed.
+ */
+export function stripOuterMarkdownFence(content: string): string {
+	const trimmed = content.trim();
+	const match = trimmed.match(/^```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i);
+	return match ? match[1].trim() : trimmed;
+}
+
+function startsWithMarkdownFence(content: string): boolean {
+	return /^```(?:markdown|md)?[ \t]*\r?\n/i.test(content.trimStart());
 }
 
 /** Decide whether a conversation is worth extracting a QA from. */
@@ -445,6 +465,7 @@ created: ${new Date().toISOString().slice(0, 10)}
 
 Rules:
 - **Recency matters most**: Prioritize the LAST user messages and observations. Earlier operational topics (like config values or tool limits) are less valuable than recent user-discovered issues or insights.
+- Output raw Markdown only. Do not wrap the page in triple backticks or any Markdown code fence.
 - Title must be a clear, specific question (not a generic topic)
 - Answer should be self-contained — readable without the original conversation
 - Include 2-5 key insights that capture the most valuable knowledge
@@ -536,14 +557,25 @@ async function runQaExtraction(
 	});
 	if (streamError) throw streamError;
 
-	const trimmed = accumulated.trim();
+	const rawTrimmed = accumulated.trim();
+	const trimmed = stripOuterMarkdownFence(rawTrimmed);
 	if (!trimmed || trimmed === "SKIP") {
 		return { ok: true, skipped: true, skipReason: "llm-skipped" };
+	}
+	if (trimmed === rawTrimmed && startsWithMarkdownFence(rawTrimmed)) {
+		return {
+			ok: false,
+			error: "LLM output wrapped in code fence with trailing content",
+		};
 	}
 
 	// Step 6: Validate frontmatter
 	const { frontmatter } = parseFrontmatter(trimmed);
-	if (!frontmatter || String(frontmatter.type || "").toLowerCase() !== "qa") {
+	if (
+		!trimmed.startsWith("---") ||
+		!frontmatter ||
+		String(frontmatter.type || "").toLowerCase() !== "qa"
+	) {
 		return { ok: false, error: "LLM output missing valid qa frontmatter" };
 	}
 
