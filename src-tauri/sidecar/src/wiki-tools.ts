@@ -45,6 +45,7 @@ interface AppToolResult {
 	result?: unknown;
 	changedPaths?: string[];
 	wikiChanged?: WikiChangedPayload[];
+	resourceLimit?: AgentResourceLimitPayload;
 }
 
 export interface LlmWikiToolContext extends WikiApiClientOptions {
@@ -125,6 +126,13 @@ function normalizedLimit(value: number | undefined, fallback: number): number {
 function ensureChangedPaths(context: LlmWikiToolContext): Set<string> {
 	context.changedPaths = context.changedPaths ?? new Set<string>();
 	return context.changedPaths;
+}
+
+function appToolBudget(context: LlmWikiToolContext): { maxFilesChanged: number; changedPaths: string[] } {
+	return {
+		maxFilesChanged: normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED),
+		changedPaths: Array.from(ensureChangedPaths(context)).sort(),
+	};
 }
 
 function pathFromObject(value: unknown): string | undefined {
@@ -211,7 +219,12 @@ async function appTool(
 	});
 
 	try {
-		const raw = await context.appToolBridge.callTool(context.streamId, toolName, args);
+		const raw = await context.appToolBridge.callTool(
+			context.streamId,
+			toolName,
+			args,
+			options.requiresWrite ? appToolBudget(context) : undefined,
+		);
 		const data = normalizeAppToolResult(raw);
 		const changedPaths = ensureChangedPaths(context);
 		const fallbackSavePath = toolName === "save_query_page"
@@ -238,6 +251,18 @@ async function appTool(
 				path: fallbackSavePath,
 				operation: "create",
 			});
+		}
+		if (data.resourceLimit) {
+			const sortedPaths = Array.from(changedPaths).sort();
+			return resourceLimitResult(
+				context,
+				{
+					...data.resourceLimit,
+					toolName: data.resourceLimit.toolName ?? toolName,
+					changedPaths: data.resourceLimit.changedPaths ?? sortedPaths,
+				},
+				{ changedCount: changedPaths.size },
+			);
 		}
 		const toolResult = data.result ?? raw;
 		const resultPayload = options.includeTaskId && toolResult && typeof toolResult === "object" && !Array.isArray(toolResult)
@@ -272,6 +297,37 @@ function normalizeAppToolResult(raw: unknown): AppToolResult {
 		result: data.result ?? raw,
 		changedPaths: parseChangedPaths(data.changedPaths),
 		wikiChanged: parseWikiChanged(data.wikiChanged),
+		resourceLimit: parseResourceLimit(data.resourceLimit),
+	};
+}
+
+function parseResourceLimit(value: unknown): AgentResourceLimitPayload | undefined {
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error("resourceLimit must be an object");
+	}
+	const record = value as Record<string, unknown>;
+	if (
+		record.kind !== "resource_limit" ||
+		record.limitKind !== "max_files_changed" ||
+		typeof record.message !== "string" ||
+		(record.recovery !== "split_task" && record.recovery !== "settings_agent")
+	) {
+		throw new Error("resourceLimit is invalid");
+	}
+	const changedPaths = parseChangedPaths(record.changedPaths);
+	return {
+		kind: "resource_limit",
+		limitKind: "max_files_changed",
+		...(typeof record.limit === "number" ? { limit: record.limit } : {}),
+		...(typeof record.used === "number" ? { used: record.used } : {}),
+		...(typeof record.attempted === "number" ? { attempted: record.attempted } : {}),
+		...(record.changedPaths !== undefined ? { changedPaths } : {}),
+		...(typeof record.path === "string" ? { path: record.path } : {}),
+		...(typeof record.bytes === "number" ? { bytes: record.bytes } : {}),
+		...(typeof record.toolName === "string" ? { toolName: record.toolName } : {}),
+		message: record.message,
+		recovery: record.recovery,
 	};
 }
 

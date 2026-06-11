@@ -5,6 +5,15 @@ export interface AppToolRequestPayload {
 	requestId: string;
 	toolName: string;
 	args: Record<string, unknown>;
+	budget?: AppToolBudget;
+}
+
+/** Current app-tool file budget for one Agent run. */
+export interface AppToolBudget {
+	/** Maximum distinct wiki files the app tool may add to the run. */
+	maxFilesChanged: number;
+	/** Distinct wiki-relative paths already changed in the current Agent run. */
+	changedPaths: string[];
 }
 
 export interface AppToolResponseMessage {
@@ -21,6 +30,7 @@ export interface AppToolBridge {
 		streamId: string,
 		toolName: string,
 		args: Record<string, unknown>,
+		budget?: AppToolBudget,
 	): Promise<unknown>;
 	handleResponse(response: AppToolResponseMessage): void;
 	rejectStream(streamId: string, reason: string): void;
@@ -41,7 +51,7 @@ export function createAppToolBridge(args: {
 	const timeoutMs = args.timeoutMs ?? 120_000;
 
 	return {
-		callTool(streamId, toolName, toolArgs) {
+		callTool(streamId, toolName, toolArgs, budget) {
 			const requestId = randomUUID();
 			return new Promise<unknown>((resolve, reject) => {
 				const timer = setTimeout(() => {
@@ -61,6 +71,7 @@ export function createAppToolBridge(args: {
 						requestId,
 						toolName,
 						args: toolArgs,
+						...(budget ? { budget } : {}),
 					},
 				});
 			});

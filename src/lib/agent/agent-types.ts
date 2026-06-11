@@ -225,6 +225,15 @@ export interface AgentAppToolRequestPayload {
 	requestId: string;
 	toolName: string;
 	args: Record<string, unknown>;
+	budget?: AgentAppToolBudget;
+}
+
+/** Current app-tool file budget for one Agent run. */
+export interface AgentAppToolBudget {
+	/** Maximum distinct wiki files the app tool may add to the run. */
+	maxFilesChanged: number;
+	/** Distinct wiki-relative paths already changed in the current Agent run. */
+	changedPaths: string[];
 }
 
 /** Shared subagent configuration — used by agent-types, agent-transport, and sidecar types. */

@@ -702,6 +702,7 @@ async function applyLlmFix(
 export interface FixLintReportResult {
   report: LintReport
   reportPath: string
+  changedPaths: string[]
 }
 
 /**
@@ -718,6 +719,7 @@ export async function fixLintReport(
   const activity = useActivityStore.getState()
 
   const fixed: string[] = []
+  const changedPaths = new Set<string>([reportPath])
   const failed: string[] = []
   const skipped: string[] = []
 
@@ -726,6 +728,7 @@ export async function fixLintReport(
       const ok = await fixLintResult(pp, item, llmConfig)
       if (ok) {
         fixed.push(`[${item.type}] ${item.page}: ${item.detail.slice(0, 80)}`)
+        changedPaths.add(item.page.startsWith("wiki/") ? item.page : `wiki/${item.page}`)
       } else {
         failed.push(`[${item.type}] ${item.page}: fix returned false`)
       }
@@ -758,7 +761,7 @@ export async function fixLintReport(
     filesWritten: [reportPath],
   })
 
-  return { report, reportPath }
+  return { report, reportPath, changedPaths: [...changedPaths].sort() }
 }
 
 /**
@@ -772,7 +775,7 @@ export async function runLintAndReport(
   includeStructural = true,
   includeSemantic = true,
   autoFix = false,
-): Promise<{ report: LintReport; reportPath: string }> {
+): Promise<{ report: LintReport; reportPath: string; changedPaths: string[] }> {
   const structural = includeStructural ? await runStructuralLint(projectPath) : []
   const semantic = includeSemantic ? await runSemanticLint(projectPath, llmConfig) : []
 
@@ -807,11 +810,15 @@ export async function runLintAndReport(
     const release = await lintFixMutex.acquire()
     try {
       const fixedReport = await fixLintReport(projectPath, report, reportPath, llmConfig)
-      return { report: fixedReport.report, reportPath: fixedReport.reportPath }
+      return {
+        report: fixedReport.report,
+        reportPath: fixedReport.reportPath,
+        changedPaths: fixedReport.changedPaths,
+      }
     } finally {
       release()
     }
   }
 
-  return { report, reportPath }
+  return { report, reportPath, changedPaths: [reportPath] }
 }

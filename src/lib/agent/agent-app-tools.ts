@@ -22,16 +22,139 @@ import { useResearchStore } from "@/stores/research-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { SearchApiConfig } from "@/stores/wiki-store"
-import type { AgentWikiChangedPayload } from "./agent-types"
+import type { AgentAppToolBudget, AgentResourceLimitPayload, AgentWikiChangedPayload } from "./agent-types"
 
-export interface AgentAppToolResponse {
+export type AgentAppToolResponse = AgentAppToolSuccessResponse | AgentAppToolResourceLimitResponse
+
+interface AgentAppToolSuccessResponse {
   ok: true
   result: unknown
   changedPaths?: string[]
   wikiChanged?: AgentWikiChangedPayload[]
 }
 
+/** Resource-limit response returned from app tools before or after a write attempt. */
+export interface AgentAppToolResourceLimitResponse {
+  ok: false
+  result: { ok: false; error: string }
+  changedPaths?: string[]
+  wikiChanged?: AgentWikiChangedPayload[]
+  resourceLimit: AgentResourceLimitPayload
+}
+
+/** Runtime options for app-level Agent tools. */
+export interface AgentAppToolRunOptions {
+  budget?: AgentAppToolBudget
+}
+
 type ToolArgs = Record<string, unknown>
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((item) => item.length > 0))].sort()
+}
+
+function wikiPathForPage(page: string): string {
+  return page.startsWith("wiki/") ? page : `wiki/${page}`
+}
+
+function changedPathsFromWikiChanged(wikiChanged: AgentWikiChangedPayload[] = []): string[] {
+  return uniqueStrings(wikiChanged.map((item) => item.path))
+}
+
+function budgetUnion(budget: AgentAppToolBudget, attemptedPaths: string[]): string[] {
+  return uniqueStrings([...budget.changedPaths, ...attemptedPaths])
+}
+
+function resourceLimitResponse(
+  toolName: string,
+  budget: AgentAppToolBudget,
+  attemptedPaths: string[],
+  message: string,
+  actualChanges?: {
+    changedPaths?: string[]
+    wikiChanged?: AgentWikiChangedPayload[]
+  },
+): AgentAppToolResourceLimitResponse {
+  const changedPaths = budgetUnion(budget, attemptedPaths)
+  return {
+    ok: false,
+    result: { ok: false, error: message },
+    ...(actualChanges?.changedPaths ? { changedPaths: actualChanges.changedPaths } : {}),
+    ...(actualChanges?.wikiChanged ? { wikiChanged: actualChanges.wikiChanged } : {}),
+    resourceLimit: {
+      kind: "resource_limit",
+      limitKind: "max_files_changed",
+      limit: budget.maxFilesChanged,
+      used: uniqueStrings(budget.changedPaths).length,
+      attempted: changedPaths.length,
+      changedPaths,
+      path: attemptedPaths[0] ?? "wiki",
+      toolName,
+      message,
+      recovery: "split_task",
+    },
+  }
+}
+
+function preflightBudget(
+  toolName: string,
+  budget: AgentAppToolBudget | undefined,
+  attemptedPaths: string[],
+): AgentAppToolResourceLimitResponse | undefined {
+  if (!budget) return undefined
+  const cleanPaths = uniqueStrings(attemptedPaths)
+  if (budgetUnion(budget, cleanPaths).length <= budget.maxFilesChanged) return undefined
+  return resourceLimitResponse(
+    toolName,
+    budget,
+    cleanPaths,
+    `Write would exceed maxFilesChanged (${budget.maxFilesChanged})`,
+  )
+}
+
+function preflightUnknownWriteBudget(
+  toolName: string,
+  budget: AgentAppToolBudget | undefined,
+): AgentAppToolResourceLimitResponse | undefined {
+  if (!budget) return undefined
+  const changedPaths = uniqueStrings(budget.changedPaths)
+  if (changedPaths.length < budget.maxFilesChanged) return undefined
+  const message = `Write would exceed maxFilesChanged (${budget.maxFilesChanged})`
+  return {
+    ok: false,
+    result: { ok: false, error: message },
+    resourceLimit: {
+      kind: "resource_limit",
+      limitKind: "max_files_changed",
+      limit: budget.maxFilesChanged,
+      used: changedPaths.length,
+      attempted: changedPaths.length + 1,
+      changedPaths,
+      path: "wiki",
+      toolName,
+      message,
+      recovery: "split_task",
+    },
+  }
+}
+
+function postflightBudget(
+  toolName: string,
+  budget: AgentAppToolBudget | undefined,
+  changedPaths: string[],
+  wikiChanged: AgentWikiChangedPayload[],
+): AgentAppToolResourceLimitResponse | undefined {
+  if (!budget) return undefined
+  const actualPaths = uniqueStrings([...changedPaths, ...changedPathsFromWikiChanged(wikiChanged)])
+  if (budgetUnion(budget, actualPaths).length <= budget.maxFilesChanged) return undefined
+  return resourceLimitResponse(
+    toolName,
+    budget,
+    actualPaths,
+    `Write exceeded maxFilesChanged (${budget.maxFilesChanged})`,
+    { changedPaths: actualPaths, wikiChanged },
+  )
+}
 
 function currentProject() {
   const project = useWikiStore.getState().project
@@ -289,10 +412,12 @@ function mergeWikiChanged(result: MergeResult): AgentWikiChangedPayload[] {
 export async function runAgentAppTool(
   toolName: string,
   args: ToolArgs,
+  options: AgentAppToolRunOptions = {},
 ): Promise<AgentAppToolResponse> {
   const project = currentProject()
   const state = useWikiStore.getState()
   const projectPath = project.path
+  const budget = options.budget
 
   if (toolName === "build_answer_context") {
     const maxContextSize =
@@ -458,6 +583,12 @@ export async function runAgentAppTool(
     const group = duplicateGroupArg(args)
     const canonicalSlug = stringArg(args, "canonicalSlug")
     const dryRun = args.dryRun !== false
+    if (!dryRun && budget) {
+      const preview = await previewDuplicateMerge(projectPath, group, canonicalSlug, state.llmConfig)
+      const plannedChanges = mergeWikiChanged(preview)
+      const blocked = preflightBudget(toolName, budget, changedPathsFromWikiChanged(plannedChanges))
+      if (blocked) return blocked
+    }
     const result = dryRun
       ? await previewDuplicateMerge(projectPath, group, canonicalSlug, state.llmConfig)
       : await executeMerge(projectPath, group, canonicalSlug, state.llmConfig)
@@ -519,6 +650,8 @@ export async function runAgentAppTool(
   }
 
   if (toolName === "ingest_source") {
+    const blocked = preflightUnknownWriteBudget(toolName, budget)
+    if (blocked) return blocked
     const sourcePath = await normalizeSourcePath(projectPath, stringArg(args, "sourcePath"))
     const folderContext = typeof args.folderContext === "string" ? args.folderContext : undefined
     const writtenPaths = await autoIngest(projectPath, sourcePath, state.llmConfig, undefined, folderContext)
@@ -526,6 +659,12 @@ export async function runAgentAppTool(
     const autofillResult = await runAutofill(projectPath)
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
+    const wikiChanged = wikiChangedFromPaths([
+      ...writtenPaths,
+      ...autofillResult.details.map((detail) => detail.relativePath),
+    ])
+    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+    if (overBudget) return overBudget
     return {
       ok: true,
       result: {
@@ -534,11 +673,13 @@ export async function runAgentAppTool(
         filesWritten: writtenPaths.length,
         autofill: autofillResult,
       },
-      wikiChanged: wikiChangedFromPaths(writtenPaths),
+      wikiChanged,
     }
   }
 
   if (toolName === "caption_source_images") {
+    const blocked = preflightUnknownWriteBudget(toolName, budget)
+    if (blocked) return blocked
     const sourcePath = await normalizeSourcePath(projectPath, stringArg(args, "sourcePath"))
     const result = await captionSourceImages(
       projectPath,
@@ -552,6 +693,8 @@ export async function runAgentAppTool(
     const wikiChanged = result.sourceSummaryUpdated
       ? [{ path: result.sourceSummaryPath, operation: "update" as const }]
       : []
+    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+    if (overBudget) return overBudget
     return {
       ok: true,
       result,
@@ -561,12 +704,14 @@ export async function runAgentAppTool(
 
   if (toolName === "fix_lint_result") {
     const result = lintResultArg(args)
+    const changedPath = wikiPathForPage(result.page)
+    const blocked = preflightBudget(toolName, budget, [changedPath])
+    if (blocked) return blocked
     const ok = await fixLintResult(projectPath, result, state.llmConfig)
     if (ok) {
       state.setFileTree(await listDirectory(projectPath))
       useWikiStore.getState().bumpDataVersion()
     }
-    const changedPath = `wiki/${result.page}`
     return {
       ok: true,
       result: { fixed: ok, result },
@@ -578,17 +723,25 @@ export async function runAgentAppTool(
   // ── Phase 3.65-B: lint report loop ──
 
   if (toolName === "run_lint_and_report") {
+    const blocked = preflightUnknownWriteBudget(toolName, budget)
+    if (blocked) return blocked
     const fileTree = state.fileTree
     const includeStructural = args.includeStructural !== false
     const includeSemantic = args.includeSemantic === true
     const autoFix = args.autoFix === true
-    const { report, reportPath } = await runLintAndReport(projectPath, state.llmConfig, fileTree, includeStructural, includeSemantic, autoFix)
+    const { report, reportPath, changedPaths } = await runLintAndReport(projectPath, state.llmConfig, fileTree, includeStructural, includeSemantic, autoFix)
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
+    const wikiChanged = changedPaths.map((path) => ({
+      path,
+      operation: path === reportPath ? "create" as const : "update" as const,
+    }))
+    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+    if (overBudget) return overBudget
     return {
       ok: true,
       result: { report, reportPath },
-      wikiChanged: [{ path: reportPath, operation: "create" }],
+      wikiChanged,
     }
   }
 
@@ -597,6 +750,12 @@ export async function runAgentAppTool(
     try {
       const report = args.report as LintReport
       const reportPath = stringArg(args, "reportPath")
+      const plannedPaths = uniqueStrings([
+        reportPath,
+        ...(report.autoFixItems ?? []).map((item) => wikiPathForPage(item.page)),
+      ])
+      const blocked = preflightBudget(toolName, budget, plannedPaths)
+      if (blocked) return blocked
       const { report: updatedReport, reportPath: updatedPath } = await fixLintReport(
         projectPath,
         report,
@@ -608,7 +767,7 @@ export async function runAgentAppTool(
       return {
         ok: true,
         result: { report: updatedReport, reportPath: updatedPath },
-        wikiChanged: [{ path: reportPath, operation: "update" }],
+        wikiChanged: plannedPaths.map((path) => ({ path, operation: "update" as const })),
       }
     } finally {
       release()
@@ -617,9 +776,11 @@ export async function runAgentAppTool(
 
   if (toolName === "enrich_wikilinks") {
     const filePath = normalizePagePath(projectPath, stringArg(args, "path"))
+    const relativePath = filePath.replace(`${normalizePath(projectPath)}/`, "")
+    const blocked = preflightBudget(toolName, budget, [relativePath])
+    if (blocked) return blocked
     await enrichWithWikilinks(projectPath, filePath, state.llmConfig)
     state.setFileTree(await listDirectory(projectPath))
-    const relativePath = filePath.replace(`${normalizePath(projectPath)}/`, "")
     return {
       ok: true,
       result: { path: relativePath },
@@ -628,13 +789,18 @@ export async function runAgentAppTool(
   }
 
   if (toolName === "autofill_properties") {
+    const preview = await runAutofill(projectPath, { dryRun: true })
+    const plannedPaths = uniqueStrings(preview.details.map((detail) => detail.relativePath))
+    const blocked = preflightBudget(toolName, budget, plannedPaths)
+    if (blocked) return blocked
     const result = await runAutofill(projectPath)
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
+    const wikiChanged = wikiChangedFromPaths(result.details.map((detail) => detail.relativePath))
     return {
       ok: true,
       result,
-      wikiChanged: [],
+      wikiChanged,
     }
   }
 
@@ -642,27 +808,57 @@ export async function runAgentAppTool(
     const pipelineName = stringArg(args, "pipeline")
     const schema = BUILTIN_PIPELINES[pipelineName]
     if (!schema) throw new Error(`Unknown pipeline: ${pipelineName}. Available: ${Object.keys(BUILTIN_PIPELINES).join(", ")}`)
-    const result = await executePipeline(schema, runAgentAppTool)
+    const pipelineBudget = budget
+      ? { maxFilesChanged: budget.maxFilesChanged, changedPaths: [...budget.changedPaths] }
+      : undefined
+    const result = await executePipeline(schema, async (stepToolName, stepArgs) => {
+      const response = pipelineBudget
+        ? await runAgentAppTool(stepToolName, stepArgs, { budget: pipelineBudget })
+        : await runAgentAppTool(stepToolName, stepArgs)
+      const actualPaths = uniqueStrings([
+        ...(response.changedPaths ?? []),
+        ...changedPathsFromWikiChanged(response.wikiChanged ?? []),
+      ])
+      if (pipelineBudget) {
+        pipelineBudget.changedPaths = budgetUnion(pipelineBudget, actualPaths)
+      }
+      return response
+    })
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
+    if (result.resourceLimit) {
+      return {
+        ok: false,
+        result: { ok: false, error: result.resourceLimit.message },
+        changedPaths: result.changedPaths,
+        wikiChanged: result.wikiChanged,
+        resourceLimit: result.resourceLimit,
+      }
+    }
     return {
       ok: true as const,
       result,
-      wikiChanged: [],
+      changedPaths: result.changedPaths,
+      wikiChanged: result.wikiChanged ?? [],
     }
   }
 
   if (toolName === "wiki_synthesis") {
+    const blocked = preflightUnknownWriteBudget(toolName, budget)
+    if (blocked) return blocked
     const targetTag = typeof args.targetTag === "string" ? args.targetTag : undefined
     const minClusterSize = typeof args.minClusterSize === "number" ? args.minClusterSize : 3
     const result = await runWikiSynthesis(projectPath, state.llmConfig, state.searchApiConfig, targetTag, minClusterSize)
     if (!result.ok) throw new Error(result.error)
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
+    const wikiChanged = result.synthesisPath ? [{ path: result.synthesisPath, operation: "create" as const }] : []
+    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+    if (overBudget) return overBudget
     return {
       ok: true,
       result,
-      wikiChanged: result.synthesisPath ? [{ path: result.synthesisPath, operation: "create" as const }] : [],
+      wikiChanged,
     }
   }
 

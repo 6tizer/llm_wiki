@@ -832,6 +832,66 @@ describe("streamAgent", () => {
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
 
+	it("passes app tool budgets to runAgentAppTool", async () => {
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent(
+			"run budgeted app tool",
+			{ apiKey: "test-key" },
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+		const streamEvent = `agent:${payload.args.streamId}`;
+		const budget = {
+			maxFilesChanged: 2,
+			changedPaths: ["wiki/index.md"],
+		};
+
+		tauriMocks.emitString(
+			streamEvent,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "app_tool_request",
+				data: {
+					requestId: "request-budget",
+					toolName: "ingest_source",
+					args: { sourcePath: "raw/sources/source.pdf" },
+					budget,
+				},
+			}),
+		);
+
+		await vi.waitFor(() => {
+			expect(appToolMocks.runAgentAppTool).toHaveBeenCalledWith(
+				"ingest_source",
+				{ sourcePath: "raw/sources/source.pdf" },
+				{ budget },
+			);
+		});
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+
+		await stream;
+
+		expect(callbacks.onDone).toHaveBeenCalledWith(null);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
 	it("handles permission requests and sends decisions back to the sidecar", async () => {
 		const callbacks = {
 			onMessage: vi.fn(),

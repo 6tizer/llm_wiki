@@ -12,6 +12,8 @@
  *   - wiki-qa: answers questions using wiki knowledge base
  */
 
+import type { AgentResourceLimitPayload, AgentWikiChangedPayload } from "./agent-types"
+
 // ── Subagent definitions ─────────────────────────────────────────────────────
 
 export type SubagentId =
@@ -160,7 +162,16 @@ export const BUILTIN_PIPELINES: Record<string, PipelineSchema> = {
 
 // ── Pipeline executor ────────────────────────────────────────────────────────
 
-export type ToolRunner = (toolName: string, args: Record<string, unknown>) => Promise<{ ok: boolean; result: unknown }>
+/** Result contract for app-tool calls executed inside a pipeline. */
+export interface PipelineToolResponse {
+  ok: boolean
+  result: unknown
+  changedPaths?: string[]
+  wikiChanged?: AgentWikiChangedPayload[]
+  resourceLimit?: AgentResourceLimitPayload
+}
+
+export type ToolRunner = (toolName: string, args: Record<string, unknown>) => Promise<PipelineToolResponse>
 
 export interface StepResult {
   stepId: string
@@ -169,6 +180,9 @@ export interface StepResult {
   result: unknown
   error?: string
   durationMs: number
+  changedPaths?: string[]
+  wikiChanged?: AgentWikiChangedPayload[]
+  resourceLimit?: AgentResourceLimitPayload
 }
 
 export interface PipelineResult {
@@ -176,6 +190,9 @@ export interface PipelineResult {
   ok: boolean
   steps: StepResult[]
   totalDurationMs: number
+  changedPaths?: string[]
+  wikiChanged?: AgentWikiChangedPayload[]
+  resourceLimit?: AgentResourceLimitPayload
 }
 
 /**
@@ -204,6 +221,10 @@ export async function executePipeline(
         allResults.push(r)
         resultsByStep.set(r.stepId, r)
       }
+      const failed = stageResults.find((r) => !r.ok)
+      if (failed) {
+        return pipelineResult(schema.name, false, allResults, start, failed.resourceLimit)
+      }
     } else {
       // Run steps sequentially
       for (const step of stage.steps) {
@@ -213,22 +234,36 @@ export async function executePipeline(
 
         // Abort stage on failure
         if (!r.ok) {
-          return {
-            pipelineName: schema.name,
-            ok: false,
-            steps: allResults,
-            totalDurationMs: Date.now() - start,
-          }
+          return pipelineResult(schema.name, false, allResults, start, r.resourceLimit)
         }
       }
     }
   }
 
+  return pipelineResult(schema.name, allResults.every((r) => r.ok), allResults, start)
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((item) => item.length > 0))].sort()
+}
+
+function pipelineResult(
+  pipelineName: string,
+  ok: boolean,
+  steps: StepResult[],
+  start: number,
+  resourceLimit?: AgentResourceLimitPayload,
+): PipelineResult {
+  const changedPaths = uniqueStrings(steps.flatMap((step) => step.changedPaths ?? []))
+  const wikiChanged = steps.flatMap((step) => step.wikiChanged ?? [])
   return {
-    pipelineName: schema.name,
-    ok: allResults.every((r) => r.ok),
-    steps: allResults,
+    pipelineName,
+    ok,
+    steps,
     totalDurationMs: Date.now() - start,
+    ...(changedPaths.length > 0 ? { changedPaths } : {}),
+    ...(wikiChanged.length > 0 ? { wikiChanged } : {}),
+    ...(resourceLimit ? { resourceLimit } : {}),
   }
 }
 
@@ -288,6 +323,9 @@ async function executeStep(
       result: response.result,
       error: response.ok ? undefined : String(response.result),
       durationMs: Date.now() - start,
+      ...(response.changedPaths ? { changedPaths: response.changedPaths } : {}),
+      ...(response.wikiChanged ? { wikiChanged: response.wikiChanged } : {}),
+      ...(response.resourceLimit ? { resourceLimit: response.resourceLimit } : {}),
     }
   } catch (err) {
     return {

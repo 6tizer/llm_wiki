@@ -440,17 +440,24 @@ test("create_entity writes fixed directory and refuses overwrite", async () => {
 	assert.match(resultText(duplicate), /already exists/);
 });
 
-test("app-level tools call bridge and emit wiki change/task events", async () => {
+test("app-level tools call bridge with budget and emit wiki change/task events", async () => {
 	const sent: Array<{ type: string; data: unknown }> = [];
-	const bridgeCalls: Array<{ streamId: string; toolName: string; args: Record<string, unknown> }> = [];
+	const bridgeCalls: Array<{
+		streamId: string;
+		toolName: string;
+		args: Record<string, unknown>;
+		budget?: { maxFilesChanged: number; changedPaths: string[] };
+	}> = [];
 	const changed: WikiChangedPayload[] = [];
 	const save = toolByName("save_query_page", {
 		streamId: "stream-1",
+		maxFilesChanged: 3,
+		changedPaths: new Set(["wiki/index.md"]),
 		emitAgentEvent: (type, data) => sent.push({ type, data }),
 		onWikiChanged: (payload) => changed.push(payload),
 		appToolBridge: {
-			async callTool(streamId, toolName, args) {
-				bridgeCalls.push({ streamId, toolName, args });
+			async callTool(streamId, toolName, args, budget) {
+				bridgeCalls.push({ streamId, toolName, args, budget });
 				return {
 					ok: true,
 					result: { relativePath: "wiki/queries/saved.md" },
@@ -470,6 +477,7 @@ test("app-level tools call bridge and emit wiki change/task events", async () =>
 			streamId: "stream-1",
 			toolName: "save_query_page",
 			args: { content: "Saved answer", title: "Saved" },
+			budget: { maxFilesChanged: 3, changedPaths: ["wiki/index.md"] },
 		},
 	]);
 	assert.deepEqual(changed, [{ path: "wiki/queries/saved.md", operation: "create" }]);
@@ -479,6 +487,115 @@ test("app-level tools call bridge and emit wiki change/task events", async () =>
 		"agent_task_done",
 	]);
 	assert.match(resultText(result), /wiki\/queries\/saved.md/);
+});
+
+test("app-level tool resource limits are emitted and returned as tool errors", async () => {
+	const sent: Array<{ type: string; data: unknown }> = [];
+	const changedPaths = new Set<string>(["wiki/index.md"]);
+	const ingest = toolByName("ingest_source", {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		maxFilesChanged: 1,
+		changedPaths,
+		emitAgentEvent: (type, data) => sent.push({ type, data }),
+		appToolBridge: {
+			async callTool() {
+				return {
+					ok: false,
+					result: { ok: false, error: "Write would exceed maxFilesChanged (1)" },
+					resourceLimit: {
+						kind: "resource_limit",
+						limitKind: "max_files_changed",
+						limit: 1,
+						used: 1,
+						attempted: 2,
+						changedPaths: ["wiki/index.md", "wiki/sources/source.md"],
+						path: "wiki/sources/source.md",
+						toolName: "ingest_source",
+						message: "Write would exceed maxFilesChanged (1)",
+						recovery: "split_task",
+					},
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+		},
+	});
+
+	const result = await ingest.handler({ sourcePath: "raw/sources/source.pdf" }, {});
+
+	assert.equal(result.isError, true);
+	assert.equal(result.structuredContent?.kind, "max_files_changed");
+	assert.equal(result.structuredContent?.limit, 1);
+	assert.deepEqual(result.structuredContent?.changedPaths, [
+		"wiki/index.md",
+		"wiki/sources/source.md",
+	]);
+	assert.equal(sent.at(-1)?.type, "agent_action_required");
+	assert.deepEqual(sent.at(-1)?.data, {
+		kind: "resource_limit",
+		limitKind: "max_files_changed",
+		limit: 1,
+		used: 1,
+		attempted: 2,
+		changedPaths: ["wiki/index.md", "wiki/sources/source.md"],
+		path: "wiki/sources/source.md",
+		toolName: "ingest_source",
+		message: "Write would exceed maxFilesChanged (1)",
+		recovery: "split_task",
+	});
+});
+
+test("app-level batch writes register changed paths before later writes are blocked", async () => {
+	const changedPaths = new Set<string>();
+	const bridgeCalls: string[] = [];
+	const ingest = toolByName("ingest_source", {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		maxFilesChanged: 2,
+		changedPaths,
+		appToolBridge: {
+			async callTool(_streamId, toolName) {
+				bridgeCalls.push(toolName);
+				return {
+					ok: true,
+					result: { ok: true },
+					wikiChanged: [
+						{ path: "wiki/sources/source.md", operation: "update" },
+						{ path: "wiki/entities/topic.md", operation: "create" },
+					],
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+		},
+	});
+	const save = toolByName("save_query_page", {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		maxFilesChanged: 2,
+		changedPaths,
+		appToolBridge: {
+			async callTool(_streamId, toolName) {
+				bridgeCalls.push(toolName);
+				return { ok: true, result: { relativePath: "wiki/queries/saved.md" } };
+			},
+			handleResponse() {},
+			rejectStream() {},
+		},
+	});
+
+	const first = await ingest.handler({ sourcePath: "raw/sources/source.pdf" }, {});
+	const second = await save.handler({ content: "Saved answer", title: "Saved" }, {});
+
+	assert.equal(first.isError, undefined);
+	assert.deepEqual(Array.from(changedPaths).sort(), [
+		"wiki/entities/topic.md",
+		"wiki/sources/source.md",
+	]);
+	assert.equal(second.isError, true);
+	assert.equal(second.structuredContent?.kind, "max_files_changed");
+	assert.deepEqual(bridgeCalls, ["ingest_source"]);
 });
 
 test("save_query_page tracks result relativePath when bridge omits wikiChanged", async () => {
