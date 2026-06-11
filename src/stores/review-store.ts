@@ -32,6 +32,45 @@ interface ReviewState {
 
 let counter = 0
 
+const reviewIdPattern = /^review-(\d+)$/
+
+function syncCounterFromItems(items: ReviewItem[]) {
+  for (const item of items) {
+    const match = reviewIdPattern.exec(item.id)
+    if (!match) continue
+    counter = Math.max(counter, Number(match[1]))
+  }
+}
+
+function nextReviewId(existingItems: ReviewItem[] = []) {
+  const existingIds = new Set(existingItems.map((item) => item.id))
+  let id = ""
+  do {
+    id = `review-${++counter}`
+  } while (existingIds.has(id))
+  return id
+}
+
+function ensureUniqueReviewIds(items: ReviewItem[]) {
+  syncCounterFromItems(items)
+  const usedIds = new Set<string>()
+  const result: ReviewItem[] = []
+
+  for (const item of items) {
+    if (!usedIds.has(item.id)) {
+      usedIds.add(item.id)
+      result.push(item)
+      continue
+    }
+
+    const nextId = nextReviewId(result)
+    usedIds.add(nextId)
+    result.push({ ...item, id: nextId })
+  }
+
+  return result
+}
+
 export const useReviewStore = create<ReviewState>((set) => ({
   items: [],
 
@@ -41,7 +80,7 @@ export const useReviewStore = create<ReviewState>((set) => ({
         ...state.items,
         {
           ...item,
-          id: `review-${++counter}`,
+          id: nextReviewId(state.items),
           resolved: false,
           createdAt: Date.now(),
         },
@@ -84,7 +123,7 @@ export const useReviewStore = create<ReviewState>((set) => ({
         } else {
           const newItem = {
             ...incoming,
-            id: `review-${++counter}`,
+            id: nextReviewId(result),
             resolved: false,
             createdAt: Date.now(),
           }
@@ -96,7 +135,9 @@ export const useReviewStore = create<ReviewState>((set) => ({
       return { items: result }
     }),
 
-  setItems: (items) => set({ items }),
+  setItems: (items) => {
+    set({ items: ensureUniqueReviewIds(items) })
+  },
 
   resolveItem: (id, action) =>
     set((state) => ({

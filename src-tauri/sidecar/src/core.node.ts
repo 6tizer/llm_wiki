@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRequestHandler, omitNullish, type QueryControl, type QueryFn } from "./core.js";
+import {
+	createRequestHandler,
+	omitNullish,
+	setBundledClaudeCodeExecutablePath,
+	type QueryControl,
+	type QueryFn,
+} from "./core.js";
 import { handleRewindFilesRequest } from "./rewind-bridge.js";
 import type { AgentMessage, AgentRequest } from "./types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -112,6 +118,31 @@ test("query request preserves provided maxTurns", async () => {
 	});
 
 	assert.equal(capturedInput?.options?.maxTurns, 44);
+});
+
+test("query request forwards bundled Claude executable path when configured", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	setBundledClaudeCodeExecutablePath("/tmp/claude-native");
+	try {
+		const handleRequest = createRequestHandler({
+			queryFn,
+			send: () => {},
+			error: () => {},
+			env: {},
+		});
+
+		await handleRequest(baseRequest);
+		assert.equal(
+			capturedInput?.options?.pathToClaudeCodeExecutable,
+			"/tmp/claude-native",
+		);
+	} finally {
+		setBundledClaudeCodeExecutablePath(undefined);
+	}
 });
 
 test("query request forwards session options to the SDK", async () => {
