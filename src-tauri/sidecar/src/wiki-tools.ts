@@ -117,6 +117,23 @@ function resourceLimitResult(
 	);
 }
 
+function normalizedLimit(value: number | undefined, fallback: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.floor(value));
+}
+
+function ensureChangedPaths(context: LlmWikiToolContext): Set<string> {
+	context.changedPaths = context.changedPaths ?? new Set<string>();
+	return context.changedPaths;
+}
+
+function pathFromObject(value: unknown): string | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const candidate = record.relativePath ?? record.path;
+	return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+}
+
 async function safe(handler: () => Promise<CallToolResult>): Promise<CallToolResult> {
 	try {
 		return await handler();
@@ -143,7 +160,7 @@ async function appTool(
 		throw new Error("Wiki write tools are disabled for this request");
 	}
 	if (toolName === "save_query_page") {
-		const maxWriteBytes = context.maxWriteBytes ?? DEFAULT_MAX_WRITE_BYTES;
+		const maxWriteBytes = normalizedLimit(context.maxWriteBytes, DEFAULT_MAX_WRITE_BYTES);
 		const content = typeof args.content === "string" ? args.content : "";
 		const bytes = Buffer.byteLength(content, "utf8");
 		if (bytes > maxWriteBytes) {
@@ -158,9 +175,8 @@ async function appTool(
 				recovery: "settings_agent",
 			});
 		}
-		const maxFilesChanged = context.maxFilesChanged ?? DEFAULT_MAX_FILES_CHANGED;
-		const changedPaths = (context.changedPaths =
-			context.changedPaths ?? new Set<string>());
+		const maxFilesChanged = normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
+		const changedPaths = ensureChangedPaths(context);
 		if (changedPaths.size >= maxFilesChanged) {
 			const sortedPaths = Array.from(changedPaths).sort();
 			return resourceLimitResult(
@@ -197,15 +213,30 @@ async function appTool(
 	try {
 		const raw = await context.appToolBridge.callTool(context.streamId, toolName, args);
 		const data = normalizeAppToolResult(raw);
+		const changedPaths = ensureChangedPaths(context);
+		const fallbackSavePath = toolName === "save_query_page"
+			? pathFromObject(data.result)
+			: undefined;
 		for (const changed of data.wikiChanged ?? []) {
-			context.changedPaths?.add(changed.path);
+			changedPaths.add(changed.path);
 			context.onWikiChanged?.(changed);
 		}
 		for (const changedPath of data.changedPaths ?? []) {
-			context.changedPaths?.add(changedPath);
+			changedPaths.add(changedPath);
 			context.onWikiChanged?.({
 				path: changedPath,
 				operation: "update",
+			});
+		}
+		if (
+			fallbackSavePath &&
+			!data.changedPaths?.includes(fallbackSavePath) &&
+			!data.wikiChanged?.some((changed) => changed.path === fallbackSavePath)
+		) {
+			changedPaths.add(fallbackSavePath);
+			context.onWikiChanged?.({
+				path: fallbackSavePath,
+				operation: "create",
 			});
 		}
 		const toolResult = data.result ?? raw;
@@ -397,7 +428,7 @@ async function writePage(args: {
 		throw new Error("Write tools are disabled for this request");
 	}
 
-	const maxWriteBytes = args.context.maxWriteBytes ?? DEFAULT_MAX_WRITE_BYTES;
+	const maxWriteBytes = normalizedLimit(args.context.maxWriteBytes, DEFAULT_MAX_WRITE_BYTES);
 	const relativePath = args.fixedDirectory
 		? assertFixedDirectoryPath(args.relativePath, args.fixedDirectory)
 		: assertWikiMarkdownPath(args.relativePath);
@@ -450,10 +481,10 @@ async function writePage(args: {
 
 	if (args.dryRun) return jsonResult(payload);
 
-	const maxFilesChanged = args.context.maxFilesChanged ?? DEFAULT_MAX_FILES_CHANGED;
-	const changedPaths = (args.context.changedPaths =
-		args.context.changedPaths ?? new Set<string>());
-	if (!changedPaths.has(plan.relativePath) && changedPaths.size >= maxFilesChanged) {
+	const maxFilesChanged = normalizedLimit(args.context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
+	const changedPaths = ensureChangedPaths(args.context);
+	const reservesChangedPath = !changedPaths.has(plan.relativePath);
+	if (reservesChangedPath && changedPaths.size >= maxFilesChanged) {
 		const sortedPaths = Array.from(changedPaths).sort();
 		return resourceLimitResult(
 			args.context,
@@ -472,8 +503,13 @@ async function writePage(args: {
 		);
 	}
 
-	await fsLike.writeFile(plan.absolutePath, newText, "utf8");
-	changedPaths.add(plan.relativePath);
+	if (reservesChangedPath) changedPaths.add(plan.relativePath);
+	try {
+		await fsLike.writeFile(plan.absolutePath, newText, "utf8");
+	} catch (err) {
+		if (reservesChangedPath) changedPaths.delete(plan.relativePath);
+		throw err;
+	}
 	args.context.onWikiChanged?.({
 		path: plan.relativePath,
 		operation: args.operation,

@@ -210,9 +210,13 @@ export const ChatMessage = memo(ChatMessageImpl, (prev, next) =>
 )
 
 function formatBytes(bytes?: number): string | undefined {
-  if (bytes === undefined) return undefined
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return undefined
   if (bytes < 1024) return `${bytes} B`
   return `${Math.round(bytes / 1024)} KiB`
+}
+
+function displayNumber(value?: number): number | string {
+  return value !== undefined && Number.isFinite(value) ? value : "?"
 }
 
 function AgentResourceLimitNotice({
@@ -226,10 +230,10 @@ function AgentResourceLimitNotice({
   const bytes = formatBytes(limit.bytes)
   const title = t(`agent.resourceLimit.${limit.limitKind}.title`)
   const description = t(`agent.resourceLimit.${limit.limitKind}.description`, {
-    limit: limit.limit,
-    used: limit.used,
-    attempted: limit.attempted,
-    bytes,
+    limit: displayNumber(limit.limit),
+    used: displayNumber(limit.used),
+    attempted: displayNumber(limit.attempted),
+    bytes: bytes ?? "?",
     path: limit.path,
   })
   const recovery = limit.limitKind === "max_write_bytes"
@@ -239,9 +243,12 @@ function AgentResourceLimitNotice({
       : t("agent.resourceLimit.recovery.settingsAgent")
 
   return (
-    <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+    <div
+      role="alert"
+      className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100"
+    >
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <div className="min-w-0 space-y-1">
           <div className="font-medium">{title}</div>
           <div>{description}</div>

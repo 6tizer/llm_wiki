@@ -129,7 +129,7 @@ describe("agent message rendering", () => {
 	    expect(html).toContain("Retry")
 	  })
 
-  it("renders agent resource limit notices", () => {
+  it("renders max files changed resource limit notices", () => {
     const html = renderToStaticMarkup(
       <ChatMessage
         message={assistantMessage({
@@ -149,9 +149,80 @@ describe("agent message rendering", () => {
     )
 
     expect(html).toContain("Max changed files reached")
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('aria-hidden="true"')
     expect(html).toContain("This Agent run can change up to 1 distinct wiki files")
     expect(html).toContain("Changed files: wiki/index.md")
     expect(html).toContain("send &quot;continue&quot;")
+  })
+
+  it("renders max write bytes notices with split-content recovery", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          mode: "agent",
+          agentResourceLimit: {
+            kind: "resource_limit",
+            limitKind: "max_write_bytes",
+            limit: 1024,
+            bytes: 2048,
+            path: "wiki/large.md",
+            message: "Write exceeds maxWriteBytes (2048 > 1024)",
+            recovery: "settings_agent",
+          },
+        })}
+      />,
+    )
+
+    expect(html).toContain("Write is too large")
+    expect(html).toContain("This write is about 2 KiB")
+    expect(html).toContain("Target: wiki/large.md")
+    expect(html).toContain("make the page shorter or split it across files")
+  })
+
+  it("renders max turns notices", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          mode: "agent",
+          agentResourceLimit: {
+            kind: "resource_limit",
+            limitKind: "max_turns_exceeded",
+            limit: 10,
+            used: 10,
+            attempted: 10,
+            message: "Reached maximum number of turns (10)",
+            recovery: "settings_agent",
+          },
+        })}
+      />,
+    )
+
+    expect(html).toContain("Max turns reached")
+    expect(html).toContain("This Agent run can use up to 10 turns")
+    expect(html).toContain("Settings &gt; Agent")
+  })
+
+  it("renders resource limit notices without literal undefined values", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          mode: "agent",
+          agentResourceLimit: {
+            kind: "resource_limit",
+            limitKind: "max_write_bytes",
+            bytes: Number.NaN,
+            message: "Write exceeds maxWriteBytes",
+            recovery: "settings_agent",
+          },
+        })}
+      />,
+    )
+
+    expect(html).toContain("This write is about ?")
+    expect(html).not.toContain("undefined")
+    expect(html).not.toContain("NaN")
+    expect(html).not.toContain("Infinity")
   })
 
   it("renders agent blocks, timeline, and cost for agent messages", () => {

@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { assertWikiMarkdownPath } from "./wiki-paths.js";
+import { assertWikiMarkdownPath, type FileSystemLike } from "./wiki-paths.js";
 import { createLlmWikiTools, type WikiChangedPayload } from "./wiki-tools.js";
 
 function toolByName(name: string, context: Parameters<typeof createLlmWikiTools>[0]) {
@@ -203,6 +203,61 @@ test("update_page rejects unsafe and oversized writes", async () => {
 	assert.deepEqual((sent.at(-1)?.data as Record<string, unknown>)?.limitKind, "max_write_bytes");
 });
 
+test("update_page checks append result against maxWriteBytes", async () => {
+	const projectPath = await tempProject();
+	const update = toolByName("update_page", {
+		projectPath,
+		maxWriteBytes: 40,
+	});
+
+	const result = await update.handler(
+		{
+			path: "wiki/index.md",
+			contents: "Additional content that should overflow.",
+			mode: "append",
+		},
+		{},
+	);
+
+	assert.equal(result.isError, true);
+	assert.equal(result.structuredContent?.kind, "max_write_bytes");
+	assert.equal(result.structuredContent?.limit, 40);
+});
+
+test("write tools clamp zero and negative resource limits", async () => {
+	const projectPath = await tempProject();
+	const createEntity = toolByName("create_entity", {
+		projectPath,
+		maxFilesChanged: -1,
+	});
+	const update = toolByName("update_page", {
+		projectPath,
+		maxWriteBytes: -5,
+	});
+
+	const blockedFile = await createEntity.handler(
+		{
+			name: "Blocked File",
+			summary: "This write should be blocked by the clamped file limit.",
+		},
+		{},
+	);
+	const blockedBytes = await update.handler(
+		{
+			path: "wiki/index.md",
+			contents: "# Index\n\nThis write should be blocked by the clamped byte limit.",
+		},
+		{},
+	);
+
+	assert.equal(blockedFile.isError, true);
+	assert.equal(blockedFile.structuredContent?.kind, "max_files_changed");
+	assert.equal(blockedFile.structuredContent?.limit, 0);
+	assert.equal(blockedBytes.isError, true);
+	assert.equal(blockedBytes.structuredContent?.kind, "max_write_bytes");
+	assert.equal(blockedBytes.structuredContent?.limit, 0);
+});
+
 test("update_page rejects real writes when write tools are disabled", async () => {
 	const projectPath = await tempProject();
 	const update = toolByName("update_page", {
@@ -281,6 +336,60 @@ test("write tools enforce maxFilesChanged per tool context", async () => {
 			recovery: "split_task",
 		},
 	});
+});
+
+test("write tools reserve changed paths before async file writes", async () => {
+	const projectPath = await tempProject();
+	let releaseFirstWrite: (() => void) | undefined;
+	let firstWriteStarted: (() => void) | undefined;
+	let writeCalls = 0;
+	const firstWriteReady = new Promise<void>((resolve) => {
+		firstWriteStarted = resolve;
+	});
+	const fsLike: FileSystemLike = {
+		readFile: (filePath, encoding) => fs.readFile(filePath, encoding),
+		access: (filePath) => fs.access(filePath),
+		mkdir: (filePath, options) => fs.mkdir(filePath, options),
+		realpath: (filePath) => fs.realpath(filePath),
+		writeFile: async (filePath, data, encoding) => {
+			writeCalls += 1;
+			if (writeCalls === 1) {
+				firstWriteStarted?.();
+				await new Promise<void>((resolve) => {
+					releaseFirstWrite = resolve;
+				});
+			}
+			await fs.writeFile(filePath, data, encoding);
+		},
+	};
+	const createEntity = toolByName("create_entity", {
+		projectPath,
+		maxFilesChanged: 1,
+		fs: fsLike,
+	});
+
+	const first = createEntity.handler(
+		{
+			name: "Concurrent One",
+			summary: "First concurrent write should reserve the only changed file slot.",
+		},
+		{},
+	);
+	await firstWriteReady;
+	const second = await createEntity.handler(
+		{
+			name: "Concurrent Two",
+			summary: "Second concurrent write should be blocked before writing.",
+		},
+		{},
+	);
+	releaseFirstWrite?.();
+	const firstResult = await first;
+
+	assert.equal(firstResult.isError, undefined);
+	assert.equal(second.isError, true);
+	assert.equal(second.structuredContent?.kind, "max_files_changed");
+	assert.equal(writeCalls, 1);
 });
 
 test("write tools default maxFilesChanged allows ten changed files", async () => {
@@ -370,6 +479,34 @@ test("app-level tools call bridge and emit wiki change/task events", async () =>
 		"agent_task_done",
 	]);
 	assert.match(resultText(result), /wiki\/queries\/saved.md/);
+});
+
+test("save_query_page tracks result relativePath when bridge omits wikiChanged", async () => {
+	const changedPaths = new Set<string>();
+	const changed: WikiChangedPayload[] = [];
+	const save = toolByName("save_query_page", {
+		streamId: "stream-1",
+		changedPaths,
+		onWikiChanged: (payload) => changed.push(payload),
+		appToolBridge: {
+			async callTool() {
+				return {
+					ok: true,
+					result: { relativePath: "wiki/queries/fallback.md" },
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+		},
+	});
+
+	const result = await save.handler({ content: "Saved answer", title: "Fallback" }, {});
+
+	assert.equal(result.isError, undefined);
+	assert.deepEqual(Array.from(changedPaths), ["wiki/queries/fallback.md"]);
+	assert.deepEqual(changed, [
+		{ path: "wiki/queries/fallback.md", operation: "create" },
+	]);
 });
 
 test("save_query_page preflights maxFilesChanged before calling app bridge", async () => {

@@ -12,6 +12,7 @@ Phase 5 已经把 Agent Sidecar 主链路推进到可用状态，但 UI 验收�
 1. Agent 资源限制没有形成完整闭环。`maxFilesChanged` 既有漏拦截路径，也缺少用户能看懂的前端提示。
 2. 删除 Agent conversation 前的 QA 提取会写出质量不合格的 wiki 页面，比如整篇被包在 Markdown 代码围栏里，或 delete-only 会话仍弹 QA 提取确认。
 3. 全量测试门禁有一处历史漂移：v0.4.3 已把本地 LLM Origin 策略改成固定 `http://localhost`，但 real-TCP 测试仍期待 same-origin，导致 `pnpm test` 失败。
+4. PR 5.1-A review 发现 app bridge 批量写入工具仍缺少完整 `maxFilesChanged` 预算闭环。`save_query_page` 已在 PR 5.1-A 内修复，`ingest_source`、`run_pipeline`、`fix_lint_report` 等批量工具需要单独设计预算/回滚语义。
 
 Phase 6 会同步上游大量 Chat、Settings、Ingest、MCP 和 Rust 后端改动。上面这些问题如果不先修，会在同步期间继续污染测试项目，资源限制和测试失败也会变成后续大 PR 的噪音。
 
@@ -47,7 +48,7 @@ Phase 6 会同步上游大量 Chat、Settings、Ingest、MCP 和 Rust 后端改�
 
 ## PR 切分
 
-Phase 5.1 最少用 3 个 PR 完成。主线边界保持清楚：一个修资源限制，一个修 QA 提取，一个修全量测试门禁。
+Phase 5.1 最少用 4 个 PR 完成。主线边界保持清楚：一个修单文件/单页资源限制闭环，一个修批量 bridge 写入预算，一个修 QA 提取，一个修全量测试门禁。
 
 ### PR 5.1-A：Agent 资源限制闭环
 
@@ -77,6 +78,36 @@ Phase 5.1 最少用 3 个 PR 完成。主线边界保持清楚：一个修资源
 - Agent transport/UI 单测覆盖结构化资源错误展示。
 - maxTurns 错误分类单测。
 - 跑 `npm --prefix src-tauri/sidecar test`、相关 Vitest、`pnpm lint`。
+
+---
+
+### PR 5.1-D：App bridge 批量写入预算闭环
+
+**目标**：让 app bridge 写入工具在批量写场景下也能遵守 `maxFilesChanged`，并给出清晰的超限语义。
+
+| 来源 | 工作项 | 验收 |
+|------|--------|------|
+| PR #93 Deep Review 3.1 | 梳理 `ingest_source`、`run_pipeline`、`fix_lint_report`、`autofill_properties`、`wiki_synthesis`、`enrich_wikilinks`、`sweep_reviews`、`merge_duplicate_group` 的实际写入返回形态 | 每个工具明确是可预算、post-flight 计数，还是显式豁免 |
+| PR #93 Deep Review 3.1 | 设计 batch 写入预算协议 | bridge 能在执行前返回预估路径，或执行后返回完整 changed paths；超限时有明确失败/回滚/后续阻止策略 |
+| PR #93 Deep Review 3.1 | 将批量工具登记到同一 `changedPaths` set | 批量工具写完后，后续 Agent 写入不能绕过 `maxFilesChanged` |
+
+**建议实现点**：
+
+- 不在 PR 5.1-A 里硬做通用 post-flight 拒绝，因为 bridge 写完后再拒绝无法自动回滚用户文件。
+- 优先给 app bridge 增加 dry-run/preview 或 `plannedChangedPaths` 能力；没有预估能力的工具必须在文档和 UI 中标注限制语义。
+- 对无法回滚的工具，至少做到写后登记完整 `changedPaths`，并阻止后续写入继续扩大影响。
+- 如果某工具天然可能触发大量文件变更，考虑要求显式用户确认或更高权限策略。
+
+**预计工时**：2-3 days
+**风险**：MEDIUM-HIGH
+**优先级**：P0
+
+**测试**：
+
+- 每个 bridge 写入工具至少有 changed-path 解析/登记单测。
+- 批量写入超过 `maxFilesChanged` 后，后续写入被阻止。
+- 对支持 preview 的工具，超限时 bridge 不执行真实写入。
+- 对只支持 post-flight 的工具，测试写后登记和后续阻止语义。
 
 ---
 
@@ -134,11 +165,12 @@ Phase 5.1 最少用 3 个 PR 完成。主线边界保持清楚：一个修资源
 ## 推荐执行顺序
 
 1. PR 5.1-A：Agent 资源限制闭环。
-2. PR 5.1-C：Real LLM 测试门禁修复。
-3. PR 5.1-B：Agent QA 提取质量修复。
-4. 完成后进入 Phase 6 上游同步。
+2. PR 5.1-D：App bridge 批量写入预算闭环。
+3. PR 5.1-C：Real LLM 测试门禁修复。
+4. PR 5.1-B：Agent QA 提取质量修复。
+5. 完成后进入 Phase 6 上游同步。
 
-这个顺序先修安全边界，再清掉全量测试噪音，最后修写入质量。QA 提取修复比较小，但资源限制涉及 sidecar、transport、UI，先处理能减少后续 Agent 验收噪音。
+这个顺序先修安全边界，再补齐 batch bridge 写入预算，然后清掉全量测试噪音，最后修写入质量。QA 提取修复比较小，但资源限制涉及 sidecar、transport、UI，先处理能减少后续 Agent 验收噪音。
 
 ---
 
@@ -148,6 +180,7 @@ Phase 5.1 完成时应满足：
 
 - #89、#85、#64、#62、#90、#87、#92 全部关闭或有明确剩余项。
 - 低资源限制配置下，Agent 不再能绕过 `maxFilesChanged` 写多个不同 wiki 文件。
+- app bridge 批量写入工具不再无声绕过 `maxFilesChanged`；无法预估的工具有明确写后登记和后续阻止策略。
 - 资源限制错误有清楚前端提示和恢复路径。
 - QA 提取保存的 Markdown 能被 frontmatter 正常解析。
 - delete-only / cleanup-only conversation 不再默认触发 QA 提取。

@@ -181,7 +181,7 @@ Phase 6 内处理或跟踪两项：
 
 继续按功能分 PR 手动 port。不要直接 merge 上游分支，也不要一次性重放所有提交。
 
-Phase 6 开始前先完成 Phase 5.1，至少保证 Agent 资源限制闭环、QA 提取质量和全量测试门禁问题不再污染后续同步验收。
+Phase 6 开始前先完成 Phase 5.1，至少保证 Agent 资源限制闭环、app bridge 批量写入预算、QA 提取质量和全量测试门禁问题不再污染后续同步验收。
 
 每个 PR 的基本流程：
 
@@ -406,7 +406,7 @@ Phase 6 开始前先完成 Phase 5.1，至少保证 Agent 资源限制闭环、Q
 
 ## 推荐执行顺序
 
-0. Phase 5.1：完成 Agent 资源限制闭环、QA 提取质量修复和 real-LLM 测试门禁修复。
+0. Phase 5.1：完成 Agent 资源限制闭环、app bridge 批量写入预算闭环、QA 提取质量修复和 real-LLM 测试门禁修复。
 1. PR B：CLI Resolver 和本地 CLI 稳定性
 2. PR C：Embedding 安全修复 + Doubao
 3. PR D：LLM Provider 和 Dedup 稳定性
