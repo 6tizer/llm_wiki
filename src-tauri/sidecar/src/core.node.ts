@@ -633,6 +633,44 @@ test("query errors emit error message and cleanup active query", async () => {
 	assert.match(String((sent[0]?.data as { error?: string }).error), /boom/);
 });
 
+test("max turns errors emit resource limit action before error", async () => {
+	const sent: AgentMessage[] = [];
+	const queryFn: QueryFn = async function* () {
+		throw new Error("Claude Code returned an error result: Reached maximum number of turns (10)");
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: (msg) => sent.push(msg),
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			maxTurns: 10,
+		},
+	});
+
+	assert.equal(sent.length, 2);
+	assert.deepEqual(sent[0], {
+		streamId: "stream-1",
+		type: "agent_action_required",
+		data: {
+			kind: "resource_limit",
+			limitKind: "max_turns_exceeded",
+			limit: 10,
+			used: 10,
+			attempted: 10,
+			message: "Claude Code returned an error result: Reached maximum number of turns (10)",
+			recovery: "settings_agent",
+		},
+	});
+	assert.equal(sent[1]?.type, "error");
+});
+
 test("query completion releases retained active SDK query", async () => {
 	const activeSdkQueries = new Map<string, QueryControl>();
 	let releaseQuery: (() => void) | undefined;

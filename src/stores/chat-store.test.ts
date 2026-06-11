@@ -188,6 +188,16 @@ describe("chat store agent data model", () => {
     useChatStore.getState().updateAgentStreamMessage("m1", {
       content: "partial",
       sessionCompact: true,
+      agentResourceLimit: {
+        kind: "resource_limit",
+        limitKind: "max_files_changed",
+        limit: 1,
+        used: 1,
+        attempted: 2,
+        changedPaths: ["wiki/index.md"],
+        message: "Write would exceed maxFilesChanged (1)",
+        recovery: "split_task",
+      },
       agentBlocks: [
         { type: "text", text: "partial" },
       ],
@@ -197,6 +207,16 @@ describe("chat store agent data model", () => {
       id: "m1",
       content: "partial",
       sessionCompact: true,
+      agentResourceLimit: {
+        kind: "resource_limit",
+        limitKind: "max_files_changed",
+        limit: 1,
+        used: 1,
+        attempted: 2,
+        changedPaths: ["wiki/index.md"],
+        message: "Write would exceed maxFilesChanged (1)",
+        recovery: "split_task",
+      },
       agentBlocks: [
         { type: "text", text: "partial" },
       ],

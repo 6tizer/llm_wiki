@@ -129,6 +129,31 @@ describe("agent message rendering", () => {
 	    expect(html).toContain("Retry")
 	  })
 
+  it("renders agent resource limit notices", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          mode: "agent",
+          agentResourceLimit: {
+            kind: "resource_limit",
+            limitKind: "max_files_changed",
+            limit: 1,
+            used: 1,
+            attempted: 2,
+            changedPaths: ["wiki/index.md"],
+            message: "Write would exceed maxFilesChanged (1)",
+            recovery: "split_task",
+          },
+        })}
+      />,
+    )
+
+    expect(html).toContain("Max changed files reached")
+    expect(html).toContain("This Agent run can change up to 1 distinct wiki files")
+    expect(html).toContain("Changed files: wiki/index.md")
+    expect(html).toContain("send &quot;continue&quot;")
+  })
+
   it("renders agent blocks, timeline, and cost for agent messages", () => {
     const html = renderToStaticMarkup(
       <ChatMessage

@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import type { ChatMessage } from "@/lib/llm-client"
 import type {
+  AgentResourceLimitPayload,
   AgentWikiChangedPayload,
   AgentPermissionDecision,
   AgentPermissionRequestPayload,
@@ -42,6 +43,7 @@ export interface DisplayMessage {
   agentBlocks?: SDKContentBlock[]
   sessionCompact?: boolean
   agentErrorKind?: AgentErrorKind
+  agentResourceLimit?: AgentResourceLimitPayload
   wikiChanges?: AgentWikiChangeRecord[]
   toolCalls?: AgentToolCallRecord[]
   costUsd?: number
@@ -107,6 +109,7 @@ interface AgentStreamMessagePatch {
   content?: string
   agentBlocks?: SDKContentBlock[]
   agentErrorKind?: AgentErrorKind
+  agentResourceLimit?: AgentResourceLimitPayload
   toolCalls?: AgentToolCallRecord[]
   agentUserMessageId?: string
   agentAssistantMessageId?: string

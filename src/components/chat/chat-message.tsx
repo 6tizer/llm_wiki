@@ -7,7 +7,7 @@ import "katex/dist/katex.min.css"
 import {
   Bot, User, FileText, BookmarkPlus, ChevronDown, ChevronRight, RefreshCw, Copy, Check,
   Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, Layout, Globe,
-  TrendingUp, Target, Image as ImageIcon, FileSearch, RotateCcw,
+  TrendingUp, Target, Image as ImageIcon, FileSearch, RotateCcw, AlertTriangle,
 } from "lucide-react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { useTranslation } from "react-i18next"
@@ -139,6 +139,9 @@ function ChatMessageImpl({
             <MarkdownContent content={content} />
           )}
         </div>
+        {isAgent && message.agentResourceLimit && (
+          <AgentResourceLimitNotice limit={message.agentResourceLimit} />
+        )}
         {shouldRenderReferences && (
           <CitedReferencesPanel content={actionContent} savedReferences={message.references} />
         )}
@@ -205,6 +208,62 @@ export const ChatMessage = memo(ChatMessageImpl, (prev, next) =>
   && prev.canRewind === next.canRewind
   && prev.onRewind === next.onRewind
 )
+
+function formatBytes(bytes?: number): string | undefined {
+  if (bytes === undefined) return undefined
+  if (bytes < 1024) return `${bytes} B`
+  return `${Math.round(bytes / 1024)} KiB`
+}
+
+function AgentResourceLimitNotice({
+  limit,
+}: {
+  limit: NonNullable<DisplayMessage["agentResourceLimit"]>
+}) {
+  const { t } = useTranslation()
+  const shownPaths = (limit.changedPaths ?? []).slice(0, 3)
+  const extraPathCount = Math.max(0, (limit.changedPaths?.length ?? 0) - shownPaths.length)
+  const bytes = formatBytes(limit.bytes)
+  const title = t(`agent.resourceLimit.${limit.limitKind}.title`)
+  const description = t(`agent.resourceLimit.${limit.limitKind}.description`, {
+    limit: limit.limit,
+    used: limit.used,
+    attempted: limit.attempted,
+    bytes,
+    path: limit.path,
+  })
+  const recovery = limit.recovery === "split_task"
+    ? t("agent.resourceLimit.recovery.splitTask")
+    : t("agent.resourceLimit.recovery.settingsAgent")
+
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <div className="min-w-0 space-y-1">
+          <div className="font-medium">{title}</div>
+          <div>{description}</div>
+          {(limit.path || shownPaths.length > 0) && (
+            <div className="break-words text-amber-900/80 dark:text-amber-100/80">
+              {limit.path
+                ? t("agent.resourceLimit.path", { path: limit.path })
+                : t(
+                    extraPathCount > 0
+                      ? "agent.resourceLimit.changedPathsMore"
+                      : "agent.resourceLimit.changedPaths",
+                    {
+                      paths: shownPaths.join(", "),
+                      extra: extraPathCount,
+                    },
+                  )}
+            </div>
+          )}
+          <div className="text-amber-900/80 dark:text-amber-100/80">{recovery}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function AgentSessionCompactNotice() {
   const { t } = useTranslation()

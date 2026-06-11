@@ -8,6 +8,7 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { AppToolBridge } from "./app-tool-bridge.js";
+import type { AgentResourceLimitPayload } from "./types.js";
 import { createWikiApiClient, type WikiApiClientOptions } from "./wiki-api.js";
 import {
 	assertFixedDirectoryPath,
@@ -84,6 +85,37 @@ function resourceResult(data: Record<string, unknown>, uri: string, text: string
 	};
 }
 
+function emitResourceLimit(
+	context: LlmWikiToolContext,
+	payload: AgentResourceLimitPayload,
+): void {
+	context.emitAgentEvent?.("agent_action_required", payload);
+}
+
+function resourceLimitResult(
+	context: LlmWikiToolContext,
+	payload: AgentResourceLimitPayload,
+	extra: Record<string, unknown> = {},
+): CallToolResult {
+	emitResourceLimit(context, payload);
+	return jsonResult(
+		{
+			ok: false,
+			kind: payload.limitKind,
+			limit: payload.limit,
+			used: payload.used,
+			attempted: payload.attempted,
+			changedPaths: payload.changedPaths,
+			path: payload.path,
+			bytes: payload.bytes,
+			error: payload.message,
+			resourceLimit: payload,
+			...extra,
+		},
+		true,
+	);
+}
+
 async function safe(handler: () => Promise<CallToolResult>): Promise<CallToolResult> {
 	try {
 		return await handler();
@@ -108,6 +140,45 @@ async function appTool(
 	if (!context.appToolBridge) throw new Error("App tool bridge is not available");
 	if (options.requiresWrite && context.enableWriteTools === false) {
 		throw new Error("Wiki write tools are disabled for this request");
+	}
+	if (toolName === "save_query_page") {
+		const maxWriteBytes = context.maxWriteBytes ?? DEFAULT_MAX_WRITE_BYTES;
+		const content = typeof args.content === "string" ? args.content : "";
+		const bytes = Buffer.byteLength(content, "utf8");
+		if (bytes > maxWriteBytes) {
+			return resourceLimitResult(context, {
+				kind: "resource_limit",
+				limitKind: "max_write_bytes",
+				limit: maxWriteBytes,
+				bytes,
+				path: "wiki/queries",
+				toolName,
+				message: `Write exceeds maxWriteBytes (${bytes} > ${maxWriteBytes})`,
+				recovery: "settings_agent",
+			});
+		}
+		const maxFilesChanged = context.maxFilesChanged ?? DEFAULT_MAX_FILES_CHANGED;
+		const changedPaths = (context.changedPaths =
+			context.changedPaths ?? new Set<string>());
+		if (changedPaths.size >= maxFilesChanged) {
+			const sortedPaths = Array.from(changedPaths).sort();
+			return resourceLimitResult(
+				context,
+				{
+					kind: "resource_limit",
+					limitKind: "max_files_changed",
+					limit: maxFilesChanged,
+					used: changedPaths.size,
+					attempted: changedPaths.size + 1,
+					changedPaths: sortedPaths,
+					path: "wiki/queries",
+					toolName,
+					message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+					recovery: "split_task",
+				},
+				{ changedCount: changedPaths.size },
+			);
+		}
 	}
 
 	const taskId = `${toolName}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -349,15 +420,17 @@ async function writePage(args: {
 	const newText = args.mode === "append" && exists ? `${oldText.trimEnd()}\n\n${args.contents.trim()}\n` : args.contents;
 	const writeBytes = Buffer.byteLength(newText, "utf8");
 	if (writeBytes > maxWriteBytes) {
-		return jsonResult(
+		return resourceLimitResult(
+			args.context,
 			{
-				ok: false,
-				kind: "max_write_bytes",
+				kind: "resource_limit",
+				limitKind: "max_write_bytes",
 				limit: maxWriteBytes,
 				bytes: writeBytes,
-				error: `Write exceeds maxWriteBytes (${writeBytes} > ${maxWriteBytes})`,
+				path: plan.relativePath,
+				message: `Write exceeds maxWriteBytes (${writeBytes} > ${maxWriteBytes})`,
+				recovery: "settings_agent",
 			},
-			true,
 		);
 	}
 	assertWritableContents(newText, maxWriteBytes);
@@ -380,16 +453,21 @@ async function writePage(args: {
 	const changedPaths = (args.context.changedPaths =
 		args.context.changedPaths ?? new Set<string>());
 	if (!changedPaths.has(plan.relativePath) && changedPaths.size >= maxFilesChanged) {
-		return jsonResult(
+		const sortedPaths = Array.from(changedPaths).sort();
+		return resourceLimitResult(
+			args.context,
 			{
-				ok: false,
-				kind: "max_files_changed",
+				kind: "resource_limit",
+				limitKind: "max_files_changed",
 				limit: maxFilesChanged,
-				changedCount: changedPaths.size,
-				changedPaths: Array.from(changedPaths).sort(),
-				error: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+				used: changedPaths.size,
+				attempted: changedPaths.size + 1,
+				changedPaths: sortedPaths,
+				path: plan.relativePath,
+				message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+				recovery: "split_task",
 			},
-			true,
+			{ changedCount: changedPaths.size },
 		);
 	}
 

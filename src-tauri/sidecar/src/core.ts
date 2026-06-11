@@ -65,6 +65,12 @@ export function appendIntentOverride(
 	return `${systemPrompt}\n\n${intentOverride}`;
 }
 
+function parseMaxTurnsExceeded(message: string): number | undefined {
+	const match = message.match(/Reached maximum number of turns \((\d+)\)/i);
+	if (!match) return undefined;
+	return Number.parseInt(match[1] ?? "", 10);
+}
+
 export function createRequestHandler({
 	queryFn,
 	send,
@@ -275,11 +281,28 @@ export function createRequestHandler({
 			send({ streamId: req.streamId, type: "done", data: null });
 		} catch (err) {
 			error("[sidecar] query error:", err);
+			const message = err instanceof Error ? err.message : String(err);
+			const reachedTurns = parseMaxTurnsExceeded(message);
+			if (reachedTurns !== undefined) {
+				send({
+					streamId: req.streamId,
+					type: "agent_action_required",
+					data: {
+						kind: "resource_limit",
+						limitKind: "max_turns_exceeded",
+						limit: req.options.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
+						used: reachedTurns,
+						attempted: reachedTurns,
+						message,
+						recovery: "settings_agent",
+					},
+				});
+			}
 			send({
 				streamId: req.streamId,
 				type: "error",
 				data: {
-					error: err instanceof Error ? err.message : String(err),
+					error: message,
 					stack: err instanceof Error ? err.stack : undefined,
 				},
 			});

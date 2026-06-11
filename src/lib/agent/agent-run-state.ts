@@ -1,7 +1,12 @@
 import type { LlmConfig } from "@/stores/wiki-store"
 import type { WikiProject } from "@/types/wiki"
 
-export type AgentErrorKind = "unavailable" | "missing_api_key" | "timeout" | "failed"
+export type AgentErrorKind =
+  | "unavailable"
+  | "missing_api_key"
+  | "timeout"
+  | "max_turns_exceeded"
+  | "failed"
 export type AgentRunPhase = "idle" | "connecting" | "running"
 
 const API_KEY_OPTIONAL_PROVIDERS = new Set<LlmConfig["provider"]>([
@@ -38,6 +43,12 @@ export function classifyAgentError(message: string): AgentErrorKind {
     return "timeout"
   }
   if (
+    lower.includes("reached maximum number of turns") ||
+    lower.includes("max_turns_exceeded")
+  ) {
+    return "max_turns_exceeded"
+  }
+  if (
     lower.includes("sidecar dist missing") ||
     lower.includes("sidecar binary missing") ||
     lower.includes("failed to spawn agent sidecar") ||
@@ -61,6 +72,7 @@ export function agentErrorI18nKey(kind: AgentErrorKind): string {
   if (kind === "unavailable") return "agent.error.unavailable"
   if (kind === "missing_api_key") return "agent.error.missingApiKey"
   if (kind === "timeout") return "agent.error.timeout"
+  if (kind === "max_turns_exceeded") return "agent.error.maxTurnsExceeded"
   return "agent.error.failed"
 }
 
