@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,8 @@ const binaryName = process.platform === "win32" ? "sidecar.exe" : "sidecar";
 const outfile = join(root, "dist-bin", binaryName);
 const generatedEntry = join(root, "dist-bin", "main-binary.generated.ts");
 
+// Bun compile supports embedding the SDK's native binary via `with { type: "file" }`
+// and `extractFromBunfs`. Other single-file runtimes need a different entry point.
 const nativePackageByPlatform = {
 	"darwin-arm64": "@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
 	"darwin-x64": "@anthropic-ai/claude-agent-sdk-darwin-x64/claude",
@@ -86,6 +88,8 @@ const result = run("bun", [
 if (result.status !== 0) {
 	process.exit(result.status ?? 1);
 }
+
+rmSync(generatedEntry, { force: true });
 
 if (!existsSync(outfile)) {
 	console.error(`[sidecar] Expected binary was not written: ${outfile}`);
