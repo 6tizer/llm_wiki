@@ -185,11 +185,32 @@ export interface AgentSessionCompactPayload {
 	message?: SDKAssistantMessage;
 }
 
-export interface AgentActionRequiredPayload {
+export type AgentResourceLimitKind =
+	| "max_files_changed"
+	| "max_write_bytes"
+	| "max_turns_exceeded";
+
+// Keep in sync with src-tauri/sidecar/src/types.ts.
+export interface AgentResourceLimitPayload {
+	kind: "resource_limit";
+	limitKind: AgentResourceLimitKind;
+	limit?: number;
+	used?: number;
+	/** For max_turns_exceeded, attempted matches used because the SDK only reports the reached turn count. */
+	attempted?: number;
+	changedPaths?: string[];
+	path?: string;
+	bytes?: number;
+	toolName?: string;
+	message: string;
+	recovery: "split_task" | "settings_agent";
+}
+
+export type AgentActionRequiredPayload = {
 	kind: "lint_recommended";
 	paths: string[];
 	reason: "agent_write";
-}
+} | AgentResourceLimitPayload;
 
 export interface AgentTaskEventPayload {
 	taskId: string;

@@ -713,6 +713,16 @@ describe("streamAgent", () => {
 			paths: ["wiki/entities/example.md"],
 			reason: "agent_write",
 		};
+		const resourceAction = {
+			kind: "resource_limit",
+			limitKind: "max_files_changed",
+			limit: 1,
+			used: 1,
+			attempted: 2,
+			changedPaths: ["wiki/entities/example.md"],
+			message: "Write would exceed maxFilesChanged (1)",
+			recovery: "split_task",
+		};
 
 		tauriMocks.emitString(
 			streamEvent,
@@ -738,6 +748,14 @@ describe("streamAgent", () => {
 				data: action,
 			}),
 		);
+		tauriMocks.emitString(
+			streamEvent,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "agent_action_required",
+				data: resourceAction,
+			}),
+		);
 		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
 			code: 0,
 			stderr: "",
@@ -748,6 +766,7 @@ describe("streamAgent", () => {
 		expect(callbacks.onToolEvent).toHaveBeenCalledWith(toolEvent);
 		expect(callbacks.onAgentSummary).toHaveBeenCalledWith(summary);
 		expect(callbacks.onActionRequired).toHaveBeenCalledWith(action);
+		expect(callbacks.onActionRequired).toHaveBeenCalledWith(resourceAction);
 		expect(callbacks.onMessage).not.toHaveBeenCalled();
 		expect(callbacks.onDone).toHaveBeenCalledWith(null);
 		expect(callbacks.onError).not.toHaveBeenCalled();

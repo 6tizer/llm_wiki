@@ -202,7 +202,30 @@
       "unavailable": "Agent 不可用：当前未打开项目。",
       "missingApiKey": "Agent 需要 API key。请在设置中配置当前 provider。",
       "timeout": "Agent 已超时。你可以重试这次请求。",
+      "maxTurnsExceeded": "Agent 已达到最大轮数。你可以拆分任务后继续，或在 Settings > Agent 调高最大轮数。",
       "failed": "Agent 失败：{{error}}"
+    },
+    "resourceLimit": {
+      "max_files_changed": {
+        "title": "已达到最大改动文件数",
+        "description": "本次 Agent 运行最多可改 {{limit}} 个不同 wiki 文件，当前已使用 {{used}} 个。"
+      },
+      "max_write_bytes": {
+        "title": "写入内容超过大小上限",
+        "description": "这次写入约 {{bytes}}，超过当前单次写入上限。"
+      },
+      "max_turns_exceeded": {
+        "title": "已达到最大轮数",
+        "description": "本次 Agent 运行最多 {{limit}} 轮，当前已达到上限。"
+      },
+      "path": "目标：{{path}}",
+      "changedPaths": "已改文件：{{paths}}",
+      "changedPathsMore": "已改文件：{{paths}}，另有 {{extra}} 个",
+      "recovery": {
+        "splitTask": "下一步：发送“继续”让 Agent 处理下一批，或把任务拆小。",
+        "settingsAgent": "下一步：把任务拆小，或到 Settings > Agent 调整资源限制后重试。",
+        "maxWriteBytes": "下一步：让 Agent 精简页面或拆成多个文件，或到 Settings > Agent 调整资源限制后重试。"
+      }
     },
     "wikiChanged": {
       "title": "Wiki 变更",

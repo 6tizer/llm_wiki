@@ -202,7 +202,30 @@
       "unavailable": "Agent is unavailable: no project is open.",
       "missingApiKey": "Agent needs an API key. Configure the current provider in Settings.",
       "timeout": "Agent timed out. You can retry this request.",
+      "maxTurnsExceeded": "Agent reached the max turn limit. Split the task and continue, or raise Max turns in Settings > Agent.",
       "failed": "Agent failed: {{error}}"
+    },
+    "resourceLimit": {
+      "max_files_changed": {
+        "title": "Max changed files reached",
+        "description": "This Agent run can change up to {{limit}} distinct wiki files. It has used {{used}}."
+      },
+      "max_write_bytes": {
+        "title": "Write is too large",
+        "description": "This write is about {{bytes}}, above the current per-write limit."
+      },
+      "max_turns_exceeded": {
+        "title": "Max turns reached",
+        "description": "This Agent run can use up to {{limit}} turns and has reached that limit."
+      },
+      "path": "Target: {{path}}",
+      "changedPaths": "Changed files: {{paths}}",
+      "changedPathsMore": "Changed files: {{paths}}, plus {{extra}} more",
+      "recovery": {
+        "splitTask": "Next step: send \"continue\" for the next batch, or split the task into smaller pieces.",
+        "settingsAgent": "Next step: split the task, or adjust resource limits in Settings > Agent and retry.",
+        "maxWriteBytes": "Next step: ask Agent to make the page shorter or split it across files, or adjust resource limits in Settings > Agent and retry."
+      }
     },
     "wikiChanged": {
       "title": "Wiki changes",

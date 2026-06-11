@@ -723,6 +723,12 @@ export function ChatPanel() {
 						},
 						onActionRequired: (payload) => {
 							markAgentRunning();
+							if (payload.kind === "resource_limit") {
+								updateAgentStreamMessage(messageId, {
+									agentResourceLimit: payload,
+								});
+								return;
+							}
 							const paths = changedPathsFromAction(payload);
 							enqueueAgentLintFromPaths(
 								options.projectPath ?? options.cwd ?? project?.path,

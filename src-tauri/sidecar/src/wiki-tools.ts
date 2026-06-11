@@ -8,6 +8,7 @@ import {
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { AppToolBridge } from "./app-tool-bridge.js";
+import type { AgentResourceLimitPayload } from "./types.js";
 import { createWikiApiClient, type WikiApiClientOptions } from "./wiki-api.js";
 import {
 	assertFixedDirectoryPath,
@@ -84,6 +85,55 @@ function resourceResult(data: Record<string, unknown>, uri: string, text: string
 	};
 }
 
+function emitResourceLimit(
+	context: LlmWikiToolContext,
+	payload: AgentResourceLimitPayload,
+): void {
+	context.emitAgentEvent?.("agent_action_required", payload);
+}
+
+function resourceLimitResult(
+	context: LlmWikiToolContext,
+	payload: AgentResourceLimitPayload,
+	extra: Record<string, unknown> = {},
+): CallToolResult {
+	emitResourceLimit(context, payload);
+	return jsonResult(
+		{
+			ok: false,
+			kind: payload.limitKind,
+			limit: payload.limit,
+			used: payload.used,
+			attempted: payload.attempted,
+			changedPaths: payload.changedPaths,
+			path: payload.path,
+			bytes: payload.bytes,
+			error: payload.message,
+			resourceLimit: payload,
+			// Legacy structuredContent consumers still read changedCount directly.
+			...extra,
+		},
+		true,
+	);
+}
+
+function normalizedLimit(value: number | undefined, fallback: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.floor(value));
+}
+
+function ensureChangedPaths(context: LlmWikiToolContext): Set<string> {
+	context.changedPaths = context.changedPaths ?? new Set<string>();
+	return context.changedPaths;
+}
+
+function pathFromObject(value: unknown): string | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const candidate = record.relativePath ?? record.path;
+	return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+}
+
 async function safe(handler: () => Promise<CallToolResult>): Promise<CallToolResult> {
 	try {
 		return await handler();
@@ -109,6 +159,44 @@ async function appTool(
 	if (options.requiresWrite && context.enableWriteTools === false) {
 		throw new Error("Wiki write tools are disabled for this request");
 	}
+	if (toolName === "save_query_page") {
+		const maxWriteBytes = normalizedLimit(context.maxWriteBytes, DEFAULT_MAX_WRITE_BYTES);
+		const content = typeof args.content === "string" ? args.content : "";
+		const bytes = Buffer.byteLength(content, "utf8");
+		if (bytes > maxWriteBytes) {
+			return resourceLimitResult(context, {
+				kind: "resource_limit",
+				limitKind: "max_write_bytes",
+				limit: maxWriteBytes,
+				bytes,
+				path: "wiki/queries",
+				toolName,
+				message: `Write exceeds maxWriteBytes (${bytes} > ${maxWriteBytes})`,
+				recovery: "settings_agent",
+			});
+		}
+		const maxFilesChanged = normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
+		const changedPaths = ensureChangedPaths(context);
+		if (changedPaths.size >= maxFilesChanged) {
+			const sortedPaths = Array.from(changedPaths).sort();
+			return resourceLimitResult(
+				context,
+				{
+					kind: "resource_limit",
+					limitKind: "max_files_changed",
+					limit: maxFilesChanged,
+					used: changedPaths.size,
+					attempted: changedPaths.size + 1,
+					changedPaths: sortedPaths,
+					path: "wiki/queries",
+					toolName,
+					message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+					recovery: "split_task",
+				},
+				{ changedCount: changedPaths.size },
+			);
+		}
+	}
 
 	const taskId = `${toolName}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 	context.emitAgentEvent?.("agent_task_started", {
@@ -125,15 +213,30 @@ async function appTool(
 	try {
 		const raw = await context.appToolBridge.callTool(context.streamId, toolName, args);
 		const data = normalizeAppToolResult(raw);
+		const changedPaths = ensureChangedPaths(context);
+		const fallbackSavePath = toolName === "save_query_page"
+			? pathFromObject(data.result)
+			: undefined;
 		for (const changed of data.wikiChanged ?? []) {
-			context.changedPaths?.add(changed.path);
+			changedPaths.add(changed.path);
 			context.onWikiChanged?.(changed);
 		}
 		for (const changedPath of data.changedPaths ?? []) {
-			context.changedPaths?.add(changedPath);
+			changedPaths.add(changedPath);
 			context.onWikiChanged?.({
 				path: changedPath,
 				operation: "update",
+			});
+		}
+		if (
+			fallbackSavePath &&
+			!data.changedPaths?.includes(fallbackSavePath) &&
+			!data.wikiChanged?.some((changed) => changed.path === fallbackSavePath)
+		) {
+			changedPaths.add(fallbackSavePath);
+			context.onWikiChanged?.({
+				path: fallbackSavePath,
+				operation: "create",
 			});
 		}
 		const toolResult = data.result ?? raw;
@@ -325,7 +428,7 @@ async function writePage(args: {
 		throw new Error("Write tools are disabled for this request");
 	}
 
-	const maxWriteBytes = args.context.maxWriteBytes ?? DEFAULT_MAX_WRITE_BYTES;
+	const maxWriteBytes = normalizedLimit(args.context.maxWriteBytes, DEFAULT_MAX_WRITE_BYTES);
 	const relativePath = args.fixedDirectory
 		? assertFixedDirectoryPath(args.relativePath, args.fixedDirectory)
 		: assertWikiMarkdownPath(args.relativePath);
@@ -349,15 +452,17 @@ async function writePage(args: {
 	const newText = args.mode === "append" && exists ? `${oldText.trimEnd()}\n\n${args.contents.trim()}\n` : args.contents;
 	const writeBytes = Buffer.byteLength(newText, "utf8");
 	if (writeBytes > maxWriteBytes) {
-		return jsonResult(
+		return resourceLimitResult(
+			args.context,
 			{
-				ok: false,
-				kind: "max_write_bytes",
+				kind: "resource_limit",
+				limitKind: "max_write_bytes",
 				limit: maxWriteBytes,
 				bytes: writeBytes,
-				error: `Write exceeds maxWriteBytes (${writeBytes} > ${maxWriteBytes})`,
+				path: plan.relativePath,
+				message: `Write exceeds maxWriteBytes (${writeBytes} > ${maxWriteBytes})`,
+				recovery: "settings_agent",
 			},
-			true,
 		);
 	}
 	assertWritableContents(newText, maxWriteBytes);
@@ -376,25 +481,35 @@ async function writePage(args: {
 
 	if (args.dryRun) return jsonResult(payload);
 
-	const maxFilesChanged = args.context.maxFilesChanged ?? DEFAULT_MAX_FILES_CHANGED;
-	const changedPaths = (args.context.changedPaths =
-		args.context.changedPaths ?? new Set<string>());
-	if (!changedPaths.has(plan.relativePath) && changedPaths.size >= maxFilesChanged) {
-		return jsonResult(
+	const maxFilesChanged = normalizedLimit(args.context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
+	const changedPaths = ensureChangedPaths(args.context);
+	const reservesChangedPath = !changedPaths.has(plan.relativePath);
+	if (reservesChangedPath && changedPaths.size >= maxFilesChanged) {
+		const sortedPaths = Array.from(changedPaths).sort();
+		return resourceLimitResult(
+			args.context,
 			{
-				ok: false,
-				kind: "max_files_changed",
+				kind: "resource_limit",
+				limitKind: "max_files_changed",
 				limit: maxFilesChanged,
-				changedCount: changedPaths.size,
-				changedPaths: Array.from(changedPaths).sort(),
-				error: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+				used: changedPaths.size,
+				attempted: changedPaths.size + 1,
+				changedPaths: sortedPaths,
+				path: plan.relativePath,
+				message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+				recovery: "split_task",
 			},
-			true,
+			{ changedCount: changedPaths.size },
 		);
 	}
 
-	await fsLike.writeFile(plan.absolutePath, newText, "utf8");
-	changedPaths.add(plan.relativePath);
+	if (reservesChangedPath) changedPaths.add(plan.relativePath);
+	try {
+		await fsLike.writeFile(plan.absolutePath, newText, "utf8");
+	} catch (err) {
+		if (reservesChangedPath) changedPaths.delete(plan.relativePath);
+		throw err;
+	}
 	args.context.onWikiChanged?.({
 		path: plan.relativePath,
 		operation: args.operation,
