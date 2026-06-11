@@ -194,6 +194,9 @@ export async function flushAllPendingQa(
 // ── Skip Logic ───────────────────────────────────────────────────────────────
 
 const GREETING_RE = /^(hi|hello|hey|你好|您好|嗨|哈喽|yo|sup)\s*[!?.。！？]*$/i;
+// Only used for delete-triggered last-turn filtering. Keep this to explicit
+// operation phrases rather than a bare "clean" so topics like clean code do
+// not look like cleanup work.
 const OPERATION_ONLY_RE =
 	/(delete|deleted|deleting|remove|removed|removing|purge|cleanup|cleaned up|clean up|clean references|no changes?|nothing to delete|not deleted|permission denied|access denied|cancelled|canceled|删除|移除|删掉|清理|清除|已删|已删除|已经删除|无需删除|不用删除|未删除|没有删除|没有变更|无变更|无需更改|权限拒绝|权限不足|已取消|取消)/i;
 const KNOWLEDGE_SIGNAL_RE =
@@ -207,6 +210,9 @@ function isDeleteOnlyConversation(
 	const lastAssistant = assistantMsgs[assistantMsgs.length - 1]?.content.trim() ?? "";
 	const tail = `${lastUser}\n${lastAssistant}`;
 
+	// Delete-triggered QA is intentionally last-turn biased: if the final
+	// exchange is only deletion or cleanup bookkeeping, skip extraction even
+	// when older turns had reusable knowledge.
 	if (!OPERATION_ONLY_RE.test(tail)) return false;
 	if (/[?？]/.test(lastUser)) return false;
 	if (KNOWLEDGE_SIGNAL_RE.test(tail)) return false;
@@ -222,6 +228,10 @@ export function stripOuterMarkdownFence(content: string): string {
 	const trimmed = content.trim();
 	const match = trimmed.match(/^```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i);
 	return match ? match[1].trim() : trimmed;
+}
+
+function startsWithMarkdownFence(content: string): boolean {
+	return /^```(?:markdown|md)?[ \t]*\r?\n/i.test(content.trimStart());
 }
 
 /** Decide whether a conversation is worth extracting a QA from. */
@@ -547,9 +557,16 @@ async function runQaExtraction(
 	});
 	if (streamError) throw streamError;
 
-	const trimmed = stripOuterMarkdownFence(accumulated);
+	const rawTrimmed = accumulated.trim();
+	const trimmed = stripOuterMarkdownFence(rawTrimmed);
 	if (!trimmed || trimmed === "SKIP") {
 		return { ok: true, skipped: true, skipReason: "llm-skipped" };
+	}
+	if (trimmed === rawTrimmed && startsWithMarkdownFence(rawTrimmed)) {
+		return {
+			ok: false,
+			error: "LLM output wrapped in code fence with trailing content",
+		};
 	}
 
 	// Step 6: Validate frontmatter

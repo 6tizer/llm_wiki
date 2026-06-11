@@ -458,6 +458,33 @@ describe("flushQaForConversation", () => {
 		expect([...fsMock.files.keys()].some((path) => path.includes("/wiki/qa/"))).toBe(false);
 	});
 
+	it("reports a specific error when a fenced QA has trailing content", async () => {
+		markConversationDirty("conv-fenced-trailing");
+		streamChatMock.mockImplementation(async (_c, _m, h) => {
+			h.onToken(
+				"```markdown\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\n---\n\n# Q: What is RAG?\n```\nHope this helps!",
+			);
+			h.onDone();
+		});
+		const messages = [
+			msg("user", "What is RAG?", "conv-fenced-trailing"),
+			msg("assistant", longAnswer, "conv-fenced-trailing"),
+		];
+		const result = await flushQaForConversation(
+			"conv-fenced-trailing",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe(
+			"LLM output wrapped in code fence with trailing content",
+		);
+		expect([...fsMock.files.keys()].some((path) => path.includes("/wiki/qa/"))).toBe(false);
+	});
+
 	it("rejects non-QA frontmatter without writing a file", async () => {
 		markConversationDirty("conv-non-qa");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
