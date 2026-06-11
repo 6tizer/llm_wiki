@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { useReviewStore, type ReviewItem } from "./review-store"
+import { resetReviewIdCounterForTest, useReviewStore, type ReviewItem } from "./review-store"
 
 // Minimal builder so each test only specifies what it cares about.
 function makeInput(overrides: Partial<Omit<ReviewItem, "id" | "resolved" | "createdAt">> = {}) {
@@ -14,6 +14,7 @@ function makeInput(overrides: Partial<Omit<ReviewItem, "id" | "resolved" | "crea
 
 // Reset the store between tests — Zustand stores are module-level singletons.
 beforeEach(() => {
+  resetReviewIdCounterForTest()
   useReviewStore.setState({ items: [] })
 })
 

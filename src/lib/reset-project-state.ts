@@ -30,9 +30,7 @@ export async function resetProjectState(): Promise<void> {
     activeAgentRewindRequest: null,
   })
 
-  useReviewStore.setState({
-    items: [],
-  })
+  useReviewStore.getState().setItems([])
 
   useActivityStore.setState({
     items: [],

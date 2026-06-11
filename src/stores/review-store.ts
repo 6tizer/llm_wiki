@@ -34,6 +34,10 @@ let counter = 0
 
 const reviewIdPattern = /^review-(\d+)$/
 
+export function resetReviewIdCounterForTest() {
+  counter = 0
+}
+
 function syncCounterFromItems(items: ReviewItem[]) {
   for (const item of items) {
     const match = reviewIdPattern.exec(item.id)
