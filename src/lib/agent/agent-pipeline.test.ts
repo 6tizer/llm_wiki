@@ -112,6 +112,64 @@ describe("executePipeline", () => {
     expect(result.steps).toHaveLength(1) // second step was skipped
   })
 
+  it("aggregates changed paths and wiki changes from successful steps", async () => {
+    const runner: ToolRunner = vi.fn(async (toolName: string) => ({
+      ok: true,
+      result: { tool: toolName },
+      changedPaths: toolName === "run_lint_and_report"
+        ? ["wiki/lint-report-1.md"]
+        : ["wiki/entities/a.md"],
+      wikiChanged: toolName === "run_lint_and_report"
+        ? [{ path: "wiki/lint-report-1.md", operation: "create" as const }]
+        : [{ path: "wiki/entities/a.md", operation: "update" as const }],
+    }))
+
+    const result = await executePipeline(LINT_FIX_PIPELINE, runner)
+
+    expect(result.ok).toBe(true)
+    expect(result.changedPaths).toEqual([
+      "wiki/entities/a.md",
+      "wiki/lint-report-1.md",
+    ])
+    expect(result.wikiChanged).toEqual([
+      { path: "wiki/lint-report-1.md", operation: "create" },
+      { path: "wiki/entities/a.md", operation: "update" },
+    ])
+  })
+
+  it("stops after a resource limit and exposes the limit on the pipeline result", async () => {
+    const resourceLimit = {
+      kind: "resource_limit" as const,
+      limitKind: "max_files_changed" as const,
+      limit: 1,
+      used: 1,
+      attempted: 2,
+      changedPaths: ["wiki/a.md", "wiki/b.md"],
+      path: "wiki/b.md",
+      toolName: "fix_lint_report",
+      message: "Write would exceed maxFilesChanged (1)",
+      recovery: "split_task" as const,
+    }
+    const runner: ToolRunner = vi.fn(async (toolName: string) => {
+      if (toolName === "fix_lint_report") {
+        return { ok: false, result: { ok: false }, resourceLimit }
+      }
+      return {
+        ok: true,
+        result: { report: {} },
+        changedPaths: ["wiki/a.md"],
+        wikiChanged: [{ path: "wiki/a.md", operation: "create" as const }],
+      }
+    })
+
+    const result = await executePipeline(LINT_FIX_PIPELINE, runner)
+
+    expect(result.ok).toBe(false)
+    expect(result.steps).toHaveLength(2)
+    expect(result.resourceLimit).toBe(resourceLimit)
+    expect(result.changedPaths).toEqual(["wiki/a.md"])
+  })
+
   it("records duration for each step", async () => {
     const runner = makeMockRunner()
     const result = await executePipeline(LINT_FIX_PIPELINE, runner)

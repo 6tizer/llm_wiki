@@ -22,7 +22,7 @@ export interface AutofillResult {
   pagesScanned: number
   statusPromoted: number
   tagsAssigned: number
-  details: Array<{ path: string; action: "status" | "tags"; from: string; to: string }>
+  details: Array<{ path: string; relativePath: string; action: "status" | "tags"; from: string; to: string }>
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -268,9 +268,10 @@ function formatYamlValue(val: string | string[]): string {
  * 2. Promotes status where criteria are met
  * 3. Assigns tags to pages with empty tags
  *
- * Returns a result summary. Does NOT call LLM — pure heuristic.
+ * Returns a result summary. With dryRun, reports the same planned changes without writing files.
+ * Does NOT call LLM — pure heuristic.
  */
-export async function runAutofill(projectPath: string): Promise<AutofillResult> {
+export async function runAutofill(projectPath: string, options: { dryRun?: boolean } = {}): Promise<AutofillResult> {
   const result: AutofillResult = {
     pagesScanned: 0,
     statusPromoted: 0,
@@ -302,10 +303,11 @@ export async function runAutofill(projectPath: string): Promise<AutofillResult> 
       // Rule 1: Referenced by ≥2 summaries → Reviewed (highest priority)
       if (refCount >= 2) {
         try {
-          await updateFrontmatterField(page.path, "status", "Reviewed")
+          if (!options.dryRun) await updateFrontmatterField(page.path, "status", "Reviewed")
           result.statusPromoted++
           result.details.push({
             path: page.slug,
+            relativePath: `wiki/${page.slug}.md`,
             action: "status",
             from: status || "(empty)",
             to: "Reviewed",
@@ -319,10 +321,11 @@ export async function runAutofill(projectPath: string): Promise<AutofillResult> 
       // Rule 2: Draft ≥7 days + content complete → Under Review
       if (created && daysSince(created) >= 7 && isContentComplete(page.body)) {
         try {
-          await updateFrontmatterField(page.path, "status", "Under Review")
+          if (!options.dryRun) await updateFrontmatterField(page.path, "status", "Under Review")
           result.statusPromoted++
           result.details.push({
             path: page.slug,
+            relativePath: `wiki/${page.slug}.md`,
             action: "status",
             from: status || "(empty)",
             to: "Under Review",
@@ -339,10 +342,11 @@ export async function runAutofill(projectPath: string): Promise<AutofillResult> 
       const extractedTags = extractTagsFromContent(title, page.body)
       if (extractedTags.length > 0) {
         try {
-          await updateFrontmatterField(page.path, "tags", extractedTags)
+          if (!options.dryRun) await updateFrontmatterField(page.path, "tags", extractedTags)
           result.tagsAssigned++
           result.details.push({
             path: page.slug,
+            relativePath: `wiki/${page.slug}.md`,
             action: "tags",
             from: "(empty)",
             to: extractedTags.join(", "),

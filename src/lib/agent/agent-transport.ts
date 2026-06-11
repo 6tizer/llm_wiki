@@ -247,7 +247,10 @@ export async function streamAgent(
 
 				if (wrapper.type === "app_tool_request") {
 					const request = msg as AgentAppToolRequestPayload;
-					void runAgentAppTool(request.toolName, request.args)
+					const run = request.budget
+						? runAgentAppTool(request.toolName, request.args, { budget: request.budget })
+						: runAgentAppTool(request.toolName, request.args);
+					void run
 						.then((data) => {
 							if (finished) return;
 							return sendAppToolResponse({

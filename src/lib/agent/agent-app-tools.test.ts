@@ -46,7 +46,28 @@ const connectionTestsMock = vi.hoisted(() => ({
 }))
 
 const autofillMock = vi.hoisted(() => ({
-  runAutofill: vi.fn(async () => ({ pagesScanned: 0, statusPromoted: 0, tagsAssigned: 0, details: [] })),
+  runAutofill: vi.fn(async (_projectPath?: string, _options?: { dryRun?: boolean }) => ({
+    pagesScanned: 0,
+    statusPromoted: 0,
+    tagsAssigned: 0,
+    details: [] as Array<{ path: string; relativePath: string; action: "status" | "tags"; from: string; to: string }>,
+  })),
+}))
+
+const wikiSynthesisMock = vi.hoisted(() => ({
+  runWikiSynthesis: vi.fn(async () => ({ ok: true, topic: "test", clusterSize: 3, synthesisPath: "wiki/synthesis/test-synthesis.md", externalSources: 0 })),
+}))
+
+const pipelineMock = vi.hoisted(() => ({
+  executePipeline: vi.fn(async (
+    _schema?: unknown,
+    _runner?: (toolName: string, args: Record<string, unknown>) => Promise<{
+      ok: boolean
+      changedPaths?: string[]
+      wikiChanged?: Array<{ path: string; operation: "create" | "update" | "delete" }>
+      resourceLimit?: unknown
+    }>,
+  ) => ({ pipelineName: "test", ok: true, steps: [] as unknown[], totalDurationMs: 0 })),
 }))
 
 vi.mock("@/commands/fs", () => ({
@@ -98,11 +119,11 @@ vi.mock("@/lib/agent/agent-autofill", () => ({
 }))
 
 vi.mock("@/lib/wiki-synthesis", () => ({
-  runWikiSynthesis: vi.fn(async () => ({ ok: true, topic: "test", clusterSize: 3, synthesisPath: "wiki/synthesis/test-synthesis.md", externalSources: 0 })),
+  runWikiSynthesis: wikiSynthesisMock.runWikiSynthesis,
 }))
 
 vi.mock("@/lib/agent/agent-pipeline", () => ({
-  executePipeline: vi.fn(async () => ({ pipelineName: "test", ok: true, steps: [], totalDurationMs: 0 })),
+  executePipeline: pipelineMock.executePipeline,
   BUILTIN_PIPELINES: { "full-ingest": { name: "full-ingest", stages: [] }, "lint-fix": { name: "lint-fix", stages: [] } },
 }))
 
@@ -117,6 +138,10 @@ describe("runAgentAppTool ingest parity tools", () => {
     ingestMock.autoIngest.mockReset()
     autofillMock.runAutofill.mockClear()
     autofillMock.runAutofill.mockResolvedValue({ pagesScanned: 0, statusPromoted: 0, tagsAssigned: 0, details: [] })
+    wikiSynthesisMock.runWikiSynthesis.mockClear()
+    wikiSynthesisMock.runWikiSynthesis.mockResolvedValue({ ok: true, topic: "test", clusterSize: 3, synthesisPath: "wiki/synthesis/test-synthesis.md", externalSources: 0 })
+    pipelineMock.executePipeline.mockClear()
+    pipelineMock.executePipeline.mockResolvedValue({ pipelineName: "test", ok: true, steps: [], totalDurationMs: 0 })
     ingestMock.captionSourceImages.mockReset()
     deepResearchMock.collectResearchSources.mockReset()
     deepResearchMock.queueResearch.mockReset()
@@ -585,6 +610,161 @@ describe("runAgentAppTool ingest parity tools", () => {
       pendingAfter: 0,
       totalReviews: 2,
     })
+    expect(response.wikiChanged).toBeUndefined()
+  })
+
+  it("blocks fix_lint_report before writing when planned pages exceed budget", async () => {
+    const response = await runAgentAppTool(
+      "fix_lint_report",
+      {
+        reportPath: "wiki/lint-report-1.md",
+        report: {
+          healthScore: 80,
+          autoFixItems: [
+            { type: "broken-link", severity: "warning", page: "entities/a.md", detail: "a" },
+            { type: "orphan", severity: "info", page: "entities/b.md", detail: "b" },
+          ],
+          humanItems: [],
+        },
+      },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.limitKind).toBe("max_files_changed")
+    expect(response.resourceLimit.attempted).toBe(3)
+    expect(response.resourceLimit.changedPaths).toEqual([
+      "wiki/entities/a.md",
+      "wiki/entities/b.md",
+      "wiki/lint-report-1.md",
+    ])
+  })
+
+  it("previews autofill_properties and blocks before real writes when over budget", async () => {
+    autofillMock.runAutofill.mockImplementation(async (_projectPath?: string, options?: { dryRun?: boolean }) => {
+      if (options?.dryRun) {
+        return {
+          pagesScanned: 2,
+          statusPromoted: 2,
+          tagsAssigned: 0,
+          details: [
+            { path: "entities/a", relativePath: "wiki/entities/a.md", action: "status" as const, from: "Draft", to: "Reviewed" },
+            { path: "entities/b", relativePath: "wiki/entities/b.md", action: "status" as const, from: "Draft", to: "Reviewed" },
+          ],
+        }
+      }
+      return { pagesScanned: 0, statusPromoted: 0, tagsAssigned: 0, details: [] }
+    })
+
+    const response = await runAgentAppTool(
+      "autofill_properties",
+      {},
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.attempted).toBe(2)
+    expect(autofillMock.runAutofill).toHaveBeenCalledTimes(1)
+    expect(autofillMock.runAutofill).toHaveBeenCalledWith("/project", { dryRun: true })
+  })
+
+  it("blocks duplicate merge before executeMerge when preview exceeds budget", async () => {
+    dedupRunnerMock.loadAllWikiPages.mockResolvedValue([
+      { path: "wiki/entities/a.md", content: "---\ntitle: A\n---\nA" },
+      { path: "wiki/entities/b.md", content: "---\ntitle: B\n---\nB" },
+      { path: "wiki/index.md", content: "- [[a]]\n- [[b]]" },
+    ])
+    dedupMock.mergeDuplicateGroup.mockResolvedValue({
+      canonicalPath: "wiki/entities/a.md",
+      canonicalContent: "Merged",
+      rewrites: [{ path: "wiki/index.md", newContent: "- [[a]]" }],
+      pagesToDelete: ["wiki/entities/b.md"],
+      backup: [],
+    })
+
+    const response = await runAgentAppTool(
+      "merge_duplicate_group",
+      { slugs: ["a", "b"], canonicalSlug: "a", dryRun: false },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.changedPaths).toEqual([
+      "wiki/entities/a.md",
+      "wiki/entities/b.md",
+      "wiki/index.md",
+    ])
+    expect(dedupRunnerMock.executeMerge).not.toHaveBeenCalled()
+  })
+
+  it("returns post-flight resource limit for ingest_source after unknown batch writes exceed budget", async () => {
+    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md", "wiki/entities/topic.md"])
+
+    const response = await runAgentAppTool(
+      "ingest_source",
+      { sourcePath: "source.pdf" },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/sources/source.md", operation: "update" },
+      { path: "wiki/entities/topic.md", operation: "update" },
+    ])
+    expect(response.resourceLimit.message).toMatch(/exceeded maxFilesChanged/)
+    expect(response.resourceLimit.attempted).toBe(2)
+  })
+
+  it("shares pipeline budget across internal steps and returns the blocking resource limit", async () => {
+    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md"])
+    pipelineMock.executePipeline.mockImplementationOnce(async (
+      _schema: unknown,
+      runner?: (toolName: string, args: Record<string, unknown>) => Promise<{
+        ok: boolean
+        changedPaths?: string[]
+        wikiChanged?: Array<{ path: string; operation: "create" | "update" | "delete" }>
+        resourceLimit?: unknown
+      }>,
+    ) => {
+      if (!runner) throw new Error("missing runner")
+      const first = await runner("ingest_source", { sourcePath: "source.pdf" })
+      const second = await runner("fix_lint_result", {
+        result: { type: "orphan", severity: "info", page: "entities/topic.md", detail: "topic" },
+      })
+      return {
+        pipelineName: "full-ingest",
+        ok: false,
+        steps: [],
+        totalDurationMs: 0,
+        changedPaths: [
+          ...(first.changedPaths ?? []),
+          ...(second.changedPaths ?? []),
+        ],
+        wikiChanged: [
+          ...(first.wikiChanged ?? []),
+          ...(second.wikiChanged ?? []),
+        ],
+        resourceLimit: second.resourceLimit,
+      }
+    })
+
+    const response = await runAgentAppTool(
+      "run_pipeline",
+      { pipeline: "full-ingest" },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.toolName).toBe("fix_lint_result")
+    expect(response.resourceLimit.changedPaths).toEqual([
+      "wiki/entities/topic.md",
+      "wiki/sources/source.md",
+    ])
   })
 
   it("tests provider connection and redacts configured secrets", async () => {

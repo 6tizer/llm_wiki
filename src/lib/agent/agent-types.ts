@@ -225,6 +225,13 @@ export interface AgentAppToolRequestPayload {
 	requestId: string;
 	toolName: string;
 	args: Record<string, unknown>;
+	budget?: AgentAppToolBudget;
+}
+
+/** Current app-tool file budget for one Agent run. */
+export interface AgentAppToolBudget {
+	maxFilesChanged: number;
+	changedPaths: string[];
 }
 
 /** Shared subagent configuration — used by agent-types, agent-transport, and sidecar types. */
