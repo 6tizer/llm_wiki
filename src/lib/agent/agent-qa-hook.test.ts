@@ -8,6 +8,7 @@ import {
 	isDuplicateQa,
 	markConversationDirty,
 	shouldExtractQa,
+	stripOuterMarkdownFence,
 	unmarkConversation,
 } from "./agent-qa-hook";
 
@@ -90,6 +91,51 @@ describe("shouldExtractQa", () => {
 		expect(result.reason).toBe("delete-only");
 	});
 
+	it("skips cleanup-only conversations without new knowledge", () => {
+		const messages = [
+			msg("user", "cleanup stale references for the deleted page"),
+			msg(
+				"assistant",
+				"Cleaned up stale references and found no changes left to apply. ".repeat(
+					3,
+				),
+			),
+		];
+		const result = shouldExtractQa(messages, { trigger: "delete" });
+		expect(result.extract).toBe(false);
+		expect(result.reason).toBe("delete-only");
+	});
+
+	it("skips no-op delete conversations without new knowledge", () => {
+		const messages = [
+			msg("user", "删除 wiki/entities/missing.md"),
+			msg(
+				"assistant",
+				"Nothing to delete. The page was already missing, not deleted, and no changes were made. ".repeat(
+					2,
+				),
+			),
+		];
+		const result = shouldExtractQa(messages, { trigger: "delete" });
+		expect(result.extract).toBe(false);
+		expect(result.reason).toBe("delete-only");
+	});
+
+	it("skips permission-denied cleanup conversations without new knowledge", () => {
+		const messages = [
+			msg("user", "remove the old QA page"),
+			msg(
+				"assistant",
+				"Permission denied while removing the page. The cleanup was cancelled and no changes were made. ".repeat(
+					2,
+				),
+			),
+		];
+		const result = shouldExtractQa(messages, { trigger: "delete" });
+		expect(result.extract).toBe(false);
+		expect(result.reason).toBe("delete-only");
+	});
+
 	it("does not apply delete-only skip to ordinary auto QA eligibility", () => {
 		const messages = [
 			msg("user", "删除 wiki/entities/old-page.md"),
@@ -112,12 +158,12 @@ describe("shouldExtractQa", () => {
 		expect(shouldExtractQa(messages).extract).toBe(true);
 	});
 
-	it("does not treat generic cleanup work as delete-only", () => {
+	it("keeps cleanup conversations that include a new issue or insight", () => {
 		const messages = [
-			msg("user", "cleanup the code around the QA hook"),
+			msg("user", "cleanup the code around the QA hook and explain the bug"),
 			msg(
 				"assistant",
-				"I cleaned up the QA hook implementation and kept the behavior focused on the existing auto extraction path without changing stored conversation data.".repeat(
+				"I cleaned up the QA hook implementation. The bug was that delete-triggered extraction treated operation-only cleanup as reusable knowledge.".repeat(
 					2,
 				),
 			),
@@ -125,6 +171,37 @@ describe("shouldExtractQa", () => {
 		expect(shouldExtractQa(messages, { trigger: "delete" }).extract).toBe(
 			true,
 		);
+	});
+});
+
+describe("stripOuterMarkdownFence", () => {
+	it("strips a complete outer markdown fence", () => {
+		const content = [
+			"```markdown",
+			"---",
+			"type: qa",
+			"title: What is RAG?",
+			"---",
+			"",
+			"# Q: What is RAG?",
+			"```",
+		].join("\n");
+		expect(stripOuterMarkdownFence(content).startsWith("---")).toBe(true);
+		expect(stripOuterMarkdownFence(content)).not.toContain("```markdown");
+	});
+
+	it("preserves non-wrapper fences in the body", () => {
+		const content = [
+			"---",
+			"type: qa",
+			"title: How to show code?",
+			"---",
+			"",
+			"```ts",
+			"const ok = true",
+			"```",
+		].join("\n");
+		expect(stripOuterMarkdownFence(content)).toBe(content);
 	});
 });
 
@@ -303,6 +380,106 @@ describe("flushQaForConversation", () => {
 		expect(result.ok).toBe(true);
 		expect(result.saved).toBe(true);
 		expect(isConversationPending("conv-1")).toBe(false);
+	});
+
+	it("saves fenced markdown QA as clean frontmatter-first markdown", async () => {
+		markConversationDirty("conv-fenced");
+		streamChatMock.mockImplementation(async (_c, _m, h) => {
+			h.onToken(
+				"```markdown\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa, ai]\ncreated: 2026-05-31\n---\n\n# Q: What is RAG?\n\n## A: RAG is retrieval augmented generation.\n```",
+			);
+			h.onDone();
+		});
+		const messages = [
+			msg("user", "What is RAG?", "conv-fenced"),
+			msg("assistant", longAnswer, "conv-fenced"),
+		];
+		const result = await flushQaForConversation(
+			"conv-fenced",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		expect(result.ok).toBe(true);
+		expect(result.saved).toBe(true);
+		const saved = fsMock.files.get("/project/wiki/qa/what-is-rag.md");
+		expect(saved?.startsWith("---")).toBe(true);
+		expect(saved).not.toContain("```markdown");
+	});
+
+	it("skips fenced SKIP responses without writing a file", async () => {
+		markConversationDirty("conv-fenced-skip");
+		streamChatMock.mockImplementation(async (_c, _m, h) => {
+			h.onToken("```\nSKIP\n```");
+			h.onDone();
+		});
+		const messages = [
+			msg("user", "What is RAG?", "conv-fenced-skip"),
+			msg("assistant", longAnswer, "conv-fenced-skip"),
+		];
+		const result = await flushQaForConversation(
+			"conv-fenced-skip",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		expect(result.ok).toBe(true);
+		expect(result.skipped).toBe(true);
+		expect(result.skipReason).toBe("llm-skipped");
+		expect([...fsMock.files.keys()].some((path) => path.includes("/wiki/qa/"))).toBe(false);
+	});
+
+	it("rejects recovered frontmatter that is not at the start of the saved file", async () => {
+		markConversationDirty("conv-prefixed");
+		streamChatMock.mockImplementation(async (_c, _m, h) => {
+			h.onToken(
+				"Here is the QA page:\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\n---\n\n# Q: What is RAG?",
+			);
+			h.onDone();
+		});
+		const messages = [
+			msg("user", "What is RAG?", "conv-prefixed"),
+			msg("assistant", longAnswer, "conv-prefixed"),
+		];
+		const result = await flushQaForConversation(
+			"conv-prefixed",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("LLM output missing valid qa frontmatter");
+		expect([...fsMock.files.keys()].some((path) => path.includes("/wiki/qa/"))).toBe(false);
+	});
+
+	it("rejects non-QA frontmatter without writing a file", async () => {
+		markConversationDirty("conv-non-qa");
+		streamChatMock.mockImplementation(async (_c, _m, h) => {
+			h.onToken(
+				"---\ntype: entity\ntitle: What is RAG?\ntags: [qa]\n---\n\n# What is RAG?",
+			);
+			h.onDone();
+		});
+		const messages = [
+			msg("user", "What is RAG?", "conv-non-qa"),
+			msg("assistant", longAnswer, "conv-non-qa"),
+		];
+		const result = await flushQaForConversation(
+			"conv-non-qa",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+
+		expect(result.ok).toBe(false);
+		expect([...fsMock.files.keys()].some((path) => path.includes("/wiki/qa/"))).toBe(false);
 	});
 
 	it("keeps auto-trigger prompt free of delete-only instructions", async () => {
