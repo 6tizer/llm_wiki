@@ -51,7 +51,7 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockRemovePageEmbedding).toHaveBeenCalledTimes(1)
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       "/proj",
-      wikiPathToVectorPageId("/proj/wiki/concepts/rope.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/concepts/rope.md"),
     )
   })
 
@@ -104,7 +104,19 @@ describe("cascadeDeleteWikiPage", () => {
     await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/some-deep/nested/page.md")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       "/proj",
-      wikiPathToVectorPageId("/proj/wiki/concepts/some-deep/nested/page.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/concepts/some-deep/nested/page.md"),
+    )
+  })
+
+  it("keeps nested wiki directory deletes distinct from the project wiki root", async () => {
+    await cascadeDeleteWikiPage("/proj", "/proj/wiki/something/wiki/foo.md")
+
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "/proj",
+      wikiPathToVectorPageId("/proj", "/proj/wiki/something/wiki/foo.md"),
+    )
+    expect(wikiPathToVectorPageId("/proj", "/proj/wiki/something/wiki/foo.md")).not.toBe(
+      wikiPathToVectorPageId("/proj", "/proj/wiki/foo.md"),
     )
   })
 
@@ -117,7 +129,7 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockDeleteFile).toHaveBeenCalledWith("C:\\proj\\wiki\\entities\\transformer.md")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       "C:/proj",
-      wikiPathToVectorPageId("C:\\proj\\wiki\\entities\\transformer.md"),
+      wikiPathToVectorPageId("C:/proj", "C:\\proj\\wiki\\entities\\transformer.md"),
     )
   })
 
@@ -128,7 +140,7 @@ describe("cascadeDeleteWikiPage", () => {
     await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/foo.bar.md")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       "/proj",
-      wikiPathToVectorPageId("/proj/wiki/concepts/foo.bar.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/concepts/foo.bar.md"),
     )
   })
 
@@ -159,7 +171,7 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockDeleteFile).toHaveBeenNthCalledWith(2, "/proj/wiki/media/rope-paper")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       "/proj",
-      wikiPathToVectorPageId("/proj/wiki/sources/rope-paper.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/sources/rope-paper.md"),
     )
   })
 
@@ -197,7 +209,7 @@ describe("cascadeDeleteWikiPage", () => {
     // Embedding cascade still ran in between.
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       "/proj",
-      wikiPathToVectorPageId("/proj/wiki/sources/text-only-source.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/sources/text-only-source.md"),
     )
   })
 
@@ -280,7 +292,7 @@ describe("cascadeDeleteWikiPagesWithRefs", () => {
     expect(mockDeleteFile).toHaveBeenCalledWith(target)
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
       PROJECT,
-      wikiPathToVectorPageId(target),
+      wikiPathToVectorPageId(PROJECT, target),
     )
   })
 

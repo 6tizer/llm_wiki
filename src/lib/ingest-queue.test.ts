@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { flushMicrotasks } from "@/test-helpers/deferred"
-import { wikiPathToVectorPageId } from "./wiki-page-identity"
+import { wikiRelativePathToVectorPageId } from "./wiki-page-identity"
 
 // Mock autoIngest so tests control success/failure timing.
 vi.mock("./ingest", () => ({
@@ -625,16 +625,16 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     expect(removePageEmbeddingMock).toHaveBeenNthCalledWith(
       1,
       "/proj",
-      wikiPathToVectorPageId("wiki/concepts/rope.md"),
+      wikiRelativePathToVectorPageId("wiki/concepts/rope.md"),
     )
     expect(removePageEmbeddingMock).toHaveBeenNthCalledWith(
       2,
       "/proj",
-      wikiPathToVectorPageId("wiki/entities/transformer.md"),
+      wikiRelativePathToVectorPageId("wiki/entities/transformer.md"),
     )
   })
 
-  it("uses absolute paths verbatim (doesn't double-prefix the project path)", async () => {
+  it("uses absolute paths verbatim and skips embeddings outside the project root", async () => {
     const { deleteFile } = await import("@/commands/fs")
     const mockDeleteFile = vi.mocked(deleteFile)
     mockDeleteFile.mockReset()
@@ -643,11 +643,7 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     await cleanupWrittenFiles("/proj", ["/abs/elsewhere/wiki/concepts/foo.md"])
 
     expect(mockDeleteFile).toHaveBeenCalledWith("/abs/elsewhere/wiki/concepts/foo.md")
-    // Vector id derivation still works on absolute paths.
-    expect(removePageEmbeddingMock).toHaveBeenCalledWith(
-      "/proj",
-      wikiPathToVectorPageId("/abs/elsewhere/wiki/concepts/foo.md"),
-    )
+    expect(removePageEmbeddingMock).not.toHaveBeenCalled()
   })
 
   it("continues to subsequent files when one delete throws", async () => {
@@ -671,7 +667,7 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     expect(removePageEmbeddingMock).toHaveBeenCalledTimes(1)
     expect(removePageEmbeddingMock).toHaveBeenCalledWith(
       "/proj",
-      wikiPathToVectorPageId("wiki/concepts/present.md"),
+      wikiRelativePathToVectorPageId("wiki/concepts/present.md"),
     )
   })
 
@@ -710,7 +706,7 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
 
     expect(removePageEmbeddingMock).toHaveBeenCalledWith(
       "C:/proj",
-      wikiPathToVectorPageId("wiki\\concepts\\rope.md"),
+      wikiRelativePathToVectorPageId("wiki\\concepts\\rope.md"),
     )
   })
 })

@@ -1081,15 +1081,21 @@ async function autoIngestImpl(
   if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
     try {
       const { embedPage } = await import("@/lib/embedding")
-      const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
+      const {
+        isRootStructuralWikiPagePath,
+        normalizeProjectWikiMarkdownPath,
+        wikiPathToVectorPageId,
+      } = await import("@/lib/wiki-page-identity")
       for (const wpath of writtenPaths) {
-        const legacyId = wpath.split("/").pop()?.replace(/\.md$/, "") ?? ""
-        if (!legacyId || ["index", "log", "overview"].includes(legacyId)) continue
-        const pageId = wikiPathToVectorPageId(wpath)
+        const wikiPath = normalizeProjectWikiMarkdownPath(pp, wpath)
+        const legacyId = wikiPath.split("/").pop()?.replace(/\.md$/, "") ?? ""
+        if (!legacyId || isRootStructuralWikiPagePath(pp, wikiPath)) continue
+        const pageId = wikiPathToVectorPageId(pp, wpath)
         try {
           const content = await readFile(`${pp}/${wpath}`)
           const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
-          const title = titleMatch ? titleMatch[1].trim() : legacyId
+          const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
+          const title = titleMatch ? titleMatch[1].trim() : titleFallback
           await embedPage(pp, pageId, title, content, embCfg)
         } catch {
           // non-critical
