@@ -78,7 +78,7 @@ describe("provider connection tests", () => {
     expect(result.message).toContain("Response: OK")
   })
 
-  it("forces local CLI isolation for CLI provider connection tests", async () => {
+  it("forces local CLI isolation and a 1-minute timeout for Codex CLI connection tests", async () => {
     streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
       callbacks.onToken("OK")
       callbacks.onDone()
@@ -94,12 +94,35 @@ describe("provider connection tests", () => {
       expect.objectContaining({
         provider: "codex-cli",
         localCliIsolation: true,
+        codexCliTimeoutMinutes: 1,
       }),
       expect.any(Array),
       expect.any(Object),
       undefined,
       { max_tokens: 32, reasoning: { mode: "off" } },
     )
+  })
+
+  it("forces local CLI isolation without adding a timeout for Claude Code connection tests", async () => {
+    streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
+      callbacks.onToken("OK")
+      callbacks.onDone()
+    })
+
+    await testLlmConnection({
+      ...llmConfig,
+      provider: "claude-code",
+      localCliIsolation: false,
+    })
+
+    const passedConfig = streamChatMock.mock.calls[0]?.[0] as LlmConfig
+    expect(passedConfig).toEqual(
+      expect.objectContaining({
+        provider: "claude-code",
+        localCliIsolation: true,
+      }),
+    )
+    expect(passedConfig.codexCliTimeoutMinutes).toBeUndefined()
   })
 
   it("does not alter non-CLI provider connection test config", async () => {
@@ -154,6 +177,35 @@ describe("provider connection tests", () => {
       expect.objectContaining({
         provider: "claude-code",
         localCliIsolation: true,
+      }),
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      { max_tokens: 32, reasoning: { mode: "off" } },
+    )
+    const passedConfig = streamChatMock.mock.calls[0]?.[0] as LlmConfig
+    expect(passedConfig.codexCliTimeoutMinutes).toBeUndefined()
+  })
+
+  it("forces local CLI isolation and a 1-minute timeout for Codex CLI functional tests", async () => {
+    streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
+      callbacks.onToken("LLM_WIKI_TEST_OK")
+      callbacks.onDone()
+    })
+
+    const result = await testLlmFunction({
+      ...llmConfig,
+      provider: "codex-cli",
+      localCliIsolation: false,
+      codexCliTimeoutMinutes: 90,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(streamChatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex-cli",
+        localCliIsolation: true,
+        codexCliTimeoutMinutes: 1,
       }),
       expect.any(Array),
       expect.any(Object),

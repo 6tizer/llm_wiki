@@ -124,7 +124,14 @@ export async function testLlmFunction(cfg: LlmConfig): Promise<ProviderTestResul
 }
 
 function configForProviderTest(cfg: LlmConfig): LlmConfig {
-  if (cfg.provider !== "claude-code" && cfg.provider !== "codex-cli") return cfg
+  if (cfg.provider === "codex-cli") {
+    return {
+      ...cfg,
+      localCliIsolation: true,
+      codexCliTimeoutMinutes: 1,
+    }
+  }
+  if (cfg.provider !== "claude-code") return cfg
   return {
     ...cfg,
     localCliIsolation: true,

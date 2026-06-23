@@ -18,12 +18,22 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use super::cli_resolver::{child_path_env, find_cli_command};
 
-#[derive(Default)]
 pub struct CodexCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
+    timeout_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+}
+
+impl Default for CodexCliState {
+    fn default() -> Self {
+        Self {
+            children: Arc::new(Mutex::new(HashMap::new())),
+            timeout_tasks: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -190,9 +200,12 @@ pub async fn codex_cli_spawn(
 
     let children = Arc::clone(&state.children);
     let timeout_children = Arc::clone(&state.children);
+    let timeout_tasks = Arc::clone(&state.timeout_tasks);
+    let timeout_tasks_for_reader = Arc::clone(&state.timeout_tasks);
     let timed_out = Arc::new(AtomicBool::new(false));
     let timeout_flag = Arc::clone(&timed_out);
     let timeout_stream_id = stream_id.clone();
+    let timeout_task_stream_id = stream_id.clone();
     let timeout_minutes = codex_spawn_timeout_minutes(timeout_minutes);
     let timeout_duration = Duration::from_secs(timeout_minutes * 60);
     let app_for_task = app.clone();
@@ -200,13 +213,22 @@ pub async fn codex_cli_spawn(
     let topic = format!("codex-cli:{stream_id}");
     let done_topic = format!("codex-cli:{stream_id}:done");
 
-    tokio::spawn(async move {
+    let timeout_task = tokio::spawn(async move {
         tokio::time::sleep(timeout_duration).await;
-        if let Some(mut child) = timeout_children.lock().await.remove(&timeout_stream_id) {
-            timeout_flag.store(true, Ordering::SeqCst);
-            let _ = child.start_kill();
+        {
+            let mut children = timeout_children.lock().await;
+            if let Some(child) = children.get_mut(&timeout_stream_id) {
+                timeout_flag.store(true, Ordering::SeqCst);
+                let _ = child.start_kill();
+            }
         }
+        timeout_tasks.lock().await.remove(&timeout_task_stream_id);
     });
+    state
+        .timeout_tasks
+        .lock()
+        .await
+        .insert(stream_id.clone(), timeout_task);
 
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
@@ -240,6 +262,7 @@ pub async fn codex_cli_spawn(
         }
 
         let child_opt = children.lock().await.remove(&stream_id_task);
+        abort_timeout_task(&timeout_tasks_for_reader, &stream_id_task).await;
         let exit_code = if let Some(mut child) = child_opt {
             match child.wait().await {
                 Ok(status) => status.code(),
@@ -254,9 +277,7 @@ pub async fn codex_cli_spawn(
             if !stderr_text.is_empty() {
                 stderr_text.push('\n');
             }
-            stderr_text.push_str(&format!(
-                "Codex CLI timed out after {timeout_minutes} minutes."
-            ));
+            stderr_text.push_str(&codex_timeout_message(timeout_minutes));
         } else if stderr_text.len() >= STDERR_LIMIT_BYTES {
             stderr_text.push_str("\n[stderr truncated]");
         }
@@ -264,19 +285,11 @@ pub async fn codex_cli_spawn(
             stdout_text.push_str("\n[stdout truncated]");
         }
 
-        let code = if timed_out.load(Ordering::SeqCst) {
-            Some(-1)
-        } else {
-            exit_code
-        };
+        let timed_out = timed_out.load(Ordering::SeqCst);
 
         let _ = app.emit(
             &done_topic,
-            serde_json::json!({
-                "code": code,
-                "stderr": stderr_text,
-                "stdout": stdout_text,
-            }),
+            codex_done_payload(exit_code, stderr_text, stdout_text, timed_out),
         );
     });
 
@@ -288,6 +301,41 @@ fn codex_spawn_timeout_minutes(value: Option<u64>) -> u64 {
         MIN_CODEX_SPAWN_TIMEOUT_MINUTES,
         MAX_CODEX_SPAWN_TIMEOUT_MINUTES,
     )
+}
+
+fn codex_timeout_message(timeout_minutes: u64) -> String {
+    let unit = if timeout_minutes == 1 {
+        "minute"
+    } else {
+        "minutes"
+    };
+    format!("Codex CLI timed out after {timeout_minutes} {unit}.")
+}
+
+async fn abort_timeout_task(
+    timeout_tasks: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    stream_id: &str,
+) -> bool {
+    if let Some(task) = timeout_tasks.lock().await.remove(stream_id) {
+        task.abort();
+        true
+    } else {
+        false
+    }
+}
+
+fn codex_done_payload(
+    exit_code: Option<i32>,
+    stderr: String,
+    stdout: String,
+    timed_out: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "code": if timed_out { Some(-1) } else { exit_code },
+        "stderr": stderr,
+        "stdout": stdout,
+        "timedOut": timed_out,
+    })
 }
 
 fn build_codex_cli_args(model: &str, isolate_local_config: bool) -> Vec<String> {
@@ -356,6 +404,7 @@ pub async fn codex_cli_kill(
     if let Some(mut child) = state.children.lock().await.remove(&stream_id) {
         let _ = child.start_kill();
     }
+    abort_timeout_task(&state.timeout_tasks, &stream_id).await;
     Ok(())
 }
 
@@ -404,6 +453,86 @@ mod tests {
             codex_spawn_timeout_minutes(Some(999)),
             MAX_CODEX_SPAWN_TIMEOUT_MINUTES
         );
+    }
+
+    #[test]
+    fn codex_done_payload_marks_timeout_and_keeps_legacy_code() {
+        let payload = codex_done_payload(Some(0), codex_timeout_message(1), String::new(), true);
+
+        assert_eq!(payload["timedOut"].as_bool(), Some(true));
+        assert_eq!(payload["code"].as_i64(), Some(-1));
+        assert_eq!(payload["stderr"], "Codex CLI timed out after 1 minute.");
+    }
+
+    #[test]
+    fn codex_done_payload_preserves_non_timeout_exit_code() {
+        let payload = codex_done_payload(Some(2), "bad flags".to_string(), String::new(), false);
+
+        assert_eq!(payload["timedOut"].as_bool(), Some(false));
+        assert_eq!(payload["code"].as_i64(), Some(2));
+        assert_eq!(payload["stderr"], "bad flags");
+    }
+
+    #[test]
+    fn codex_timeout_message_uses_singular_minute() {
+        assert_eq!(
+            codex_timeout_message(1),
+            "Codex CLI timed out after 1 minute."
+        );
+        assert_eq!(
+            codex_timeout_message(2),
+            "Codex CLI timed out after 2 minutes."
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_timeout_task_removes_task_without_running_timeout_body() {
+        let timeout_tasks = Arc::new(Mutex::new(HashMap::new()));
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timed_out_for_task = Arc::clone(&timed_out);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            timed_out_for_task.store(true, Ordering::SeqCst);
+        });
+
+        timeout_tasks
+            .lock()
+            .await
+            .insert("stream-1".to_string(), task);
+
+        assert!(abort_timeout_task(&timeout_tasks, "stream-1").await);
+        assert!(timeout_tasks.lock().await.is_empty());
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        assert!(!timed_out.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn kill_abort_cleanup_does_not_mark_done_payload_as_timed_out() {
+        let timeout_tasks = Arc::new(Mutex::new(HashMap::new()));
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timed_out_for_task = Arc::clone(&timed_out);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            timed_out_for_task.store(true, Ordering::SeqCst);
+        });
+
+        timeout_tasks
+            .lock()
+            .await
+            .insert("stream-1".to_string(), task);
+        assert!(abort_timeout_task(&timeout_tasks, "stream-1").await);
+
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        let payload = codex_done_payload(
+            None,
+            "Process was killed by user.".to_string(),
+            String::new(),
+            timed_out.load(Ordering::SeqCst),
+        );
+
+        assert_eq!(payload["timedOut"].as_bool(), Some(false));
+        assert!(payload["code"].is_null());
+        assert_eq!(payload["stderr"], "Process was killed by user.");
     }
 
     #[test]
