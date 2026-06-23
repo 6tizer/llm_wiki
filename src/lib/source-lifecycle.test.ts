@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listDirectory: vi.fn(),
   preprocessFile: vi.fn(),
   enqueueBatch: vi.fn(),
+  removePageEmbedding: vi.fn(),
 }))
 
 vi.mock("@/commands/fs", async () => {
@@ -29,12 +30,18 @@ vi.mock("@/lib/ingest-queue", () => ({
   enqueueBatch: mocks.enqueueBatch,
 }))
 
+vi.mock("@/lib/embedding", () => ({
+  removePageEmbedding: mocks.removePageEmbedding,
+}))
+
 import {
+  cleanupDeletedWikiPages,
   folderContextForSourcePath,
   importSourceFiles,
   importSourceFolder,
   isIngestableSourcePath,
 } from "./source-lifecycle"
+import { wikiPathToVectorPageId } from "./wiki-page-identity"
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -46,6 +53,7 @@ beforeEach(() => {
   mocks.listDirectory.mockResolvedValue([])
   mocks.preprocessFile.mockResolvedValue("")
   mocks.enqueueBatch.mockResolvedValue(["task"])
+  mocks.removePageEmbedding.mockResolvedValue(undefined)
 })
 
 describe("source-lifecycle path helpers", () => {
@@ -145,5 +153,17 @@ describe("source-lifecycle path helpers", () => {
         folderContext: "",
       },
     ])
+  })
+
+  it("cleans embeddings for absolute nested wiki page paths", async () => {
+    mocks.listDirectory.mockResolvedValue([])
+
+    await cleanupDeletedWikiPages("/project", ["/project/wiki/projects/log.md"])
+
+    expect(mocks.removePageEmbedding).toHaveBeenCalledWith(
+      "/project",
+      wikiPathToVectorPageId("/project", "/project/wiki/projects/log.md"),
+    )
+    expect(mocks.deleteFile).toHaveBeenCalledWith("/project/wiki/media/log")
   })
 })

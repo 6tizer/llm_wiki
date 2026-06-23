@@ -224,7 +224,7 @@ export async function reembedSourceSummary(
     const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
     await embedPage(
       pp,
-      wikiPathToVectorPageId(`wiki/sources/${sourceSummarySlug}.md`),
+      wikiPathToVectorPageId(pp, `wiki/sources/${sourceSummarySlug}.md`),
       title,
       content,
       embCfg,

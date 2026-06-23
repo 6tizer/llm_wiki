@@ -988,7 +988,7 @@ struct PageIdentityIndex {
 impl PageIdentityIndex {
     fn insert(&mut self, project_path: &str, path: &Path) {
         let rel = normalize_path(&relative_to_project(project_path, path));
-        let Some(vector_id) = wiki_path_to_vector_page_id(&rel) else {
+        let Some(vector_id) = wiki_relative_path_to_vector_page_id(&rel) else {
             return;
         };
         self.by_vector_id.insert(vector_id.clone(), rel.clone());
@@ -1031,7 +1031,7 @@ impl PageIdentityIndex {
     fn from_paths_for_test(paths: &[&str]) -> Self {
         let mut index = Self::default();
         for rel in paths {
-            let vector_id = wiki_path_to_vector_page_id(rel).unwrap();
+            let vector_id = wiki_relative_path_to_vector_page_id(rel).unwrap();
             let normalized = normalize_path(rel);
             index
                 .by_vector_id
@@ -1048,23 +1048,46 @@ impl PageIdentityIndex {
     }
 }
 
-fn wiki_path_to_vector_page_id(path: &str) -> Option<String> {
-    let normalized = normalize_path(path).trim_start_matches('/').to_string();
-    let parts = normalized.split('/').collect::<Vec<_>>();
-    let wiki_pos = parts.iter().rposition(|part| *part == "wiki")?;
-    let wiki_path = parts[wiki_pos..].join("/");
+fn wiki_relative_path_to_vector_page_id(path: &str) -> Option<String> {
+    let wiki_path = normalize_path(path);
+    if wiki_path.starts_with('/') || !wiki_path.starts_with("wiki/") {
+        return None;
+    }
+    if wiki_path
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
     let without_extension = wiki_path.strip_suffix(".md")?;
+    if without_extension == "wiki/" {
+        return None;
+    }
     Some(format!(
         "wp_{}",
         URL_SAFE_NO_PAD.encode(without_extension.as_bytes())
     ))
 }
 
+#[cfg(test)]
+fn project_path_to_vector_page_id(project_path: &str, path: &Path) -> Option<String> {
+    let rel = normalize_path(&relative_to_project(project_path, path));
+    wiki_relative_path_to_vector_page_id(&rel)
+}
+
 fn relative_to_project(project_path: &str, path: &Path) -> String {
-    let root = Path::new(project_path);
-    path.strip_prefix(root)
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"))
+    let root = normalize_path(project_path)
+        .trim_end_matches('/')
+        .to_string();
+    let full_path = normalize_path(&path.to_string_lossy());
+    if full_path == root {
+        String::new()
+    } else {
+        full_path
+            .strip_prefix(&format!("{root}/"))
+            .unwrap_or(&full_path)
+            .to_string()
+    }
 }
 
 fn file_stem(path: &str) -> String {
@@ -1266,21 +1289,21 @@ mod tests {
         ]);
         let vector_rank = BTreeMap::from([
             (
-                wiki_path_to_vector_page_id("wiki/concepts/both.md").unwrap(),
+                wiki_relative_path_to_vector_page_id("wiki/concepts/both.md").unwrap(),
                 1,
             ),
             (
-                wiki_path_to_vector_page_id("wiki/concepts/vector-only.md").unwrap(),
+                wiki_relative_path_to_vector_page_id("wiki/concepts/vector-only.md").unwrap(),
                 2,
             ),
         ]);
         let vector_score = BTreeMap::from([
             (
-                wiki_path_to_vector_page_id("wiki/concepts/both.md").unwrap(),
+                wiki_relative_path_to_vector_page_id("wiki/concepts/both.md").unwrap(),
                 0.95,
             ),
             (
-                wiki_path_to_vector_page_id("wiki/concepts/vector-only.md").unwrap(),
+                wiki_relative_path_to_vector_page_id("wiki/concepts/vector-only.md").unwrap(),
                 0.8,
             ),
         ]);
@@ -1317,7 +1340,7 @@ mod tests {
             "---\ntitle: Deep Page\n---\n\n# Deep Page\n\nThe literal query is absent here.",
         );
         let vector_results = vec![PageVectorResult {
-            id: wiki_path_to_vector_page_id("wiki/custom/deep-page.md").unwrap(),
+            id: wiki_relative_path_to_vector_page_id("wiki/custom/deep-page.md").unwrap(),
             score: 0.91,
             chunk_text: "A semantic chunk explains the actual reason for retrieval.".to_string(),
             heading_path: "Section > Detail".to_string(),
@@ -1356,15 +1379,64 @@ mod tests {
 
     #[test]
     fn vector_page_id_uses_project_wiki_root_when_parent_path_contains_wiki() {
-        let relative = wiki_path_to_vector_page_id("wiki/a/b.md").unwrap();
+        let relative = wiki_relative_path_to_vector_page_id("wiki/a/b.md").unwrap();
 
         assert_eq!(
-            wiki_path_to_vector_page_id("/tmp/wiki/proj/wiki/a/b.md").unwrap(),
+            project_path_to_vector_page_id(
+                "/tmp/wiki/proj",
+                Path::new("/tmp/wiki/proj/wiki/a/b.md")
+            )
+            .unwrap(),
             relative
         );
         assert_eq!(
-            wiki_path_to_vector_page_id("C:\\tmp\\wiki\\proj\\wiki\\a\\b.md").unwrap(),
+            wiki_relative_path_to_vector_page_id("wiki\\a\\b.md").unwrap(),
+            relative,
+        );
+        assert_eq!(
+            project_path_to_vector_page_id(
+                "C:/tmp/wiki/proj",
+                Path::new("C:\\tmp\\wiki\\proj\\wiki\\a\\b.md")
+            )
+            .unwrap(),
             relative
+        );
+        assert!(project_path_to_vector_page_id(
+            "/tmp/wiki/proj",
+            Path::new("/tmp/other/wiki/a/b.md")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn vector_page_id_distinguishes_nested_wiki_directories() {
+        let root_page = wiki_relative_path_to_vector_page_id("wiki/foo.md").unwrap();
+        let nested_wiki_page =
+            wiki_relative_path_to_vector_page_id("wiki/something/wiki/foo.md").unwrap();
+
+        assert_ne!(root_page, nested_wiki_page);
+    }
+
+    #[test]
+    fn vector_page_id_rejects_dot_segments() {
+        assert!(wiki_relative_path_to_vector_page_id("wiki/../foo.md").is_none());
+        assert!(wiki_relative_path_to_vector_page_id("wiki/./foo.md").is_none());
+        assert!(wiki_relative_path_to_vector_page_id("wiki/.md").is_none());
+    }
+
+    #[test]
+    fn vector_page_id_uses_fixed_base64url_vectors() {
+        assert_eq!(
+            wiki_relative_path_to_vector_page_id("wiki/a/b.md").unwrap(),
+            "wp_d2lraS9hL2I"
+        );
+        assert_eq!(
+            wiki_relative_path_to_vector_page_id("wiki/queries/foo.md").unwrap(),
+            "wp_d2lraS9xdWVyaWVzL2Zvbw"
+        );
+        assert_eq!(
+            wiki_relative_path_to_vector_page_id("wiki/sources/默会 知识.v1.md").unwrap(),
+            "wp_d2lraS9zb3VyY2VzL-m7mOS8miDnn6Xor4YudjE"
         );
     }
 
@@ -1382,7 +1454,7 @@ mod tests {
             "---\ntitle: Source Foo\n---\n\n# Source Foo\n\nAlso no lexical match.",
         );
         let pp = root.to_string_lossy().to_string();
-        let encoded = wiki_path_to_vector_page_id("wiki/queries/foo.md").unwrap();
+        let encoded = wiki_relative_path_to_vector_page_id("wiki/queries/foo.md").unwrap();
         vectorstore::vector_upsert_chunks(
             pp.clone(),
             encoded,

@@ -46,7 +46,7 @@ import {
   removePageEmbedding,
   type PageSearchResult,
 } from "./embedding"
-import { wikiPathToVectorPageId } from "./wiki-page-identity"
+import { wikiPathToVectorPageId, wikiRelativePathToVectorPageId } from "./wiki-page-identity"
 
 const cfg = {
   enabled: true,
@@ -82,8 +82,8 @@ beforeEach(() => {
 
 describe("wiki page identity", () => {
   it("encodes path-aware vector ids and keeps legacy stem ids separate", async () => {
-    const queries = wikiPathToVectorPageId("C:\\proj\\wiki\\queries\\foo.md")
-    const sources = wikiPathToVectorPageId("/proj/wiki/sources/foo.md")
+    const queries = wikiPathToVectorPageId("C:/proj", "C:\\proj\\wiki\\queries\\foo.md")
+    const sources = wikiPathToVectorPageId("/proj", "/proj/wiki/sources/foo.md")
 
     expect(queries).toMatch(/^wp_[A-Za-z0-9_-]+$/)
     expect(sources).toMatch(/^wp_[A-Za-z0-9_-]+$/)
@@ -91,16 +91,23 @@ describe("wiki page identity", () => {
   })
 
   it("handles CJK, spaces, and punctuation deterministically", async () => {
-    expect(wikiPathToVectorPageId("/proj/wiki/sources/默会 知识.v1.md")).toBe(
-      wikiPathToVectorPageId("wiki/sources/默会 知识.v1.md"),
+    expect(wikiPathToVectorPageId("/proj", "/proj/wiki/sources/默会 知识.v1.md")).toBe(
+      wikiRelativePathToVectorPageId("wiki/sources/默会 知识.v1.md"),
     )
   })
 
   it("uses the project wiki root when parent directories also contain wiki", async () => {
-    const relative = wikiPathToVectorPageId("wiki/a/b.md")
+    const relative = wikiRelativePathToVectorPageId("wiki/a/b.md")
 
-    expect(wikiPathToVectorPageId("/tmp/wiki/proj/wiki/a/b.md")).toBe(relative)
-    expect(wikiPathToVectorPageId("C:\\tmp\\wiki\\proj\\wiki\\a\\b.md")).toBe(relative)
+    expect(wikiPathToVectorPageId("/tmp/wiki/proj", "/tmp/wiki/proj/wiki/a/b.md")).toBe(relative)
+    expect(wikiPathToVectorPageId("C:/tmp/wiki/proj", "C:\\tmp\\wiki\\proj\\wiki\\a\\b.md")).toBe(relative)
+  })
+
+  it("keeps a nested wiki directory distinct from the project wiki root", async () => {
+    const rootPage = wikiPathToVectorPageId("/proj", "/proj/wiki/foo.md")
+    const nestedWikiPage = wikiPathToVectorPageId("/proj", "/proj/wiki/something/wiki/foo.md")
+
+    expect(rootPage).not.toBe(nestedWikiPage)
   })
 })
 
@@ -1192,9 +1199,34 @@ describe("embedAllPages", () => {
     expect(upsertCalls).toHaveLength(2)
     const pageIds = upsertCalls.map((c) => (c[1] as { pageId: string }).pageId).sort()
     expect(pageIds).toEqual([
-      wikiPathToVectorPageId("/proj/wiki/rope.md"),
-      wikiPathToVectorPageId("/proj/wiki/sub/attention.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/rope.md"),
+      wikiPathToVectorPageId("/proj", "/proj/wiki/sub/attention.md"),
     ].sort())
+  })
+
+  it("indexes nested pages with structural basenames", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "log.md", path: "/proj/wiki/log.md", is_dir: false },
+      {
+        name: "projects",
+        path: "/proj/wiki/projects",
+        is_dir: true,
+        children: [
+          { name: "log.md", path: "/proj/wiki/projects/log.md", is_dir: false },
+        ],
+      },
+    ])
+    readFileMock.mockResolvedValue("# Project Log\n\nBody.")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+
+    const count = await embedAllPages("/proj", cfg)
+
+    expect(count).toBe(1)
+    const upsertCalls = mockInvoke.mock.calls.filter((c) => c[0] === "vector_upsert_chunks")
+    expect(upsertCalls).toHaveLength(1)
+    expect((upsertCalls[0][1] as { pageId: string }).pageId).toBe(
+      wikiPathToVectorPageId("/proj", "/proj/wiki/projects/log.md"),
+    )
   })
 
   it("extracts the title from YAML frontmatter when present", async () => {
@@ -1306,7 +1338,7 @@ describe("embedAllPages", () => {
     expect(count).toBe(2)
     const upserts = mockInvoke.mock.calls.filter((c) => c[0] === "vector_upsert_chunks")
     expect(upserts).toHaveLength(1)
-    expect((upserts[0][1] as { pageId: string }).pageId).toBe(wikiPathToVectorPageId("/proj/wiki/b.md"))
+    expect((upserts[0][1] as { pageId: string }).pageId).toBe(wikiPathToVectorPageId("/proj", "/proj/wiki/b.md"))
   })
 
   it("clearExisting prepares all rows before replacing old chunks", async () => {
@@ -1367,7 +1399,7 @@ describe("embedAllPages", () => {
       pages: Array<{ page_id: string; chunks: Array<{ embedding: number[] }> }>
     }
     expect(replaceArgs.projectPath).toBe("/proj")
-    expect(replaceArgs.pages[0].page_id).toBe(wikiPathToVectorPageId("/proj/wiki/a.md"))
+    expect(replaceArgs.pages[0].page_id).toBe(wikiPathToVectorPageId("/proj", "/proj/wiki/a.md"))
     expect(replaceArgs.pages[0].chunks).toHaveLength(1)
   })
 

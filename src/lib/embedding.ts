@@ -28,7 +28,7 @@ import { normalizePath } from "@/lib/path-utils"
 import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 import { chunkMarkdown, type Chunk } from "@/lib/text-chunker"
 import { isLocalOrPrivateHttpEndpoint, localLlmOriginHeader } from "@/lib/llm-providers"
-import { wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
+import { isRootStructuralWikiPagePath, wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
 
 const RESERVED_EMBEDDING_HEADER_NAMES = new Set([
   "authorization",
@@ -548,8 +548,8 @@ export async function embedAllPages(
         walk(node.children)
       } else if (!node.is_dir && node.name.endsWith(".md")) {
         const id = node.name.replace(/\.md$/, "")
-        if (!["index", "log", "overview", "purpose", "schema"].includes(id)) {
-          mdFiles.push({ id, path: node.path, pageId: wikiPathToVectorPageId(node.path) })
+        if (!isRootStructuralWikiPagePath(pp, node.path)) {
+          mdFiles.push({ id, path: node.path, pageId: wikiPathToVectorPageId(pp, node.path) })
         }
       }
     }

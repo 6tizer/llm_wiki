@@ -380,7 +380,7 @@ export async function cleanupDeletedWikiPages(
       try {
         return [{
           slug: wikiPathToLegacyStemId(path),
-          pageId: wikiPathToVectorPageId(path),
+          pageId: wikiPathToVectorPageId(pp, path),
           title: "",
         }]
       } catch {

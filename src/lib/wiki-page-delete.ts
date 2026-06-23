@@ -77,7 +77,7 @@ export async function cascadeDeleteWikiPage(
   await deleteFile(pagePath)
   const slug = getFileStem(pagePath)
   if (slug.length > 0) {
-    await removePageEmbedding(projectPath, wikiPathToVectorPageId(pagePath))
+    await removePageEmbedding(projectPath, wikiPathToVectorPageId(projectPath, pagePath))
   }
 
   // Media cascade: source-summary deletion → drop the source's

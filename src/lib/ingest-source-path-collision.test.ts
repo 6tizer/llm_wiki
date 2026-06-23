@@ -7,8 +7,12 @@ import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { sourceSummarySlugFromIdentity } from "./source-identity"
+import { wikiPathToVectorPageId } from "./wiki-page-identity"
 
 vi.mock("@/commands/fs", () => realFs)
+vi.mock("@/lib/embedding", () => ({
+  embedPage: vi.fn(async () => {}),
+}))
 
 let sourceMarkers: string[] = []
 let failLongChunksOnce = new Set<number>()
@@ -109,9 +113,11 @@ vi.mock("./llm-client", () => ({
 }))
 
 import { autoIngest, executeIngestWrites } from "./ingest"
+import { embedPage } from "@/lib/embedding"
 import { streamChat } from "./llm-client"
 
 const mockStreamChat = vi.mocked(streamChat)
+const mockEmbedPage = vi.mocked(embedPage)
 
 describe("autoIngest source summary paths", () => {
   let tmp: { path: string; cleanup: () => Promise<void> } | undefined
@@ -123,6 +129,7 @@ describe("autoIngest source summary paths", () => {
     generationSuffix = ""
     abortDuringReview = null
     mockStreamChat.mockClear()
+    mockEmbedPage.mockClear()
     tmp = await createTempProject("same-basename-sources")
 
     await writeFileRaw(`${tmp.path}/purpose.md`, "# Purpose\n\nTrack project config files.\n")
@@ -209,6 +216,69 @@ describe("autoIngest source summary paths", () => {
     expect(summaryFiles).toHaveLength(2)
     expect(allSummaries).toContain("project-a/config.yaml")
     expect(allSummaries).toContain("project-b/config.yaml")
+  })
+
+  it("embeds nested pages with structural basenames while skipping root structural pages", async () => {
+    if (!tmp) throw new Error("missing temp project")
+    const projectPath = tmp.path
+    sourceMarkers = ["project-a config"]
+    generationSuffix = [
+      "",
+      "---FILE: wiki/log.md---",
+      "---",
+      'title: "Root Log"',
+      "---",
+      "",
+      "# Root Log",
+      "",
+      "Aggregate log.",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/projects/index.md---",
+      "---",
+      "tags: []",
+      "---",
+      "",
+      "# Project Index",
+      "",
+      "Nested index content.",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/projects/log.md---",
+      "---",
+      'title: "Project Log"',
+      "---",
+      "",
+      "# Project Log",
+      "",
+      "Nested content log.",
+      "---END FILE---",
+    ].join("\n")
+    useWikiStore.setState({
+      embeddingConfig: {
+        enabled: true,
+        endpoint: "http://127.0.0.1:11434/api/embeddings",
+        apiKey: "",
+        model: "test-embed",
+      },
+    })
+
+    await autoIngest(
+      projectPath,
+      `${projectPath}/raw/sources/project-a/config.yaml`,
+      useWikiStore.getState().llmConfig,
+      undefined,
+      "project-a",
+    )
+
+    const pageIds = mockEmbedPage.mock.calls.map(([, pageId]) => pageId)
+    expect(pageIds).toContain(wikiPathToVectorPageId(projectPath, "wiki/projects/log.md"))
+    expect(pageIds).toContain(wikiPathToVectorPageId(projectPath, "wiki/projects/index.md"))
+    expect(pageIds).not.toContain(wikiPathToVectorPageId(projectPath, "wiki/log.md"))
+    const indexCall = mockEmbedPage.mock.calls.find(([, pageId]) =>
+      pageId === wikiPathToVectorPageId(projectPath, "wiki/projects/index.md")
+    )
+    expect(indexCall?.[2]).toBe("projects/index")
   })
 
   it("migrates a safe legacy basename source summary to the canonical nested source path", async () => {
