@@ -224,6 +224,92 @@ describe("webSearch", () => {
 		).rejects.toThrow("SearXNG instance URL");
 	});
 
+	it("allows Firecrawl without an API key and normalizes web results", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse({
+				success: true,
+				data: {
+					web: [
+						{
+							title: "Firecrawl result",
+							url: "https://fire.example/page",
+							markdown: "Full markdown",
+						},
+					],
+				},
+			}),
+		);
+
+		const out = await webSearch(
+			"crawl",
+			{ provider: "firecrawl", apiKey: "" },
+			2,
+		);
+		const [url, init] = fetchMock.mock.calls[0];
+
+		expect(url).toBe("https://api.firecrawl.dev/v2/search");
+		expect((init?.headers as Record<string, string>).Authorization).toBeUndefined();
+		expect(JSON.parse(String(init?.body))).toMatchObject({
+			query: "crawl",
+			limit: 2,
+			sources: ["web"],
+		});
+		expect(out).toEqual([
+			{
+				title: "Firecrawl result",
+				url: "https://fire.example/page",
+				snippet: "Full markdown",
+				source: "fire.example",
+			},
+		]);
+		expect(
+			hasConfiguredSearchProvider({ provider: "firecrawl", apiKey: "" }),
+		).toBe(true);
+	});
+
+	it("surfaces Firecrawl rate-limit guidance", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse({ error: "rate limited" }, { status: 429 }),
+		);
+
+		await expect(
+			webSearch("crawl", { provider: "firecrawl", apiKey: "" }, 5),
+		).rejects.toThrow("Firecrawl search rate limit reached");
+	});
+
+	it.each([401, 403])(
+		"surfaces Firecrawl authorization guidance for %s responses",
+		async (status) => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse({ error: "forbidden" }, { status }),
+			);
+
+			await expect(
+				webSearch("crawl", { provider: "firecrawl", apiKey: "bad" }, 5),
+			).rejects.toThrow("Firecrawl search is not authorized");
+		},
+	);
+
+	it("surfaces Firecrawl quota or billing guidance for 402 responses", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse({ error: "payment required" }, { status: 402 }),
+		);
+
+		await expect(
+			webSearch("crawl", { provider: "firecrawl", apiKey: "key" }, 5),
+		).rejects.toThrow("Firecrawl search quota or billing limit reached");
+	});
+
+	it("surfaces Firecrawl default HTTP status errors", async () => {
+		fetchMock.mockResolvedValueOnce(
+			jsonResponse({ error: "server down" }, { status: 503 }),
+		);
+
+		await expect(
+			webSearch("crawl", { provider: "firecrawl", apiKey: "key" }, 5),
+		).rejects.toThrow("Firecrawl search failed (503)");
+	});
+
 	it("treats SearXNG instance URLs as configured without an API key", () => {
 		expect(
 			hasConfiguredSearchProvider({

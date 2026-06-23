@@ -101,7 +101,11 @@ export type DedupLlmCall = (
   systemPrompt: string,
   userMessage: string,
   signal?: AbortSignal,
+  options?: { maxTokens?: number },
 ) => Promise<string>
+
+export const DEDUP_DETECTION_MAX_TOKENS = 8192
+export const DEDUP_MERGE_MAX_TOKENS = 16384
 
 // ──────────────────────────────────────────────────────────────────
 // Stage 1: extract summaries (no LLM)
@@ -216,7 +220,9 @@ export async function detectDuplicateGroups(
   if (summaries.length < 2) return []
 
   const userMessage = buildDetectorUserMessage(summaries)
-  const response = await llmCall(DETECTOR_SYSTEM_PROMPT, userMessage, options.signal)
+  const response = await llmCall(DETECTOR_SYSTEM_PROMPT, userMessage, options.signal, {
+    maxTokens: DEDUP_DETECTION_MAX_TOKENS,
+  })
   const parsed = parseDetectorResponse(response)
 
   const validSlugs = new Set(summaries.map((s) => s.slug))
@@ -243,22 +249,29 @@ function buildDetectorUserMessage(summaries: EntitySummary[]): string {
  * Tolerant JSON extraction. The LLM might wrap output in code
  * fences (\`\`\`json), prepend "Sure, here you go:", or trail
  * with a polite "Let me know if...". Pull the first {…} block
- * with balanced braces and parse it. Returns [] for any failure
- * — the caller treats "no duplicates found" identically to "LLM
- * output garbled".
+ * with balanced braces and parse it. Malformed/truncated output
+ * throws so detection cannot silently treat a failed model response
+ * as "no duplicates found".
  */
 export function parseDetectorResponse(raw: string): DuplicateGroup[] {
   const jsonText = extractFirstJsonObject(raw)
-  if (!jsonText) return []
+  if (!jsonText) {
+    throw new Error("Duplicate detector returned no JSON object; scan result was not trusted.")
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonText)
-  } catch {
-    return []
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new Error(`Duplicate detector returned malformed or truncated JSON; scan result was not trusted. ${detail}`)
   }
-  if (!parsed || typeof parsed !== "object") return []
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Duplicate detector returned a non-object JSON payload; scan result was not trusted.")
+  }
   const groupsRaw = (parsed as { groups?: unknown }).groups
-  if (!Array.isArray(groupsRaw)) return []
+  if (!Array.isArray(groupsRaw)) {
+    throw new Error("Duplicate detector JSON did not contain a groups array; scan result was not trusted.")
+  }
 
   const out: DuplicateGroup[] = []
   for (const g of groupsRaw) {
@@ -362,7 +375,9 @@ export async function mergeDuplicateGroup(
 
   // 1. LLM body merge
   const userMessage = buildMergerUserMessage(req.group)
-  const llmOutput = await llmCall(MERGER_SYSTEM_PROMPT, userMessage, options.signal)
+  const llmOutput = await llmCall(MERGER_SYSTEM_PROMPT, userMessage, options.signal, {
+    maxTokens: DEDUP_MERGE_MAX_TOKENS,
+  })
 
   // 2. Frontmatter union (deterministic post-processing of LLM output).
   //    For each unioned field, fold every input page's values into

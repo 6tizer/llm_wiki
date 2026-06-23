@@ -77,6 +77,12 @@ describe("extractReasoningTextFromLine", () => {
     expect(extractReasoningTextFromLine(line)).toEqual(["thinking"])
   })
 
+  it("extracts no-space SSE data chunks", () => {
+    const line =
+      'data:{"choices":[{"index":0,"delta":{"reasoning_content":"thinking"}}]}'
+    expect(extractReasoningTextFromLine(line)).toEqual(["thinking"])
+  })
+
   it("extracts Qwen-style reasoning chunks", () => {
     const line =
       'data: {"choices":[{"index":0,"delta":{"reasoning":"Let me think"}}]}'

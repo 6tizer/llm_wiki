@@ -276,6 +276,21 @@ describe("fetchEmbedding — provider wire formats", () => {
     })
   })
 
+  it("passes AbortSignal through to the embedding HTTP request", async () => {
+    const controller = new AbortController()
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.1]))
+
+    const out = await fetchEmbedding("hi", {
+      enabled: true,
+      endpoint: "https://api.openai.com/v1/embeddings",
+      apiKey: "sk-test",
+      model: "text-embedding-3-small",
+    }, undefined, { signal: controller.signal })
+
+    expect(out).toEqual([0.1])
+    expect(mockHttpFetch.mock.calls[0][1]?.signal).toBe(controller.signal)
+  })
+
   it("does not route LM Studio text-embedding models through Gemini", async () => {
     mockHttpFetch.mockResolvedValueOnce(okResponse([0.3, 0.4]))
 

@@ -54,6 +54,7 @@ export type SearchProvider =
 	| "searxng"
 	| "ollama"
 	| "exa"
+	| "firecrawl"
 	| "none";
 export type DeepResearchSource = "web" | "anytxt" | "both";
 export type SerpApiEngine =
