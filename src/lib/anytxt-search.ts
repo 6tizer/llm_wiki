@@ -43,8 +43,10 @@ export async function anyTxtSearch(
   config?: AnyTxtConfig,
   maxResults: number = DEFAULT_ANYTXT_LIMIT,
   projectPath?: string,
+  signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
   if (!query.trim()) return []
+  throwIfAborted(signal)
   const resolved = normalizeAnyTxtConfig(config, projectPath)
   if (!resolved.enabled) return []
   const limit = Math.min(clampAnyTxtLimit(maxResults), resolved.limit)
@@ -59,14 +61,22 @@ export async function anyTxtSearch(
     limit: String(limit),
     offset: 0,
     order: 0,
-  }))
+  }), signal)
+  throwIfAborted(signal)
 
   const items = extractAnyTxtItems(response).slice(0, limit)
   const out: WebSearchResult[] = []
   for (const item of items) {
-    const fragment = item.fid
-      ? await getAnyTxtFragment(resolved.endpoint, item.fid, query).catch(() => "")
-      : ""
+    throwIfAborted(signal)
+    let fragment = ""
+    if (item.fid) {
+      try {
+        fragment = await getAnyTxtFragment(resolved.endpoint, item.fid, query, signal)
+      } catch (err) {
+        if (isAbortError(err, signal)) throw err
+      }
+      throwIfAborted(signal)
+    }
     out.push({
       title: item.title,
       url: fileUrlForPath(item.path) || (item.fid ? `anytxt://${item.fid}` : ""),
@@ -83,16 +93,19 @@ export async function anyTxtSearchSmart(
   llmConfig?: LlmConfig,
   maxResults: number = DEFAULT_ANYTXT_LIMIT,
   projectPath?: string,
+  signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
   const resolved = normalizeAnyTxtConfig(config, projectPath)
   if (!resolved.enabled) return []
   const queries = Array.isArray(query) ? query : [query]
-  const preparedQueries = await prepareAnyTxtQueries(queries, llmConfig)
+  const preparedQueries = await prepareAnyTxtQueries(queries, llmConfig, signal)
   const allResults: WebSearchResult[] = []
   const seen = new Set<string>()
 
   for (const preparedQuery of preparedQueries) {
-    const results = await anyTxtSearch(preparedQuery, resolved, maxResults, projectPath)
+    throwIfAborted(signal)
+    const results = await anyTxtSearch(preparedQuery, resolved, maxResults, projectPath, signal)
+    throwIfAborted(signal)
     for (const result of results) {
       const key = (result.url || `${result.source}:${result.title}:${result.snippet}`).toLowerCase()
       if (seen.has(key)) continue
@@ -105,24 +118,36 @@ export async function anyTxtSearchSmart(
   return allResults
 }
 
-export async function prepareAnyTxtQueries(queries: string[], llmConfig?: LlmConfig): Promise<string[]> {
+export async function prepareAnyTxtQueries(
+  queries: string[],
+  llmConfig?: LlmConfig,
+  signal?: AbortSignal,
+): Promise<string[]> {
   const cleanQueries = uniqueAnyTxtQueries(queries)
   if (cleanQueries.length === 0) return []
   if (!llmConfig) return cleanQueries
+  throwIfAborted(signal)
 
   try {
-    const rewritten = await rewriteAnyTxtQueries(cleanQueries, llmConfig)
+    const rewritten = await rewriteAnyTxtQueries(cleanQueries, llmConfig, signal)
+    throwIfAborted(signal)
     return uniqueAnyTxtQueries([...rewritten, ...cleanQueries])
   } catch (err) {
+    if (isAbortError(err, signal)) throw err
     const message = err instanceof Error ? err.message : String(err)
     console.warn("[AnyTXT] query rewrite failed, using original queries:", message)
     return cleanQueries
   }
 }
 
-export async function rewriteAnyTxtQueries(queries: string[], llmConfig: LlmConfig): Promise<string[]> {
+export async function rewriteAnyTxtQueries(
+  queries: string[],
+  llmConfig: LlmConfig,
+  signal?: AbortSignal,
+): Promise<string[]> {
   const cleanQueries = uniqueAnyTxtQueries(queries)
   if (cleanQueries.length === 0) return []
+  throwIfAborted(signal)
 
   const prompt = [
     "Convert the user's search or research topics into concise AnyTXT local file search keyword queries.",
@@ -148,9 +173,10 @@ export async function rewriteAnyTxtQueries(queries: string[], llmConfig: LlmConf
       onDone: () => {},
       onError: () => {},
     },
-    undefined,
+    signal,
     { temperature: 0.1, max_tokens: 512, reasoning: { mode: "off" } },
   )
+  throwIfAborted(signal)
 
   const rewritten = parseAnyTxtQueryRewrite(output)
   return rewritten.length > 0 ? rewritten : cleanQueries
@@ -194,16 +220,23 @@ export function uniqueAnyTxtQueries(queries: string[], limit: number = ANYTXT_QU
   return out
 }
 
-async function getAnyTxtFragment(endpoint: string, fid: string, pattern: string): Promise<string> {
+async function getAnyTxtFragment(endpoint: string, fid: string, pattern: string, signal?: AbortSignal): Promise<string> {
   const response = await callAnyTxtRpc(endpoint, "ATRpcServer.Searcher.V1.GetFragment", {
     fid,
     pattern,
-  })
+  }, signal)
   return extractFragmentText(response)
 }
 
-async function callAnyTxtRpc(endpoint: string, method: string, input: Record<string, unknown>): Promise<unknown> {
+async function callAnyTxtRpc(
+  endpoint: string,
+  method: string,
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  throwIfAborted(signal)
   const httpFetch = await getHttpFetch()
+  throwIfAborted(signal)
   let response: Response
   try {
     response = await httpFetch(endpoint, {
@@ -218,6 +251,7 @@ async function callAnyTxtRpc(endpoint: string, method: string, input: Record<str
         method,
         params: { input },
       }),
+      signal,
     })
   } catch (err) {
     if (isFetchNetworkError(err)) {
@@ -225,6 +259,7 @@ async function callAnyTxtRpc(endpoint: string, method: string, input: Record<str
     }
     throw err
   }
+  throwIfAborted(signal)
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "Unknown error")
@@ -237,6 +272,15 @@ async function callAnyTxtRpc(endpoint: string, method: string, input: Record<str
     throw new Error(`AnyTXT error: ${message}`)
   }
   return data.result
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error ? signal.reason : new Error("AnyTXT search aborted")
+}
+
+function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  return Boolean(signal?.aborted) || (err instanceof Error && err.name === "AbortError")
 }
 
 function extractAnyTxtItems(result: unknown): AnyTxtItem[] {
