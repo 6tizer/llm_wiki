@@ -1081,13 +1081,15 @@ async function autoIngestImpl(
   if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
     try {
       const { embedPage } = await import("@/lib/embedding")
+      const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
       for (const wpath of writtenPaths) {
-        const pageId = wpath.split("/").pop()?.replace(/\.md$/, "") ?? ""
-        if (!pageId || ["index", "log", "overview"].includes(pageId)) continue
+        const legacyId = wpath.split("/").pop()?.replace(/\.md$/, "") ?? ""
+        if (!legacyId || ["index", "log", "overview"].includes(legacyId)) continue
+        const pageId = wikiPathToVectorPageId(wpath)
         try {
           const content = await readFile(`${pp}/${wpath}`)
           const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
-          const title = titleMatch ? titleMatch[1].trim() : pageId
+          const title = titleMatch ? titleMatch[1].trim() : legacyId
           await embedPage(pp, pageId, title, content, embCfg)
         } catch {
           // non-critical

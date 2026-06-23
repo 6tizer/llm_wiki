@@ -13,7 +13,7 @@ import type { WikiProject, FileNode } from "@/types/wiki"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { enqueueBatch } from "@/lib/ingest-queue"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
-import { getFileName, getFileStem, getRelativePath, normalizePath } from "@/lib/path-utils"
+import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils"
 import {
   sourceIdentityForPath,
   sourceReferenceIdentity,
@@ -26,6 +26,7 @@ import {
 } from "@/lib/sources-merge"
 import { removeFromIngestCache } from "@/lib/ingest-cache"
 import { removePageEmbedding } from "@/lib/embedding"
+import { wikiPathToVectorPageId, wikiPathToLegacyStemId } from "@/lib/wiki-page-identity"
 import {
   buildDeletedKeys,
   cleanIndexListing,
@@ -375,13 +376,23 @@ export async function cleanupDeletedWikiPages(
 ): Promise<void> {
   const pp = normalizePath(projectPath)
   const deletedInfos = relativePaths
-    .map((path) => ({ slug: getFileStem(path), title: "" }))
+    .flatMap((path) => {
+      try {
+        return [{
+          slug: wikiPathToLegacyStemId(path),
+          pageId: wikiPathToVectorPageId(path),
+          title: "",
+        }]
+      } catch {
+        return []
+      }
+    })
     .filter((info) => info.slug.length > 0 && !info.slug.startsWith("."))
 
   if (deletedInfos.length === 0) return
 
   for (const info of deletedInfos) {
-    await removePageEmbedding(pp, info.slug)
+    await removePageEmbedding(pp, info.pageId)
     try {
       await deleteFile(`${pp}/wiki/media/${info.slug}`)
     } catch {

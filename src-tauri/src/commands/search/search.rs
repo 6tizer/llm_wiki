@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use walkdir::WalkDir;
@@ -146,7 +147,7 @@ pub async fn search_project_inner(
     };
     let query_phrase = trim_query_punctuation(&query.to_lowercase());
     let mut results = Vec::new();
-    let mut page_paths_by_stem = BTreeMap::new();
+    let mut page_index = PageIdentityIndex::default();
 
     let wiki_root = Path::new(&project_path).join("wiki");
     if wiki_root.exists() {
@@ -168,18 +169,7 @@ pub async fn search_project_inner(
                 Ok(content) => content,
                 Err(_) => continue,
             };
-            if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
-                let previous = page_paths_by_stem.insert(
-                    stem.to_string(),
-                    relative_to_project(&project_path, entry.path()),
-                );
-                if let Some(previous) = previous {
-                    eprintln!(
-                        "[Search] duplicate wiki page stem '{stem}': '{previous}' and '{}' share one vector page_id",
-                        relative_to_project(&project_path, entry.path())
-                    );
-                }
-            }
+            page_index.insert(&project_path, entry.path());
             if let Some(hit) = score_file(
                 &project_path,
                 entry.path(),
@@ -222,7 +212,7 @@ pub async fn search_project_inner(
                     }
                     materialize_vector_only_results(
                         &vector_results,
-                        &page_paths_by_stem,
+                        &page_index,
                         &project_path,
                         &mut results,
                         include_content,
@@ -253,7 +243,13 @@ pub async fn search_project_inner(
         });
     }
 
-    apply_rrf_scores(&mut results, &token_rank, &vector_rank, &vector_score);
+    apply_rrf_scores(
+        &mut results,
+        &token_rank,
+        &vector_rank,
+        &vector_score,
+        &page_index,
+    );
 
     results.sort_by(|a, b| {
         b.score
@@ -276,10 +272,12 @@ fn apply_rrf_scores(
     token_rank: &BTreeMap<String, usize>,
     vector_rank: &BTreeMap<String, usize>,
     vector_score: &BTreeMap<String, f32>,
+    page_index: &PageIdentityIndex,
 ) {
     for result in results {
         let token = token_rank.get(&normalize_path(&result.path)).copied();
-        let vector = vector_rank.get(&file_stem(&result.path)).copied();
+        let match_ids = page_index.vector_match_ids_for_path(&result.path);
+        let vector = match_ids.iter().find_map(|id| vector_rank.get(id).copied());
         let mut rrf = 0.0;
         if let Some(rank) = token {
             rrf += 1.0 / (RRF_K + rank as f64);
@@ -287,7 +285,10 @@ fn apply_rrf_scores(
         if let Some(rank) = vector {
             rrf += 1.0 / (RRF_K + rank as f64);
         }
-        if let Some(score) = vector_score.get(&file_stem(&result.path)).copied() {
+        if let Some(score) = match_ids
+            .iter()
+            .find_map(|id| vector_score.get(id).copied())
+        {
             result.vector_score = Some(score);
         }
         result.score = rrf;
@@ -366,39 +367,40 @@ async fn search_by_embedding(
 
 fn materialize_vector_only_results(
     vector_results: &[PageVectorResult],
-    page_paths_by_stem: &BTreeMap<String, String>,
+    page_index: &PageIdentityIndex,
     project_path: &str,
     results: &mut Vec<ProjectSearchResult>,
     include_content: bool,
 ) {
-    let mut known: BTreeSet<String> = results.iter().map(|r| file_stem(&r.path)).collect();
+    let mut known: BTreeSet<String> = results.iter().map(|r| normalize_path(&r.path)).collect();
     for vr in vector_results {
-        if known.contains(&vr.id) {
+        let Some(rel) = page_index.resolve_vector_page_id(&vr.id) else {
+            continue;
+        };
+        if known.contains(&rel) {
             continue;
         }
-        if let Some(rel) = page_paths_by_stem.get(&vr.id) {
-            let path = Path::new(project_path).join(rel);
-            let Ok(content) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let file_name = Path::new(&rel)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            let title = extract_title(&content, file_name);
-            let snippet = build_vector_snippet(vr);
-            results.push(ProjectSearchResult {
-                path: rel.clone(),
-                title,
-                snippet,
-                title_match: false,
-                score: 0.0,
-                vector_score: Some(vr.score),
-                images: extract_image_refs(&content),
-                content: include_content.then_some(content),
-            });
-            known.insert(vr.id.clone());
-        }
+        let path = Path::new(project_path).join(&rel);
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let file_name = Path::new(&rel)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let title = extract_title(&content, file_name);
+        let snippet = build_vector_snippet(vr);
+        results.push(ProjectSearchResult {
+            path: rel.clone(),
+            title,
+            snippet,
+            title_match: false,
+            score: 0.0,
+            vector_score: Some(vr.score),
+            images: extract_image_refs(&content),
+            content: include_content.then_some(content),
+        });
+        known.insert(rel);
     }
 }
 
@@ -668,8 +670,12 @@ pub fn extract_image_refs(content: &str) -> Vec<SearchImageRef> {
 
 async fn fetch_embedding(text: &str, cfg: &SearchEmbeddingConfig) -> Result<Vec<f32>, String> {
     let is_google = is_google_embedding_config(cfg);
+    let is_doubao = is_doubao_embedding_config(cfg);
+    let is_doubao_vision = is_doubao_vision_embedding_config(cfg);
     let endpoint = if is_google {
         google_embedding_endpoint(cfg)
+    } else if is_doubao {
+        doubao_embedding_endpoint(cfg, is_doubao_vision)
     } else {
         cfg.endpoint.trim().to_string()
     };
@@ -679,8 +685,11 @@ async fn fetch_embedding(text: &str, cfg: &SearchEmbeddingConfig) -> Result<Vec<
         ))
         .build()
         .map_err(|e| format!("Embedding HTTP client error: {e}"))?
-        .post(endpoint)
+        .post(&endpoint)
         .header("Content-Type", "application/json");
+    if !is_google && is_local_or_private_http_endpoint(&endpoint) {
+        req = req.header("Origin", "http://localhost");
+    }
     if !cfg.api_key.trim().is_empty() {
         if is_google {
             req = req.header("x-goog-api-key", cfg.api_key.trim());
@@ -703,6 +712,13 @@ async fn fetch_embedding(text: &str, cfg: &SearchEmbeddingConfig) -> Result<Vec<
     }
     let body = if is_google {
         google_embedding_body(&cfg.model, text, cfg.output_dimensionality)
+    } else if is_doubao_vision {
+        json!({
+            "model": cfg.model,
+            "input": [{ "type": "text", "text": text }],
+        })
+    } else if is_doubao {
+        json!({ "model": cfg.model, "input": [text] })
     } else {
         json!({ "model": cfg.model, "input": text })
     };
@@ -725,6 +741,10 @@ async fn fetch_embedding(text: &str, cfg: &SearchEmbeddingConfig) -> Result<Vec<
     let values = if is_google {
         data.get("embedding")
             .and_then(|v| v.get("values"))
+            .and_then(Value::as_array)
+    } else if is_doubao_vision {
+        data.get("data")
+            .and_then(|v| v.get("embedding"))
             .and_then(Value::as_array)
     } else {
         data.get("data")
@@ -778,13 +798,79 @@ fn is_safe_extra_header_name(name: &str) -> bool {
 fn is_reserved_extra_header_name(name: &str) -> bool {
     matches!(
         name.trim().to_ascii_lowercase().as_str(),
-        "authorization" | "content-type" | "host" | "content-length" | "x-goog-api-key"
+        "authorization" | "content-type" | "host" | "content-length" | "origin" | "x-goog-api-key"
     )
 }
 
 fn is_google_embedding_config(cfg: &SearchEmbeddingConfig) -> bool {
     let endpoint = cfg.endpoint.to_lowercase();
     endpoint.contains("generativelanguage.googleapis.com") || endpoint.contains(":embedcontent")
+}
+
+fn is_doubao_embedding_config(cfg: &SearchEmbeddingConfig) -> bool {
+    let probe = format!("{} {}", cfg.endpoint, cfg.model).to_lowercase();
+    probe.contains("volces")
+        || probe.contains("volcengine")
+        || probe.contains("doubao")
+        || probe.contains("ark.cn-beijing.volces.com")
+}
+
+fn is_doubao_vision_embedding_config(cfg: &SearchEmbeddingConfig) -> bool {
+    cfg.model.to_lowercase().contains("doubao-embedding-vision")
+}
+
+fn doubao_embedding_endpoint(cfg: &SearchEmbeddingConfig, vision: bool) -> String {
+    let raw = cfg.endpoint.trim().trim_end_matches('/').to_string();
+    if vision {
+        if raw.to_lowercase().ends_with("/embeddings/multimodal") {
+            return raw;
+        }
+        if raw.to_lowercase().ends_with("/api/v3") {
+            return format!("{raw}/embeddings/multimodal");
+        }
+        return format!("{raw}/api/v3/embeddings/multimodal");
+    }
+    if raw.to_lowercase().ends_with("/embeddings") {
+        return raw;
+    }
+    if raw.to_lowercase().ends_with("/api/v3") {
+        return format!("{raw}/embeddings");
+    }
+    format!("{raw}/api/v3/embeddings")
+}
+
+fn is_private_ipv4(hostname: &str) -> bool {
+    let octets = hostname
+        .split('.')
+        .map(str::parse::<u8>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(octets) = octets else {
+        return false;
+    };
+    if octets.len() != 4 {
+        return false;
+    }
+    let a = octets[0];
+    let b = octets[1];
+    a == 10 || a == 127 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168)
+}
+
+fn is_local_or_private_http_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let normalized = host.trim_matches(['[', ']']).to_lowercase();
+    normalized == "localhost"
+        || normalized.ends_with(".localhost")
+        || normalized.ends_with(".local")
+        || normalized == "::1"
+        || is_private_ipv4(&normalized)
 }
 
 fn google_embedding_endpoint(cfg: &SearchEmbeddingConfig) -> String {
@@ -892,6 +978,88 @@ fn normalize_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+#[derive(Debug, Default)]
+struct PageIdentityIndex {
+    by_vector_id: BTreeMap<String, String>,
+    by_legacy_stem: BTreeMap<String, Vec<String>>,
+    by_path: BTreeMap<String, String>,
+}
+
+impl PageIdentityIndex {
+    fn insert(&mut self, project_path: &str, path: &Path) {
+        let rel = normalize_path(&relative_to_project(project_path, path));
+        let Some(vector_id) = wiki_path_to_vector_page_id(&rel) else {
+            return;
+        };
+        self.by_vector_id.insert(vector_id.clone(), rel.clone());
+        self.by_path.insert(rel.clone(), vector_id);
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            self.by_legacy_stem
+                .entry(stem.to_string())
+                .or_default()
+                .push(rel);
+        }
+    }
+
+    fn resolve_vector_page_id(&self, id: &str) -> Option<String> {
+        if let Some(path) = self.by_vector_id.get(id) {
+            return Some(path.clone());
+        }
+        let legacy = self.by_legacy_stem.get(id)?;
+        if legacy.len() == 1 {
+            return legacy.first().cloned();
+        }
+        None
+    }
+
+    fn vector_match_ids_for_path(&self, path: &str) -> Vec<String> {
+        let normalized = normalize_path(path);
+        let mut ids = Vec::new();
+        if let Some(id) = self.by_path.get(&normalized) {
+            ids.push(id.clone());
+        }
+        let stem = file_stem(&normalized);
+        if let Some(paths) = self.by_legacy_stem.get(&stem) {
+            if paths.len() == 1 && paths[0] == normalized {
+                ids.push(stem);
+            }
+        }
+        ids
+    }
+
+    #[cfg(test)]
+    fn from_paths_for_test(paths: &[&str]) -> Self {
+        let mut index = Self::default();
+        for rel in paths {
+            let vector_id = wiki_path_to_vector_page_id(rel).unwrap();
+            let normalized = normalize_path(rel);
+            index
+                .by_vector_id
+                .insert(vector_id.clone(), normalized.clone());
+            index.by_path.insert(normalized.clone(), vector_id);
+            let stem = file_stem(&normalized);
+            index
+                .by_legacy_stem
+                .entry(stem)
+                .or_default()
+                .push(normalized);
+        }
+        index
+    }
+}
+
+fn wiki_path_to_vector_page_id(path: &str) -> Option<String> {
+    let normalized = normalize_path(path).trim_start_matches('/').to_string();
+    let parts = normalized.split('/').collect::<Vec<_>>();
+    let wiki_pos = parts.iter().rposition(|part| *part == "wiki")?;
+    let wiki_path = parts[wiki_pos..].join("/");
+    let without_extension = wiki_path.strip_suffix(".md")?;
+    Some(format!(
+        "wp_{}",
+        URL_SAFE_NO_PAD.encode(without_extension.as_bytes())
+    ))
+}
+
 fn relative_to_project(project_path: &str, path: &Path) -> String {
     let root = Path::new(project_path);
     path.strip_prefix(root)
@@ -939,6 +1107,21 @@ mod tests {
             images: vec![],
             content: None,
         }
+    }
+
+    fn fake_embedding(seed: u32) -> Vec<f32> {
+        (0..16)
+            .map(|i| if i == seed as usize { 1.0 } else { 0.0 })
+            .collect()
+    }
+
+    fn vector_chunk(seed: u32, text: &str) -> Vec<vectorstore::ChunkUpsertInput> {
+        vec![vectorstore::ChunkUpsertInput {
+            chunk_index: 0,
+            chunk_text: text.to_string(),
+            heading_path: "## Vector".to_string(),
+            embedding: fake_embedding(seed),
+        }]
     }
 
     #[test]
@@ -1016,8 +1199,53 @@ mod tests {
 
         assert!(is_reserved_extra_header_name("Authorization"));
         assert!(is_reserved_extra_header_name("content-type"));
+        assert!(is_reserved_extra_header_name("Origin"));
         assert!(is_reserved_extra_header_name("X-Goog-Api-Key"));
         assert!(!is_reserved_extra_header_name("X-Model-Provider-Id"));
+    }
+
+    #[test]
+    fn doubao_embedding_endpoint_and_body_shapes() {
+        let text_cfg = SearchEmbeddingConfig {
+            enabled: true,
+            endpoint: "https://ark.cn-beijing.volces.com".to_string(),
+            api_key: "k".to_string(),
+            model: "doubao-embedding-text-240715".to_string(),
+            output_dimensionality: None,
+            extra_headers: None,
+        };
+        assert!(is_doubao_embedding_config(&text_cfg));
+        assert_eq!(
+            doubao_embedding_endpoint(&text_cfg, false),
+            "https://ark.cn-beijing.volces.com/api/v3/embeddings",
+        );
+
+        let vision_cfg = SearchEmbeddingConfig {
+            model: "doubao-embedding-vision-241215".to_string(),
+            endpoint: "https://ark.cn-beijing.volces.com/api/v3".to_string(),
+            ..text_cfg
+        };
+        assert!(is_doubao_vision_embedding_config(&vision_cfg));
+        assert_eq!(
+            doubao_embedding_endpoint(&vision_cfg, true),
+            "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+        );
+    }
+
+    #[test]
+    fn local_or_private_embedding_endpoint_detection() {
+        assert!(is_local_or_private_http_endpoint(
+            "http://localhost:11434/v1/embeddings"
+        ));
+        assert!(is_local_or_private_http_endpoint(
+            "http://192.168.1.20:11434/v1/embeddings"
+        ));
+        assert!(is_local_or_private_http_endpoint(
+            "http://[::1]:11434/v1/embeddings"
+        ));
+        assert!(!is_local_or_private_http_endpoint(
+            "https://api.openai.com/v1/embeddings"
+        ));
     }
 
     #[test]
@@ -1031,11 +1259,39 @@ mod tests {
             ("wiki/concepts/both.md".to_string(), 1),
             ("wiki/concepts/token-only.md".to_string(), 2),
         ]);
-        let vector_rank = BTreeMap::from([("both".to_string(), 1), ("vector-only".to_string(), 2)]);
-        let vector_score =
-            BTreeMap::from([("both".to_string(), 0.95), ("vector-only".to_string(), 0.8)]);
+        let page_index = PageIdentityIndex::from_paths_for_test(&[
+            "wiki/concepts/both.md",
+            "wiki/concepts/token-only.md",
+            "wiki/concepts/vector-only.md",
+        ]);
+        let vector_rank = BTreeMap::from([
+            (
+                wiki_path_to_vector_page_id("wiki/concepts/both.md").unwrap(),
+                1,
+            ),
+            (
+                wiki_path_to_vector_page_id("wiki/concepts/vector-only.md").unwrap(),
+                2,
+            ),
+        ]);
+        let vector_score = BTreeMap::from([
+            (
+                wiki_path_to_vector_page_id("wiki/concepts/both.md").unwrap(),
+                0.95,
+            ),
+            (
+                wiki_path_to_vector_page_id("wiki/concepts/vector-only.md").unwrap(),
+                0.8,
+            ),
+        ]);
 
-        apply_rrf_scores(&mut results, &token_rank, &vector_rank, &vector_score);
+        apply_rrf_scores(
+            &mut results,
+            &token_rank,
+            &vector_rank,
+            &vector_score,
+            &page_index,
+        );
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
 
         assert_eq!(results[0].path, "wiki/concepts/both.md");
@@ -1061,16 +1317,13 @@ mod tests {
             "---\ntitle: Deep Page\n---\n\n# Deep Page\n\nThe literal query is absent here.",
         );
         let vector_results = vec![PageVectorResult {
-            id: "deep-page".to_string(),
+            id: wiki_path_to_vector_page_id("wiki/custom/deep-page.md").unwrap(),
             score: 0.91,
             chunk_text: "A semantic chunk explains the actual reason for retrieval.".to_string(),
             heading_path: "Section > Detail".to_string(),
         }];
         let mut results = Vec::new();
-        let pages = BTreeMap::from([(
-            "deep-page".to_string(),
-            "wiki/custom/deep-page.md".to_string(),
-        )]);
+        let pages = PageIdentityIndex::from_paths_for_test(&["wiki/custom/deep-page.md"]);
 
         materialize_vector_only_results(
             &vector_results,
@@ -1099,6 +1352,129 @@ mod tests {
         };
 
         assert_eq!(build_vector_snippet(&vector), "");
+    }
+
+    #[test]
+    fn vector_page_id_uses_project_wiki_root_when_parent_path_contains_wiki() {
+        let relative = wiki_path_to_vector_page_id("wiki/a/b.md").unwrap();
+
+        assert_eq!(
+            wiki_path_to_vector_page_id("/tmp/wiki/proj/wiki/a/b.md").unwrap(),
+            relative
+        );
+        assert_eq!(
+            wiki_path_to_vector_page_id("C:\\tmp\\wiki\\proj\\wiki\\a\\b.md").unwrap(),
+            relative
+        );
+    }
+
+    #[tokio::test]
+    async fn encoded_vector_only_hit_materializes_to_exact_path() {
+        let root = tmp_project();
+        write_page(
+            &root,
+            "wiki/queries/foo.md",
+            "---\ntitle: Query Foo\n---\n\n# Query Foo\n\nNo lexical match here.",
+        );
+        write_page(
+            &root,
+            "wiki/sources/foo.md",
+            "---\ntitle: Source Foo\n---\n\n# Source Foo\n\nAlso no lexical match.",
+        );
+        let pp = root.to_string_lossy().to_string();
+        let encoded = wiki_path_to_vector_page_id("wiki/queries/foo.md").unwrap();
+        vectorstore::vector_upsert_chunks(
+            pp.clone(),
+            encoded,
+            vector_chunk(0, "semantic-only chunk belongs to query foo"),
+        )
+        .await
+        .unwrap();
+
+        let out = search_project_inner(
+            pp.clone(),
+            "semantic-only".into(),
+            20,
+            false,
+            Some(fake_embedding(0)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.mode, "vector");
+        assert_eq!(out.results.len(), 1);
+        assert_eq!(out.results[0].path, "wiki/queries/foo.md");
+        assert_eq!(out.results[0].vector_score, Some(1.0));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn legacy_unique_vector_id_materializes_for_backcompat() {
+        let root = tmp_project();
+        write_page(
+            &root,
+            "wiki/concepts/legacy-only.md",
+            "---\ntitle: Legacy Only\n---\n\n# Legacy Only\n\nNo lexical match here.",
+        );
+        let pp = root.to_string_lossy().to_string();
+        vectorstore::vector_upsert_chunks(
+            pp.clone(),
+            "legacy-only".into(),
+            vector_chunk(1, "semantic legacy chunk"),
+        )
+        .await
+        .unwrap();
+
+        let out = search_project_inner(
+            pp.clone(),
+            "semantic".into(),
+            20,
+            false,
+            Some(fake_embedding(1)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.results.len(), 1);
+        assert_eq!(out.results[0].path, "wiki/concepts/legacy-only.md");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn legacy_duplicate_vector_id_is_skipped_not_guessed() {
+        let root = tmp_project();
+        write_page(
+            &root,
+            "wiki/queries/foo.md",
+            "---\ntitle: Query Foo\n---\n\n# Query Foo\n\nNo lexical match here.",
+        );
+        write_page(
+            &root,
+            "wiki/sources/foo.md",
+            "---\ntitle: Source Foo\n---\n\n# Source Foo\n\nNo lexical match here either.",
+        );
+        let pp = root.to_string_lossy().to_string();
+        vectorstore::vector_upsert_chunks(
+            pp.clone(),
+            "foo".into(),
+            vector_chunk(2, "ambiguous legacy vector chunk"),
+        )
+        .await
+        .unwrap();
+
+        let out = search_project_inner(
+            pp.clone(),
+            "ambiguous".into(),
+            20,
+            false,
+            Some(fake_embedding(2)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.vector_hits, 1);
+        assert!(out.results.is_empty());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]

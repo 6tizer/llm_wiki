@@ -221,7 +221,14 @@ export async function reembedSourceSummary(
     )
     const title = titleMatch ? titleMatch[1].trim() : sourceIdentity
     const { embedPage } = await import("@/lib/embedding")
-    await embedPage(pp, sourceSummarySlug, title, content, embCfg)
+    const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
+    await embedPage(
+      pp,
+      wikiPathToVectorPageId(`wiki/sources/${sourceSummarySlug}.md`),
+      title,
+      content,
+      embCfg,
+    )
     console.log(`[ingest:caption] re-embedded ${sourceSummarySlug} with captioned alt text`)
   } catch (err) {
     console.warn(

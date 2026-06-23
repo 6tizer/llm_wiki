@@ -46,6 +46,7 @@ import {
   removePageEmbedding,
   type PageSearchResult,
 } from "./embedding"
+import { wikiPathToVectorPageId } from "./wiki-page-identity"
 
 const cfg = {
   enabled: true,
@@ -77,6 +78,30 @@ function genericErrorResponse(status: number, body: string): Response {
 beforeEach(() => {
   mockInvoke.mockReset()
   mockHttpFetch.mockReset()
+})
+
+describe("wiki page identity", () => {
+  it("encodes path-aware vector ids and keeps legacy stem ids separate", async () => {
+    const queries = wikiPathToVectorPageId("C:\\proj\\wiki\\queries\\foo.md")
+    const sources = wikiPathToVectorPageId("/proj/wiki/sources/foo.md")
+
+    expect(queries).toMatch(/^wp_[A-Za-z0-9_-]+$/)
+    expect(sources).toMatch(/^wp_[A-Za-z0-9_-]+$/)
+    expect(queries).not.toBe(sources)
+  })
+
+  it("handles CJK, spaces, and punctuation deterministically", async () => {
+    expect(wikiPathToVectorPageId("/proj/wiki/sources/默会 知识.v1.md")).toBe(
+      wikiPathToVectorPageId("wiki/sources/默会 知识.v1.md"),
+    )
+  })
+
+  it("uses the project wiki root when parent directories also contain wiki", async () => {
+    const relative = wikiPathToVectorPageId("wiki/a/b.md")
+
+    expect(wikiPathToVectorPageId("/tmp/wiki/proj/wiki/a/b.md")).toBe(relative)
+    expect(wikiPathToVectorPageId("C:\\tmp\\wiki\\proj\\wiki\\a\\b.md")).toBe(relative)
+  })
 })
 
 // ── searchByEmbedding — chunk→page aggregation ─────────────────────
@@ -243,6 +268,7 @@ describe("fetchEmbedding — provider wire formats", () => {
     const [url, opts] = mockHttpFetch.mock.calls[0]
     expect(url).toBe("https://api.openai.com/v1/embeddings")
     expect((opts?.headers as Record<string, string>).Authorization).toBe("Bearer sk-test")
+    expect((opts?.headers as Record<string, string>).Origin).toBeUndefined()
     expect((opts?.headers as Record<string, string>)["x-goog-api-key"]).toBeUndefined()
     expect(JSON.parse(String(opts?.body))).toEqual({
       model: "text-embedding-3-small",
@@ -264,6 +290,7 @@ describe("fetchEmbedding — provider wire formats", () => {
     const [url, opts] = mockHttpFetch.mock.calls[0]
     expect(url).toBe("http://127.0.0.1:1234/v1/embeddings")
     expect((opts?.headers as Record<string, string>).Authorization).toBeUndefined()
+    expect((opts?.headers as Record<string, string>).Origin).toBe("http://localhost")
     expect((opts?.headers as Record<string, string>)["x-goog-api-key"]).toBeUndefined()
     expect(JSON.parse(String(opts?.body))).toEqual({
       model: "text-embedding-qwen3-embedding-0.6b",
@@ -287,6 +314,7 @@ describe("fetchEmbedding — provider wire formats", () => {
         "Content-Type": "text/plain",
         Host: "evil.example.com",
         "Content-Length": "999",
+        Origin: "https://evil.example.com",
         "x-goog-api-key": "wrong-google-key",
       },
     })
@@ -299,9 +327,70 @@ describe("fetchEmbedding — provider wire formats", () => {
     expect(headers["Content-Type"]).toBe("application/json")
     expect(headers.Host).toBeUndefined()
     expect(headers["Content-Length"]).toBeUndefined()
+    expect(headers.Origin).toBeUndefined()
     expect(headers["x-goog-api-key"]).toBeUndefined()
     expect(headers["Bad Header"]).toBeUndefined()
     expect(headers["X-Empty"]).toBeUndefined()
+  })
+
+  it("sends localhost Origin for private embedding endpoints but blocks extra header override", async () => {
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.5]))
+
+    await fetchEmbedding("hi", {
+      enabled: true,
+      endpoint: "http://192.168.1.10:11434/v1/embeddings",
+      apiKey: "",
+      model: "nomic-embed-text",
+      extraHeaders: {
+        origin: "https://attacker.example",
+      },
+    })
+
+    const [, opts] = mockHttpFetch.mock.calls[0]
+    expect((opts?.headers as Record<string, string>).Origin).toBe("http://localhost")
+  })
+
+  it("uses Doubao text embedding endpoint and array input", async () => {
+    mockHttpFetch.mockResolvedValueOnce(okResponse([0.1, 0.2]))
+
+    const out = await fetchEmbedding("hello", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com",
+      apiKey: "volc-key",
+      model: "doubao-embedding-text-240715",
+    })
+
+    expect(out).toEqual([0.1, 0.2])
+    const [url, opts] = mockHttpFetch.mock.calls[0]
+    expect(url).toBe("https://ark.cn-beijing.volces.com/api/v3/embeddings")
+    expect(JSON.parse(String(opts?.body))).toEqual({
+      model: "doubao-embedding-text-240715",
+      input: ["hello"],
+    })
+  })
+
+  it("uses Doubao vision multimodal endpoint and data.embedding response", async () => {
+    mockHttpFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { embedding: [0.7, 0.8] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    const out = await fetchEmbedding("describe image", {
+      enabled: true,
+      endpoint: "https://ark.cn-beijing.volces.com/api/v3",
+      apiKey: "volc-key",
+      model: "doubao-embedding-vision-241215",
+    })
+
+    expect(out).toEqual([0.7, 0.8])
+    const [url, opts] = mockHttpFetch.mock.calls[0]
+    expect(url).toBe("https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal")
+    expect(JSON.parse(String(opts?.body))).toEqual({
+      model: "doubao-embedding-vision-241215",
+      input: [{ type: "text", text: "describe image" }],
+    })
   })
 
   it("does not let custom headers override the Gemini API key header", async () => {
@@ -1087,7 +1176,10 @@ describe("embedAllPages", () => {
     const upsertCalls = mockInvoke.mock.calls.filter((c) => c[0] === "vector_upsert_chunks")
     expect(upsertCalls).toHaveLength(2)
     const pageIds = upsertCalls.map((c) => (c[1] as { pageId: string }).pageId).sort()
-    expect(pageIds).toEqual(["attention", "rope"])
+    expect(pageIds).toEqual([
+      wikiPathToVectorPageId("/proj/wiki/rope.md"),
+      wikiPathToVectorPageId("/proj/wiki/sub/attention.md"),
+    ].sort())
   })
 
   it("extracts the title from YAML frontmatter when present", async () => {
@@ -1142,6 +1234,47 @@ describe("embedAllPages", () => {
     expect(out).toBe(0)
   })
 
+  it("clearExisting throws when listDirectory fails and leaves old index untouched", async () => {
+    listDirectoryMock.mockRejectedValueOnce(new Error("ENOENT: no such file"))
+
+    await expect(embedAllPages("/proj", cfg, undefined, { clearExisting: true }))
+      .rejects.toThrow("Could not read wiki tree; existing index was left unchanged.")
+
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_clear_chunks")).toBe(false)
+  })
+
+  it("clearExisting refuses an empty scan when existing chunks are present", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "index.md", path: "/proj/wiki/index.md", is_dir: false },
+      { name: "notes.txt", path: "/proj/wiki/notes.txt", is_dir: false },
+    ])
+    mockInvoke.mockResolvedValueOnce(3)
+
+    await expect(embedAllPages("/proj", cfg, undefined, { clearExisting: true }))
+      .rejects.toThrow("Wiki scan found no indexable pages; existing index was left unchanged.")
+
+    expect(mockInvoke).toHaveBeenCalledWith("vector_count_chunks", {
+      projectPath: "/proj",
+    })
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_clear_chunks")).toBe(false)
+  })
+
+  it("clearExisting allows an empty scan only when no chunks exist", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "index.md", path: "/proj/wiki/index.md", is_dir: false },
+    ])
+    mockInvoke.mockResolvedValueOnce(0)
+
+    const out = await embedAllPages("/proj", cfg, undefined, { clearExisting: true })
+
+    expect(out).toBe(0)
+    expect(mockInvoke.mock.calls.map((c) => c[0])).toEqual([
+      "vector_count_chunks",
+      "vector_clear_chunks",
+      "vector_drop_legacy",
+    ])
+  })
+
   it("continues with remaining files when one file's readFile throws", async () => {
     listDirectoryMock.mockResolvedValueOnce([
       { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
@@ -1158,7 +1291,86 @@ describe("embedAllPages", () => {
     expect(count).toBe(2)
     const upserts = mockInvoke.mock.calls.filter((c) => c[0] === "vector_upsert_chunks")
     expect(upserts).toHaveLength(1)
-    expect((upserts[0][1] as { pageId: string }).pageId).toBe("b")
+    expect((upserts[0][1] as { pageId: string }).pageId).toBe(wikiPathToVectorPageId("/proj/wiki/b.md"))
+  })
+
+  it("clearExisting prepares all rows before replacing old chunks", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
+      { name: "b.md", path: "/proj/wiki/b.md", is_dir: false },
+    ])
+    readFileMock
+      .mockResolvedValueOnce("body for a")
+      .mockRejectedValueOnce(new Error("permission denied"))
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+
+    await expect(embedAllPages("/proj", cfg, undefined, { clearExisting: true }))
+      .rejects.toThrow("permission denied")
+
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_clear_chunks")).toBe(false)
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_upsert_chunks")).toBe(false)
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_replace_all_chunks")).toBe(false)
+  })
+
+  it("clearExisting treats embedding nulls as prepare failure before clearing", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValueOnce("body for a")
+    mockHttpFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ wrong_field: [1, 2] }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+
+    await expect(embedAllPages("/proj", cfg, undefined, { clearExisting: true }))
+      .rejects.toThrow("missing data[0].embedding")
+
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_clear_chunks")).toBe(false)
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_replace_all_chunks")).toBe(false)
+  })
+
+  it("clearExisting replaces all chunks in one safe command after prepare", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValueOnce("body for a")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+    mockInvoke.mockResolvedValue(undefined)
+
+    const count = await embedAllPages("/proj", cfg, undefined, { clearExisting: true })
+
+    expect(count).toBe(1)
+    expect(mockInvoke.mock.calls.map((c) => c[0])).toEqual([
+      "vector_replace_all_chunks",
+      "vector_optimize_chunks",
+      "vector_drop_legacy",
+    ])
+    const replaceArgs = mockInvoke.mock.calls[0][1] as {
+      projectPath: string
+      pages: Array<{ page_id: string; chunks: Array<{ embedding: number[] }> }>
+    }
+    expect(replaceArgs.projectPath).toBe("/proj")
+    expect(replaceArgs.pages[0].page_id).toBe(wikiPathToVectorPageId("/proj/wiki/a.md"))
+    expect(replaceArgs.pages[0].chunks).toHaveLength(1)
+  })
+
+  it("clearExisting uses safe replace and does not clear on replace failure", async () => {
+    listDirectoryMock.mockResolvedValueOnce([
+      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
+    ])
+    readFileMock.mockResolvedValueOnce("body for a")
+    mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
+    mockInvoke.mockRejectedValueOnce(new Error("disk full"))
+
+    await expect(embedAllPages("/proj", cfg, undefined, { clearExisting: true }))
+      .rejects.toThrow("disk full")
+
+    expect(mockInvoke.mock.calls.map((c) => c[0])).toEqual(["vector_replace_all_chunks"])
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_clear_chunks")).toBe(false)
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_upsert_chunks")).toBe(false)
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "vector_optimize_chunks")).toBe(false)
   })
 })
 

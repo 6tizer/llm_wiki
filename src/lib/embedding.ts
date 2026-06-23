@@ -27,12 +27,15 @@ import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 import { chunkMarkdown, type Chunk } from "@/lib/text-chunker"
+import { isLocalOrPrivateHttpEndpoint, localLlmOriginHeader } from "@/lib/llm-providers"
+import { wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
 
 const RESERVED_EMBEDDING_HEADER_NAMES = new Set([
   "authorization",
   "content-type",
   "host",
   "content-length",
+  "origin",
   "x-goog-api-key",
 ])
 const HTTP_HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
@@ -105,8 +108,13 @@ export async function fetchEmbedding(
   if (!cfg.endpoint) return null
 
   const isGoogleNative = isGoogleEmbeddingConfig(cfg)
-  const endpoint = isGoogleNative ? googleEmbeddingEndpoint(cfg) : cfg.endpoint
+  const isDoubao = isDoubaoEmbeddingConfig(cfg)
+  const isDoubaoVision = isDoubaoVisionEmbeddingConfig(cfg)
+  const endpoint = embeddingEndpoint(cfg, { isGoogleNative, isDoubao, isDoubaoVision })
   const headers: Record<string, string> = { "Content-Type": "application/json" }
+  if (!isGoogleNative && isLocalOrPrivateHttpEndpoint(endpoint)) {
+    Object.assign(headers, localLlmOriginHeader())
+  }
   if (cfg.apiKey) {
     if (isGoogleNative) {
       headers["x-goog-api-key"] = cfg.apiKey
@@ -133,22 +141,22 @@ export async function fetchEmbedding(
         method: "POST",
         headers,
         body: JSON.stringify(
-          isGoogleNative
-            ? googleEmbeddingBody(cfg.model, current, cfg.outputDimensionality)
-            : { model: cfg.model, input: current },
+          embeddingBody(cfg, current, { isGoogleNative, isDoubao, isDoubaoVision }),
         ),
       })
 
       if (resp.ok) {
         const data = await resp.json()
-        const embedding = isGoogleNative
-          ? data?.embedding?.values ?? null
-          : data?.data?.[0]?.embedding ?? null
+        const embedding = extractEmbeddingResponse(data, { isGoogleNative, isDoubaoVision })
         if (isNonEmptyNumberArray(embedding)) {
           lastEmbeddingError = null
           return embedding
         }
-        const expectedShape = isGoogleNative ? "embedding.values" : "data[0].embedding"
+        const expectedShape = isGoogleNative
+          ? "embedding.values"
+          : isDoubaoVision
+            ? "data.embedding"
+            : "data[0].embedding"
         lastEmbeddingError = `Embedding response missing ${expectedShape} (got ${JSON.stringify(data).slice(0, 200)})`
         console.warn(`[Embedding] ${lastEmbeddingError}`)
         return null
@@ -215,6 +223,65 @@ function isGoogleEmbeddingConfig(cfg: EmbeddingConfig): boolean {
     || /:embedcontent(\?|$)/i.test(endpoint)
 }
 
+function isDoubaoEmbeddingConfig(cfg: EmbeddingConfig): boolean {
+  return /volces|volcengine|doubao|ark\.cn-beijing\.volces\.com/i.test(`${cfg.endpoint} ${cfg.model}`)
+}
+
+function isDoubaoVisionEmbeddingConfig(cfg: EmbeddingConfig): boolean {
+  return /doubao-embedding-vision/i.test(cfg.model)
+}
+
+function embeddingEndpoint(
+  cfg: EmbeddingConfig,
+  kind: { isGoogleNative: boolean; isDoubao: boolean; isDoubaoVision: boolean },
+): string {
+  if (kind.isGoogleNative) return googleEmbeddingEndpoint(cfg)
+  if (!kind.isDoubao) return cfg.endpoint
+  const raw = cfg.endpoint.trim().replace(/\/+$/, "")
+  if (kind.isDoubaoVision) {
+    if (/\/api\/v\d+\/embeddings\/multimodal$/i.test(raw)) return raw
+    if (/\/api\/v\d+$/i.test(raw)) return `${raw}/embeddings/multimodal`
+    return `${raw}/api/v3/embeddings/multimodal`
+  }
+  if (/\/api\/v\d+\/embeddings$/i.test(raw)) return raw
+  if (/\/api\/v\d+$/i.test(raw)) return `${raw}/embeddings`
+  return `${raw}/api/v3/embeddings`
+}
+
+function embeddingBody(
+  cfg: EmbeddingConfig,
+  text: string,
+  kind: { isGoogleNative: boolean; isDoubao: boolean; isDoubaoVision: boolean },
+): Record<string, unknown> {
+  if (kind.isGoogleNative) {
+    return googleEmbeddingBody(cfg.model, text, cfg.outputDimensionality)
+  }
+  if (kind.isDoubaoVision) {
+    return {
+      model: cfg.model,
+      input: [
+        {
+          type: "text",
+          text,
+        },
+      ],
+    }
+  }
+  if (kind.isDoubao) {
+    return { model: cfg.model, input: [text] }
+  }
+  return { model: cfg.model, input: text }
+}
+
+function extractEmbeddingResponse(
+  data: unknown,
+  kind: { isGoogleNative: boolean; isDoubaoVision: boolean },
+): unknown {
+  if (kind.isGoogleNative) return (data as { embedding?: { values?: unknown } })?.embedding?.values ?? null
+  if (kind.isDoubaoVision) return (data as { data?: { embedding?: unknown } })?.data?.embedding ?? null
+  return (data as { data?: Array<{ embedding?: unknown }> })?.data?.[0]?.embedding ?? null
+}
+
 function googleEmbeddingEndpoint(cfg: EmbeddingConfig): string {
   const raw = stripGoogleApiKeyQuery(cfg.endpoint.trim()).replace(/\/+$/, "")
   if (/:batchEmbedContents(\?|$)/i.test(raw)) {
@@ -274,6 +341,15 @@ interface ChunkUpsertInput {
   embedding: number[]
 }
 
+function toRustChunks(chunks: ChunkUpsertInput[]) {
+  return chunks.map((c) => ({
+    chunk_index: c.chunkIndex,
+    chunk_text: c.chunkText,
+    heading_path: c.headingPath,
+    embedding: c.embedding.map((v) => Math.fround(v)),
+  }))
+}
+
 async function vectorUpsertChunks(
   projectPath: string,
   pageId: string,
@@ -282,11 +358,19 @@ async function vectorUpsertChunks(
   await invoke("vector_upsert_chunks", {
     projectPath: normalizePath(projectPath),
     pageId,
-    chunks: chunks.map((c) => ({
-      chunk_index: c.chunkIndex,
-      chunk_text: c.chunkText,
-      heading_path: c.headingPath,
-      embedding: c.embedding.map((v) => Math.fround(v)),
+    chunks: toRustChunks(chunks),
+  })
+}
+
+async function vectorReplaceAllChunks(
+  projectPath: string,
+  pages: Array<{ pageId: string; chunks: ChunkUpsertInput[] }>,
+): Promise<void> {
+  await invoke("vector_replace_all_chunks", {
+    projectPath: normalizePath(projectPath),
+    pages: pages.map((p) => ({
+      page_id: p.pageId,
+      chunks: toRustChunks(p.chunks),
     })),
   })
 }
@@ -316,6 +400,18 @@ async function vectorDeletePage(projectPath: string, pageId: string): Promise<vo
   await invoke("vector_delete_page", {
     projectPath: normalizePath(projectPath),
     pageId,
+  })
+}
+
+async function vectorClearChunks(projectPath: string): Promise<void> {
+  await invoke("vector_clear_chunks", {
+    projectPath: normalizePath(projectPath),
+  })
+}
+
+async function vectorOptimizeChunks(projectPath: string): Promise<void> {
+  await invoke("vector_optimize_chunks", {
+    projectPath: normalizePath(projectPath),
   })
 }
 
@@ -427,6 +523,7 @@ export async function embedAllPages(
   projectPath: string,
   cfg: EmbeddingConfig,
   onProgress?: (done: number, total: number) => void,
+  options?: { clearExisting?: boolean },
 ): Promise<number> {
   if (!cfg.enabled || !cfg.model) return 0
 
@@ -436,10 +533,13 @@ export async function embedAllPages(
   try {
     tree = await listDirectory(`${pp}/wiki`)
   } catch {
+    if (options?.clearExisting) {
+      throw new Error("Could not read wiki tree; existing index was left unchanged.")
+    }
     return 0
   }
 
-  const mdFiles: { id: string; path: string }[] = []
+  const mdFiles: { id: string; path: string; pageId: string }[] = []
   function walk(nodes: FileNode[]) {
     for (const node of nodes) {
       if (node.is_dir && node.children) {
@@ -447,12 +547,68 @@ export async function embedAllPages(
       } else if (!node.is_dir && node.name.endsWith(".md")) {
         const id = node.name.replace(/\.md$/, "")
         if (!["index", "log", "overview", "purpose", "schema"].includes(id)) {
-          mdFiles.push({ id, path: node.path })
+          mdFiles.push({ id, path: node.path, pageId: wikiPathToVectorPageId(node.path) })
         }
       }
     }
   }
   walk(tree)
+
+  if (options?.clearExisting) {
+    if (mdFiles.length === 0) {
+      const existingChunks = await vectorCountChunks(pp)
+      if (existingChunks > 0) {
+        throw new Error("Wiki scan found no indexable pages; existing index was left unchanged.")
+      }
+      await vectorClearChunks(pp)
+      try {
+        await dropLegacyVectorTable(pp)
+      } catch {
+        // best effort
+      }
+      return 0
+    }
+
+    const prepared: Array<{ file: { id: string; pageId: string }; rows: ChunkUpsertInput[] }> = []
+    for (const file of mdFiles) {
+      const content = await readFile(file.path)
+      const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
+      const title = titleMatch ? titleMatch[1].trim() : file.id
+      const rows = await preparePageEmbeddingRows(title, content, cfg)
+      if (rows.length > 0) prepared.push({ file, rows })
+    }
+
+    if (prepared.length === 0) {
+      const existingChunks = await vectorCountChunks(pp)
+      if (existingChunks > 0) {
+        throw new Error("Embedding rebuild prepared no rows; existing index was left unchanged.")
+      }
+      await vectorClearChunks(pp)
+      try {
+        await dropLegacyVectorTable(pp)
+      } catch {
+        // best effort
+      }
+      return 0
+    }
+
+    await vectorReplaceAllChunks(
+      pp,
+      prepared.map((item) => ({ pageId: item.file.pageId, chunks: item.rows })),
+    )
+    if (onProgress) onProgress(prepared.length, prepared.length)
+    try {
+      await vectorOptimizeChunks(pp)
+    } catch {
+      // best effort
+    }
+    try {
+      await dropLegacyVectorTable(pp)
+    } catch {
+      // best effort
+    }
+    return prepared.length
+  }
 
   let done = 0
   for (const file of mdFiles) {
@@ -460,7 +616,7 @@ export async function embedAllPages(
       const content = await readFile(file.path)
       const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
       const title = titleMatch ? titleMatch[1].trim() : file.id
-      await embedPage(pp, file.id, title, content, cfg)
+      await embedPage(pp, file.pageId, title, content, cfg)
     } catch {
       // skip — individual file failure doesn't halt the batch
     }
@@ -469,6 +625,31 @@ export async function embedAllPages(
   }
 
   return done
+}
+
+async function preparePageEmbeddingRows(
+  title: string,
+  content: string,
+  cfg: EmbeddingConfig,
+): Promise<ChunkUpsertInput[]> {
+  const chunks = chunkMarkdown(content, {
+    targetChars: cfg.maxChunkChars ?? 1000,
+    overlapChars: cfg.overlapChunkChars ?? 200,
+  })
+  const rows: ChunkUpsertInput[] = []
+  for (const chunk of chunks) {
+    const vec = await fetchEmbedding(enrichChunkForEmbedding(title, chunk), cfg)
+    if (!vec) {
+      throw new Error(lastEmbeddingError ?? "Embedding request failed while preparing rebuild")
+    }
+    rows.push({
+      chunkIndex: chunk.index,
+      chunkText: chunk.text,
+      headingPath: chunk.headingPath,
+      embedding: vec,
+    })
+  }
+  return rows
 }
 
 /**
