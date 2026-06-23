@@ -44,6 +44,8 @@ interface LlmConfig {
 	maxContextSize: number; // max context window in characters
 	apiMode?: CustomApiMode;
 	reasoning?: ReasoningConfig;
+	localCliIsolation?: boolean;
+	codexCliTimeoutMinutes?: number;
 }
 
 export type SearchProvider =
@@ -281,6 +283,8 @@ export interface ProviderOverride {
 	apiMode?: CustomApiMode;
 	maxContextSize?: number;
 	reasoning?: ReasoningConfig;
+	localCliIsolation?: boolean;
+	codexCliTimeoutMinutes?: number;
 }
 
 export type ProviderConfigs = Record<string, ProviderOverride>;
@@ -371,6 +375,8 @@ export const useWikiStore = create<WikiState>((set) => ({
 		customEndpoint: "",
 		azureApiVersion: "2024-10-21",
 		reasoning: { mode: "auto" },
+		localCliIsolation: false,
+		codexCliTimeoutMinutes: 10,
 	},
 	providerConfigs: {},
 	activePresetId: null,

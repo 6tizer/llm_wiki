@@ -37,11 +37,17 @@ import {
 	parseCodexCliLine,
 	streamCodexCli,
 } from "./codex-cli-transport";
+import { useWikiStore } from "@/stores/wiki-store";
 
 beforeEach(() => {
 	vi.clearAllMocks();
 	tauriMocks.reset();
 	tauriMocks.invoke.mockResolvedValue(undefined);
+	useWikiStore.getState().setProject({
+		id: "project-1",
+		name: "Project",
+		path: "/tmp/llm-wiki-project",
+	});
 });
 
 describe("parseCodexCliLine", () => {
@@ -95,6 +101,85 @@ describe("buildPrompt", () => {
 });
 
 describe("streamCodexCli", () => {
+	it("passes isolation, timeout, and active project root to the Rust command", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+				localCliIsolation: true,
+				codexCliTimeoutMinutes: 30,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"codex_cli_spawn",
+				expect.objectContaining({
+					model: "gpt-5.1-codex-mini",
+					isolateLocalConfig: true,
+					timeoutMinutes: 30,
+					workingDirectory: "/tmp/llm-wiki-project",
+				}),
+			);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 0,
+			stderr: "",
+			stdout: JSON.stringify({
+				type: "item.completed",
+				item: { type: "agent_message", text: "analysis" },
+			}),
+		});
+
+		await stream;
+		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
+	});
+
+	it("fails before spawning when no active project is open", async () => {
+		useWikiStore.getState().setProject(null);
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Codex CLI requires an active project working directory",
+			}),
+		);
+	});
+
 	it("does not resolve until the Codex CLI done event arrives", async () => {
 		const callbacks = {
 			onToken: vi.fn(),

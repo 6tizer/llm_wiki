@@ -64,9 +64,10 @@ export async function testLlmConnection(cfg: LlmConfig): Promise<ProviderTestRes
   const started = performance.now()
   let content = ""
   let errorMessage: string | null = null
+  const testConfig = configForProviderTest(cfg)
 
   await streamChat(
-    cfg,
+    testConfig,
     [
       { role: "system", content: "You are a connection checker. Reply briefly." },
       { role: "user", content: "Reply with one short word." },
@@ -89,11 +90,12 @@ export async function testLlmConnection(cfg: LlmConfig): Promise<ProviderTestRes
 }
 
 export async function testLlmFunction(cfg: LlmConfig): Promise<ProviderTestResult> {
+  const testConfig = configForProviderTest(cfg)
   let content = ""
   let errorMessage: string | null = null
 
   await streamChat(
-    cfg,
+    testConfig,
     [
       {
         role: "system",
@@ -119,4 +121,12 @@ export async function testLlmFunction(cfg: LlmConfig): Promise<ProviderTestResul
     }
   }
   return { ok: true, message: "Functional test passed. The model returned the expected token." }
+}
+
+function configForProviderTest(cfg: LlmConfig): LlmConfig {
+  if (cfg.provider !== "claude-code" && cfg.provider !== "codex-cli") return cfg
+  return {
+    ...cfg,
+    localCliIsolation: true,
+  }
 }

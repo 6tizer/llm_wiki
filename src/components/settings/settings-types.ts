@@ -19,6 +19,8 @@ export interface SettingsDraft {
   maxContextSize: number
   apiMode: CustomApiMode | undefined
   reasoning: ReasoningConfig | undefined
+  localCliIsolation: boolean
+  codexCliTimeoutMinutes: number | undefined
 
   // Embedding
   embeddingEnabled: boolean

@@ -78,6 +78,47 @@ describe("provider connection tests", () => {
     expect(result.message).toContain("Response: OK")
   })
 
+  it("forces local CLI isolation for CLI provider connection tests", async () => {
+    streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
+      callbacks.onToken("OK")
+      callbacks.onDone()
+    })
+
+    await testLlmConnection({
+      ...llmConfig,
+      provider: "codex-cli",
+      localCliIsolation: false,
+    })
+
+    expect(streamChatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex-cli",
+        localCliIsolation: true,
+      }),
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      { max_tokens: 32, reasoning: { mode: "off" } },
+    )
+  })
+
+  it("does not alter non-CLI provider connection test config", async () => {
+    streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
+      callbacks.onToken("OK")
+      callbacks.onDone()
+    })
+
+    await testLlmConnection(llmConfig)
+
+    expect(streamChatMock).toHaveBeenCalledWith(
+      llmConfig,
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      { max_tokens: 32, reasoning: { mode: "off" } },
+    )
+  })
+
   it("validates LLM functional output token", async () => {
     streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
       callbacks.onToken("LLM_WIKI_TEST_OK")
@@ -89,6 +130,31 @@ describe("provider connection tests", () => {
     expect(result.ok).toBe(true)
     expect(streamChatMock).toHaveBeenCalledWith(
       llmConfig,
+      expect.any(Array),
+      expect.any(Object),
+      undefined,
+      { max_tokens: 32, reasoning: { mode: "off" } },
+    )
+  })
+
+  it("forces local CLI isolation for CLI provider functional tests", async () => {
+    streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
+      callbacks.onToken("LLM_WIKI_TEST_OK")
+      callbacks.onDone()
+    })
+
+    const result = await testLlmFunction({
+      ...llmConfig,
+      provider: "claude-code",
+      localCliIsolation: false,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(streamChatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-code",
+        localCliIsolation: true,
+      }),
       expect.any(Array),
       expect.any(Object),
       undefined,

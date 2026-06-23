@@ -33,11 +33,17 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { streamClaudeCodeCli } from "./claude-cli-transport";
+import { useWikiStore } from "@/stores/wiki-store";
 
 beforeEach(() => {
 	vi.clearAllMocks();
 	tauriMocks.reset();
 	tauriMocks.invoke.mockResolvedValue(undefined);
+	useWikiStore.getState().setProject({
+		id: "project-1",
+		name: "Project",
+		path: "/tmp/llm-wiki-project",
+	});
 });
 
 describe("streamClaudeCodeCli", () => {
@@ -68,5 +74,66 @@ describe("streamClaudeCodeCli", () => {
 		expect(tauriMocks.listen).not.toHaveBeenCalled();
 		expect(callbacks.onDone).toHaveBeenCalled();
 		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
+	it("passes isolation and active project root to the Rust command", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamClaudeCodeCli(
+			{
+				provider: "claude-code",
+				apiKey: "",
+				model: "claude-sonnet-4-20250514",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+				localCliIsolation: true,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).toHaveBeenCalledWith(
+			"claude_cli_spawn",
+			expect.objectContaining({
+				model: "claude-sonnet-4-20250514",
+				isolateLocalConfig: true,
+				workingDirectory: "/tmp/llm-wiki-project",
+			}),
+		);
+	});
+
+	it("fails before spawning when no active project is open", async () => {
+		useWikiStore.getState().setProject(null);
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamClaudeCodeCli(
+			{
+				provider: "claude-code",
+				apiKey: "",
+				model: "claude-sonnet-4-20250514",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).not.toHaveBeenCalled();
+		expect(tauriMocks.listen).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Claude Code CLI requires an active project working directory",
+			}),
+		);
 	});
 });

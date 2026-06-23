@@ -128,8 +128,17 @@ function PresetRow({
   const azureModelFamily = ov.azureModelFamily ?? preset.azureModelFamily ?? "auto"
   const context = ov.maxContextSize ?? preset.suggestedContextSize ?? 131072
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
+  const localCliIsolation = ov.localCliIsolation ?? false
+  const codexCliTimeoutMinutes = ov.codexCliTimeoutMinutes ?? 10
   const [testState, setTestState] = useState<ProviderTestState>({ kind: "idle" })
-  const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model || !!ov.azureApiVersion || !!ov.azureModelFamily
+  const hasConfig =
+    !!apiKey ||
+    !!ov.baseUrl ||
+    !!ov.model ||
+    !!ov.azureApiVersion ||
+    !!ov.azureModelFamily ||
+    ov.localCliIsolation !== undefined ||
+    ov.codexCliTimeoutMinutes !== undefined
   // Local CLI providers authenticate via their own existing login state
   // (inherited by the spawned subprocess), so no API key field is shown.
   // Ollama ditto for its local-only model.
@@ -140,7 +149,20 @@ function PresetRow({
 
   const resolvedConfig = useMemo(
     () => resolveConfig(preset, ov, useWikiStore.getState().llmConfig),
-    [apiKey, apiMode, azureApiVersion, azureModelFamily, baseUrl, context, model, preset, reasoning, ov],
+    [
+      apiKey,
+      apiMode,
+      azureApiVersion,
+      azureModelFamily,
+      baseUrl,
+      context,
+      codexCliTimeoutMinutes,
+      localCliIsolation,
+      model,
+      preset,
+      reasoning,
+      ov,
+    ],
   )
 
   async function runProviderTest(kind: "connection" | "function") {
@@ -309,6 +331,53 @@ function PresetRow({
 
           {preset.provider === "claude-code" && <ClaudeCliStatusPill />}
           {preset.provider === "codex-cli" && <CodexCliStatusPill />}
+
+          {(preset.provider === "claude-code" || preset.provider === "codex-cli") && (
+            <div className="space-y-3 rounded-md border p-3">
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-border"
+                  checked={localCliIsolation}
+                  onChange={(e) => onChange({ localCliIsolation: e.target.checked })}
+                />
+                <span className="min-w-0">
+                  <span className="block font-medium">
+                    {t("settings.sections.llm.localCliIsolation")}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {t("settings.sections.llm.localCliIsolationHint")}
+                  </span>
+                </span>
+              </label>
+
+              {preset.provider === "codex-cli" && (
+                <div className="space-y-2">
+                  <Label>{t("settings.sections.llm.codexCliTimeout")}</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={240}
+                    value={codexCliTimeoutMinutes}
+                    onChange={(e) => {
+                      const raw = e.target.value.trim()
+                      const n = Number(raw)
+                      onChange({
+                        codexCliTimeoutMinutes:
+                          raw === "" || !Number.isFinite(n)
+                            ? undefined
+                            : Math.max(1, Math.min(240, Math.round(n))),
+                      })
+                    }}
+                    placeholder="10"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.sections.llm.codexCliTimeoutHint")}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {needsApiKey && (
             <div className="space-y-2">
