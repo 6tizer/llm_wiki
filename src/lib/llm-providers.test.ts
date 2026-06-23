@@ -106,8 +106,10 @@ describe("Anthropic buildBody — vision content", () => {
     const body = getProviderConfig(cfg).buildBody([
       sys,
       { role: "user", content: "ok" },
-    ]) as { system?: string; messages: unknown[] }
-    expect(body.system).toBe("be terse")
+    ]) as { system?: Array<{ type: string; text: string; cache_control?: unknown }>; messages: unknown[] }
+    expect(body.system).toEqual([
+      { type: "text", text: "be terse", cache_control: { type: "ephemeral" } },
+    ])
   })
 })
 
@@ -229,6 +231,20 @@ describe("Azure OpenAI provider", () => {
   })
 })
 
+describe("SSE parser compatibility", () => {
+  it("OpenAI parser accepts data: without a following space", () => {
+    const cfg = getProviderConfig(mkConfig({ provider: "openai" }))
+    const line = 'data:{"choices":[{"delta":{"content":"hi"}}]}'
+    expect(cfg.parseStream(line)).toBe("hi")
+  })
+
+  it("Anthropic parser accepts data: without a following space", () => {
+    const cfg = getProviderConfig(mkConfig({ provider: "anthropic" }))
+    const line = 'data:{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}'
+    expect(cfg.parseStream(line)).toBe("hi")
+  })
+})
+
 describe("Ollama / custom (chat_completions) — vision content", () => {
   it("ollama uses OpenAI-shaped image_url block (works on /v1/chat/completions for vision-capable models)", () => {
     const cfg = mkConfig({
@@ -266,6 +282,35 @@ describe("Ollama / custom (chat_completions) — vision content", () => {
 })
 
 describe("reasoning controls", () => {
+  it("maps Ollama reasoning off to think=false", () => {
+    const cfg = mkConfig({
+      provider: "ollama",
+      model: "qwen3:latest",
+      ollamaUrl: "http://localhost:11434",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as Record<string, unknown>
+
+    expect(body.think).toBe(false)
+  })
+
+  it("maps local OpenAI-compatible reasoning off to think=false", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      model: "local-reasoner",
+      customEndpoint: "http://127.0.0.1:8000/v1",
+      apiMode: "chat_completions",
+    })
+    const body = getProviderConfig(cfg).buildBody(
+      [{ role: "user", content: "hi" }],
+      { reasoning: { mode: "off" } },
+    ) as Record<string, unknown>
+
+    expect(body.think).toBe(false)
+  })
+
   it("maps DeepSeek-compatible custom endpoints to thinking disabled for structured tasks", () => {
     const cfg = mkConfig({
       provider: "custom",
@@ -394,6 +439,20 @@ describe("reasoning controls", () => {
 
     expect(body.temperature).toBeUndefined()
     expect(body.max_tokens).toBe(4096)
+  })
+
+  it("uses Bearer auth for Moonshot Anthropic wire", () => {
+    const cfg = mkConfig({
+      provider: "custom",
+      apiKey: "sk-moonshot",
+      model: "kimi-k2.6",
+      customEndpoint: "https://api.moonshot.ai/anthropic",
+      apiMode: "anthropic_messages",
+    })
+    const provider = getProviderConfig(cfg)
+
+    expect(provider.headers.Authorization).toBe("Bearer sk-moonshot")
+    expect(provider.headers["x-api-key"]).toBeUndefined()
   })
 
   it("maps Anthropic reasoning budget to extended thinking and removes sampling knobs", () => {

@@ -159,9 +159,14 @@ function shouldSendLocalLlmOrigin(endpoint: string): boolean {
   return isLocalOrPrivateHttpEndpoint(endpoint)
 }
 
+function parseSseData(line: string): string | null {
+  if (!line.startsWith("data:")) return null
+  return line.slice(5).trim()
+}
+
 function parseOpenAiLine(line: string): string | null {
-  if (!line.startsWith("data: ")) return null
-  const data = line.slice(6).trim()
+  const data = parseSseData(line)
+  if (data === null) return null
   if (data === "[DONE]") return null
   try {
     const parsed = JSON.parse(data) as {
@@ -174,8 +179,8 @@ function parseOpenAiLine(line: string): string | null {
 }
 
 function parseAnthropicLine(line: string): string | null {
-  if (!line.startsWith("data: ")) return null
-  const data = line.slice(6).trim()
+  const data = parseSseData(line)
+  if (data === null) return null
   try {
     const parsed = JSON.parse(data) as {
       type: string
@@ -194,8 +199,8 @@ function parseAnthropicLine(line: string): string | null {
 }
 
 export function parseGoogleLine(line: string): string | null {
-  if (!line.startsWith("data: ")) return null
-  const data = line.slice(6).trim()
+  const data = parseSseData(line)
+  if (data === null) return null
   try {
     const parsed = JSON.parse(data) as {
       candidates: Array<{
@@ -337,6 +342,20 @@ function adaptKimiBody(config: LlmConfig, body: Record<string, unknown>): void {
   delete body.temperature
 }
 
+function adaptOpenAiCompatibleReasoningOff(
+  config: LlmConfig,
+  body: Record<string, unknown>,
+  reasoning: ReasoningConfig,
+): void {
+  if (reasoning.mode !== "off") return
+  if (config.provider === "ollama") {
+    body.think = false
+  }
+  if (config.provider === "custom" && shouldSendLocalLlmOrigin(config.customEndpoint)) {
+    body.think = false
+  }
+}
+
 function adaptXiaomiMimoBody(
   config: LlmConfig,
   body: Record<string, unknown>,
@@ -376,6 +395,7 @@ function buildOpenAiCompatibleBody(
   adaptOpenAiStrictCompletionBody(config, body)
   adaptKimiBody(config, body)
   adaptXiaomiMimoBody(config, body, reasoning)
+  adaptOpenAiCompatibleReasoningOff(config, body, reasoning)
 
   if (isDeepSeekEndpoint(config)) {
     // DeepSeek V4 thinking mode. `thinking.type=disabled` is the most
@@ -458,9 +478,12 @@ function buildAnthropicBody(
   const conversationMessages = messages
     .filter((m) => m.role !== "system")
     .map((m) => ({ role: m.role, content: toAnthropicContent(m.content) }))
-  const system =
+  const systemText =
     systemMessages.map((m) => flattenAnthropicSystem(m.content)).join("\n") ||
     undefined
+  const system = systemText !== undefined
+    ? [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }]
+    : undefined
 
   // Anthropic Messages uses top_p / top_k (Python-style snake_case), a
   // mandatory `max_tokens`, and `stop_sequences` instead of `stop`.
@@ -528,6 +551,10 @@ function requiresBearerAuth(url: string): boolean {
     // on its /apps/anthropic gateway; behavior matches the other
     // Chinese Anthropic-wire proxies above.
     normalized.startsWith("https://coding.dashscope.aliyuncs.com/apps/anthropic") ||
+    normalized.startsWith("https://api.moonshot.ai/anthropic") ||
+    normalized.startsWith("https://api.moonshot.cn/anthropic") ||
+    normalized.startsWith("https://api.moonshot.ai/v1/messages") ||
+    normalized.startsWith("https://api.moonshot.cn/v1/messages") ||
     // Xiaomi MiMo Token Plan Anthropic gateway authenticates with
     // Authorization Bearer, matching its OpenAI-compatible gateway.
     /(^https:\/\/|^)token-plan-cn\.xiaomimimo\.com\/anthropic(?:\/|$)/i.test(normalized)

@@ -101,14 +101,14 @@ describe("parseDetectorResponse", () => {
     expect(parseDetectorResponse(raw)[0].confidence).toBe("low")
   })
 
-  it("returns [] for malformed JSON", () => {
-    expect(parseDetectorResponse("not json at all")).toEqual([])
-    expect(parseDetectorResponse('{"groups": [unclosed')).toEqual([])
-    expect(parseDetectorResponse("")).toEqual([])
+  it("throws for malformed or truncated JSON", () => {
+    expect(() => parseDetectorResponse("not json at all")).toThrow(/no JSON object/)
+    expect(() => parseDetectorResponse('{"groups": [unclosed')).toThrow(/no JSON object|malformed|truncated/)
+    expect(() => parseDetectorResponse("")).toThrow(/no JSON object/)
   })
 
-  it("returns [] when the JSON object has no groups field", () => {
-    expect(parseDetectorResponse('{"other_field": []}')).toEqual([])
+  it("throws when the JSON object has no groups field", () => {
+    expect(() => parseDetectorResponse('{"other_field": []}')).toThrow(/groups array/)
   })
 
   it("survives quoted braces inside reason strings", () => {
@@ -210,6 +210,7 @@ describe("detectDuplicateGroups", () => {
     )
     expect(llm).toHaveBeenCalledOnce()
     const userMsg = llm.mock.calls[0][1]
+    expect(llm.mock.calls[0][3]).toEqual({ maxTokens: 8192 })
     expect(userMsg).toContain("type=entity")
     expect(userMsg).toContain("slug=foo")
     expect(userMsg).toContain('"Foo"')
@@ -419,6 +420,7 @@ describe("mergeDuplicateGroup", () => {
     )
 
     // Canonical body has both versions' content
+    expect(llm.mock.calls[0][3]).toEqual({ maxTokens: 16384 })
     expect(result.canonicalContent).toContain("Anaerobic Phase")
     expect(result.canonicalContent).toContain("厌氧阶段")
 

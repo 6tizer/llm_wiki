@@ -4,7 +4,7 @@ import { streamChat } from "./llm-client"
 import { autoIngest } from "./ingest"
 import { writeFile, readFile, listDirectory } from "@/commands/fs"
 import { useWikiStore, type LlmConfig, type SearchApiConfig } from "@/stores/wiki-store"
-import { useResearchStore } from "@/stores/research-store"
+import { useResearchStore, type ResearchTask } from "@/stores/research-store"
 import { normalizePath } from "@/lib/path-utils"
 import { buildLanguageDirective } from "@/lib/output-language"
 
@@ -17,6 +17,7 @@ interface ResearchSourceDeps {
 
 interface CollectResearchSourceOptions {
   llmConfig?: LlmConfig
+  signal?: AbortSignal
 }
 
 interface ResearchSourceCollection {
@@ -35,7 +36,8 @@ export function queueResearch(
   searchQueries?: string[],
 ): string {
   const store = useResearchStore.getState()
-  const taskId = store.addTask(topic)
+  const pp = normalizePath(projectPath)
+  const taskId = store.addTask(topic, pp)
   // Store search queries on the task
   if (searchQueries && searchQueries.length > 0) {
     store.updateTask(taskId, { searchQueries })
@@ -44,7 +46,7 @@ export function queueResearch(
   store.setPanelOpen(true)
   // Start processing on next tick to ensure React has rendered the panel
   setTimeout(() => {
-    processQueue(projectPath, llmConfig, searchConfig)
+    processQueue(pp, llmConfig, searchConfig)
   }, 50)
   return taskId
 }
@@ -85,10 +87,11 @@ export async function collectResearchSources(
 
   const webQueries = queries.map((q) => q.trim()).filter(Boolean)
   const calls: Array<Promise<{ results: import("./web-search").WebSearchResult[] }>> = []
+  throwIfAborted(options.signal)
 
   for (const webQuery of webQueries) {
     if (useWeb && webConfigured && webQuery) {
-      calls.push(deps.webSearch(webQuery, resolvedSearchConfig, 5).then((results) => ({ results })))
+      calls.push(deps.webSearch(webQuery, resolvedSearchConfig, 5, options.signal).then((results) => ({ results })))
     }
   }
   if (useAnyTxt) {
@@ -96,6 +99,7 @@ export async function collectResearchSources(
   }
 
   const settled = await Promise.allSettled(calls)
+  throwIfAborted(options.signal)
   for (const item of settled) {
     if (item.status === "fulfilled") {
       addResults(item.value.results)
@@ -114,6 +118,16 @@ function hasAnyTxtSource(searchConfig: SearchApiConfig): boolean {
   return sourceMode === "anytxt" || sourceMode === "both"
 }
 
+function isResearchProjectActive(projectPath: string): boolean {
+  const currentPath = useWikiStore.getState().project?.path
+  return currentPath !== undefined && normalizePath(currentPath) === normalizePath(projectPath)
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error ? signal.reason : new Error("Deep research task aborted")
+}
+
 /**
  * Process queued tasks up to maxConcurrent limit.
  */
@@ -122,14 +136,15 @@ function processQueue(
   llmConfig: LlmConfig,
   searchConfig: SearchApiConfig,
 ) {
+  const pp = normalizePath(projectPath)
   const store = useResearchStore.getState()
-  const running = store.getRunningCount()
+  const running = store.getRunningCount(pp)
   const available = store.maxConcurrent - running
 
   for (let i = 0; i < available; i++) {
-    const next = useResearchStore.getState().getNextQueued()
+    const next = useResearchStore.getState().getNextQueued(pp)
     if (!next) break
-    executeResearch(projectPath, next.id, next.topic, llmConfig, searchConfig)
+    executeResearch(pp, next.id, next.topic, llmConfig, searchConfig)
   }
 }
 
@@ -141,12 +156,20 @@ async function executeResearch(
   searchConfig: SearchApiConfig,
 ) {
   const pp = normalizePath(projectPath)
-  const store = useResearchStore.getState()
+  const abortController = new AbortController()
+  const updateTask = (updates: Partial<ResearchTask>): boolean => {
+    if (!isResearchProjectActive(pp)) {
+      abortController.abort(new Error("Deep research task stopped because the active project changed."))
+      return false
+    }
+    useResearchStore.getState().updateTask(taskId, updates)
+    return true
+  }
 
   try {
     // Step 1: gather research sources — use multiple queries if available,
     // merge Web Search and local AnyTXT results, then deduplicate.
-    store.updateTask(taskId, { status: "searching" })
+    if (!updateTask({ status: "searching" })) return
 
     const task = useResearchStore.getState().tasks.find((t) => t.id === taskId)
     const queries = task?.searchQueries && task.searchQueries.length > 0
@@ -157,23 +180,31 @@ async function executeResearch(
       searchConfig,
       pp,
       { webSearch, anyTxtSearch: anyTxtSearchSmart },
-      { llmConfig },
+      { llmConfig, signal: abortController.signal },
     )
 
     const webResults = allResults
-    store.updateTask(taskId, { webResults })
+    if (!updateTask({ webResults, sourceErrors })) return
 
     if (webResults.length === 0) {
-      store.updateTask(taskId, {
-        status: "done",
-        synthesis: sourceErrors.length > 0 ? sourceErrors.join("\n") : "No research sources found.",
-      })
-      onTaskFinished(pp, llmConfig, searchConfig)
+      if (sourceErrors.length > 0) {
+        updateTask({
+          status: "error",
+          error: `All selected research sources failed: ${sourceErrors.join("; ")}`,
+          synthesis: sourceErrors.join("\n"),
+        })
+      } else {
+        updateTask({
+          status: "done",
+          synthesis: "No research sources found.",
+        })
+      }
+      if (isResearchProjectActive(pp)) onTaskFinished(pp, llmConfig, searchConfig)
       return
     }
 
     // Step 2: LLM synthesis
-    store.updateTask(taskId, { status: "synthesizing" })
+    if (!updateTask({ status: "synthesizing" })) return
 
     const searchContext = webResults
       .map((r, i) => `[${i + 1}] **${r.title}** (${r.source})\n${r.snippet}`)
@@ -218,28 +249,33 @@ async function executeResearch(
       ],
       {
         onToken: (token) => {
+          if (!isResearchProjectActive(pp)) {
+            abortController.abort(new Error("Deep research task stopped because the active project changed."))
+            return
+          }
           accumulated += token
           // Update synthesis progressively so UI shows real-time text
           useResearchStore.getState().updateTask(taskId, { synthesis: accumulated })
         },
         onDone: () => {},
         onError: (err) => {
-          useResearchStore.getState().updateTask(taskId, {
+          updateTask({
             status: "error",
             error: err.message,
           })
         },
       },
+      abortController.signal,
     )
 
     // Check if errored during streaming
     if (useResearchStore.getState().tasks.find((t) => t.id === taskId)?.status === "error") {
-      onTaskFinished(pp, llmConfig, searchConfig)
+      if (isResearchProjectActive(pp)) onTaskFinished(pp, llmConfig, searchConfig)
       return
     }
 
     // Step 3: Save to wiki
-    store.updateTask(taskId, { status: "saving", synthesis: accumulated })
+    if (!updateTask({ status: "saving", synthesis: accumulated })) return
 
     const date = new Date().toISOString().slice(0, 10)
     const slug = topic.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 50)
@@ -275,16 +311,18 @@ async function executeResearch(
       "",
     ].join("\n")
 
+    if (!isResearchProjectActive(pp)) return
     await writeFile(filePath, pageContent)
     const savedPath = `wiki/queries/${fileName}`
 
-    useResearchStore.getState().updateTask(taskId, {
+    if (!updateTask({
       status: "done",
       savedPath,
-    })
+    })) return
 
     // Refresh tree
     try {
+      if (!isResearchProjectActive(pp)) return
       const tree = await listDirectory(pp)
       useWikiStore.getState().setFileTree(tree)
       useWikiStore.getState().bumpDataVersion()
@@ -293,18 +331,20 @@ async function executeResearch(
     }
 
     // Auto-ingest the research result to generate entities, concepts, cross-references
+    if (!isResearchProjectActive(pp)) return
     autoIngest(pp, `${pp}/${savedPath}`, llmConfig).catch((err) => {
       console.error("Failed to auto-ingest research result:", err)
     })
   } catch (err) {
+    if (!isResearchProjectActive(pp)) return
     const message = err instanceof Error ? err.message : String(err)
-    useResearchStore.getState().updateTask(taskId, {
+    updateTask({
       status: "error",
       error: message,
     })
   }
 
-  onTaskFinished(pp, llmConfig, searchConfig)
+  if (isResearchProjectActive(pp)) onTaskFinished(pp, llmConfig, searchConfig)
 }
 
 function onTaskFinished(

@@ -7,8 +7,9 @@
 import { listDirectory, readFile, writeFile, deleteFile } from "@/commands/fs"
 import { streamChat } from "@/lib/llm-client"
 import { normalizePath } from "@/lib/path-utils"
-import type { LlmConfig } from "@/stores/wiki-store"
+import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
+import { prefilterDedupCandidates } from "./dedup_embedding"
 import {
   detectDuplicateGroups,
   extractEntitySummary,
@@ -27,7 +28,7 @@ import { loadNotDuplicates } from "./dedup-storage"
  * the algorithm modules free of any LlmConfig knowledge.
  */
 export function buildDedupLlmCall(llmConfig: LlmConfig): DedupLlmCall {
-  return async (systemPrompt, userMessage, signal) => {
+  return async (systemPrompt, userMessage, signal, options) => {
     let result = ""
     let streamError: Error | null = null
     await new Promise<void>((resolve) => {
@@ -48,7 +49,11 @@ export function buildDedupLlmCall(llmConfig: LlmConfig): DedupLlmCall {
           },
         },
         signal,
-        { temperature: 0.1 },
+        {
+          temperature: 0.1,
+          reasoning: { mode: "off" },
+          ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+        },
       ).catch((err) => {
         streamError = err instanceof Error ? err : new Error(String(err))
         resolve()
@@ -139,8 +144,14 @@ export async function runDuplicateDetection(
   const summaries = await loadAllEntitySummaries(projectPath)
   if (summaries.length < 2) return []
   const notDup = await loadNotDuplicates(projectPath)
+  const filtered = await prefilterDedupCandidates(
+    summaries,
+    useWikiStore.getState().embeddingConfig,
+    options.signal,
+  )
+  if (filtered.summaries.length < 2) return []
   const llm = buildDedupLlmCall(llmConfig)
-  return detectDuplicateGroups(summaries, llm, {
+  return detectDuplicateGroups(filtered.summaries, llm, {
     signal: options.signal,
     notDuplicates: notDup,
   })

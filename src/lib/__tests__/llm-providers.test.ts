@@ -164,6 +164,11 @@ describe("parseGoogleLine — Gemini SSE parsing", () => {
     expect(parseGoogleLine(line)).toBe("Hello")
   })
 
+  it("accepts SSE data lines without a space after the colon", () => {
+    const line = 'data:{"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}'
+    expect(parseGoogleLine(line)).toBe("Hello")
+  })
+
   it("concatenates text across multiple parts in one event", () => {
     // Gemini 2.5/3.x reasoning models sometimes split output across
     // multiple parts in a single streaming chunk. The old parser only

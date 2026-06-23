@@ -104,6 +104,7 @@ export async function fetchEmbedding(
   text: string,
   cfg: EmbeddingConfig,
   maxRetries = 3,
+  options: { signal?: AbortSignal } = {},
 ): Promise<number[] | null> {
   if (!cfg.endpoint) return null
 
@@ -143,6 +144,7 @@ export async function fetchEmbedding(
         body: JSON.stringify(
           embeddingBody(cfg, current, { isGoogleNative, isDoubao, isDoubaoVision }),
         ),
+        signal: options.signal,
       })
 
       if (resp.ok) {

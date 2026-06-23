@@ -49,8 +49,8 @@ export function countReasoningCharsInLine(rawLine: string): number {
 
 export function extractReasoningTextFromLine(rawLine: string): string[] {
   const line = rawLine.trim()
-  if (!line.startsWith("data: ")) return []
-  const data = line.slice(6).trim()
+  if (!line.startsWith("data:")) return []
+  const data = line.slice(5).trim()
   if (!data || data === "[DONE]") return []
 
   try {

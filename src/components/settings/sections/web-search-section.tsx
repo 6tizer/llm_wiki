@@ -54,6 +54,14 @@ const SEARCH_PROVIDERS = [
 		keyPlaceholder: "Enter your Exa API key (exa.ai)",
 		needsApiKey: true,
 	},
+	{
+		id: "firecrawl",
+		label: "Firecrawl",
+		hint: "Web search with optional Firecrawl API key",
+		keyPlaceholder: "Optional Firecrawl API key (firecrawl.dev)",
+		needsApiKey: true,
+		apiKeyOptional: true,
+	},
 ] as const;
 
 export function WebSearchSection() {
@@ -252,6 +260,14 @@ export function WebSearchSection() {
 				{SEARCH_PROVIDERS.map((provider) => {
 					const override = resolvedConfig.providerConfigs?.[provider.id];
 					const isActive = resolvedConfig.provider === provider.id;
+					const providerLabel =
+						provider.id === "firecrawl"
+							? t("settings.sections.webSearch.firecrawlLabel")
+							: provider.label;
+					const providerHint =
+						provider.id === "firecrawl"
+							? t("settings.sections.webSearch.firecrawlHint")
+							: provider.hint;
 					const hasConfig =
 						provider.id === "searxng"
 							? !!override?.searXngUrl
@@ -299,7 +315,7 @@ export function WebSearchSection() {
 								>
 									<div className="flex items-center gap-2">
 										<span className="truncate text-sm font-medium">
-											{provider.label}
+											{providerLabel}
 										</span>
 										{hasConfig && !isActive && (
 											<span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -318,7 +334,7 @@ export function WebSearchSection() {
 										)}
 									</div>
 									<div className="mt-0.5 truncate text-xs text-muted-foreground">
-										{provider.hint}
+										{providerHint}
 									</div>
 								</button>
 
@@ -348,7 +364,11 @@ export function WebSearchSection() {
 								<div className="space-y-4 border-t bg-background/50 px-4 py-3">
 									{provider.needsApiKey ? (
 										<div className="space-y-2">
-											<Label>{t("settings.apiKey")}</Label>
+											<Label>
+												{provider.id === "firecrawl"
+													? t("settings.sections.webSearch.firecrawlApiKey")
+													: t("settings.apiKey")}
+											</Label>
 											<Input
 												type="password"
 												value={override?.apiKey ?? ""}
@@ -357,8 +377,17 @@ export function WebSearchSection() {
 														apiKey: e.target.value,
 													})
 												}
-												placeholder={provider.keyPlaceholder}
+												placeholder={
+													provider.id === "firecrawl"
+														? t("settings.sections.webSearch.firecrawlKeyPlaceholder")
+														: provider.keyPlaceholder
+												}
 											/>
+											{provider.id === "firecrawl" && (
+												<p className="text-xs text-muted-foreground">
+													{t("settings.sections.webSearch.firecrawlOptionalHint")}
+												</p>
+											)}
 											{provider.id === "ollama" && (
 												<p className="text-xs text-muted-foreground">
 													{t("settings.sections.webSearch.ollamaHint")}

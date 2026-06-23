@@ -163,6 +163,9 @@ export function hasConfiguredSearchProvider(config: SearchApiConfig): boolean {
 	if (resolved.provider === "ollama") {
 		return Boolean(resolved.apiKey?.trim());
 	}
+	if (resolved.provider === "firecrawl") {
+		return true;
+	}
 	return Boolean(resolved.apiKey?.trim());
 }
 
@@ -183,6 +186,7 @@ export async function webSearch(
 	query: string,
 	config: SearchApiConfig,
 	maxResults: number = 10,
+	signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
 	const resolved = resolveSearchConfig(config);
 	if (resolved.provider === "none") {
@@ -213,13 +217,14 @@ export async function webSearch(
 
 	switch (resolved.provider) {
 		case "tavily":
-			return tavilySearch(query, resolved.apiKey, maxResults);
+			return tavilySearch(query, resolved.apiKey, maxResults, signal);
 		case "serpapi":
 			return serpApiSearch(
 				query,
 				resolved.apiKey,
 				maxResults,
 				resolved.serpApiEngine ?? "google",
+				signal,
 			);
 		case "searxng":
 			return searXngSearch(
@@ -227,11 +232,14 @@ export async function webSearch(
 				resolved.searXngUrl ?? "",
 				maxResults,
 				resolved.searXngCategories ?? ["general"],
+				signal,
 			);
 		case "ollama":
-			return ollamaSearch(query, resolved.apiKey ?? "", maxResults);
+			return ollamaSearch(query, resolved.apiKey ?? "", maxResults, signal);
 		case "exa":
-			return exaSearch(query, resolved.apiKey, maxResults);
+			return exaSearch(query, resolved.apiKey, maxResults, signal);
+		case "firecrawl":
+			return firecrawlSearch(query, resolved.apiKey ?? "", maxResults, signal);
 		default:
 			throw new Error(`Unknown search provider: ${resolved.provider}`);
 	}
@@ -256,6 +264,7 @@ async function searXngSearch(
 	instanceUrl: string,
 	maxResults: number,
 	categories: SearXngCategory[],
+	signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
 	let endpoint: URL;
 	try {
@@ -279,6 +288,7 @@ async function searXngSearch(
 		response = await httpFetch(endpoint.toString(), {
 			method: "GET",
 			headers: { Accept: "application/json" },
+			signal,
 		});
 	} catch (err) {
 		if (isFetchNetworkError(err)) {
@@ -337,6 +347,7 @@ async function tavilySearch(
 	query: string,
 	apiKey: string,
 	maxResults: number,
+	signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
 	// Route through the Tauri HTTP plugin so future non-Tavily search
 	// providers (Serper, Exa, Brave, Google CSE, ...) with less friendly
@@ -354,6 +365,7 @@ async function tavilySearch(
 				search_depth: "advanced",
 				include_answer: false,
 			}),
+			signal,
 		});
 	} catch (err) {
 		if (isFetchNetworkError(err)) {
@@ -386,6 +398,7 @@ async function serpApiSearch(
 	apiKey: string,
 	maxResults: number,
 	engine: SerpApiEngine,
+	signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
 	const params = new URLSearchParams({
 		engine,
@@ -402,6 +415,7 @@ async function serpApiSearch(
 			{
 				method: "GET",
 				headers: { Accept: "application/json" },
+				signal,
 			},
 		);
 	} catch (err) {
@@ -486,6 +500,7 @@ async function ollamaSearch(
 	query: string,
 	apiKey: string,
 	maxResults: number,
+	signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
 	const trimmedApiKey = apiKey.trim();
 	if (!trimmedApiKey) {
@@ -510,6 +525,7 @@ async function ollamaSearch(
 				query,
 				max_results: maxResults,
 			}),
+			signal,
 		});
 	} catch (err) {
 		if (isFetchNetworkError(err)) {
@@ -553,6 +569,7 @@ async function exaSearch(
 	query: string,
 	apiKey: string,
 	maxResults: number,
+	signal?: AbortSignal,
 ): Promise<WebSearchResult[]> {
 	const httpFetch = await getHttpFetch();
 	let response: Response;
@@ -569,6 +586,7 @@ async function exaSearch(
 				numResults: maxResults,
 				contents: { text: true },
 			}),
+			signal,
 		});
 	} catch (err) {
 		if (isFetchNetworkError(err)) {
@@ -607,4 +625,100 @@ async function exaSearch(
 			};
 		},
 	);
+}
+
+async function firecrawlSearch(
+	query: string,
+	apiKey: string,
+	maxResults: number,
+	signal?: AbortSignal,
+): Promise<WebSearchResult[]> {
+	const headers: Record<string, string> = {
+		Accept: "application/json",
+		"Content-Type": "application/json",
+	};
+	const trimmedKey = apiKey.trim();
+	if (trimmedKey) {
+		headers.Authorization = `Bearer ${trimmedKey}`;
+	}
+
+	const httpFetch = await getHttpFetch();
+	let response: Response;
+	try {
+		response = await httpFetch("https://api.firecrawl.dev/v2/search", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				query,
+				limit: Math.max(1, Math.min(maxResults, 100)),
+				sources: ["web"],
+				scrapeOptions: { formats: [{ type: "markdown" }] },
+			}),
+			signal,
+		});
+	} catch (err) {
+		if (isFetchNetworkError(err)) {
+			throw new Error(
+				"Network error reaching api.firecrawl.dev. Check your connectivity and whether the Firecrawl API key is still valid.",
+			);
+		}
+		throw err;
+	}
+
+	if (!response.ok) {
+		throw new Error(await firecrawlErrorMessage(response));
+	}
+
+	const data = await response.json();
+	if (data?.success === false) {
+		throw new Error(`Firecrawl search failed: ${String(data.error ?? data.warning ?? "Unknown error")}`);
+	}
+
+	return normalizeFirecrawlResults(data, maxResults);
+}
+
+async function firecrawlErrorMessage(response: Response): Promise<string> {
+	const body = await response.text().catch(() => "");
+	const detail = body.trim() ? ` ${body.slice(0, 240)}` : "";
+	switch (response.status) {
+		case 401:
+		case 403:
+			return `Firecrawl search is not authorized. Add or check your Firecrawl API key in Settings.${detail}`;
+		case 402:
+			return `Firecrawl search quota or billing limit reached. Check your Firecrawl plan or credits.${detail}`;
+		case 429:
+			return `Firecrawl search rate limit reached. Wait a moment or add a Firecrawl API key in Settings.${detail}`;
+		default:
+			return `Firecrawl search failed (${response.status}):${detail || " Unknown error"}`;
+	}
+}
+
+function normalizeFirecrawlResults(data: {
+	data?: { web?: unknown[] } | unknown[];
+	results?: unknown[];
+}, maxResults: number): WebSearchResult[] {
+	const dataField = data.data;
+	const raw = Array.isArray(dataField)
+		? dataField
+		: Array.isArray(dataField?.web)
+			? dataField.web
+			: data.results ?? [];
+	return raw.slice(0, maxResults).map((item) => {
+		const r = item as {
+			title?: string;
+			description?: string;
+			snippet?: string;
+			markdown?: string;
+			url?: string;
+			sourceURL?: string;
+			metadata?: { sourceURL?: string; url?: string; title?: string; description?: string };
+		};
+		const url = r.url ?? r.sourceURL ?? r.metadata?.sourceURL ?? r.metadata?.url ?? "";
+		return {
+			title: r.title ?? r.metadata?.title ?? "Untitled",
+			url,
+			snippet: r.markdown ?? r.description ?? r.snippet ?? r.metadata?.description ?? "",
+			source: hostnameFromUrl(url),
+		};
+	}).filter((item) => item.url.length > 0);
 }

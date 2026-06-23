@@ -360,6 +360,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     useResearchStore.setState({
       tasks: [{
         id: "research-42",
+        projectPath: "/project",
         topic: "membrane bioreactor",
         status: "done",
         searchQueries: ["MBR winter"],
