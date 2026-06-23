@@ -112,6 +112,7 @@ type SpawnPayload = Record<string, unknown> & {
 	messages: ChatMessage[];
 	isolateLocalConfig: boolean;
 	workingDirectory: string;
+	timeoutMinutes?: number;
 };
 
 /**
@@ -223,11 +224,19 @@ export async function streamClaudeCodeCli(
 			}
 		});
 
-		unlistenDone = await listen<{ code: number | null; stderr: string }>(
+		unlistenDone = await listen<{
+			code: number | null;
+			stderr: string;
+			timedOut?: boolean;
+		}>(
 			`claude-cli:${streamId}:done`,
 			(event) => {
 				const code = event.payload?.code;
 				const stderr = event.payload?.stderr?.trim() ?? "";
+				if (event.payload?.timedOut === true) {
+					finishWith(() => onError(new Error(buildTimeoutError(stderr))));
+					return;
+				}
 				if (code !== null && code !== undefined && code !== 0) {
 					finishWith(() =>
 						onError(
@@ -251,6 +260,7 @@ export async function streamClaudeCodeCli(
 			messages,
 			isolateLocalConfig: config.localCliIsolation === true,
 			workingDirectory,
+			timeoutMinutes: config.claudeCliTimeoutMinutes,
 		};
 		await invoke("claude_cli_spawn", payload);
 	} catch (err) {
@@ -272,6 +282,11 @@ export async function streamClaudeCodeCli(
 	} finally {
 		signal?.removeEventListener("abort", abortListener);
 	}
+}
+
+function buildTimeoutError(stderr: string): string {
+	if (stderr) return stderr;
+	return "Claude Code CLI timed out.";
 }
 
 /**

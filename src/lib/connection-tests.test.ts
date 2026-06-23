@@ -103,7 +103,7 @@ describe("provider connection tests", () => {
     )
   })
 
-  it("forces local CLI isolation without adding a timeout for Claude Code connection tests", async () => {
+  it("forces local CLI isolation and a 1-minute timeout for Claude Code connection tests", async () => {
     streamChatMock.mockImplementationOnce(async (_cfg, _messages, callbacks) => {
       callbacks.onToken("OK")
       callbacks.onDone()
@@ -120,6 +120,7 @@ describe("provider connection tests", () => {
       expect.objectContaining({
         provider: "claude-code",
         localCliIsolation: true,
+        claudeCliTimeoutMinutes: 1,
       }),
     )
     expect(passedConfig.codexCliTimeoutMinutes).toBeUndefined()
@@ -177,6 +178,7 @@ describe("provider connection tests", () => {
       expect.objectContaining({
         provider: "claude-code",
         localCliIsolation: true,
+        claudeCliTimeoutMinutes: 1,
       }),
       expect.any(Array),
       expect.any(Object),

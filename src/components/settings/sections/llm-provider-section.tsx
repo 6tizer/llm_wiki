@@ -129,6 +129,7 @@ function PresetRow({
   const context = ov.maxContextSize ?? preset.suggestedContextSize ?? 131072
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
   const localCliIsolation = ov.localCliIsolation ?? false
+  const claudeCliTimeoutMinutes = ov.claudeCliTimeoutMinutes
   const codexCliTimeoutMinutes = ov.codexCliTimeoutMinutes ?? 10
   const [testState, setTestState] = useState<ProviderTestState>({ kind: "idle" })
   const hasConfig =
@@ -138,6 +139,7 @@ function PresetRow({
     !!ov.azureApiVersion ||
     !!ov.azureModelFamily ||
     ov.localCliIsolation !== undefined ||
+    ov.claudeCliTimeoutMinutes !== undefined ||
     ov.codexCliTimeoutMinutes !== undefined
   // Local CLI providers authenticate via their own existing login state
   // (inherited by the spawned subprocess), so no API key field is shown.
@@ -156,6 +158,7 @@ function PresetRow({
       azureModelFamily,
       baseUrl,
       context,
+      claudeCliTimeoutMinutes,
       codexCliTimeoutMinutes,
       localCliIsolation,
       model,
@@ -350,6 +353,32 @@ function PresetRow({
                   </span>
                 </span>
               </label>
+
+              {preset.provider === "claude-code" && (
+                <div className="space-y-2 pt-1">
+                  <Label>{t("settings.sections.llm.claudeCliTimeout")}</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={240}
+                    value={claudeCliTimeoutMinutes ?? ""}
+                    onChange={(e) => {
+                      const raw = e.target.value.trim()
+                      const n = Number(raw)
+                      onChange({
+                        claudeCliTimeoutMinutes:
+                          raw === "" || !Number.isFinite(n)
+                            ? undefined
+                            : Math.max(1, Math.min(240, Math.round(n))),
+                      })
+                    }}
+                    placeholder="30"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.sections.llm.claudeCliTimeoutHint")}
+                  </p>
+                </div>
+              )}
 
               {preset.provider === "codex-cli" && (
                 <div className="space-y-2">

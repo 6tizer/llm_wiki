@@ -121,6 +121,29 @@ describe("resolveConfig", () => {
     expect(resolved.codexCliTimeoutMinutes).toBe(45)
   })
 
+  it("carries Claude Code timeout overrides without setting a default", () => {
+    const preset: LlmPreset = {
+      id: "claude-code",
+      label: "Claude Code",
+      provider: "claude-code",
+      defaultModel: "claude-sonnet-4-20250514",
+    }
+
+    const resolved = resolveConfig(
+      preset,
+      { claudeCliTimeoutMinutes: 30 },
+      fallbackConfig({ claudeCliTimeoutMinutes: 90 }),
+    )
+    const disabled = resolveConfig(
+      preset,
+      undefined,
+      fallbackConfig({ claudeCliTimeoutMinutes: 90 }),
+    )
+
+    expect(resolved.claudeCliTimeoutMinutes).toBe(30)
+    expect(disabled.claudeCliTimeoutMinutes).toBeUndefined()
+  })
+
   it("does not leak CLI settings from fallback when no override is saved", () => {
     const preset: LlmPreset = {
       id: "claude-code",
@@ -132,10 +155,15 @@ describe("resolveConfig", () => {
     const resolved = resolveConfig(
       preset,
       undefined,
-      fallbackConfig({ localCliIsolation: true, codexCliTimeoutMinutes: 45 }),
+      fallbackConfig({
+        localCliIsolation: true,
+        claudeCliTimeoutMinutes: 30,
+        codexCliTimeoutMinutes: 45,
+      }),
     )
 
     expect(resolved.localCliIsolation).toBe(false)
+    expect(resolved.claudeCliTimeoutMinutes).toBeUndefined()
     expect(resolved.codexCliTimeoutMinutes).toBeUndefined()
   })
 })

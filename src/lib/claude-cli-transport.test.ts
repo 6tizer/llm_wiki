@@ -76,7 +76,40 @@ describe("streamClaudeCodeCli", () => {
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
 
-	it("passes isolation and active project root to the Rust command", async () => {
+	it("passes isolation, timeout, and active project root to the Rust command", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamClaudeCodeCli(
+			{
+				provider: "claude-code",
+				apiKey: "",
+				model: "claude-sonnet-4-20250514",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+				localCliIsolation: true,
+				claudeCliTimeoutMinutes: 30,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).toHaveBeenCalledWith(
+			"claude_cli_spawn",
+			expect.objectContaining({
+				model: "claude-sonnet-4-20250514",
+				isolateLocalConfig: true,
+				timeoutMinutes: 30,
+				workingDirectory: "/tmp/llm-wiki-project",
+			}),
+		);
+	});
+
+	it("does not enable a Rust timeout when the config leaves it empty", async () => {
 		const callbacks = {
 			onToken: vi.fn(),
 			onDone: vi.fn(),
@@ -97,12 +130,97 @@ describe("streamClaudeCodeCli", () => {
 			callbacks,
 		);
 
-		expect(tauriMocks.invoke).toHaveBeenCalledWith(
-			"claude_cli_spawn",
-			expect.objectContaining({
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			timeoutMinutes?: number;
+		};
+		expect(payload.timeoutMinutes).toBeUndefined();
+	});
+
+	it("surfaces timed-out done payloads as timeout-specific errors", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamClaudeCodeCli(
+			{
+				provider: "claude-code",
+				apiKey: "",
 				model: "claude-sonnet-4-20250514",
-				isolateLocalConfig: true,
-				workingDirectory: "/tmp/llm-wiki-project",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`claude-cli:${payload.streamId}:done`, {
+			code: -1,
+			timedOut: true,
+			stderr: "Claude Code CLI timed out after 1 minute.",
+		});
+
+		await stream;
+
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Claude Code CLI timed out after 1 minute.",
+			}),
+		);
+		expect(callbacks.onError.mock.calls[0]?.[0].message).not.toContain(
+			"code -1",
+		);
+	});
+
+	it("keeps ordinary code -1 done payloads on the generic exit-code path", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamClaudeCodeCli(
+			{
+				provider: "claude-code",
+				apiKey: "",
+				model: "claude-sonnet-4-20250514",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`claude-cli:${payload.streamId}:done`, {
+			code: -1,
+			timedOut: false,
+			stderr: "manual failure",
+		});
+
+		await stream;
+
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "claude CLI exited with code -1: manual failure",
 			}),
 		);
 	});

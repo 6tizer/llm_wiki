@@ -135,5 +135,6 @@ function configForProviderTest(cfg: LlmConfig): LlmConfig {
   return {
     ...cfg,
     localCliIsolation: true,
+    claudeCliTimeoutMinutes: 1,
   }
 }

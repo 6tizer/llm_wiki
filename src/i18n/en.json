@@ -387,6 +387,8 @@
         "testingFunction": "Testing function…",
         "localCliIsolation": "Isolate local CLI config",
         "localCliIsolationHint": "Run provider tests and chat without user-level CLI rules, MCP config, tools, slash commands, or sessions.",
+        "claudeCliTimeout": "Claude Code CLI timeout (minutes)",
+        "claudeCliTimeoutHint": "Optional. Empty disables the Rust-side timeout. Range is 1-240 minutes.",
         "codexCliTimeout": "Codex CLI timeout (minutes)",
         "codexCliTimeoutHint": "Clamp range is 1-240 minutes. Default is 10.",
         "deploymentName": "Deployment name",

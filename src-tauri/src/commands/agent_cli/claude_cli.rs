@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use super::cli_resolver::{child_path_env, find_cli_command};
 
@@ -35,7 +37,11 @@ use super::cli_resolver::{child_path_env, find_cli_command};
 #[derive(Default)]
 pub struct ClaudeCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
+    timeout_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
+
+const MIN_CLAUDE_SPAWN_TIMEOUT_MINUTES: u64 = 1;
+const MAX_CLAUDE_SPAWN_TIMEOUT_MINUTES: u64 = 240;
 
 #[derive(Serialize)]
 pub struct DetectResult {
@@ -230,6 +236,7 @@ pub async fn claude_cli_spawn(
     messages: Vec<ClaudeMessage>,
     isolate_local_config: bool,
     working_directory: Option<String>,
+    timeout_minutes: Option<u64>,
 ) -> Result<(), String> {
     // Build the turn list: fold any system messages into a preamble on
     // the first user turn rather than using a CLI flag, because
@@ -329,6 +336,25 @@ pub async fn claude_cli_spawn(
     state.children.lock().await.insert(stream_id.clone(), child);
 
     let children = Arc::clone(&state.children);
+    let timeout_tasks = Arc::clone(&state.timeout_tasks);
+    let timeout_minutes = claude_spawn_timeout_minutes(timeout_minutes);
+    let timed_out = Arc::new(AtomicBool::new(false));
+    if let Some(timeout_minutes) = timeout_minutes {
+        let children_for_timeout = Arc::clone(&children);
+        let stream_id_for_timeout = stream_id.clone();
+        let timed_out_for_timeout = Arc::clone(&timed_out);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(timeout_minutes * 60)).await;
+            kill_child_for_claude_timeout(
+                &children_for_timeout,
+                &stream_id_for_timeout,
+                &timed_out_for_timeout,
+            )
+            .await;
+        });
+        timeout_tasks.lock().await.insert(stream_id.clone(), task);
+    }
+
     let app_for_task = app.clone();
     let stream_id_task = stream_id.clone();
     let topic = format!("claude-cli:{stream_id}");
@@ -374,6 +400,7 @@ pub async fn claude_cli_spawn(
         // Wait for the child to fully exit so we can report its code.
         // Don't hold the map lock across .wait() — kill could race.
         let child_opt = children.lock().await.remove(&stream_id_task);
+        abort_claude_timeout_task(&timeout_tasks, &stream_id_task).await;
         let exit_code = if let Some(mut child) = child_opt {
             match child.wait().await {
                 Ok(status) => status.code(),
@@ -385,17 +412,94 @@ pub async fn claude_cli_spawn(
         };
 
         let stderr_text = stderr_task.await.unwrap_or_default();
+        let timed_out = timed_out.load(Ordering::SeqCst);
+        let stderr_text = if timed_out {
+            append_claude_timeout_message(stderr_text, timeout_minutes.unwrap_or(0))
+        } else {
+            stderr_text
+        };
 
         let _ = app.emit(
             &done_topic,
-            serde_json::json!({
-                "code": exit_code,
-                "stderr": stderr_text,
-            }),
+            claude_done_payload(exit_code, stderr_text, timed_out),
         );
     });
 
     Ok(())
+}
+
+fn claude_spawn_timeout_minutes(value: Option<u64>) -> Option<u64> {
+    value.map(|minutes| {
+        minutes.clamp(
+            MIN_CLAUDE_SPAWN_TIMEOUT_MINUTES,
+            MAX_CLAUDE_SPAWN_TIMEOUT_MINUTES,
+        )
+    })
+}
+
+fn claude_timeout_message(timeout_minutes: u64) -> String {
+    let unit = if timeout_minutes == 1 {
+        "minute"
+    } else {
+        "minutes"
+    };
+    format!("Claude Code CLI timed out after {timeout_minutes} {unit}.")
+}
+
+fn append_claude_timeout_message(mut stderr: String, timeout_minutes: u64) -> String {
+    if !stderr.is_empty() {
+        stderr.push('\n');
+    }
+    stderr.push_str(&claude_timeout_message(timeout_minutes));
+    stderr
+}
+
+async fn abort_claude_timeout_task(
+    timeout_tasks: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    stream_id: &str,
+) -> bool {
+    if let Some(task) = timeout_tasks.lock().await.remove(stream_id) {
+        task.abort();
+        true
+    } else {
+        false
+    }
+}
+
+async fn kill_child_for_claude_timeout(
+    children: &Arc<Mutex<HashMap<String, Child>>>,
+    stream_id: &str,
+    timed_out: &AtomicBool,
+) -> bool {
+    let mut children = children.lock().await;
+    let Some(child) = children.get_mut(stream_id) else {
+        return false;
+    };
+
+    match child.try_wait() {
+        Ok(Some(_status)) => false,
+        Ok(None) => {
+            let _ = child.start_kill();
+            timed_out.store(true, Ordering::SeqCst);
+            true
+        }
+        Err(e) => {
+            eprintln!("[claude-cli] timeout watchdog failed to inspect child status: {e}");
+            false
+        }
+    }
+}
+
+fn claude_done_payload(
+    exit_code: Option<i32>,
+    stderr: String,
+    timed_out: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "code": if timed_out { Some(-1) } else { exit_code },
+        "stderr": stderr,
+        "timedOut": timed_out,
+    })
 }
 
 fn build_claude_cli_args(model: &str, isolate_local_config: bool) -> Vec<String> {
@@ -481,6 +585,7 @@ pub async fn claude_cli_kill(
         // wait future elsewhere when it can. Dropping the handle is
         // enough; kill_on_drop ensures the SIGKILL is sent.
     }
+    abort_claude_timeout_task(&state.timeout_tasks, &stream_id).await;
     Ok(())
 }
 
@@ -598,6 +703,192 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "--prompt-suggestions" && pair[1] == "false"));
+    }
+
+    #[test]
+    fn claude_spawn_timeout_minutes_is_disabled_by_default_and_clamps_when_set() {
+        assert_eq!(claude_spawn_timeout_minutes(None), None);
+        assert_eq!(claude_spawn_timeout_minutes(Some(0)), Some(1));
+        assert_eq!(claude_spawn_timeout_minutes(Some(42)), Some(42));
+        assert_eq!(claude_spawn_timeout_minutes(Some(999)), Some(240));
+    }
+
+    #[test]
+    fn claude_done_payload_marks_timeout_and_keeps_legacy_code() {
+        let payload = claude_done_payload(Some(0), claude_timeout_message(1), true);
+
+        assert_eq!(payload["timedOut"].as_bool(), Some(true));
+        assert_eq!(payload["code"].as_i64(), Some(-1));
+        assert_eq!(
+            payload["stderr"],
+            "Claude Code CLI timed out after 1 minute."
+        );
+    }
+
+    #[test]
+    fn claude_done_payload_preserves_non_timeout_exit_code() {
+        let payload = claude_done_payload(Some(-1), "bad flags".to_string(), false);
+
+        assert_eq!(payload["timedOut"].as_bool(), Some(false));
+        assert_eq!(payload["code"].as_i64(), Some(-1));
+        assert_eq!(payload["stderr"], "bad flags");
+    }
+
+    #[test]
+    fn claude_timeout_message_uses_singular_minute() {
+        assert_eq!(
+            claude_timeout_message(1),
+            "Claude Code CLI timed out after 1 minute."
+        );
+        assert_eq!(
+            claude_timeout_message(2),
+            "Claude Code CLI timed out after 2 minutes."
+        );
+    }
+
+    #[test]
+    fn append_claude_timeout_message_keeps_stderr_diagnostics() {
+        assert_eq!(
+            append_claude_timeout_message("existing".to_string(), 2),
+            "existing\nClaude Code CLI timed out after 2 minutes."
+        );
+        assert_eq!(
+            append_claude_timeout_message(String::new(), 2),
+            "Claude Code CLI timed out after 2 minutes."
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_claude_timeout_task_removes_task_without_marking_timeout() {
+        let timeout_tasks = Arc::new(Mutex::new(HashMap::new()));
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timed_out_for_task = Arc::clone(&timed_out);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            timed_out_for_task.store(true, Ordering::SeqCst);
+        });
+
+        timeout_tasks
+            .lock()
+            .await
+            .insert("stream-1".to_string(), task);
+
+        assert!(abort_claude_timeout_task(&timeout_tasks, "stream-1").await);
+        assert!(timeout_tasks.lock().await.is_empty());
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        assert!(!timed_out.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn manual_kill_cleanup_does_not_mark_done_payload_as_timed_out() {
+        let timeout_tasks = Arc::new(Mutex::new(HashMap::new()));
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timed_out_for_task = Arc::clone(&timed_out);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            timed_out_for_task.store(true, Ordering::SeqCst);
+        });
+
+        timeout_tasks
+            .lock()
+            .await
+            .insert("stream-1".to_string(), task);
+        assert!(abort_claude_timeout_task(&timeout_tasks, "stream-1").await);
+
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        let payload = claude_done_payload(
+            None,
+            "Process was killed by user.".to_string(),
+            timed_out.load(Ordering::SeqCst),
+        );
+
+        assert_eq!(payload["timedOut"].as_bool(), Some(false));
+        assert!(payload["code"].is_null());
+        assert_eq!(payload["stderr"], "Process was killed by user.");
+    }
+
+    #[tokio::test]
+    async fn timeout_watchdog_without_child_does_not_mark_timed_out() {
+        let children = Arc::new(Mutex::new(HashMap::new()));
+        let timed_out = AtomicBool::new(false);
+
+        assert!(!kill_child_for_claude_timeout(&children, "stream-1", &timed_out).await);
+        assert!(!timed_out.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn timeout_watchdog_exited_child_does_not_mark_timed_out() {
+        let children = Arc::new(Mutex::new(HashMap::new()));
+        let child = spawn_quick_exit_child().expect("spawn quick child");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        children.lock().await.insert("stream-1".to_string(), child);
+        let timed_out = AtomicBool::new(false);
+
+        assert!(!kill_child_for_claude_timeout(&children, "stream-1", &timed_out).await);
+        assert!(!timed_out.load(Ordering::SeqCst));
+        assert!(children.lock().await.contains_key("stream-1"));
+
+        let mut child = children
+            .lock()
+            .await
+            .remove("stream-1")
+            .expect("child remains available for cleanup");
+        let status = child.wait().await.expect("reap child");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn timeout_watchdog_kills_running_child_but_leaves_it_for_reap() {
+        let children = Arc::new(Mutex::new(HashMap::new()));
+        let child = spawn_sleep_child().expect("spawn sleep child");
+        children.lock().await.insert("stream-1".to_string(), child);
+        let timed_out = AtomicBool::new(false);
+
+        assert!(kill_child_for_claude_timeout(&children, "stream-1", &timed_out).await);
+        assert!(timed_out.load(Ordering::SeqCst));
+        assert!(children.lock().await.contains_key("stream-1"));
+
+        let mut child = children
+            .lock()
+            .await
+            .remove("stream-1")
+            .expect("child remains available for wait");
+        let _ = child.wait().await.expect("reap killed child");
+    }
+
+    fn spawn_quick_exit_child() -> Result<Child, std::io::Error> {
+        let mut cmd = platform_shell_command("exit 0");
+        cmd.spawn()
+    }
+
+    fn spawn_sleep_child() -> Result<Child, std::io::Error> {
+        let mut cmd = platform_shell_command(platform_sleep_command());
+        cmd.spawn()
+    }
+
+    #[cfg(unix)]
+    fn platform_shell_command(script: &str) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(script);
+        cmd
+    }
+
+    #[cfg(windows)]
+    fn platform_shell_command(script: &str) -> Command {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(script);
+        suppress_windows_console(&mut cmd);
+        cmd
+    }
+
+    #[cfg(unix)]
+    fn platform_sleep_command() -> &'static str {
+        "sleep 5"
+    }
+
+    #[cfg(windows)]
+    fn platform_sleep_command() -> &'static str {
+        "ping -n 6 127.0.0.1 >NUL"
     }
 
     #[tokio::test]
