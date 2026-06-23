@@ -95,7 +95,14 @@ export async function collectResearchSources(
     }
   }
   if (useAnyTxt) {
-    calls.push(deps.anyTxtSearch(queries, resolvedSearchConfig.anyTxt, options.llmConfig, 15, projectPath).then((results) => ({ results })))
+    calls.push(deps.anyTxtSearch(
+      queries,
+      resolvedSearchConfig.anyTxt,
+      options.llmConfig,
+      15,
+      projectPath,
+      options.signal,
+    ).then((results) => ({ results })))
   }
 
   const settled = await Promise.allSettled(calls)

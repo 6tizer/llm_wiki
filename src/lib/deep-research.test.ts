@@ -57,6 +57,7 @@ describe("collectResearchSources", () => {
   it("uses only AnyTXT when source mode is anytxt", async () => {
     const webSearch = vi.fn().mockResolvedValue([webResult])
     const anyTxtSearch = vi.fn().mockResolvedValue([localResult])
+    const controller = new AbortController()
 
     const out = await collectResearchSources(
       ["alpha"],
@@ -68,11 +69,13 @@ describe("collectResearchSources", () => {
       }),
       "/project",
       { webSearch, anyTxtSearch },
+      { signal: controller.signal },
     )
 
     expect(webSearch).not.toHaveBeenCalled()
     expect(anyTxtSearch).toHaveBeenCalledTimes(1)
     expect(anyTxtSearch.mock.calls[0][0]).toEqual(["alpha"])
+    expect(anyTxtSearch.mock.calls[0][5]).toBe(controller.signal)
     expect(out.results).toEqual([localResult])
   })
 
@@ -80,6 +83,7 @@ describe("collectResearchSources", () => {
     const duplicate = { ...localResult, url: webResult.url }
     const webSearch = vi.fn().mockResolvedValue([webResult])
     const anyTxtSearch = vi.fn().mockResolvedValue([duplicate, localResult])
+    const controller = new AbortController()
 
     const out = await collectResearchSources(
       ["alpha"],
@@ -91,10 +95,13 @@ describe("collectResearchSources", () => {
       }),
       "/project",
       { webSearch, anyTxtSearch },
+      { signal: controller.signal },
     )
 
     expect(webSearch).toHaveBeenCalledTimes(1)
     expect(anyTxtSearch).toHaveBeenCalledTimes(1)
+    expect(webSearch.mock.calls[0][3]).toBe(controller.signal)
+    expect(anyTxtSearch.mock.calls[0][5]).toBe(controller.signal)
     expect(out.results).toEqual([webResult, localResult])
   })
 

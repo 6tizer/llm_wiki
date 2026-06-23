@@ -6,6 +6,7 @@ import {
   normalizeAnyTxtConfig,
   parseAnyTxtQueryRewrite,
   prepareAnyTxtQueries,
+  rewriteAnyTxtQueries,
 } from "./anytxt-search"
 
 const streamChatMock = vi.hoisted(() => vi.fn())
@@ -31,6 +32,12 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
     headers: { "Content-Type": "application/json" },
     ...init,
   })
+}
+
+function abortError(message = "cancelled"): Error {
+  const err = new Error(message)
+  err.name = "AbortError"
+  return err
 }
 
 describe("anyTxtSearch", () => {
@@ -288,6 +295,70 @@ describe("anyTxtSearch", () => {
     await expect(anyTxtSearch("alpha", { endpoint: "http://127.0.0.1:9920" }))
       .rejects.toThrow("Check that ATGUI.exe is running")
   })
+
+  it("passes AbortSignal to AnyTXT fetch calls", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ result: { items: [] } }))
+    const controller = new AbortController()
+
+    await anyTxtSearch("alpha", { endpoint: "http://127.0.0.1:9920" }, 5, "/project", controller.signal)
+
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal)
+  })
+
+  it("rejects before calling AnyTXT when already aborted", async () => {
+    const controller = new AbortController()
+    controller.abort(new Error("cancelled before search"))
+
+    await expect(anyTxtSearch("alpha", { endpoint: "http://127.0.0.1:9920" }, 5, "/project", controller.signal))
+      .rejects.toThrow("cancelled before search")
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("does not swallow AbortError from fragment lookup", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        result: {
+          items: [
+            { fid: "1", path: "/tmp/a.md", snippet: "fallback snippet" },
+          ],
+        },
+      }))
+      .mockRejectedValueOnce(abortError("fragment cancelled"))
+
+    await expect(anyTxtSearch("alpha", { endpoint: "http://127.0.0.1:9920" }))
+      .rejects.toThrow("fragment cancelled")
+  })
+
+  it("stops the serial fragment loop after an abort", async () => {
+    const controller = new AbortController()
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        result: {
+          items: [
+            { fid: "1", path: "/tmp/a.md", snippet: "a fallback" },
+            { fid: "2", path: "/tmp/b.md", snippet: "b fallback" },
+          ],
+        },
+      }))
+      .mockImplementationOnce(async () => {
+        controller.abort(new Error("stop after first fragment"))
+        return jsonResponse({ result: { output: { text: "first fragment" } } })
+      })
+
+    await expect(anyTxtSearch(
+      "alpha",
+      { endpoint: "http://127.0.0.1:9920" },
+      5,
+      "/project",
+      controller.signal,
+    )).rejects.toThrow("stop after first fragment")
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      method: "ATRpcServer.Searcher.V1.GetFragment",
+      params: { input: { fid: "1", pattern: "alpha" } },
+    })
+  })
 })
 
 describe("AnyTXT query rewrite", () => {
@@ -322,6 +393,52 @@ describe("AnyTXT query rewrite", () => {
     const queries = await prepareAnyTxtQueries(["how did the project handle winter ammonia?"], llmConfig)
 
     expect(queries).toEqual(["how did the project handle winter ammonia?"])
+  })
+
+  it("passes AbortSignal to query rewrite streaming", async () => {
+    const controller = new AbortController()
+    streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const handlers = args[2] as { onToken?: (token: string) => void; onDone?: () => void }
+      handlers.onToken?.('["local keywords"]')
+      handlers.onDone?.()
+    })
+
+    await rewriteAnyTxtQueries(["natural language question"], llmConfig, controller.signal)
+
+    const lastCall = streamChatMock.mock.calls[streamChatMock.mock.calls.length - 1]
+    expect(lastCall[3]).toBe(controller.signal)
+  })
+
+  it("does not fall back to original queries when rewrite is aborted", async () => {
+    streamChatMock.mockRejectedValueOnce(abortError("rewrite cancelled"))
+
+    await expect(prepareAnyTxtQueries(["natural language question"], llmConfig))
+      .rejects.toThrow("rewrite cancelled")
+  })
+
+  it("does not fall back when prepare sees streamChat finish after abort", async () => {
+    const controller = new AbortController()
+    streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const handlers = args[2] as { onDone?: () => void }
+      controller.abort(new Error("prepare cancelled"))
+      handlers.onDone?.()
+    })
+
+    await expect(prepareAnyTxtQueries(["natural language question"], llmConfig, controller.signal))
+      .rejects.toThrow("prepare cancelled")
+  })
+
+  it("does not return rewritten queries when rewrite sees streamChat finish after abort", async () => {
+    const controller = new AbortController()
+    streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const handlers = args[2] as { onToken?: (token: string) => void; onDone?: () => void }
+      handlers.onToken?.('["local keywords"]')
+      controller.abort(new Error("rewrite finished cancelled"))
+      handlers.onDone?.()
+    })
+
+    await expect(rewriteAnyTxtQueries(["natural language question"], llmConfig, controller.signal))
+      .rejects.toThrow("rewrite finished cancelled")
   })
 
   it("searches rewritten queries through the smart AnyTXT entry point", async () => {

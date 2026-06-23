@@ -24,8 +24,8 @@ interface ResearchState {
   updateTask: (id: string, updates: Partial<ResearchTask>) => void
   removeTask: (id: string) => void
   setPanelOpen: (open: boolean) => void
-  getRunningCount: (projectPath?: string) => number
-  getNextQueued: (projectPath?: string) => ResearchTask | undefined
+  getRunningCount: (projectPath: string) => number
+  getNextQueued: (projectPath: string) => ResearchTask | undefined
 }
 
 let counter = 0
@@ -72,7 +72,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
   getRunningCount: (projectPath) => {
     const { tasks } = get()
     return tasks.filter((t) =>
-      (projectPath === undefined || t.projectPath === projectPath) &&
+      t.projectPath === projectPath &&
       (t.status === "searching" || t.status === "synthesizing" || t.status === "saving")
     ).length
   },
@@ -81,7 +81,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     const { tasks } = get()
     return tasks.find((t) =>
       t.status === "queued" &&
-      (projectPath === undefined || t.projectPath === projectPath)
+      t.projectPath === projectPath
     )
   },
 }))
