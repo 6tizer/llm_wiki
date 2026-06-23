@@ -70,8 +70,8 @@ const JSON_CONTENT_TYPE = "application/json"
  * Origin header for local-LLM endpoints (Ollama, LM Studio, llama.cpp
  * server, LocalAI, vLLM, …).
  *
- * Always sets `Origin: http://localhost` regardless of where the
- * actual server is. Two interlocking reasons:
+ * Ollama always gets this header regardless of where the actual
+ * server is. Two interlocking reasons:
  *
  *   1. We MUST override the platform default. `@tauri-apps/plugin-
  *      http` v2.5.x auto-injects the webview's own origin
@@ -94,11 +94,10 @@ const JSON_CONTENT_TYPE = "application/json"
  * `http://localhost` is unconditionally in Ollama's default
  * OLLAMA_ORIGINS list (`http://localhost`, `http://localhost:*`,
  * `http://127.0.0.1*`, etc.). LM Studio / llama.cpp / vLLM /
- * LocalAI don't check Origin at all, so the value is ignored
- * there. The header is purely a CORS-allowlist signal — semantic
- * "where this request came from" is meaningless here because the
- * server uses API keys (or no auth), not origin, for actual
- * permission checks.
+ * LocalAI usually don't check Origin. For custom OpenAI-compatible
+ * endpoints we therefore send this header only to local/LAN hosts,
+ * so public cloud API gateways don't receive a fake localhost
+ * origin they did not ask for.
  *
  * Users who actively tightened OLLAMA_ORIGINS to remove localhost
  * (rare) need to re-add `http://localhost` to their server config;
@@ -116,6 +115,44 @@ const JSON_CONTENT_TYPE = "application/json"
  */
 function localLlmOriginHeader(): Record<string, string> {
   return { Origin: "http://localhost" }
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".")
+  if (parts.length !== 4) return false
+  const octets = parts.map((part) => {
+    if (!/^\d+$/.test(part)) return Number.NaN
+    return Number(part)
+  })
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false
+  }
+  const [a, b] = octets
+  return (
+    a === 10 ||
+    a === 127 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  )
+}
+
+function isLocalOrLanHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "")
+  if (normalized === "localhost" || normalized.endsWith(".localhost")) return true
+  // Treat mDNS-style names as local/LAN for local LLM servers.
+  if (normalized.endsWith(".local")) return true
+  if (normalized === "::1") return true
+  return isPrivateIpv4(normalized)
+}
+
+function shouldSendLocalLlmOrigin(endpoint: string): boolean {
+  const trimmed = endpoint.trim()
+  if (trimmed === "") return false
+  try {
+    return isLocalOrLanHostname(new URL(trimmed).hostname)
+  } catch {
+    return false
+  }
 }
 
 function parseOpenAiLine(line: string): string | null {
@@ -777,9 +814,10 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
               : { Authorization: `Bearer ${apiKey}` }
             : {}),
           // Local OpenAI-compatible servers (LM Studio, llama.cpp,
-          // vLLM, LocalAI) often share Ollama's CORS sensitivity.
-          // Same rationale as the `ollama` branch above.
-          ...(azure ? {} : localLlmOriginHeader()),
+          // vLLM, LocalAI) can share Ollama's CORS sensitivity, but
+          // public cloud OpenAI-compatible gateways should not receive
+          // a synthetic localhost Origin.
+          ...(!azure && shouldSendLocalLlmOrigin(base) ? localLlmOriginHeader() : {}),
         },
         buildBody: (messages, overrides) => {
           const body = buildOpenAiCompatibleBody(config, messages, overrides)
