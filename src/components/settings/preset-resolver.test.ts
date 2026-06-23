@@ -102,4 +102,40 @@ describe("resolveConfig", () => {
     expect(resolved.azureApiVersion).toBe("2025-01-01-preview")
     expect(resolved.azureModelFamily).toBe("gpt5")
   })
+
+  it("carries local CLI isolation and Codex timeout overrides", () => {
+    const preset: LlmPreset = {
+      id: "codex-cli",
+      label: "Codex CLI",
+      provider: "codex-cli",
+      defaultModel: "gpt-5.1-codex-mini",
+    }
+
+    const resolved = resolveConfig(
+      preset,
+      { localCliIsolation: true, codexCliTimeoutMinutes: 45 },
+      fallbackConfig({ localCliIsolation: false, codexCliTimeoutMinutes: 10 }),
+    )
+
+    expect(resolved.localCliIsolation).toBe(true)
+    expect(resolved.codexCliTimeoutMinutes).toBe(45)
+  })
+
+  it("does not leak CLI settings from fallback when no override is saved", () => {
+    const preset: LlmPreset = {
+      id: "claude-code",
+      label: "Claude Code",
+      provider: "claude-code",
+      defaultModel: "claude-sonnet-4-20250514",
+    }
+
+    const resolved = resolveConfig(
+      preset,
+      undefined,
+      fallbackConfig({ localCliIsolation: true, codexCliTimeoutMinutes: 45 }),
+    )
+
+    expect(resolved.localCliIsolation).toBe(false)
+    expect(resolved.codexCliTimeoutMinutes).toBeUndefined()
+  })
 })

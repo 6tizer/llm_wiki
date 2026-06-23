@@ -19,6 +19,8 @@ export function resolveConfig(
   const maxContextSize =
     ov.maxContextSize ?? preset.suggestedContextSize ?? fallback.maxContextSize
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
+  const localCliIsolation = ov.localCliIsolation ?? false
+  const codexCliTimeoutMinutes = ov.codexCliTimeoutMinutes
 
   if (preset.provider === "custom") {
     return {
@@ -30,6 +32,8 @@ export function resolveConfig(
       maxContextSize,
       apiMode: ov.apiMode ?? preset.apiMode ?? "chat_completions",
       reasoning,
+      localCliIsolation,
+      codexCliTimeoutMinutes,
     }
   }
 
@@ -42,6 +46,8 @@ export function resolveConfig(
       customEndpoint: fallback.customEndpoint,
       maxContextSize,
       reasoning,
+      localCliIsolation,
+      codexCliTimeoutMinutes,
     }
   }
 
@@ -56,6 +62,8 @@ export function resolveConfig(
       azureModelFamily: ov.azureModelFamily ?? preset.azureModelFamily ?? "auto",
       maxContextSize,
       reasoning,
+      localCliIsolation,
+      codexCliTimeoutMinutes,
     }
   }
 
@@ -70,6 +78,8 @@ export function resolveConfig(
       customEndpoint: fallback.customEndpoint,
       maxContextSize,
       reasoning,
+      localCliIsolation,
+      codexCliTimeoutMinutes,
     }
   }
 
@@ -84,5 +94,7 @@ export function resolveConfig(
     customEndpoint: fallback.customEndpoint,
     maxContextSize,
     reasoning,
+    localCliIsolation,
+    codexCliTimeoutMinutes,
   }
 }

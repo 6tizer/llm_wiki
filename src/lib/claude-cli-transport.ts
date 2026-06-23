@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { LlmConfig } from "@/stores/wiki-store";
+import { useWikiStore } from "@/stores/wiki-store";
 import type { StreamCallbacks } from "./llm-client";
 import type { ChatMessage, RequestOverrides } from "./llm-providers";
 
@@ -109,6 +110,8 @@ type SpawnPayload = Record<string, unknown> & {
 	streamId: string;
 	model: string;
 	messages: ChatMessage[];
+	isolateLocalConfig: boolean;
+	workingDirectory: string;
 };
 
 /**
@@ -200,6 +203,11 @@ export async function streamClaudeCodeCli(
 	signal?.addEventListener("abort", abortListener);
 
 	try {
+		const workingDirectory = useWikiStore.getState().project?.path;
+		if (!workingDirectory) {
+			throw new Error("Claude Code CLI requires an active project working directory");
+		}
+
 		// Listen FIRST so we don't miss the very first event on fast CLIs.
 		unlistenData = await listen<string>(`claude-cli:${streamId}`, (event) => {
 			if (finished) return;
@@ -241,6 +249,8 @@ export async function streamClaudeCodeCli(
 			streamId,
 			model: config.model,
 			messages,
+			isolateLocalConfig: config.localCliIsolation === true,
+			workingDirectory,
 		};
 		await invoke("claude_cli_spawn", payload);
 	} catch (err) {
