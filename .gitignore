@@ -52,3 +52,4 @@ pnpm-debug.log*
 .claude/
 CLAUDE.md
 litellm/
+.agent-loop/
