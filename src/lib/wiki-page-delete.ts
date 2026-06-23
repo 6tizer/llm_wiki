@@ -10,10 +10,12 @@
  * This helper consolidates that two-step cleanup so every wiki-page
  * delete path (source-delete cascade in sources-view, orphan-page
  * delete in lint-view, cancelled-ingest cleanup in ingest-queue)
- * uses the SAME slug derivation and order of operations. Without
- * this, each call site reinvented the slug regex slightly
- * differently (`getFileName().replace(/\.md$/, "")` vs
- * `getFileStem()`), which would drift over time.
+ * uses the SAME path-derived embedding id and order of operations.
+ * Without this, each call site reinvented page identity slightly
+ * differently (`getFileName().replace(/\.md$/, "")` vs full wiki
+ * path), which would drift over time. Slugs are still used for
+ * media ownership and related-frontmatter cleanup where those files
+ * are keyed by page slug.
  *
  * Errors are propagated, NOT swallowed — callers wrap in try/catch
  * to apply their own fault-tolerance policy (e.g. continue with the
@@ -22,6 +24,7 @@
 import { deleteFile, listDirectory, readFile, writeFile } from "@/commands/fs"
 import { getFileStem, normalizePath } from "@/lib/path-utils"
 import { removePageEmbedding } from "@/lib/embedding"
+import { wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
 import {
   buildDeletedKeys,
   cleanIndexListing,
@@ -61,10 +64,11 @@ function isSourcePage(pagePath: string): boolean {
  * cascade to the right LanceDB instance, and to locate the media
  * directory).
  *
- * `pagePath` may be absolute or relative; only its basename is used
- * for the page-id lookup, so callers don't need to normalize before
- * calling. The disk delete uses the path verbatim — pass an
- * absolute path if your caller has one (most do).
+ * `pagePath` may be absolute or relative; the embedding page id is
+ * derived from its normalized `wiki/.../*.md` path so same-stem pages
+ * in different wiki folders don't collide. The disk delete uses the
+ * path verbatim — pass an absolute path if your caller has one
+ * (most do).
  */
 export async function cascadeDeleteWikiPage(
   projectPath: string,
@@ -73,7 +77,7 @@ export async function cascadeDeleteWikiPage(
   await deleteFile(pagePath)
   const slug = getFileStem(pagePath)
   if (slug.length > 0) {
-    await removePageEmbedding(projectPath, slug)
+    await removePageEmbedding(projectPath, wikiPathToVectorPageId(pagePath))
   }
 
   // Media cascade: source-summary deletion → drop the source's

@@ -43,6 +43,7 @@ const RESERVED_HEADER_NAMES = new Set([
   "content-type",
   "host",
   "content-length",
+  "origin",
   "x-goog-api-key",
 ])
 const HTTP_HEADER_NAME_RE = /^[!#$%&'*+.^_~0-9A-Za-z-]+$/
@@ -105,7 +106,7 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
     setReindex({ kind: "running", done: 0, total: 0 })
     const count = await embedAllPages(project.path, embeddingConfig, (done, total) => {
       setReindex({ kind: "running", done, total })
-    })
+    }, { clearExisting: true })
     setReindex({ kind: "done", count })
     await refreshStats()
   }, [project, embeddingConfig, refreshStats])

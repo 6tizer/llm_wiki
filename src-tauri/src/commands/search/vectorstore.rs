@@ -4,8 +4,14 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use lancedb::connect;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::table::optimize::OptimizeAction;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use crate::panic_guard::run_guarded_async;
 
@@ -41,8 +47,52 @@ pub struct ChunkUpsertInput {
     pub embedding: Vec<f32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PageChunksReplaceInput {
+    pub page_id: String,
+    pub chunks: Vec<ChunkUpsertInput>,
+}
+
 fn db_path(project_path: &str) -> String {
     format!("{}/.llm-wiki/lancedb", project_path.replace('\\', "/"))
+}
+
+fn table_dir(project_path: &str, table_name: &str) -> PathBuf {
+    Path::new(&db_path(project_path)).join(format!("{table_name}.lance"))
+}
+
+fn format_replace_restore_failed_error(
+    final_dir: &Path,
+    backup_dir: &Path,
+    temp_dir: &Path,
+    replace_error: &std::io::Error,
+    restore_error: &std::io::Error,
+) -> String {
+    format!(
+        "Replace chunks error: failed to move replacement table into place ({replace_error}); \
+failed to restore previous table from backup ({restore_error}). \
+Old table may still be available at backup path: {}; final path: {}; temp path: {}",
+        backup_dir.display(),
+        final_dir.display(),
+        temp_dir.display()
+    )
+}
+
+fn format_replace_no_backup_failed_error(
+    final_dir: &Path,
+    temp_dir: &Path,
+    replace_error: &std::io::Error,
+) -> String {
+    format!(
+        "Replace chunks error: failed to move replacement table into place ({replace_error}); \
+final path: {}; temp path: {}",
+        final_dir.display(),
+        temp_dir.display()
+    )
+}
+
+fn cleanup_failed_replacement_temp_dir(temp_dir: &Path) {
+    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 /// v1 (legacy) table name. One row per page.
@@ -50,23 +100,38 @@ const TABLE_V1: &str = "wiki_vectors";
 /// v2 (current) table name. One row per CHUNK — a page is typically
 /// represented by multiple rows sharing the same `page_id`.
 const TABLE_V2: &str = "wiki_chunks_v2";
+const MAX_PAGE_ID_LEN: usize = 2048;
 
-/// Validate page_id to prevent filter injection
-fn validate_page_id(page_id: &str) -> Result<(), String> {
-    if page_id.is_empty() || page_id.len() > 256 {
+static PROJECT_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+async fn project_vector_lock(project_path: &str) -> Arc<Mutex<()>> {
+    let key = project_path.replace('\\', "/");
+    let mut locks = PROJECT_LOCKS.lock().await;
+    locks
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn validate_page_id_chars(page_id: &str) -> Result<(), String> {
+    if page_id.is_empty() || page_id.len() > MAX_PAGE_ID_LEN {
         return Err("Invalid page_id: empty or too long".to_string());
     }
-    // Only allow alphanumeric, hyphens, underscores, dots
-    if !page_id
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
+    if page_id.chars().any(|c| {
+        c.is_control() || c.is_whitespace() || matches!(c, '\'' | '"' | '`' | '/' | '\\' | ';')
+    }) {
         return Err(format!(
             "Invalid page_id: contains disallowed characters: {}",
             page_id
         ));
     }
     Ok(())
+}
+
+/// Validate page_id to prevent filter injection
+fn validate_page_id(page_id: &str) -> Result<(), String> {
+    validate_page_id_chars(page_id)
 }
 
 fn make_schema(dim: i32) -> Arc<Schema> {
@@ -106,6 +171,8 @@ pub async fn vector_upsert(
 ) -> Result<(), String> {
     run_guarded_async("vector_upsert", async move {
         validate_page_id(&page_id)?;
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
 
         let db = connect(&db_path(&project_path))
             .execute()
@@ -163,6 +230,9 @@ pub async fn vector_search(
     top_k: usize,
 ) -> Result<Vec<VectorSearchResult>, String> {
     run_guarded_async("vector_search", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
         let db = connect(&db_path(&project_path))
             .execute()
             .await
@@ -229,6 +299,8 @@ pub async fn vector_search(
 pub async fn vector_delete(project_path: String, page_id: String) -> Result<(), String> {
     run_guarded_async("vector_delete", async move {
         validate_page_id(&page_id)?;
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
 
         let db = connect(&db_path(&project_path))
             .execute()
@@ -265,6 +337,9 @@ pub async fn vector_delete(project_path: String, page_id: String) -> Result<(), 
 #[tauri::command]
 pub async fn vector_count(project_path: String) -> Result<usize, String> {
     run_guarded_async("vector_count", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
         let db = connect(&db_path(&project_path))
             .execute()
             .await
@@ -327,19 +402,7 @@ pub async fn vector_count(project_path: String) -> Result<usize, String> {
 // ──────────────────────────────────────────────────────────────────────────
 
 fn validate_page_id_for_v2(page_id: &str) -> Result<(), String> {
-    if page_id.is_empty() || page_id.len() > 256 {
-        return Err("Invalid page_id: empty or too long".to_string());
-    }
-    if !page_id
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return Err(format!(
-            "Invalid page_id: contains disallowed characters: {}",
-            page_id
-        ));
-    }
-    Ok(())
+    validate_page_id_chars(page_id)
 }
 
 fn make_schema_v2(dim: i32) -> Arc<Schema> {
@@ -428,6 +491,8 @@ pub async fn vector_upsert_chunks(
 ) -> Result<(), String> {
     run_guarded_async("vector_upsert_chunks", async move {
         validate_page_id_for_v2(&page_id)?;
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
 
         if chunks.is_empty() {
             return Ok(());
@@ -484,6 +549,132 @@ pub async fn vector_upsert_chunks(
     .await
 }
 
+async fn vector_replace_all_chunks_locked(
+    project_path: String,
+    pages: Vec<PageChunksReplaceInput>,
+    temp_table_name: Option<String>,
+) -> Result<(), String> {
+    if pages.is_empty() {
+        return Err("Replacement requires at least one page".to_string());
+    }
+
+    let mut dim: Option<i32> = None;
+    let mut expected_rows = 0usize;
+    let mut batches: Vec<RecordBatch> = Vec::with_capacity(pages.len());
+
+    for page in &pages {
+        validate_page_id_for_v2(&page.page_id)?;
+        if page.chunks.is_empty() {
+            return Err(format!("Replacement page '{}' has no chunks", page.page_id));
+        }
+        let page_dim = page.chunks[0].embedding.len() as i32;
+        if page_dim == 0 {
+            return Err(format!(
+                "Replacement page '{}' has empty embedding",
+                page.page_id
+            ));
+        }
+        if let Some(existing_dim) = dim {
+            if existing_dim != page_dim {
+                return Err(format!(
+                    "Replacement page '{}' has embedding dim {} but rebuild dim is {}",
+                    page.page_id, page_dim, existing_dim
+                ));
+            }
+        } else {
+            dim = Some(page_dim);
+        }
+        expected_rows += page.chunks.len();
+        let schema = make_schema_v2(dim.unwrap());
+        batches.push(make_batch_v2(
+            schema,
+            &page.page_id,
+            &page.chunks,
+            dim.unwrap(),
+        )?);
+    }
+
+    let temp_table = temp_table_name
+        .unwrap_or_else(|| format!("{}_rebuild_{}", TABLE_V2, Uuid::new_v4().simple()));
+    let temp_dir = table_dir(&project_path, &temp_table);
+
+    {
+        let db = connect(&db_path(&project_path))
+            .execute()
+            .await
+            .map_err(|e| format!("DB connect error: {e}"))?;
+
+        let table = db
+            .create_table(&temp_table, batches)
+            .execute()
+            .await
+            .map_err(|e| format!("Create replacement table error: {e}"))?;
+
+        let count = table
+            .count_rows(None)
+            .await
+            .map_err(|e| format!("Count replacement table error: {e}"))?;
+        if count != expected_rows {
+            let _ = db.drop_table(&temp_table, &[]).await;
+            return Err(format!(
+                "Replacement table row count mismatch: expected {expected_rows}, got {count}"
+            ));
+        }
+    }
+
+    let final_dir = table_dir(&project_path, TABLE_V2);
+    let backup_table = format!("{}_backup_{}", TABLE_V2, Uuid::new_v4().simple());
+    let backup_dir = table_dir(&project_path, &backup_table);
+    let mut backup_created = false;
+
+    if final_dir.exists() {
+        std::fs::rename(&final_dir, &backup_dir)
+            .map_err(|e| format!("Backup existing chunks error: {e}"))?;
+        backup_created = true;
+    }
+
+    if let Err(e) = std::fs::rename(&temp_dir, &final_dir) {
+        if backup_created {
+            if let Err(restore_error) = std::fs::rename(&backup_dir, &final_dir) {
+                return Err(format_replace_restore_failed_error(
+                    &final_dir,
+                    &backup_dir,
+                    &temp_dir,
+                    &e,
+                    &restore_error,
+                ));
+            }
+        }
+        cleanup_failed_replacement_temp_dir(&temp_dir);
+        return Err(format_replace_no_backup_failed_error(
+            &final_dir, &temp_dir, &e,
+        ));
+    }
+
+    if backup_created {
+        let _ = std::fs::remove_dir_all(&backup_dir);
+    }
+
+    Ok(())
+}
+
+/// Replace the entire v2 chunk table with a fully prepared rebuild.
+/// The old table is left untouched until the replacement table has been
+/// written and row-count checked, then the on-disk Lance table directory
+/// is switched while holding the per-project vector lock.
+#[tauri::command]
+pub async fn vector_replace_all_chunks(
+    project_path: String,
+    pages: Vec<PageChunksReplaceInput>,
+) -> Result<(), String> {
+    run_guarded_async("vector_replace_all_chunks", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+        vector_replace_all_chunks_locked(project_path, pages, None).await
+    })
+    .await
+}
+
 /// Top-K chunk search. Returns every matching chunk's metadata + score
 /// (1 / (1 + distance), matching v1's convention for drop-in replacement
 /// at the TS layer). TS is responsible for grouping by page_id.
@@ -494,6 +685,9 @@ pub async fn vector_search_chunks(
     top_k: usize,
 ) -> Result<Vec<ChunkSearchResult>, String> {
     run_guarded_async("vector_search_chunks", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
         let db = connect(&db_path(&project_path))
             .execute()
             .await
@@ -580,6 +774,8 @@ pub async fn vector_search_chunks(
 pub async fn vector_delete_page(project_path: String, page_id: String) -> Result<(), String> {
     run_guarded_async("vector_delete_page", async move {
         validate_page_id_for_v2(&page_id)?;
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
 
         let db = connect(&db_path(&project_path))
             .execute()
@@ -617,6 +813,9 @@ pub async fn vector_delete_page(project_path: String, page_id: String) -> Result
 #[tauri::command]
 pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> {
     run_guarded_async("vector_count_chunks", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
         let db = connect(&db_path(&project_path))
             .execute()
             .await
@@ -655,6 +854,9 @@ pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> 
 #[tauri::command]
 pub async fn vector_legacy_row_count(project_path: String) -> Result<usize, String> {
     run_guarded_async("vector_legacy_row_count", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
         let db = connect(&db_path(&project_path))
             .execute()
             .await
@@ -692,6 +894,9 @@ pub async fn vector_legacy_row_count(project_path: String) -> Result<usize, Stri
 #[tauri::command]
 pub async fn vector_drop_legacy(project_path: String) -> Result<(), String> {
     run_guarded_async("vector_drop_legacy", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
         let db = connect(&db_path(&project_path))
             .execute()
             .await
@@ -712,6 +917,75 @@ pub async fn vector_drop_legacy(project_path: String) -> Result<(), String> {
         db.drop_table(TABLE_V1, &[])
             .await
             .map_err(|e| format!("Drop table error: {e}"))?;
+
+        Ok(())
+    })
+    .await
+}
+
+/// Drop all v2 chunk rows for a project. Used by safe rebuild after the
+/// TypeScript layer has already prepared replacement rows.
+#[tauri::command]
+pub async fn vector_clear_chunks(project_path: String) -> Result<(), String> {
+    run_guarded_async("vector_clear_chunks", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
+        let db = connect(&db_path(&project_path))
+            .execute()
+            .await
+            .map_err(|e| format!("DB connect error: {e}"))?;
+
+        let tables = db
+            .table_names()
+            .execute()
+            .await
+            .map_err(|e| format!("List tables error: {e}"))?;
+
+        if !tables.contains(&TABLE_V2.to_string()) {
+            return Ok(());
+        }
+
+        db.drop_table(TABLE_V2, &[])
+            .await
+            .map_err(|e| format!("Clear chunks error: {e}"))?;
+
+        Ok(())
+    })
+    .await
+}
+
+/// Best-effort LanceDB optimization for the v2 chunk table.
+#[tauri::command]
+pub async fn vector_optimize_chunks(project_path: String) -> Result<(), String> {
+    run_guarded_async("vector_optimize_chunks", async move {
+        let lock = project_vector_lock(&project_path).await;
+        let _guard = lock.lock().await;
+
+        let db = connect(&db_path(&project_path))
+            .execute()
+            .await
+            .map_err(|e| format!("DB connect error: {e}"))?;
+
+        let tables = db
+            .table_names()
+            .execute()
+            .await
+            .map_err(|e| format!("List tables error: {e}"))?;
+
+        if !tables.contains(&TABLE_V2.to_string()) {
+            return Ok(());
+        }
+
+        let table = db
+            .open_table(TABLE_V2)
+            .execute()
+            .await
+            .map_err(|e| format!("Open table error: {e}"))?;
+        table
+            .optimize(OptimizeAction::All)
+            .await
+            .map_err(|e| format!("Optimize chunks error: {e}"))?;
 
         Ok(())
     })
@@ -775,6 +1049,58 @@ mod tests_v2 {
             .collect()
     }
 
+    #[test]
+    fn replace_restore_failure_error_includes_table_paths() {
+        let replace_error =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "replace denied");
+        let restore_error = std::io::Error::new(std::io::ErrorKind::NotFound, "backup missing");
+
+        let message = format_replace_restore_failed_error(
+            Path::new("/project/.llm-wiki/lancedb/wiki_chunks_v2.lance"),
+            Path::new("/project/.llm-wiki/lancedb/wiki_chunks_v2_backup_123.lance"),
+            Path::new("/project/.llm-wiki/lancedb/wiki_chunks_v2_rebuild_456.lance"),
+            &replace_error,
+            &restore_error,
+        );
+
+        assert!(message.contains("replace denied"));
+        assert!(message.contains("backup missing"));
+        assert!(message.contains("Old table may still be available at backup path"));
+        assert!(message.contains("/project/.llm-wiki/lancedb/wiki_chunks_v2.lance"));
+        assert!(message.contains("/project/.llm-wiki/lancedb/wiki_chunks_v2_backup_123.lance"));
+        assert!(message.contains("/project/.llm-wiki/lancedb/wiki_chunks_v2_rebuild_456.lance"));
+    }
+
+    #[test]
+    fn replace_no_backup_failure_error_includes_table_paths() {
+        let replace_error =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "replace denied");
+
+        let message = format_replace_no_backup_failed_error(
+            Path::new("/project/.llm-wiki/lancedb/wiki_chunks_v2.lance"),
+            Path::new("/project/.llm-wiki/lancedb/wiki_chunks_v2_rebuild_456.lance"),
+            &replace_error,
+        );
+
+        assert!(message.contains("replace denied"));
+        assert!(message.contains("final path"));
+        assert!(message.contains("temp path"));
+        assert!(message.contains("/project/.llm-wiki/lancedb/wiki_chunks_v2.lance"));
+        assert!(message.contains("/project/.llm-wiki/lancedb/wiki_chunks_v2_rebuild_456.lance"));
+    }
+
+    #[test]
+    fn cleanup_failed_replacement_temp_dir_removes_leftover_temp_table() {
+        let p = tmp_project();
+        let temp_dir = p.join(".llm-wiki/lancedb/wiki_chunks_v2_rebuild_test.lance");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("marker"), "temp").unwrap();
+
+        cleanup_failed_replacement_temp_dir(&temp_dir);
+
+        assert!(!temp_dir.exists());
+    }
+
     #[tokio::test]
     async fn v2_upsert_then_count() {
         let p = tmp_project();
@@ -820,6 +1146,62 @@ mod tests_v2 {
             .unwrap();
 
         assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn replace_all_chunks_swaps_complete_rebuild() {
+        let p = tmp_project();
+        let pp = p.to_string_lossy().to_string();
+
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+            .await
+            .unwrap();
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 3);
+
+        vector_replace_all_chunks(
+            pp.clone(),
+            vec![PageChunksReplaceInput {
+                page_id: "page-b".into(),
+                chunks: make_chunks("page-b", 2, 16),
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 2);
+        let results = vector_search_chunks(pp, fake_embedding(0, 16), 10)
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.page_id == "page-b"));
+    }
+
+    #[tokio::test]
+    async fn replace_all_chunks_preserves_old_table_when_temp_write_fails() {
+        let p = tmp_project();
+        let pp = p.to_string_lossy().to_string();
+
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 3, 16))
+            .await
+            .unwrap();
+
+        let result = vector_replace_all_chunks_locked(
+            pp.clone(),
+            vec![PageChunksReplaceInput {
+                page_id: "page-b".into(),
+                chunks: make_chunks("page-b", 2, 16),
+            }],
+            Some(TABLE_V2.to_string()),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 3);
+        let results = vector_search_chunks(pp, fake_embedding(0, 16), 10)
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.page_id == "page-a"));
     }
 
     #[tokio::test]
@@ -954,6 +1336,51 @@ mod tests_v2 {
         // Quote would be a SQL-injection footgun for the delete filter.
         let result = vector_upsert_chunks(pp, "bad'; DROP".into(), make_chunks("x", 1, 16)).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn v2_accepts_unicode_and_long_encoded_page_id() {
+        let p = tmp_project();
+        let pp = p.to_string_lossy().to_string();
+        let page_id = format!("wp_{}", "默会知识_".repeat(80));
+
+        vector_upsert_chunks(pp.clone(), page_id.clone(), make_chunks("unicode", 1, 16))
+            .await
+            .unwrap();
+
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 1);
+        vector_delete_page(pp.clone(), page_id).await.unwrap();
+        assert_eq!(vector_count_chunks(pp).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn clear_chunks_drops_v2_without_touching_legacy() {
+        let p = tmp_project();
+        let pp = p.to_string_lossy().to_string();
+
+        vector_upsert(pp.clone(), "old-page".into(), fake_embedding(0, 16))
+            .await
+            .unwrap();
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16))
+            .await
+            .unwrap();
+
+        vector_clear_chunks(pp.clone()).await.unwrap();
+
+        assert_eq!(vector_count_chunks(pp.clone()).await.unwrap(), 0);
+        assert_eq!(vector_legacy_row_count(pp).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn optimize_chunks_is_noop_when_missing_and_ok_when_present() {
+        let p = tmp_project();
+        let pp = p.to_string_lossy().to_string();
+
+        vector_optimize_chunks(pp.clone()).await.unwrap();
+        vector_upsert_chunks(pp.clone(), "page-a".into(), make_chunks("page-a", 2, 16))
+            .await
+            .unwrap();
+        vector_optimize_chunks(pp).await.unwrap();
     }
 
     #[tokio::test]

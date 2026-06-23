@@ -1,13 +1,14 @@
 /**
  * Unit tests for cascadeDeleteWikiPage — the one helper that every
  * wiki-page delete flow goes through. By centralizing the cascade
- * here we get test coverage for slug derivation + ordering once,
- * instead of having to test it at every React-component call site.
+ * here we get test coverage for path-derived embedding ids,
+ * slug-keyed media cleanup, and ordering once, instead of having to
+ * test it at every React-component call site.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 const mockDeleteFile = vi.fn<(path: string) => Promise<void>>()
-const mockRemovePageEmbedding = vi.fn<(projectPath: string, slug: string) => Promise<void>>()
+const mockRemovePageEmbedding = vi.fn<(projectPath: string, pageId: string) => Promise<void>>()
 const mockReadFile = vi.fn<(path: string) => Promise<string>>()
 const mockWriteFile = vi.fn<(path: string, content: string) => Promise<void>>()
 const mockListDirectory = vi.fn<(path: string) => Promise<unknown>>()
@@ -20,11 +21,12 @@ vi.mock("@/commands/fs", () => ({
 }))
 
 vi.mock("@/lib/embedding", () => ({
-  removePageEmbedding: (projectPath: string, slug: string) =>
-    mockRemovePageEmbedding(projectPath, slug),
+  removePageEmbedding: (projectPath: string, pageId: string) =>
+    mockRemovePageEmbedding(projectPath, pageId),
 }))
 
 import { cascadeDeleteWikiPage, cascadeDeleteWikiPagesWithRefs } from "./wiki-page-delete"
+import { wikiPathToVectorPageId } from "./wiki-page-identity"
 import type { FileNode } from "@/types/wiki"
 
 beforeEach(() => {
@@ -47,7 +49,10 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockDeleteFile).toHaveBeenCalledWith("/proj/wiki/concepts/rope.md")
 
     expect(mockRemovePageEmbedding).toHaveBeenCalledTimes(1)
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "rope")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "/proj",
+      wikiPathToVectorPageId("/proj/wiki/concepts/rope.md"),
+    )
   })
 
   it("calls deleteFile BEFORE removePageEmbedding (file is the source of truth)", async () => {
@@ -95,34 +100,42 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockDeleteFile).toHaveBeenCalled()
   })
 
-  it("derives slug from the path's basename, ignoring directory segments", async () => {
+  it("derives embedding id from the full wiki path, preserving directory segments", async () => {
     await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/some-deep/nested/page.md")
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "page")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "/proj",
+      wikiPathToVectorPageId("/proj/wiki/concepts/some-deep/nested/page.md"),
+    )
   })
 
   it("handles Windows backslash paths (project path normalization happens elsewhere)", async () => {
     // The desktop ingest pipeline can produce backslash-laden paths
     // before path-utils normalizes them. cascadeDeleteWikiPage's
-    // slug derivation MUST cope with both separators in one string.
+    // path-derived embedding id MUST cope with both separators in one string.
     await cascadeDeleteWikiPage("C:/proj", "C:\\proj\\wiki\\entities\\transformer.md")
 
     expect(mockDeleteFile).toHaveBeenCalledWith("C:\\proj\\wiki\\entities\\transformer.md")
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith("C:/proj", "transformer")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "C:/proj",
+      wikiPathToVectorPageId("C:\\proj\\wiki\\entities\\transformer.md"),
+    )
   })
 
-  it("preserves dotted page names (e.g. foo.bar.md) in the slug", async () => {
+  it("preserves dotted page names for slug-keyed cleanup metadata", async () => {
     // getFileStem strips only the LAST extension, so "foo.bar.md" → "foo.bar".
-    // Pin it: a regression that strips ALL dots would turn this slug
-    // into "foo" and orphan the LanceDB chunks for "foo.bar".
+    // Pin it for media/cleanup slug handling while the embedding id
+    // itself remains derived from the full wiki path.
     await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/foo.bar.md")
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "foo.bar")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "/proj",
+      wikiPathToVectorPageId("/proj/wiki/concepts/foo.bar.md"),
+    )
   })
 
-  it("skips removePageEmbedding when slug derivation yields empty (defensive)", async () => {
+  it("skips removePageEmbedding when page identity yields empty slug metadata (defensive)", async () => {
     // Edge case: a path that's just "/" or empty would yield ""
-    // slug. Calling removePageEmbedding("") could match every page
-    // in some LanceDB filter implementations, which would be
-    // catastrophic. The helper guards against this.
+    // slug metadata. Calling removePageEmbedding for that invalid page
+    // identity could be catastrophic. The helper guards against this.
     await cascadeDeleteWikiPage("/proj", "/")
     expect(mockDeleteFile).toHaveBeenCalled()
     expect(mockRemovePageEmbedding).not.toHaveBeenCalled()
@@ -144,7 +157,10 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockDeleteFile).toHaveBeenCalledTimes(2)
     expect(mockDeleteFile).toHaveBeenNthCalledWith(1, "/proj/wiki/sources/rope-paper.md")
     expect(mockDeleteFile).toHaveBeenNthCalledWith(2, "/proj/wiki/media/rope-paper")
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "rope-paper")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "/proj",
+      wikiPathToVectorPageId("/proj/wiki/sources/rope-paper.md"),
+    )
   })
 
   it("does NOT cascade media when deleting a non-source page (concept / entity / queries)", async () => {
@@ -179,7 +195,10 @@ describe("cascadeDeleteWikiPage", () => {
     // Both attempts happened.
     expect(mockDeleteFile).toHaveBeenCalledTimes(2)
     // Embedding cascade still ran in between.
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "text-only-source")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      "/proj",
+      wikiPathToVectorPageId("/proj/wiki/sources/text-only-source.md"),
+    )
   })
 
   it("handles Windows backslash paths in the source-page detection", async () => {
@@ -259,7 +278,10 @@ describe("cascadeDeleteWikiPagesWithRefs", () => {
     const result = await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
     expect(result.deletedPaths).toEqual([target])
     expect(mockDeleteFile).toHaveBeenCalledWith(target)
-    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(PROJECT, "alice-chen")
+    expect(mockRemovePageEmbedding).toHaveBeenCalledWith(
+      PROJECT,
+      wikiPathToVectorPageId(target),
+    )
   })
 
   it("strips [[deleted]] body wikilinks from sibling pages", async () => {
