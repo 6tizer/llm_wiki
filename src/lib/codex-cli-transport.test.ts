@@ -345,6 +345,97 @@ describe("streamCodexCli", () => {
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
 
+	it("surfaces timed-out done payloads as timeout-specific errors", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: -1,
+			timedOut: true,
+			stderr: "Codex CLI timed out after 1 minute.",
+			stdout: "",
+		});
+
+		await stream;
+
+		expect(callbacks.onToken).not.toHaveBeenCalled();
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Codex CLI timed out after 1 minute.",
+			}),
+		);
+		expect(callbacks.onError.mock.calls[0]?.[0].message).not.toContain(
+			"code -1",
+		);
+	});
+
+	it("keeps ordinary non-zero done payloads on the generic exit-code error path", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 2,
+			stderr: "bad flags",
+			stdout: "",
+		});
+
+		await stream;
+
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "Codex CLI exited with code 2:\nbad flags",
+			}),
+		);
+	});
+
 	it("surfaces a clear error when completion has no agent message", async () => {
 		const callbacks = {
 			onToken: vi.fn(),

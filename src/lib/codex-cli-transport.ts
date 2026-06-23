@@ -73,6 +73,13 @@ type SpawnPayload = Record<string, unknown> & {
 	workingDirectory: string;
 };
 
+type DonePayload = {
+	code: number | null;
+	stderr: string;
+	stdout?: string;
+	timedOut?: boolean;
+};
+
 export async function streamCodexCli(
 	config: LlmConfig,
 	messages: ChatMessage[],
@@ -172,15 +179,21 @@ export async function streamCodexCli(
 			return;
 		}
 
-		unlistenDone = await listen<{
-			code: number | null;
-			stderr: string;
-			stdout?: string;
-		}>(`codex-cli:${streamId}:done`, (event) => {
+		unlistenDone = await listen<DonePayload>(`codex-cli:${streamId}:done`, (event) => {
 			const code = event.payload?.code;
 			const stderr = event.payload?.stderr?.trim() ?? "";
 			const stdout = event.payload?.stdout ?? "";
-			if (code !== null && code !== undefined && code !== 0) {
+			if (event.payload?.timedOut === true) {
+				const details = stderr || stdout.trim() || unparsedLines.join("\n");
+				finishWith(() =>
+					onError(
+						new Error(
+							details ||
+								"Codex CLI timed out. Try a faster model, a smaller context, or a longer Codex CLI timeout.",
+						),
+					),
+				);
+			} else if (code !== null && code !== undefined && code !== 0) {
 				const details = stderr || stdout.trim() || unparsedLines.join("\n");
 				finishWith(() =>
 					onError(
