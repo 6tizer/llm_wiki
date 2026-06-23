@@ -427,14 +427,10 @@ describe("Sampling override translation across wires", () => {
 //   TCP connection rather than 403, which surfaces as a generic
 //   reqwest error.
 //
-// Current strategy: ALWAYS send `Origin: http://localhost`
-// regardless of where the actual server is. Ollama's default
-// OLLAMA_ORIGINS unconditionally includes `http://localhost` (and
-// the related `127.0.0.1` / port-wildcard variants); LM Studio /
-// llama.cpp / vLLM don't check Origin at all. The header is purely
-// a CORS-allowlist signal — semantically lying about "where this
-// request came from" is fine because the server uses API keys (or
-// no auth), not origin, for actual permission checks.
+// Current strategy: always send `Origin: http://localhost` for Ollama.
+// For custom OpenAI-compatible endpoints, only send it for local/LAN
+// hosts. Public cloud API gateways use API keys/Bearer auth and should
+// not receive a synthetic localhost Origin.
 
 describe("Origin header — local LLM CORS workaround", () => {
   it("Ollama provider sends Origin: http://localhost when server is on localhost", () => {
@@ -478,21 +474,51 @@ describe("Origin header — local LLM CORS workaround", () => {
     expect(cfg.headers["Origin"]).toBe("http://localhost")
   })
 
-  it("custom OpenAI-compat endpoint gets the same Origin override (LM Studio / llama.cpp / vLLM)", () => {
-    // For these servers Origin is ignored entirely — but we send
-    // the value anyway so behavior is uniform across local-LLM
-    // providers and the rare hardened deployment that does check
-    // CORS still works.
+  it.each([
+    "http://localhost:11434",
+    "https://LOCALHOST:11434",
+    "http://foo.localhost:1234",
+    "http://a.b.localhost:1234/v1?x=1",
+    "http://host.local:1234",
+    "http://127.0.0.1:1234",
+    "http://127.42.0.9:1234",
+    "http://10.20.30.40:1234",
+    "http://172.16.0.1:1234",
+    "http://172.31.255.254:1234",
+    "http://192.168.1.50:1234",
+    "http://[::1]:1234",
+  ])("custom OpenAI-compat local/LAN endpoint sends localhost Origin: %s", (customEndpoint) => {
     const cfg = getProviderConfig({
       provider: "custom",
       apiKey: "",
       model: "qwen3",
       ollamaUrl: "",
-      customEndpoint: "http://127.0.0.1:1234",
+      customEndpoint,
       maxContextSize: 8192,
       apiMode: "chat_completions",
     } as RealLlmConfig)
     expect(cfg.headers["Origin"]).toBe("http://localhost")
+  })
+
+  it.each([
+    "https://api.example.com/v1",
+    "https://openrouter.ai/api/v1",
+    "https://8.8.8.8/v1",
+    "http://172.15.255.255:1234",
+    "http://172.32.0.1:1234",
+    "not a url",
+    "",
+  ])("custom OpenAI-compat public/malformed endpoint does not send Origin: %s", (customEndpoint) => {
+    const cfg = getProviderConfig({
+      provider: "custom",
+      apiKey: "k",
+      model: "qwen3",
+      ollamaUrl: "",
+      customEndpoint,
+      maxContextSize: 8192,
+      apiMode: "chat_completions",
+    } as RealLlmConfig)
+    expect(cfg.headers["Origin"]).toBeUndefined()
   })
 
   it("commercial provider (OpenAI) does NOT get an explicit Origin override", () => {
@@ -507,6 +533,31 @@ describe("Origin header — local LLM CORS workaround", () => {
       customEndpoint: "",
       maxContextSize: 128000,
     })
+    expect(cfg.headers["Origin"]).toBeUndefined()
+  })
+
+  it("Azure provider does NOT get an explicit Origin override", () => {
+    const cfg = getProviderConfig({
+      provider: "azure",
+      apiKey: "k",
+      model: "deployment",
+      ollamaUrl: "",
+      customEndpoint: "https://resource.openai.azure.com",
+      maxContextSize: 128000,
+    } as RealLlmConfig)
+    expect(cfg.headers["Origin"]).toBeUndefined()
+  })
+
+  it("custom Azure OpenAI endpoint does NOT get an explicit Origin override", () => {
+    const cfg = getProviderConfig({
+      provider: "custom",
+      apiKey: "k",
+      model: "deployment",
+      ollamaUrl: "",
+      customEndpoint: "https://resource.openai.azure.com",
+      maxContextSize: 128000,
+      apiMode: "chat_completions",
+    } as RealLlmConfig)
     expect(cfg.headers["Origin"]).toBeUndefined()
   })
 
