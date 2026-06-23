@@ -121,6 +121,7 @@ function initialDraft(
     apiMode: llm.apiMode,
     reasoning: llm.reasoning,
     localCliIsolation: llm.localCliIsolation ?? false,
+    claudeCliTimeoutMinutes: llm.claudeCliTimeoutMinutes,
     codexCliTimeoutMinutes: llm.codexCliTimeoutMinutes ?? 10,
     embeddingEnabled: embed.enabled,
     embeddingEndpoint: embed.endpoint,
@@ -297,6 +298,7 @@ export function SettingsView() {
       apiMode: draft.provider === "custom" ? draft.apiMode : undefined,
       reasoning: draft.reasoning,
       localCliIsolation: draft.localCliIsolation,
+      claudeCliTimeoutMinutes: draft.claudeCliTimeoutMinutes,
       codexCliTimeoutMinutes: draft.codexCliTimeoutMinutes,
     }
     const newEmbed = {

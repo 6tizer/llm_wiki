@@ -45,6 +45,7 @@ interface LlmConfig {
 	apiMode?: CustomApiMode;
 	reasoning?: ReasoningConfig;
 	localCliIsolation?: boolean;
+	claudeCliTimeoutMinutes?: number;
 	codexCliTimeoutMinutes?: number;
 }
 
@@ -285,6 +286,7 @@ export interface ProviderOverride {
 	maxContextSize?: number;
 	reasoning?: ReasoningConfig;
 	localCliIsolation?: boolean;
+	claudeCliTimeoutMinutes?: number;
 	codexCliTimeoutMinutes?: number;
 }
 

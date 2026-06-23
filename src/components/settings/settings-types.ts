@@ -20,6 +20,7 @@ export interface SettingsDraft {
   apiMode: CustomApiMode | undefined
   reasoning: ReasoningConfig | undefined
   localCliIsolation: boolean
+  claudeCliTimeoutMinutes: number | undefined
   codexCliTimeoutMinutes: number | undefined
 
   // Embedding

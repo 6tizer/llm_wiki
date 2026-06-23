@@ -387,6 +387,8 @@
         "testingFunction": "正在测试功能…",
         "localCliIsolation": "隔离本地 CLI 配置",
         "localCliIsolationHint": "聊天和 provider 测试不读取用户级 CLI rules、MCP 配置、工具、斜杠命令或会话。",
+        "claudeCliTimeout": "Claude Code CLI 超时（分钟）",
+        "claudeCliTimeoutHint": "可选；留空表示禁用 Rust 侧超时。取值范围 1-240 分钟。",
         "codexCliTimeout": "Codex CLI 超时（分钟）",
         "codexCliTimeoutHint": "取值范围 1-240 分钟，默认 10。",
         "deploymentName": "部署名称",

@@ -20,6 +20,7 @@ export function resolveConfig(
     ov.maxContextSize ?? preset.suggestedContextSize ?? fallback.maxContextSize
   const reasoning = ov.reasoning ?? { mode: "auto" as const }
   const localCliIsolation = ov.localCliIsolation ?? false
+  const claudeCliTimeoutMinutes = ov.claudeCliTimeoutMinutes
   const codexCliTimeoutMinutes = ov.codexCliTimeoutMinutes
 
   if (preset.provider === "custom") {
@@ -33,6 +34,7 @@ export function resolveConfig(
       apiMode: ov.apiMode ?? preset.apiMode ?? "chat_completions",
       reasoning,
       localCliIsolation,
+      claudeCliTimeoutMinutes,
       codexCliTimeoutMinutes,
     }
   }
@@ -47,6 +49,7 @@ export function resolveConfig(
       maxContextSize,
       reasoning,
       localCliIsolation,
+      claudeCliTimeoutMinutes,
       codexCliTimeoutMinutes,
     }
   }
@@ -63,6 +66,7 @@ export function resolveConfig(
       maxContextSize,
       reasoning,
       localCliIsolation,
+      claudeCliTimeoutMinutes,
       codexCliTimeoutMinutes,
     }
   }
@@ -79,6 +83,7 @@ export function resolveConfig(
       maxContextSize,
       reasoning,
       localCliIsolation,
+      claudeCliTimeoutMinutes,
       codexCliTimeoutMinutes,
     }
   }
@@ -95,6 +100,7 @@ export function resolveConfig(
     maxContextSize,
     reasoning,
     localCliIsolation,
+    claudeCliTimeoutMinutes,
     codexCliTimeoutMinutes,
   }
 }
