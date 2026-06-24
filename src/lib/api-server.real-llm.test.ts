@@ -219,19 +219,25 @@ function appStateCandidates(): string[] {
   const candidates = explicit ? [explicit] : []
   if (process.platform === "darwin") {
     candidates.push(
-      path.join(home, "Library/Application Support/com.llmwiki.app/app-state.json"),
-      path.join(home, "Library/Application Support/LLM Wiki/app-state.json"),
+      path.join(home, "Library/Application Support/com.6tizer.llmwiki.agent/app-state.json"),
+      path.join(home, "Library/Application Support/LLM Wiki Agent/app-state.json"),
     )
   } else if (process.platform === "win32") {
     const appData = process.env.APPDATA ?? path.join(home, "AppData/Roaming")
     candidates.push(
-      path.join(appData, "com.llmwiki.app/app-state.json"),
-      path.join(appData, "LLM Wiki/app-state.json"),
+      path.join(appData, "com.6tizer.llmwiki.agent/app-state.json"),
+      path.join(appData, "LLM Wiki Agent/app-state.json"),
     )
   } else {
     candidates.push(
-      path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local/share"), "com.llmwiki.app/app-state.json"),
-      path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "com.llmwiki.app/app-state.json"),
+      path.join(
+        process.env.XDG_DATA_HOME ?? path.join(home, ".local/share"),
+        "com.6tizer.llmwiki.agent/app-state.json",
+      ),
+      path.join(
+        process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"),
+        "com.6tizer.llmwiki.agent/app-state.json",
+      ),
     )
   }
   return [...new Set(candidates)]

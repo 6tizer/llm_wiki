@@ -1,7 +1,7 @@
-# LLM Wiki
+# LLM Wiki Agent
 
 <p align="center">
-  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Logo">
+  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Agent Logo">
 </p>
 
 <p align="center">
@@ -31,9 +31,9 @@
 
 ## 这是什么？
 
-LLM Wiki 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
+LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
 
-当前只主动维护 Mac 桌面应用。Windows/Linux 的旧产物或过渡产物可能仍出现在 release、CI 或历史文档里，但它们不是当前 active product target。CI/release 清理会放到下一轮实现 PR [`mac-product-baseline`](docs/plans/mac-product-baseline.md)。
+当前只主动维护 Apple Silicon Mac 桌面应用。Windows/Linux 产物可能存在于旧 release 或历史文档里，但它们只是 legacy artifacts，不是当前 active release 或 CI target。
 
 大多数"LLM + 文档"的玩法都是 RAG：上传文件，模型在查询时检索相关片段，每次都从零生成答案——知识不会沉淀。LLM Wiki 走相反的路线：LLM **增量构建并维护一个持久化的 Wiki**——一个互相交叉引用的 markdown 页面目录，矛盾被标记出来，综合判断不断演进。知识**编译一次**就保持更新，而不是每次提问都重新推导。
 
@@ -129,7 +129,7 @@ my-wiki/
 - **Lint 闭环** —— Agent 驱动的检测与自动修复，带并发控制
 
 ### 平台
-- **Mac-only active maintenance** —— 基于 Tauri v2 的 macOS 原生桌面应用，支持 Apple Silicon + Intel
+- **Mac-only active maintenance** —— 基于 Tauri v2 的 Apple Silicon macOS 原生桌面应用
 - **多 LLM 提供商** —— OpenAI、Anthropic、Google、Ollama、Azure，或任意 OpenAI 兼容端点
 - **本地 HTTP API** —— token 保护的 `127.0.0.1` JSON API，供外部工具和 Agent 使用
 - **国际化** —— 中英文界面
@@ -158,9 +158,9 @@ my-wiki/
 ### 预编译二进制
 
 从 [Releases](https://github.com/6tizer/llm_wiki/releases) 下载：
-- **macOS** —— `.dmg`（Apple Silicon + Intel）
+- **macOS** —— `.dmg`（Apple Silicon）
 
-Windows/Linux 产物可能仍存在于旧 release 或迁移期构建中，但不再作为主动支持承诺。仓库会在后续 `mac-product-baseline` PR 清理 CI 和 release 打包口径。
+Windows/Linux 产物可能仍存在于旧 release 中，但只作为 legacy artifacts。当前 active release 和 CI 只面向 Apple Silicon macOS。
 
 ### 从源码构建
 
@@ -195,7 +195,7 @@ npm run tauri build    # 生产构建
 
 ### 内置 Agent Sidecar
 
-LLM Wiki 内置一个基于 **Claude Agent SDK** 的 Agent，以 Node.js sidecar 进程运行，通过 stdin/stdout JSON-lines 与 Rust 后端通信。
+LLM Wiki Agent 内置一个基于 **Claude Agent SDK** 的 Agent，以 Node.js sidecar 进程运行，通过 stdin/stdout JSON-lines 与 Rust 后端通信。
 
 - **Wiki MCP 工具** —— `read_page`、`search_pages`、`update_page`、`create_entity` / `create_concept`、`get_graph`
 - **Hooks 与权限** —— Wiki 工具在安全边界内自动允许（写入限制在 `wiki/**/*.md`）；内置工具走 SDK 权限审批
@@ -251,7 +251,7 @@ src/                        # 前端（React + TypeScript）
 
 ## 路线图
 
-当前产品方向是 Mac-only 桌面维护和 Agent 产品化。下一轮实现 PR 是 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.0 delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
+当前产品方向是 Apple Silicon Mac-only 桌面维护和 Agent 产品化。当前实现基线记录在 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.0 delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
 
 ## 致谢
 

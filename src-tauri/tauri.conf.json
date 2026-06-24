@@ -1,8 +1,8 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "LLM Wiki",
+	"productName": "LLM Wiki Agent",
 	"version": "0.4.14",
-	"identifier": "com.llmwiki.app",
+	"identifier": "com.6tizer.llmwiki.agent",
 	"build": {
 		"beforeDevCommand": "npm --prefix src-tauri/sidecar run build:if-stale && npm run dev",
 		"devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
 	"app": {
 		"windows": [
 			{
-				"title": "LLM Wiki",
+				"title": "LLM Wiki Agent",
 				"width": 1200,
 				"height": 800,
 				"resizable": true,
@@ -29,7 +29,7 @@
 	},
 	"bundle": {
 		"active": true,
-		"targets": "all",
+		"targets": ["app", "dmg"],
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",

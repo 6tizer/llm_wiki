@@ -112,7 +112,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_title("[DEV] LLM Wiki");
+                    let _ = w.set_title("[DEV] LLM Wiki Agent");
                 }
             }
             if let Ok(dir) = app.path().resource_dir() {
@@ -227,7 +227,7 @@ pub fn run() {
                         use tauri_plugin_dialog::DialogExt;
                         let confirmed = app
                             .dialog()
-                            .message("Are you sure you want to quit LLM Wiki?")
+                            .message("Are you sure you want to quit LLM Wiki Agent?")
                             .title("Confirm Exit")
                             .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
                             .blocking_show();

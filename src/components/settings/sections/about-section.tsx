@@ -209,7 +209,7 @@ export function AboutSection() {
       </div>
 
       <div className="rounded-md border p-4 text-sm">
-        <div className="font-medium">LLM Wiki</div>
+        <div className="font-medium">LLM Wiki Agent</div>
         <p className="mt-1 text-xs text-muted-foreground">
           {t("settings.sections.about.appDescription")}
           {" "}

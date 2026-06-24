@@ -1,7 +1,7 @@
-# LLM Wiki
+# LLM Wiki Agent
 
 <p align="center">
-  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Logo">
+  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Agent Logo">
 </p>
 
 <p align="center">
@@ -31,9 +31,9 @@
 
 ## What is this?
 
-LLM Wiki is a macOS-first desktop app that turns a pile of documents into an organized, interlinked knowledge base — automatically.
+LLM Wiki Agent is a macOS-first desktop app that turns a pile of documents into an organized, interlinked knowledge base — automatically.
 
-Current active maintenance targets the Mac desktop app. Older or transitional Windows/Linux artifacts may still exist in releases, CI, or historical documentation, but they are not the active product target. CI and release pruning is planned for the next implementation PR, [`mac-product-baseline`](docs/plans/mac-product-baseline.md).
+Current active maintenance targets the Mac desktop app for Apple Silicon. Windows/Linux artifacts may exist in older releases or historical documentation, but they are legacy artifacts, not current active release or CI targets.
 
 Most LLM-and-documents workflows look like RAG: you upload files, the model retrieves relevant chunks at query time, and answers from scratch. Nothing accumulates. LLM Wiki takes the opposite approach. The LLM **incrementally builds and maintains a persistent wiki** — a directory of markdown pages with cross-references, contradictions flagged, and an evolving synthesis. Knowledge is compiled **once** and kept current, not re-derived on every question.
 
@@ -129,7 +129,7 @@ my-wiki/
 - **Lint loop** — agent-driven detection and auto-fix with concurrency control
 
 ### Platform
-- **Mac-only active maintenance** — native desktop on macOS (Apple Silicon + Intel) via Tauri v2
+- **Mac-only active maintenance** — native desktop on macOS Apple Silicon via Tauri v2
 - **Multi-provider LLM** — OpenAI, Anthropic, Google, Ollama, Azure, or any OpenAI-compatible endpoint
 - **Local HTTP API** — token-protected `127.0.0.1` JSON API for external tools and agents
 - **i18n** — English + Chinese interface
@@ -158,9 +158,9 @@ The near-term product direction remains a Mac app built with Tauri, Rust, TypeSc
 ### Pre-built binaries
 
 Download from [Releases](https://github.com/6tizer/llm_wiki/releases):
-- **macOS** — `.dmg` (Apple Silicon + Intel)
+- **macOS** — `.dmg` (Apple Silicon)
 
-Windows/Linux artifacts may appear in older releases or during the transition, but they are no longer an active support promise. The repository will clean up CI and release packaging in the upcoming `mac-product-baseline` PR.
+Windows/Linux artifacts may appear in older releases, but they are legacy artifacts only. Current active releases and CI target macOS Apple Silicon.
 
 ### Build from source
 
@@ -195,7 +195,7 @@ npm run tauri build    # Production build
 
 ### Built-in Agent Sidecar
 
-LLM Wiki ships a built-in agent powered by the **Claude Agent SDK**, running as a bundled sidecar binary in production and a Node.js sidecar in development. It communicates with the Rust backend over stdin/stdout JSON-lines.
+LLM Wiki Agent ships a built-in agent powered by the **Claude Agent SDK**, running as a bundled sidecar binary in production and a Node.js sidecar in development. It communicates with the Rust backend over stdin/stdout JSON-lines.
 
 - **Wiki MCP tools** — `read_page`, `search_pages`, `update_page`, `create_entity` / `create_concept`, `get_graph`
 - **Hooks & permissions** — wiki tools auto-allowed within safe boundaries (writes restricted to `wiki/**/*.md`); built-in tools go through SDK permission approval
@@ -251,7 +251,7 @@ src/                        # Frontend (React + TypeScript)
 
 ## Roadmap
 
-The active product direction is Mac-only desktop maintenance plus Agent productization. The next implementation PR is [`mac-product-baseline`](docs/plans/mac-product-baseline.md), followed by upstream v0.5.0 delta work and Phase 7 Agent SDK productization. See [`docs/plans/`](docs/plans/) for the current plan index.
+The active product direction is Mac-only Apple Silicon desktop maintenance plus Agent productization. The current implementation baseline is tracked in [`mac-product-baseline`](docs/plans/mac-product-baseline.md), followed by upstream v0.5.0 delta work and Phase 7 Agent SDK productization. See [`docs/plans/`](docs/plans/) for the current plan index.
 
 ## Credits
 
