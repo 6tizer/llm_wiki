@@ -8,6 +8,12 @@ Phase 6 后续实现 PR 不再以 `v0.4.25` 为当前目标；每个 PR 开工�
 
 本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
 
+## Alignment Principles
+
+- 上游优先对齐：普通 Chat、RAG、UI 和低风险用户体验尽量贴近 upstream `v0.5.x`，避免无理由 fork。
+- fork 差异保留：Mac-only 产品定位、Claude Agent SDK sidecar、可写 Wiki 工具、permission/session/pipeline 和安全边界继续作为本 fork 的核心差异。
+- OKF 兼容：`<project>/wiki/` 逐步明确为 OKF-compatible knowledge bundle root；OKF 只作为知识包格式兼容层，不替代 MCP、Agent runtime 或 local HTTP API。
+
 ## Agent Terminology Boundary
 
 上游 `v0.5.x` 的 Agent 是 **Chat Agent Router**：
@@ -43,7 +49,8 @@ Phase 6 后续实现 PR 不再以 `v0.4.25` 为当前目标；每个 PR 开工�
 | Ingest、schema、review create page、source path safety | PR E |
 | Zoom、layout、app visibility、project open/create UX | H-lite |
 | Chat image、multimodal message、chat standalone | PR G |
-| Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G scope review + Phase 7 boundary decision |
+| Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G Chat Agent Router alignment + Phase 7 boundary decision |
+| OKF-compatible wiki bundle、validator/export/import | OKF roadmap |
 | MinerU / PDF parsing | PR F |
 | Theme、tray、general settings、window close behavior | PR I |
 | Graph rendering/performance | PR J |

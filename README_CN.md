@@ -37,7 +37,7 @@ LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成�
 
 大多数"LLM + 文档"的玩法都是 RAG：上传文件，模型在查询时检索相关片段，每次都从零生成答案——知识不会沉淀。LLM Wiki 走相反的路线：LLM **增量构建并维护一个持久化的 Wiki**——一个互相交叉引用的 markdown 页面目录，矛盾被标记出来，综合判断不断演进。知识**编译一次**就保持更新，而不是每次提问都重新推导。
 
-Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完全归你所有。你负责筛选源文件、提出问题；LLM 负责阅读、总结、交叉引用和繁琐的维护工作。
+Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完全归你所有。你负责筛选源文件、提出问题；LLM 负责阅读、总结、交叉引用和繁琐的维护工作。长期格式方向是兼容 Google Open Knowledge Format（OKF）知识包，同时保留本地 wikilink 和 Obsidian 工作流。
 
 它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个能自主研究和更新 Wiki 的内置 Agent SDK sidecar。
 
@@ -113,6 +113,7 @@ my-wiki/
 - **图谱扩展上下文** —— 用 top 命中作为种子做 2 跳相关性遍历
 - **可配置上下文窗口** —— 4K → 1M tokens，按比例分配预算
 - **多会话对话** —— 持久化 session、引用来源面板、重新生成、保存到 Wiki
+- **普通 Chat 对齐上游** —— 普通 Chat/RAG/UI 尽量贴近 upstream LLM Wiki v0.5.x，合适时吸收 Chat Agent Router 能力
 - **思考过程显示** —— 为 DeepSeek / QwQ 类模型折叠展示 `<think>` 推理块
 - **KaTeX 数学渲染** —— 各视图均支持行内与块级 LaTeX
 
@@ -253,7 +254,7 @@ src/                        # 前端（React + TypeScript）
 
 ## 路线图
 
-当前产品方向是 Apple Silicon Mac-only 桌面维护和 Agent 产品化。当前实现基线记录在 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.x delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
+当前产品方向从已完成的 [`mac-product-baseline`](docs/plans/mac-product-baseline.md) 出发，继续推进三条对齐主线：普通 Chat/RAG/UI 对齐上游 Chat Agent Router，sidecar 对齐 Claude Agent SDK，Wiki bundle 兼容 Google OKF。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
 
 ## 致谢
 

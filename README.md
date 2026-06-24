@@ -37,7 +37,7 @@ Current active maintenance targets the Mac desktop app for Apple Silicon. Window
 
 Most LLM-and-documents workflows look like RAG: you upload files, the model retrieves relevant chunks at query time, and answers from scratch. Nothing accumulates. LLM Wiki takes the opposite approach. The LLM **incrementally builds and maintains a persistent wiki** — a directory of markdown pages with cross-references, contradictions flagged, and an evolving synthesis. Knowledge is compiled **once** and kept current, not re-derived on every question.
 
-The wiki is just markdown on disk: a git repo, an Obsidian vault, yours to keep. You curate sources and ask questions; the LLM does the reading, summarizing, cross-referencing, and bookkeeping.
+The wiki is just markdown on disk: a git repo, an Obsidian vault, yours to keep. You curate sources and ask questions; the LLM does the reading, summarizing, cross-referencing, and bookkeeping. The long-term format direction is Google Open Knowledge Format (OKF)-compatible knowledge bundles, while keeping local wikilinks and Obsidian workflows intact.
 
 It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and has grown into a full application with a knowledge graph, vector search, web research, a Chrome clipper, and a built-in Agent SDK sidecar that can research and update the wiki on its own.
 
@@ -113,6 +113,7 @@ my-wiki/
 - **Graph-expanded context** — top hits seed a 2-hop relevance traversal
 - **Configurable context window** — 4K → 1M tokens with proportional budget allocation
 - **Multi-conversation chat** — persistent sessions, cited references panel, regenerate, save-to-wiki
+- **Upstream-aligned normal Chat** — normal Chat/RAG/UI should stay close to upstream LLM Wiki v0.5.x, including the Chat Agent Router where it fits
 - **Thinking display** — collapsible `<think>` reasoning blocks for DeepSeek / QwQ-style models
 - **KaTeX math** — inline and block LaTeX rendering everywhere
 
@@ -253,7 +254,7 @@ src/                        # Frontend (React + TypeScript)
 
 ## Roadmap
 
-The active product direction is Mac-only Apple Silicon desktop maintenance plus Agent productization. The current implementation baseline is tracked in [`mac-product-baseline`](docs/plans/mac-product-baseline.md), followed by upstream v0.5.x delta work and Phase 7 Agent SDK productization. See [`docs/plans/`](docs/plans/) for the current plan index.
+The active product direction starts from the completed [`mac-product-baseline`](docs/plans/mac-product-baseline.md), then continues through three alignment tracks: upstream Chat Agent Router alignment for normal Chat/RAG/UI, Claude Agent SDK alignment for the sidecar, and Google OKF compatibility for wiki bundles. See [`docs/plans/`](docs/plans/) for the current plan index.
 
 ## Credits
 

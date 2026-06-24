@@ -1,10 +1,10 @@
 # Mac Product Baseline
 
-> 类型：实现 PR 计划 | 创建：2026-06-24 | 状态：implementation/current | Issue/PR：#117 Mac-only CI + app identity cleanup
+> 类型：实现 PR 计划 | 创建：2026-06-24 | 状态：completed | Issue/PR：#117 Mac-only CI + app identity cleanup | merge commit：`8c85679`
 
 ## 结论
 
-本 PR 把 active product target 收敛为 Apple Silicon Mac-only maintained desktop app，并把产品身份改为 `LLM Wiki Agent`。
+本计划已由 #117 完成并合入 `8c85679`。该 PR 把 active product target 收敛为 Apple Silicon Mac-only maintained desktop app，并把产品身份改为 `LLM Wiki Agent`。
 
 当前实现决策：
 

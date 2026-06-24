@@ -1,9 +1,10 @@
 # Phase 6: upstream sync to nashsu/llm_wiki v0.5.x
 
-> 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-24 | 状态：active
+> 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-25 | 状态：active
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 计划索引：[Plans Index](./README.md)
 > Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
+> Chat 对齐：[Upstream Chat Agent Router Alignment](./upstream-chat-agent-router-alignment.md)
 > 后续：[Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)
 > 上游基线：`nashsu/llm_wiki` tag `v0.5.0@997db74`；截至 2026-06-24 已看到 `v0.5.1@cc4b98f`
 
@@ -48,13 +49,13 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 
 1. PR E：Ingest/schema/review-create-page safety
 2. H-lite：zoom/layout/app visibility
-3. PR G：聊天图片粘贴 + 多模态消息 + chat standalone
+3. PR G：Chat Agent Router alignment + multimodal chat
 4. PR F：MinerU PDF 解析
 5. PR I：主题、托盘、通用设置
 6. PR J：图形渲染优化
 7. PR K：AnyTXT、源文件导入、Lint 持久化和低风险杂项
 
-每个 PR 都必须重新核对 upstream `v0.5.x` delta，不得沿用旧 `v0.4.25` 结论。
+每个剩余 PR 都必须重新核对 upstream `v0.5.x` delta，不得沿用旧 `v0.4.25` 结论。
 
 ## Agent Boundary From Upstream v0.5.x
 
@@ -95,9 +96,9 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 - Language prompt technical names。
 - App startup visibility 只按当前 Mac target 验收；旧 Windows startup 修复如果仍在 upstream delta 中，作为 legacy reference 分流，不扩大当前产品承诺。
 
-### PR G：聊天图片粘贴 + 多模态消息 + chat standalone
+### PR G：Chat Agent Router alignment + multimodal chat
 
-目标：普通 Chat 支持图片和 multimodal message，同时重新评估 upstream Chat Agent Router 是否进入普通 Chat；不得破坏 Agent SDK sidecar stream UI。
+目标：普通 Chat 对齐 upstream `v0.5.x` Chat Agent Router，并支持图片和 multimodal message；不得破坏 Agent SDK sidecar stream UI。
 
 重点：
 
@@ -105,7 +106,7 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 - User message image rendering。
 - LLM message ContentBlock[] 转换。
 - Chat standalone 迁移。
-- 上游 Chat Agent Router 的 agent mode、tool progress、project file read、reasoning fallback 分流。
+- 上游 Chat Agent Router 的 query understanding、`fast / standard / deep / local_first`、project files/read file、agent steps 持久化、tool progress UI、reasoning fallback 分流。
 - 保留本地 Agent permission、timeline、rewind、resume、resource limit notice。
 
 风险：HIGH。Chat 与 Agent UI 冲突最大，必须补 Agent 回归。

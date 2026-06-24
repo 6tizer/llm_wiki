@@ -1,13 +1,14 @@
 # Phase 7: Agent SDK productization
 
-> 类型：Phase backlog | 创建：2026-06-12 | 更新：2026-06-24 | 状态：backlog
+> 类型：Phase backlog | 创建：2026-06-12 | 更新：2026-06-25 | 状态：backlog
 > 文件名说明：保留 `agent-sidecar-phase6.1.md` 作为历史兼容路径；当前定位是 Phase 7。
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 前置：[Phase 6 upstream sync](./upstream-sync-phase6.md)、[Mac Product Baseline](./mac-product-baseline.md)
+> SDK 对齐：[Claude Agent SDK Alignment](./claude-agent-sdk-alignment.md)
 
 ## 结论
 
-本文件不再表示 Phase 6 的尾项，而是 Phase 7 backlog：Agent SDK productization。等 Phase 6 upstream `v0.5.x` P0/P1 同步和 Mac-only baseline 稳定后，再集中处理 Agent SDK sidecar 的 UX、session continuity、permission entry、QA fixture 和内部 RPC 评估。
+本文件不再表示 Phase 6 的尾项，而是 Phase 7 backlog：Agent SDK productization。等 Phase 6 upstream `v0.5.x` P0/P1 同步和 Mac-only baseline 稳定后，先做 Claude Agent SDK alignment，再集中处理 Agent SDK sidecar 的 UX、session continuity、permission entry、QA fixture 和内部 RPC 评估。
 
 术语边界：upstream `v0.5.x` 的 Agent 是普通 Chat 内的 **Chat Agent Router**，负责 query understanding、只读工具路由和 tool progress。Phase 7 的 Agent 是本 fork 的 **Agent SDK sidecar**，负责 Claude Agent SDK runtime、写入能力、permission/session/resource-limit/pipeline 产品化。Chat Agent Router 的 port 与 UI 融合优先在 Phase 6 PR G 评估；只有 sidecar 生命周期和权限相关问题进入本文件。
 
@@ -31,7 +32,21 @@
 - Phase 6 remaining PRs have completed or routed upstream `v0.5.x` P0/P1 delta.
 - `mac-product-baseline` has cleaned up Mac-only CI/release/app identity.
 - Agent sidecar binary, Agent settings, Chat Agent mode, MCP resources and local HTTP API are stable after upstream sync.
+- Claude Agent SDK alignment PR has upgraded and assessed latest stable SDK delta.
 - GitNexus index is current.
+
+## PR 7-0：Claude Agent SDK alignment
+
+目标：在 timeline、rewind、permission 和 session productization 前，把 sidecar 跟进 Claude Agent SDK latest stable。
+
+SDK 版本事实、dist-tags 核验命令和开工复核要求维护在 [Claude Agent SDK Alignment](./claude-agent-sdk-alignment.md)。PR 7-0 开工时以该文档的最新核验结果为准，避免在多个计划文件里重复维护同一组版本号。
+
+Work items：
+
+- 升级 SDK 到 latest stable，并验证 sidecar transport、message schema 和 bundled build。
+- 评估 `rewind_conversation`、`canUseTool` `agent_id`、background/subagent permission、`tool_use_meta` / `icon_url`。
+- 评估 structured rate-limit / credits / refusal errors、`sandbox.credentials`、hooks/skills/plugins delta。
+- 明确哪些能力进入 PR 7-A / 7-B / 7-C，哪些只记录为后续。
 
 ## PR 7-A：Agent session continuity and activity timeline
 
