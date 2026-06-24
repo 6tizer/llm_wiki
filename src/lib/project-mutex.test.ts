@@ -163,3 +163,75 @@ describe("withProjectLock — cross-project parallelism", () => {
     expect(order).toContain("B:end")
   })
 })
+
+describe("withProjectLock — path-variant serialization", () => {
+  // The lock key is the normalized path (backslashes → forward slashes,
+  // trailing slash stripped). Two callers that pass the same logical
+  // project with different string forms MUST serialize — otherwise the
+  // silent index.md clobber race this lock exists to prevent can
+  // re-emerge for path-variant callers.
+  it("serializes /proj and /proj/ (trailing slash)", async () => {
+    const order: string[] = []
+    const aRunning = defer()
+    const aRelease = defer()
+
+    const callA = withProjectLock("/proj", async () => {
+      order.push("A:start")
+      aRunning.resolve()
+      await aRelease.promise
+      order.push("A:end")
+      return "A"
+    })
+
+    await aRunning.promise
+
+    // Trailing-slash variant — same logical project, must wait on A.
+    const callB = withProjectLock("/proj/", async () => {
+      order.push("B:start")
+      order.push("B:end")
+      return "B"
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toEqual(["A:start"])
+
+    aRelease.resolve()
+    expect(await callA).toBe("A")
+    expect(await callB).toBe("B")
+    expect(order).toEqual(["A:start", "A:end", "B:start", "B:end"])
+  })
+
+  it("serializes /proj and backslash variant", async () => {
+    const order: string[] = []
+    const aRunning = defer()
+    const aRelease = defer()
+
+    const callA = withProjectLock("C:/proj", async () => {
+      order.push("A:start")
+      aRunning.resolve()
+      await aRelease.promise
+      order.push("A:end")
+      return "A"
+    })
+
+    await aRunning.promise
+
+    // Backslash variant of the same logical path — normalizePath
+    // converts \ to /, so this must map to the same lock slot.
+    const callB = withProjectLock("C:\\proj", async () => {
+      order.push("B:start")
+      order.push("B:end")
+      return "B"
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(order).toEqual(["A:start"])
+
+    aRelease.resolve()
+    expect(await callA).toBe("A")
+    expect(await callB).toBe("B")
+    expect(order).toEqual(["A:start", "A:end", "B:start", "B:end"])
+  })
+})

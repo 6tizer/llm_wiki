@@ -33,6 +33,31 @@ vi.mock("@/lib/embedding", () => ({
     removePageEmbeddingMock(projectPath, slug),
 }))
 
+// Mock wiki-page-delete so cleanupWrittenFiles is deterministic and
+// side-effect-free across tests. The real cascade reads index.md,
+// lists directories, rewrites frontmatter, and recursively removes
+// media dirs — all coupled to mock-readFile/mock-listDirectory state,
+// and its async settle timing leaks deleteFile calls across tests
+// when invoked mid-test (e.g. from the abort-guard path). The mock
+// reproduces the observable contract the cascade tests rely on:
+// deleteFile(pagePath) then removePageEmbedding(projectPath, slug).
+vi.mock("@/lib/wiki-page-delete", () => ({
+  cascadeDeleteWikiPage: async (
+    projectPath: string,
+    pagePath: string,
+  ): Promise<void> => {
+    const { deleteFile } = await import("@/commands/fs")
+    const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
+    const { getFileStem } = await import("@/lib/path-utils")
+    await deleteFile(pagePath)
+    const slug = getFileStem(pagePath)
+    if (slug.length > 0) {
+      const { removePageEmbedding } = await import("@/lib/embedding")
+      await removePageEmbedding(projectPath, wikiPathToVectorPageId(projectPath, pagePath))
+    }
+  },
+}))
+
 // Mock project-identity — tests don't hit Tauri plugin-store. Maps the
 // test UUIDs defined below back to their assigned paths.
 const TEST_ID = "test-project-uuid"
@@ -91,6 +116,13 @@ beforeEach(async () => {
   mockSweep.mockReset()
   mockSweep.mockResolvedValue(0)
   removePageEmbeddingMock.mockReset()
+  // Reset deleteFile too — several tests trigger cleanupWrittenFiles
+  // (cancel/cancelAll/pause/abort-guard) which dynamically imports
+  // wiki-page-delete and calls deleteFile. Without a reset here, call
+  // counts leak across tests.
+  const { deleteFile } = await import("@/commands/fs")
+  vi.mocked(deleteFile).mockReset()
+  vi.mocked(deleteFile).mockResolvedValue(undefined)
 
   // Default: persisted queue file doesn't exist
   mockReadFile.mockRejectedValue(new Error("ENOENT"))
@@ -600,6 +632,63 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
       expect(parsed).toEqual([])
     }
   })
+
+  it("processNext routes an aborted (partial) resolve through the error branch, not success", async () => {
+    // P1-1: if the run signal aborts mid-write but autoIngest still
+    // resolves late with a PARTIAL file list, the success branch must
+    // NOT consume it. The captured-signal abort guard throws
+    // "Ingest aborted mid-write", routing through the catch branch so
+    // the partial result is cleaned up and the task is retried, not
+    // silently dropped as if complete.
+    //
+    // We drive the abort via cancelAllTasks (aborts the signal) but
+    // keep a snapshot of the task id, then resolve autoIngest late.
+    // Before the fix the late resolve would re-enter the success
+    // branch and bump completedSinceIdle / corrupt accounting; after
+    // the fix it throws into the catch branch (a no-op for an already-
+    // removed task, but crucially does NOT register as success).
+    // Reset the deleteFile mock so this test's cleanup cascade doesn't
+    // leak call counts into the cleanupWrittenFiles describe block below.
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveAutoIngest: (files: string[]) => void = () => {}
+    mockAutoIngest.mockImplementation(
+      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+    )
+
+    const taskId = await enqueueIngest(TEST_ID, "aborted-mid.md")
+    await flushMicrotasks(2)
+    expect(getQueue().find((t) => t.id === taskId)?.status).toBe("processing")
+
+    // Snapshot the summary BEFORE the late resolve. completedSinceIdle
+    // is exposed via getQueueSummary — capturing it lets us prove the
+    // late partial resolve does NOT register as a completion.
+    const summaryBefore = getQueueSummary()
+
+    const { cancelAllTasks } = await import("./ingest-queue")
+    const cancelPromise = cancelAllTasks()
+    // The signal is now aborted. Resolve autoIngest with a partial list
+    // AFTER the abort — the success-branch guard must reject it. Use a
+    // NON-source wiki path so cleanupWrittenFiles doesn't trigger the
+    // extra media-directory cascade (which would couple this test to
+    // mock-readFile state for index.md / media listing).
+    resolveAutoIngest(["wiki/concepts/partial.md"])
+    await cancelPromise
+    // Drain generously: the abort guard's cleanupWrittenFiles runs an
+    // async cascade (deleteFile + removePageEmbedding) that must fully
+    // settle before the next test's beforeEach, or its mock calls leak
+    // across tests. Drain generously: the mock chain does several
+    // `await import`s + `await`s, each adding a microtask hop.
+    await flushMicrotasks(40)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // The partial result must NOT have bumped the completed counter —
+    // that would mean the success branch ran on aborted/partial data.
+    const summaryAfter = getQueueSummary()
+    expect(summaryAfter.completed).toBe(summaryBefore.completed)
+  })
 })
 
 // ── cleanupWrittenFiles — file delete + LanceDB chunk cascade ──────
@@ -708,5 +797,55 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
       "C:/proj",
       wikiRelativePathToVectorPageId("wiki\\concepts\\rope.md"),
     )
+  })
+})
+
+// ── saveQueue — error surfacing (P2-5) ──────────────────────────────
+// saveQueue used to swallow ALL write errors silently. It now surfaces
+// them to the activity panel (debounced) and logs to console. These
+// tests drive it via enqueueIngest, which calls saveQueue on success.
+describe("ingest-queue — saveQueue error surfacing", () => {
+  beforeEach(async () => {
+    // Clear any activity items carried over from prior tests so the
+    // addItem assertions below start from a clean slate.
+    const { useActivityStore } = await import("@/stores/activity-store")
+    useActivityStore.setState({ items: [] })
+  })
+
+  it("surfaces a saveQueue write failure to the activity panel", async () => {
+    const { useActivityStore } = await import("@/stores/activity-store")
+    // Drive a successful ingest so processNext calls saveQueue, but make
+    // writeFile reject to force the catch branch.
+    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockWriteFile.mockRejectedValue(new Error("EACCES: permission denied"))
+
+    await enqueueIngest(TEST_ID, "raw/sources/err.md")
+    await flushMicrotasks(10)
+
+    const errors = useActivityStore.getState().items.filter((i) => i.status === "error")
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect(errors[0].detail).toMatch(/Failed to save ingest queue/i)
+    expect(errors[0].detail).toMatch(/permission denied/i)
+  })
+
+  it("debounces repeated saveQueue failures (one surface per window)", async () => {
+    const { useActivityStore } = await import("@/stores/activity-store")
+    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockWriteFile.mockRejectedValue(new Error("ENOSPC: no space"))
+
+    // Trigger several saveQueue calls in quick succession.
+    await enqueueIngest(TEST_ID, "raw/sources/a.md")
+    await flushMicrotasks(10)
+    await enqueueIngest(TEST_ID, "raw/sources/b.md")
+    await flushMicrotasks(10)
+    await enqueueIngest(TEST_ID, "raw/sources/c.md")
+    await flushMicrotasks(10)
+
+    const errors = useActivityStore
+      .getState()
+      .items.filter((i) => i.status === "error" && /save ingest queue/i.test(i.detail))
+    // All three enqueues happened within the debounce window, so only
+    // ONE error item should have been added.
+    expect(errors).toHaveLength(1)
   })
 })

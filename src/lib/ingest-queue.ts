@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "@/commands/fs"
 import { autoIngest } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useActivityStore } from "@/stores/activity-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 import { getProjectPathById } from "@/lib/project-identity"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
@@ -42,6 +43,12 @@ let processedSinceDrain = false
 // Abort controller for the review-sweep LLM call so switching projects
 // cancels a long-running judgment instead of burning tokens.
 let sweepAbortController: AbortController | null = null
+// Debounce for surfacing saveQueue errors to the activity panel: a
+// persistent disk-full / permission error would otherwise spam one
+// item per call (saveQueue runs from enqueue, retry, cancel, etc.).
+// One surface per window is enough; the error is non-fatal.
+let lastSaveQueueErrorAt = 0
+const SAVE_QUEUE_ERROR_DEBOUNCE_MS = 5000
 
 function resetQueueAccounting(): void {
   completedSinceIdle = 0
@@ -58,8 +65,30 @@ async function saveQueue(projectPath: string): Promise<void> {
     // Only save pending and failed tasks (done tasks are removed)
     const toSave = queue.filter((t) => t.status !== "done")
     await writeFile(queueFilePath(projectPath), JSON.stringify(toSave, null, 2))
-  } catch {
-    // non-critical
+  } catch (err) {
+    // Non-fatal (the queue also lives in memory), but no longer silent:
+    // a persistent disk-full / permission error would otherwise make
+    // every enqueue/retry/cancel fail invisibly. Surface it to the
+    // activity panel once per debounce window so the user can act, and
+    // always log so the console retains the full picture.
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[ingest] saveQueue failed for "${projectPath}": ${message}`)
+    const now = Date.now()
+    if (now - lastSaveQueueErrorAt > SAVE_QUEUE_ERROR_DEBOUNCE_MS) {
+      lastSaveQueueErrorAt = now
+      try {
+        useActivityStore.getState().addItem({
+          type: "ingest",
+          title: "Ingest queue",
+          status: "error",
+          detail: `Failed to save ingest queue: ${message}`,
+          filesWritten: [],
+        })
+      } catch {
+        // activity-store unavailable (e.g. headless test) — the
+        // console.error above still preserves the signal.
+      }
+    }
   }
 }
 
@@ -381,6 +410,9 @@ export function clearQueueState(): void {
   lastWrittenFiles = []
   processedSinceDrain = false
   resetQueueAccounting()
+  // Reset the saveQueue error debounce so a prior test's surfaced error
+  // doesn't suppress the next test's expected surface.
+  lastSaveQueueErrorAt = 0
 }
 
 /**
@@ -403,6 +435,14 @@ export async function pauseQueue(): Promise<void> {
   if (currentAbortController) {
     currentAbortController.abort()
     currentAbortController = null
+  }
+  // Clean up any files the in-flight ingest wrote before the abort
+  // landed. Without this, partial pages from a paused ingest are
+  // orphaned on disk (the abort only stops further writes; it does
+  // not undo the ones already made). The task is reverted to pending
+  // below so it re-runs from scratch on the next restore.
+  if (lastWrittenFiles.length > 0) {
+    await cleanupWrittenFiles(pausedProjectPath, lastWrittenFiles)
   }
   if (sweepAbortController) {
     sweepAbortController.abort()
@@ -569,10 +609,17 @@ async function processNext(projectId: string): Promise<void> {
   console.log(`[Ingest Queue] Processing: ${next.sourcePath} (${queue.filter((t) => t.projectId === projectId && t.status === "pending").length} remaining)`)
 
   currentAbortController = new AbortController()
+  // Capture the signal for THIS run locally. cancelTask / pauseQueue
+  // null out the module-level `currentAbortController` after aborting,
+  // so a late-resolving autoIngest cannot rely on reading
+  // `currentAbortController?.signal.aborted` below — that would be
+  // `undefined` (falsy) and the partial result would slip into the
+  // success branch. The captured reference survives the null-out.
+  const runSignal = currentAbortController.signal
   lastWrittenFiles = []
 
   try {
-    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, currentAbortController.signal, next.folderContext)
+    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, runSignal, next.folderContext)
     // Stale-context guard: project switched during the long LLM call.
     // Bail without mutating queue or writing to disk — pauseQueue has
     // already persisted the correct state to the old project's file,
@@ -586,6 +633,22 @@ async function processNext(projectId: string): Promise<void> {
     // as failure so the task stays in the queue and retries.
     if (writtenFiles.length === 0) {
       throw new Error("Ingest produced no output files")
+    }
+
+    // Abort guard: if the signal fired DURING the LLM/stream but the
+    // promise still resolved late (a trailing onDone fast-path), the
+    // returned `writtenFiles` may be a PARTIAL set. Without this check
+    // we'd treat it as full success — null the controller, clear
+    // lastWrittenFiles, drop the task from the queue, and leave the
+    // partial pages on disk with no retry path. Instead: clean up the
+    // partial output and fall through to the catch branch (preserving
+    // retry semantics), matching the cancelTask/cancelAllTasks flow.
+    if (runSignal.aborted) {
+      if (writtenFiles.length > 0) {
+        await cleanupWrittenFiles(pp, writtenFiles)
+      }
+      lastWrittenFiles = []
+      throw new Error("Ingest aborted mid-write")
     }
 
     // Success: remove from queue

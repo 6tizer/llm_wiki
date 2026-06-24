@@ -1065,11 +1065,23 @@ async function autoIngestImpl(
   // mismatch, path-traversal rejection, empty-path) are NOT failures
   // — they represent deterministic decisions and caching them is
   // safe.
-  if (writtenPaths.length > 0 && hardFailures.length === 0) {
+  //
+  // Also skip on abort: a mid-write abort (cancel / pause / project
+  // switch) can leave `writtenPaths` partially populated with the
+  // pages that made it to disk before the signal fired. Caching that
+  // partial list would, on re-ingest, silently treat the missing
+  // pages as already-done — the same silent-truncation failure mode
+  // as the hardFailure branch above. The caller's abort path owns
+  // cleaning up the partial files; here we only refuse to freeze them.
+  if (writtenPaths.length > 0 && hardFailures.length === 0 && !signal?.aborted) {
     await saveIngestCache(pp, sourceIdentity, sourceContent, writtenPaths)
     if (longSourceCheckpointPath) {
       await clearLongSourceCheckpoint(longSourceCheckpointPath)
     }
+  } else if (signal?.aborted) {
+    console.warn(
+      `[ingest] Skipping cache save for "${sourceIdentity}" — aborted mid-write`,
+    )
   } else if (hardFailures.length > 0) {
     console.warn(
       `[ingest] Skipping cache save for "${sourceIdentity}" — ${hardFailures.length} block(s) failed to write: ${hardFailures.join(", ")}`,
