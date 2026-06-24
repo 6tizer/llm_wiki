@@ -39,6 +39,12 @@ import {
 } from "./codex-cli-transport";
 import { useWikiStore } from "@/stores/wiki-store";
 
+const agentMessageLine = (text: string) =>
+	JSON.stringify({
+		type: "item.completed",
+		item: { type: "agent_message", text },
+	});
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	tauriMocks.reset();
@@ -141,10 +147,7 @@ describe("streamCodexCli", () => {
 		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
 			code: 0,
 			stderr: "",
-			stdout: JSON.stringify({
-				type: "item.completed",
-				item: { type: "agent_message", text: "analysis" },
-			}),
+			stdout: agentMessageLine("analysis"),
 		});
 
 		await stream;
@@ -285,21 +288,26 @@ describe("streamCodexCli", () => {
 			stderr: "",
 			stdout: [
 				JSON.stringify({ type: "turn.started" }),
-				JSON.stringify({
-					type: "item.completed",
-					item: { type: "agent_message", text: "fallback analysis" },
-				}),
+				agentMessageLine("fallback analysis A"),
+				agentMessageLine("fallback analysis B"),
 			].join("\n"),
 		});
 
 		await stream;
 
-		expect(callbacks.onToken).toHaveBeenCalledWith("fallback analysis");
+		expect(callbacks.onToken).toHaveBeenNthCalledWith(
+			1,
+			"fallback analysis A",
+		);
+		expect(callbacks.onToken).toHaveBeenNthCalledWith(
+			2,
+			"fallback analysis B",
+		);
 		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
 
-	it("does not replay done stdout when a live agent message was already emitted", async () => {
+	it("does not replay the same done stdout message after a live agent message", async () => {
 		const callbacks = {
 			onToken: vi.fn(),
 			onDone: vi.fn(),
@@ -326,10 +334,7 @@ describe("streamCodexCli", () => {
 		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
 			streamId: string;
 		};
-		const line = JSON.stringify({
-			type: "item.completed",
-			item: { type: "agent_message", text: "live analysis" },
-		});
+		const line = agentMessageLine("live analysis");
 		tauriMocks.emit(`codex-cli:${payload.streamId}`, line);
 		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
 			code: 0,
@@ -341,6 +346,90 @@ describe("streamCodexCli", () => {
 
 		expect(callbacks.onToken).toHaveBeenCalledTimes(1);
 		expect(callbacks.onToken).toHaveBeenCalledWith("live analysis");
+		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
+	it("replays only missed done stdout messages after live agent messages", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}`, agentMessageLine("A"));
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 0,
+			stderr: "",
+			stdout: [agentMessageLine("A"), agentMessageLine("B")].join("\n"),
+		});
+
+		await stream;
+
+		expect(callbacks.onToken).toHaveBeenNthCalledWith(1, "A");
+		expect(callbacks.onToken).toHaveBeenNthCalledWith(2, "B");
+		expect(callbacks.onToken).toHaveBeenCalledTimes(2);
+		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
+	it("deduplicates repeated agent messages in done stdout", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 0,
+			stderr: "",
+			stdout: [agentMessageLine("A"), agentMessageLine("A")].join("\n"),
+		});
+
+		await stream;
+
+		expect(callbacks.onToken).toHaveBeenCalledTimes(1);
+		expect(callbacks.onToken).toHaveBeenCalledWith("A");
 		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
@@ -393,6 +482,52 @@ describe("streamCodexCli", () => {
 		);
 	});
 
+	it("does not replay timeout stdout and removes already-sent messages from details", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}`, agentMessageLine("A"));
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: -1,
+			timedOut: true,
+			stderr: "",
+			stdout: [agentMessageLine("A"), agentMessageLine("B")].join("\n"),
+		});
+
+		await stream;
+
+		expect(callbacks.onToken).toHaveBeenCalledTimes(1);
+		expect(callbacks.onToken).toHaveBeenCalledWith("A");
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledTimes(1);
+		const message = callbacks.onError.mock.calls[0]?.[0].message;
+		expect(message).toBe("B");
+		expect(message).not.toContain("A");
+	});
+
 	it("keeps ordinary non-zero done payloads on the generic exit-code error path", async () => {
 		const callbacks = {
 			onToken: vi.fn(),
@@ -434,6 +569,93 @@ describe("streamCodexCli", () => {
 				message: "Codex CLI exited with code 2:\nbad flags",
 			}),
 		);
+	});
+
+	it("does not replay non-zero stdout and removes already-sent messages from details", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}`, agentMessageLine("A"));
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 2,
+			stderr: "",
+			stdout: [agentMessageLine("A"), agentMessageLine("B")].join("\n"),
+		});
+
+		await stream;
+
+		expect(callbacks.onToken).toHaveBeenCalledTimes(1);
+		expect(callbacks.onToken).toHaveBeenCalledWith("A");
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledTimes(1);
+		const message = callbacks.onError.mock.calls[0]?.[0].message;
+		expect(message).toBe("Codex CLI exited with code 2:\nB");
+		expect(message).not.toContain("A");
+	});
+
+	it("ignores stdout truncated markers in error details", async () => {
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 2,
+			stderr: "",
+			stdout: ["[stdout truncated]", agentMessageLine("B")].join("\n"),
+		});
+
+		await stream;
+
+		expect(callbacks.onToken).not.toHaveBeenCalled();
+		expect(callbacks.onDone).not.toHaveBeenCalled();
+		const message = callbacks.onError.mock.calls[0]?.[0].message;
+		expect(message).toBe("Codex CLI exited with code 2:\nB");
+		expect(message).not.toContain("[stdout truncated]");
 	});
 
 	it("surfaces a clear error when completion has no agent message", async () => {
@@ -565,6 +787,62 @@ describe("streamCodexCli", () => {
 			([command]) => command === "codex_cli_kill",
 		);
 		expect(killCalls).toHaveLength(1);
+		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
+	it("ignores late done events after abort finishes the stream", async () => {
+		const controller = new AbortController();
+		const callbacks = {
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+		let resolveSpawn: (() => void) | undefined;
+		tauriMocks.invoke.mockImplementation((command: string) => {
+			if (command === "codex_cli_spawn") {
+				return new Promise<void>((resolve) => {
+					resolveSpawn = resolve;
+				});
+			}
+			return Promise.resolve(undefined);
+		});
+
+		const stream = streamCodexCli(
+			{
+				provider: "codex-cli",
+				apiKey: "",
+				model: "gpt-5.1-codex-mini",
+				ollamaUrl: "",
+				customEndpoint: "",
+				maxContextSize: 128000,
+			},
+			[{ role: "user", content: "Analyze this source." }],
+			callbacks,
+			controller.signal,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"codex_cli_spawn",
+				expect.anything(),
+			);
+		});
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			streamId: string;
+		};
+
+		controller.abort();
+		tauriMocks.emit(`codex-cli:${payload.streamId}:done`, {
+			code: 0,
+			stderr: "",
+			stdout: agentMessageLine("late"),
+		});
+
+		resolveSpawn?.();
+		await stream;
+
+		expect(callbacks.onToken).not.toHaveBeenCalled();
 		expect(callbacks.onDone).toHaveBeenCalledTimes(1);
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
