@@ -1,6 +1,11 @@
 {
   "bundle": {
-    "resources": ["sidecar/dist-bin/sidecar"],
+    "resources": {
+      "sidecar/dist-bin/sidecar": "sidecar/dist-bin/sidecar",
+      "../mcp-server/package.json": "mcp-server/package.json",
+      "../mcp-server/dist": "mcp-server/dist",
+      "../mcp-server/node_modules": "mcp-server/node_modules"
+    },
     "macOS": {
       "frameworks": ["pdfium/libpdfium.dylib"]
     }

@@ -84,7 +84,7 @@ const CATEGORIES: Category[] = [
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
-function initialDraft(
+export function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
   embed: ReturnType<typeof useWikiStore.getState>["embeddingConfig"],
   multimodal: ReturnType<typeof useWikiStore.getState>["multimodalConfig"],
@@ -153,11 +153,21 @@ function initialDraft(
     sourceWatchConfig: normalizeSourceWatchConfig(sourceWatch),
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
+    apiMcpEnabled: apiConfig.mcpEnabled ?? false,
     apiToken: apiConfig.token,
     agentMaxTurns: agentConfig.maxTurns,
     agentMaxFilesChanged: agentConfig.maxFilesChanged,
     agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
     uiLanguage,
+  }
+}
+
+export function apiConfigFromDraft(draft: SettingsDraft) {
+  return {
+    enabled: draft.apiEnabled,
+    allowUnauthenticated: draft.apiAllowUnauthenticated,
+    mcpEnabled: draft.apiMcpEnabled,
+    token: draft.apiToken.trim(),
   }
 }
 
@@ -394,14 +404,10 @@ export function SettingsView() {
     setMaxHistoryMessages(draft.maxHistoryMessages)
 
     // ── API server: persist + push to store. The Rust side reads
-    // `apiConfig.{enabled,token}` from this same `app-state.json` on
+    // `apiConfig.{enabled,token,mcpEnabled}` from this same `app-state.json` on
     // every request via a 5s cache, so saved changes propagate
     // within that window without any IPC round-trip.
-    const newApiConfig = {
-      enabled: draft.apiEnabled,
-      allowUnauthenticated: draft.apiAllowUnauthenticated,
-      token: draft.apiToken.trim(),
-    }
+    const newApiConfig = apiConfigFromDraft(draft)
     setApiConfig(newApiConfig)
     await saveApiConfig(newApiConfig)
     try {

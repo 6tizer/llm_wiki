@@ -6,7 +6,7 @@
 	"build": {
 		"beforeDevCommand": "npm --prefix src-tauri/sidecar run build:if-stale && npm run dev",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "npm run build && npm --prefix src-tauri/sidecar run build:binary",
+		"beforeBuildCommand": "npm run build:desktop",
 		"frontendDist": "../dist"
 	},
 	"app": {

@@ -345,7 +345,7 @@
       "network": "网络",
       "sourceWatch": "资料文件夹监控",
       "scheduledImport": "定时导入",
-      "apiServer": "API 服务",
+      "apiServer": "API + MCP",
       "agent": "Agent",
       "output": "输出偏好",
       "interface": "界面",
@@ -578,8 +578,8 @@
         "never": "从未"
       },
       "apiServer": {
-        "title": "API 服务",
-        "description": "本地在 127.0.0.1:19828 暴露一个 HTTP API，把项目文件、搜索、知识图谱、重新扫描接口开放给你自己的脚本和工具。无需通过 UI 即可读取 wiki。",
+        "title": "API + MCP",
+        "description": "通过本地 HTTP API 把 LLM Wiki 开放给你自己的工具，也可以选择启用随桌面端打包的 MCP server 供 agent 客户端使用。",
         "enable": "启用本地 HTTP API",
         "enableHint": "关闭后，即使已配置 token，除 /health 外的所有接口都会返回 503。可作为不清空 token 的临时关闭开关。",
         "status": "状态",
@@ -619,10 +619,16 @@
         "endpointProjectsNote": "列出所有已知项目及其 ID 和路径。",
         "endpointFilesNote": "?root=wiki|sources|all；?recursive=false；?maxFiles=N（≤10000）。",
         "endpointContentNote": "?path=wiki/index.md —— 仅文本文件，最大 2 MB。",
+        "endpointReviewsNote": "?status=unresolved|resolved|all&type=TYPE&limit=N —— 已清洗的 Review 列表项目。",
         "endpointSearchNote": "JSON body：{ query, topK?, includeContent?, queryEmbedding? }。配置嵌入后使用统一的关键词 + 向量检索。",
         "endpointGraphNote": "?q=…&nodeType=…&limit=N —— 基于 wiki/*.md 的双链图谱。",
         "endpointRescanNote": "使用你的资料文件夹监控配置触发后端重新扫描。",
-        "endpointChatNote": "尚未实现（返回 501）。"
+        "endpointChatNote": "尚未实现（返回 501）。",
+        "mcpEnable": "启用 MCP 访问",
+        "mcpEnableHint": "MCP 通过本地 API 工作，并沿用同一套 token 规则。保持 HTTP API 启用后，将 MCP 客户端连接到随应用打包的 Node server。",
+        "mcpUsage": "MCP 用法",
+        "mcpUsageHint": "先运行一次 `npm run mcp:build`，然后按下方配置 MCP 客户端。除非启用无认证访问，否则请在 MCP 客户端环境变量中设置 LLM_WIKI_API_TOKEN。",
+        "mcpPathUnavailable": "未找到 MCP server 入口。请在 LLM Wiki 仓库中运行 `npm run mcp:build`，然后重新打开设置。"
       },
       "agent": {
         "title": "Agent",

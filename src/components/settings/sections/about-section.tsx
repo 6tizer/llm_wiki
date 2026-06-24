@@ -11,6 +11,7 @@ import { saveUpdateCheckState } from "@/lib/project-store"
 
 interface ApiHealth {
   enabled?: boolean
+  mcpEnabled?: boolean
   authConfigured?: boolean
   allowUnauthenticated?: boolean
 }
@@ -100,6 +101,9 @@ export function AboutSection() {
     }
     if (apiStatus === "running" && apiHealth?.authConfigured === false) {
       return t("settings.sections.about.apiNoToken")
+    }
+    if (apiStatus === "running" && apiHealth?.mcpEnabled) {
+      return `${apiStatus} + MCP`
     }
     return apiStatus
   })()

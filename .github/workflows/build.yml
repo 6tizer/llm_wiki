@@ -94,6 +94,11 @@ jobs:
       - name: Build sidecar binary
         run: npm --prefix src-tauri/sidecar run build:binary
 
+      - name: Prepare MCP server resources
+        run: |
+          npm --prefix mcp-server ci
+          npm run mcp:build
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
