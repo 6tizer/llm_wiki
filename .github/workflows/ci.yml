@@ -8,37 +8,17 @@ on:
 
 jobs:
   check:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macos-latest, ubuntu-22.04]
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          docker system prune -af || true
-          df -h
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install protoc (macOS)
-        if: matrix.platform == 'macos-latest'
         run: brew install protobuf
-
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf protobuf-compiler
-
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

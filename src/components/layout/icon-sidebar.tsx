@@ -67,7 +67,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
         <div className="mb-2 flex items-center justify-center">
           <img
             src={logoImg}
-            alt="LLM Wiki"
+            alt="LLM Wiki Agent"
             className="h-8 w-8 rounded-[22%]"
           />
         </div>

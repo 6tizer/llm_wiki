@@ -1,7 +1,7 @@
-# LLM Wiki
+# LLM Wiki Agent
 
 <p align="center">
-  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Logo">
+  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Agent Logo">
 </p>
 
 <p align="center">
@@ -31,15 +31,15 @@
 
 ## 这是什么？
 
-LLM Wiki 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
+LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
 
-当前只主动维护 Mac 桌面应用。Windows/Linux 的旧产物或过渡产物可能仍出现在 release、CI 或历史文档里，但它们不是当前 active product target。CI/release 清理会放到下一轮实现 PR [`mac-product-baseline`](docs/plans/mac-product-baseline.md)。
+当前只主动维护 Apple Silicon Mac 桌面应用。Windows/Linux 产物可能存在于旧 release 或历史文档里，但它们只是 legacy artifacts，不是当前 active release 或 CI target。
 
 大多数"LLM + 文档"的玩法都是 RAG：上传文件，模型在查询时检索相关片段，每次都从零生成答案——知识不会沉淀。LLM Wiki 走相反的路线：LLM **增量构建并维护一个持久化的 Wiki**——一个互相交叉引用的 markdown 页面目录，矛盾被标记出来，综合判断不断演进。知识**编译一次**就保持更新，而不是每次提问都重新推导。
 
 Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完全归你所有。你负责筛选源文件、提出问题；LLM 负责阅读、总结、交叉引用和繁琐的维护工作。
 
-它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个能自主研究和更新 Wiki 的内置 Agent。
+它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个能自主研究和更新 Wiki 的内置 Agent SDK sidecar。
 
 <p align="center">
   <img src="assets/llm_wiki_arch.jpg" width="100%" alt="LLM Wiki 架构">
@@ -47,7 +47,7 @@ Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完
 
 ## 核心亮点
 
-- **内置 Agent** —— 基于 Claude Agent SDK 的 Agent 运行在应用内，配有专属 Wiki 工具、多轮对话、工具调用时间线、权限审批、session resume/fork。它能搜索、读取、写入 Wiki 页面，执行研究，并驱动多 Agent 流水线（compiler → linter → fixer → synthesizer → qa）。
+- **内置 Agent SDK sidecar** —— 基于 Claude Agent SDK 的 Agent 运行在应用内，配有专属 Wiki 工具、多轮对话、工具调用时间线、权限审批、session resume/fork。它能搜索、读取、写入 Wiki 页面，执行研究，并驱动多 Agent 流水线（compiler → linter → fixer → synthesizer → qa）。
 - **两步 ingest** —— LLM 先分析源文档，再生成页面，带源文件溯源和 SHA-256 增量缓存。
 - **知识图谱** —— 4 信号相关性引擎 + Louvain 社区检测，呈现知识簇、惊喜连接和知识缺口。
 - **混合搜索** —— 分词关键词搜索（英文 + 中文 CJK）配合可选的 LanceDB 向量语义搜索。
@@ -129,7 +129,7 @@ my-wiki/
 - **Lint 闭环** —— Agent 驱动的检测与自动修复，带并发控制
 
 ### 平台
-- **Mac-only active maintenance** —— 基于 Tauri v2 的 macOS 原生桌面应用，支持 Apple Silicon + Intel
+- **Mac-only active maintenance** —— 基于 Tauri v2 的 Apple Silicon macOS 原生桌面应用
 - **多 LLM 提供商** —— OpenAI、Anthropic、Google、Ollama、Azure，或任意 OpenAI 兼容端点
 - **本地 HTTP API** —— token 保护的 `127.0.0.1` JSON API，供外部工具和 Agent 使用
 - **国际化** —— 中英文界面
@@ -158,9 +158,9 @@ my-wiki/
 ### 预编译二进制
 
 从 [Releases](https://github.com/6tizer/llm_wiki/releases) 下载：
-- **macOS** —— `.dmg`（Apple Silicon + Intel）
+- **macOS** —— `.dmg`（Apple Silicon）
 
-Windows/Linux 产物可能仍存在于旧 release 或迁移期构建中，但不再作为主动支持承诺。仓库会在后续 `mac-product-baseline` PR 清理 CI 和 release 打包口径。
+Windows/Linux 产物可能仍存在于旧 release 中，但只作为 legacy artifacts。当前 active release 和 CI 只面向 Apple Silicon macOS。
 
 ### 从源码构建
 
@@ -195,7 +195,9 @@ npm run tauri build    # 生产构建
 
 ### 内置 Agent Sidecar
 
-LLM Wiki 内置一个基于 **Claude Agent SDK** 的 Agent，以 Node.js sidecar 进程运行，通过 stdin/stdout JSON-lines 与 Rust 后端通信。
+LLM Wiki Agent 内置一个基于 **Claude Agent SDK** 的 Agent，以 Node.js sidecar 进程运行，通过 stdin/stdout JSON-lines 与 Rust 后端通信。
+
+术语说明：上游 LLM Wiki v0.5.x 也在普通 Chat 里加入了 **Chat Agent Router**。这个上游 Agent 是一个 TypeScript planner，会在一次聊天中按需调用只读的项目文件、Wiki、图谱、Web、AnyTXT 工具，再交给当前配置的 LLM provider 回答。本 fork 里的 **Agent SDK sidecar** 指独立的 Claude Agent SDK runtime，包含可写 Wiki 工具、权限审批、session 生命周期和多 Agent 工作流。后续上游同步可以吸收 Chat Agent Router 的有用能力，但不能把它当成 sidecar 的替代品。
 
 - **Wiki MCP 工具** —— `read_page`、`search_pages`、`update_page`、`create_entity` / `create_concept`、`get_graph`
 - **Hooks 与权限** —— Wiki 工具在安全边界内自动允许（写入限制在 `wiki/**/*.md`）；内置工具走 SDK 权限审批
@@ -251,7 +253,7 @@ src/                        # 前端（React + TypeScript）
 
 ## 路线图
 
-当前产品方向是 Mac-only 桌面维护和 Agent 产品化。下一轮实现 PR 是 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.0 delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
+当前产品方向是 Apple Silicon Mac-only 桌面维护和 Agent 产品化。当前实现基线记录在 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.x delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
 
 ## 致谢
 

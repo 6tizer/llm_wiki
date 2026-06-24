@@ -6,7 +6,12 @@ mod proxy;
 mod types;
 
 use panic_guard::run_guarded;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+const APP_STATE_FILE_NAME: &str = "app-state.json";
+const LEGACY_BUNDLE_ID: &str = "com.llmwiki.app";
+const LEGACY_PRODUCT_NAME: &str = "LLM Wiki";
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -92,6 +97,50 @@ fn set_proxy_env(config: proxy::ProxyConfig) -> String {
     summary
 }
 
+fn legacy_app_state_candidates(current_app_data_dir: &Path) -> Vec<PathBuf> {
+    let Some(parent) = current_app_data_dir.parent() else {
+        return Vec::new();
+    };
+    let mut candidates = vec![
+        parent.join(LEGACY_BUNDLE_ID).join(APP_STATE_FILE_NAME),
+        parent.join(LEGACY_PRODUCT_NAME).join(APP_STATE_FILE_NAME),
+    ];
+    candidates.dedup();
+    candidates
+}
+
+fn migrate_legacy_app_state(current_app_data_dir: &Path) {
+    let current_store = current_app_data_dir.join(APP_STATE_FILE_NAME);
+    if current_store.exists() {
+        return;
+    }
+
+    for legacy_store in legacy_app_state_candidates(current_app_data_dir) {
+        if !legacy_store.is_file() {
+            continue;
+        }
+        if let Err(err) = std::fs::create_dir_all(current_app_data_dir) {
+            eprintln!("[app-state] could not create app data dir for migration: {err}");
+            return;
+        }
+        match std::fs::copy(&legacy_store, &current_store) {
+            Ok(_) => {
+                eprintln!(
+                    "[app-state] migrated legacy settings from {}",
+                    legacy_store.display()
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "[app-state] could not migrate legacy settings from {}: {err}",
+                    legacy_store.display()
+                );
+            }
+        }
+        return;
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     clip_server::start_clip_server();
@@ -112,7 +161,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_title("[DEV] LLM Wiki");
+                    let _ = w.set_title("[DEV] LLM Wiki Agent");
                 }
             }
             if let Ok(dir) = app.path().resource_dir() {
@@ -126,7 +175,8 @@ pub fn run() {
             // everything: LLM, embedding, update check, deep
             // research, captioning. See src-tauri/src/proxy.rs.
             if let Ok(dir) = app.path().app_data_dir() {
-                let store_path = dir.join("app-state.json");
+                migrate_legacy_app_state(&dir);
+                let store_path = dir.join(APP_STATE_FILE_NAME);
                 eprintln!("[proxy] reading from {}", store_path.display());
                 if let Some(cfg) = proxy::read_proxy_config_from_store(&store_path) {
                     let summary = proxy::apply_proxy_env(&cfg);
@@ -227,7 +277,7 @@ pub fn run() {
                         use tauri_plugin_dialog::DialogExt;
                         let confirmed = app
                             .dialog()
-                            .message("Are you sure you want to quit LLM Wiki?")
+                            .message("Are you sure you want to quit LLM Wiki Agent?")
                             .title("Confirm Exit")
                             .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
                             .blocking_show();
@@ -258,4 +308,25 @@ pub fn run() {
             }
             let _ = (app, event); // suppress unused warnings on non-macOS
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_app_state_candidates_use_current_parent() {
+        let current =
+            Path::new("/Users/example/Library/Application Support/com.6tizer.llmwiki.agent");
+
+        assert_eq!(
+            legacy_app_state_candidates(current),
+            vec![
+                PathBuf::from(
+                    "/Users/example/Library/Application Support/com.llmwiki.app/app-state.json"
+                ),
+                PathBuf::from("/Users/example/Library/Application Support/LLM Wiki/app-state.json"),
+            ]
+        );
+    }
 }
