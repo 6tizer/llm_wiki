@@ -694,6 +694,12 @@ async function processNext(projectId: string): Promise<void> {
       if (runToken === currentRunToken) processing = false
       return
     }
+    // Run-token guard (early): an orphaned catch must NOT touch any
+    // global state — `currentAbortController = null` below would clobber
+    // the NEW run's controller (task B), making B impossible to cancel
+    // or pause. The abort guard's cleanupWrittenFiles already ran in
+    // the try block before the throw, so bailing here loses nothing.
+    if (runToken !== currentRunToken) return
     currentAbortController = null
     const message = err instanceof Error ? err.message : String(err)
     next.retryCount++

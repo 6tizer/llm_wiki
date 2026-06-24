@@ -779,6 +779,69 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
     // B's task should have been removed from the queue (success path).
     expect(getQueue().find((t) => t.sourcePath === "b.md")).toBeUndefined()
   })
+
+  it("orphaned catch does not clobber the new run's currentAbortController", async () => {
+    // P1 re-review finding: the orphaned catch's `currentAbortController
+    // = null` must not run when the token is stale. Without the early
+    // run-token guard in the catch block, A's orphan would null out B's
+    // controller, making B impossible to cancel/pause.
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveA: (files: string[]) => void = () => {}
+    let resolveB: (files: string[]) => void = () => {}
+    let bSignal: AbortSignal | undefined
+
+    // A: controllable promise that captures the abort signal.
+    mockAutoIngest.mockImplementationOnce(
+      () => new Promise<string[]>((resolve) => { resolveA = resolve }),
+    )
+    // B: controllable promise that captures the abort signal.
+    mockAutoIngest.mockImplementationOnce(
+      (_pp: string, _src: string, _llm: unknown, signal?: AbortSignal) => {
+        bSignal = signal
+        return new Promise<string[]>((resolve) => { resolveB = resolve })
+      },
+    )
+
+    await enqueueBatch(TEST_ID, [
+      { sourcePath: "a.md", folderContext: "" },
+      { sourcePath: "b.md", folderContext: "" },
+    ])
+    await flushMicrotasks(2)
+    expect(getQueue().find((t) => t.sourcePath === "a.md")?.status).toBe("processing")
+
+    // Cancel A: aborts A's signal, bumps run token, starts B.
+    const cancelPromise = cancelTask(getQueue().find((t) => t.sourcePath === "a.md")!.id)
+    // Resolve A late with partial files (abort guard path).
+    resolveA(["wiki/concepts/partial-a.md"])
+    await cancelPromise
+    await flushMicrotasks(10)
+
+    // B must now be processing.
+    expect(getQueue().find((t) => t.sourcePath === "b.md")?.status).toBe("processing")
+    expect(bSignal).toBeDefined()
+    expect(bSignal!.aborted).toBe(false)
+
+    // Now cancel B. If A's orphan clobbered currentAbortController, this
+    // would be a no-op (controller is null) and B's signal would NOT be
+    // aborted. If the guard works, B's signal gets aborted.
+    await cancelTask(getQueue().find((t) => t.sourcePath === "b.md")!.id)
+    await flushMicrotasks(5)
+
+    expect(bSignal!.aborted).toBe(true)
+    // Resolve B late — the abort guard should clean up and not register
+    // as success.
+    resolveB(["wiki/concepts/partial-b.md"])
+    // Drain generously: two cleanupWrittenFiles cascades (from cancel-A's
+    // orphan and cancel-B) each do dynamic imports + async deletes that
+    // must fully settle before the next test's beforeEach, or their mock
+    // calls leak across tests.
+    await flushMicrotasks(60)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(getQueueSummary().completed).toBe(0)
+  })
 })
 
 // ── cleanupWrittenFiles — file delete + LanceDB chunk cascade ──────
