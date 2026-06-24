@@ -111,7 +111,7 @@ export async function streamCodexCli(
 	let unlistenDone: UnlistenFn | undefined;
 	let finished = false;
 	let aborted = signal?.aborted ?? false;
-	let emittedAgentMessage = false;
+	const sentAgentMessages = new Set<string>();
 	let resolveCompletion: () => void = () => {};
 	const completion = new Promise<void>((resolve) => {
 		resolveCompletion = resolve;
@@ -140,16 +140,48 @@ export async function streamCodexCli(
 		resolveCompletion();
 	};
 
+	const emitAgentMessage = (messageText: string) => {
+		if (sentAgentMessages.has(messageText)) return;
+		sentAgentMessages.add(messageText);
+		onToken(messageText);
+	};
+
 	const replayAgentMessagesFromStdout = (stdout: string | undefined) => {
 		if (!stdout) return;
-
 		for (const line of stdout.split(/\r?\n/)) {
-			const token = parseCodexCliLine(line);
-			if (token !== null) {
-				emittedAgentMessage = true;
-				onToken(token);
+			const messageText = parseCodexCliLine(line);
+			if (messageText !== null) {
+				emitAgentMessage(messageText);
 			}
 		}
+	};
+
+	const dedupedStdoutDetails = (stdout: string | undefined) => {
+		if (!stdout) return "";
+		const details: string[] = [];
+		const seenDetails = new Set<string>();
+
+		for (const line of stdout.split(/\r?\n/)) {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed === "[stdout truncated]") continue;
+
+			const messageText = parseCodexCliLine(trimmed);
+			if (messageText !== null) {
+				if (sentAgentMessages.has(messageText) || seenDetails.has(messageText)) {
+					continue;
+				}
+				seenDetails.add(messageText);
+				details.push(messageText);
+				continue;
+			}
+
+			// Non-agent diagnostic lines are deduped by their trimmed text too.
+			if (seenDetails.has(trimmed)) continue;
+			seenDetails.add(trimmed);
+			details.push(trimmed);
+		}
+
+		return details.join("\n");
 	};
 
 	const abortListener = () => {
@@ -166,10 +198,9 @@ export async function streamCodexCli(
 	try {
 		unlistenData = await listen<string>(`codex-cli:${streamId}`, (event) => {
 			if (finished) return;
-			const token = parseCodexCliLine(event.payload);
-			if (token !== null) {
-				emittedAgentMessage = true;
-				onToken(token);
+			const messageText = parseCodexCliLine(event.payload);
+			if (messageText !== null) {
+				emitAgentMessage(messageText);
 			} else {
 				captureUnparsed(event.payload);
 			}
@@ -180,11 +211,13 @@ export async function streamCodexCli(
 		}
 
 		unlistenDone = await listen<DonePayload>(`codex-cli:${streamId}:done`, (event) => {
+			if (finished) return;
 			const code = event.payload?.code;
 			const stderr = event.payload?.stderr?.trim() ?? "";
 			const stdout = event.payload?.stdout ?? "";
 			if (event.payload?.timedOut === true) {
-				const details = stderr || stdout.trim() || unparsedLines.join("\n");
+				const details =
+					stderr || dedupedStdoutDetails(stdout) || unparsedLines.join("\n");
 				finishWith(() =>
 					onError(
 						new Error(
@@ -194,7 +227,8 @@ export async function streamCodexCli(
 					),
 				);
 			} else if (code !== null && code !== undefined && code !== 0) {
-				const details = stderr || stdout.trim() || unparsedLines.join("\n");
+				const details =
+					stderr || dedupedStdoutDetails(stdout) || unparsedLines.join("\n");
 				finishWith(() =>
 					onError(
 						new Error(
@@ -205,9 +239,10 @@ export async function streamCodexCli(
 					),
 				);
 			} else {
-				if (!emittedAgentMessage) replayAgentMessagesFromStdout(stdout);
-				if (!emittedAgentMessage) {
-					const details = stdout.trim() || unparsedLines.join("\n").trim();
+				replayAgentMessagesFromStdout(stdout);
+				if (sentAgentMessages.size === 0) {
+					const details =
+						dedupedStdoutDetails(stdout) || unparsedLines.join("\n").trim();
 					finishWith(() =>
 						onError(
 							new Error(
