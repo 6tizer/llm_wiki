@@ -84,7 +84,7 @@ const CATEGORIES: Category[] = [
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
-function initialDraft(
+export function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
   embed: ReturnType<typeof useWikiStore.getState>["embeddingConfig"],
   multimodal: ReturnType<typeof useWikiStore.getState>["multimodalConfig"],
@@ -153,11 +153,21 @@ function initialDraft(
     sourceWatchConfig: normalizeSourceWatchConfig(sourceWatch),
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
+    apiMcpEnabled: apiConfig.mcpEnabled ?? false,
     apiToken: apiConfig.token,
     agentMaxTurns: agentConfig.maxTurns,
     agentMaxFilesChanged: agentConfig.maxFilesChanged,
     agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
     uiLanguage,
+  }
+}
+
+export function apiConfigFromDraft(draft: SettingsDraft) {
+  return {
+    enabled: draft.apiEnabled,
+    allowUnauthenticated: draft.apiAllowUnauthenticated,
+    mcpEnabled: draft.apiMcpEnabled,
+    token: draft.apiToken.trim(),
   }
 }
 
@@ -394,14 +404,10 @@ export function SettingsView() {
     setMaxHistoryMessages(draft.maxHistoryMessages)
 
     // ── API server: persist + push to store. The Rust side reads
-    // `apiConfig.{enabled,token}` from this same `app-state.json` on
+    // `apiConfig.{enabled,token,mcpEnabled}` from this same `app-state.json` on
     // every request via a 5s cache, so saved changes propagate
     // within that window without any IPC round-trip.
-    const newApiConfig = {
-      enabled: draft.apiEnabled,
-      allowUnauthenticated: draft.apiAllowUnauthenticated,
-      token: draft.apiToken.trim(),
-    }
+    const newApiConfig = apiConfigFromDraft(draft)
     setApiConfig(newApiConfig)
     await saveApiConfig(newApiConfig)
     try {
@@ -479,14 +485,14 @@ export function SettingsView() {
   }, [active, draft, setDraft])
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full min-h-0 overflow-hidden">
       {/* Sidebar — category nav. Matches the IconSidebar's pill-on-accent
           pattern so the two navigational surfaces feel like one app. */}
-      <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/30">
+      <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r bg-muted/30">
         <div className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {t("settings.title")}
         </div>
-        <nav className="flex-1 overflow-y-auto px-2 pb-3">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {CATEGORIES.map((c) => {
             const Icon = c.icon
             const isActive = c.id === active
@@ -530,8 +536,8 @@ export function SettingsView() {
       </aside>
 
       {/* Content */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-2xl">{body}</div>
         </div>
 

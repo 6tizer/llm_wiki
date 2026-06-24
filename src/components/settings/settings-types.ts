@@ -75,6 +75,7 @@ export interface SettingsDraft {
   // Local HTTP API server
   apiEnabled: boolean
   apiAllowUnauthenticated: boolean
+  apiMcpEnabled: boolean
   apiToken: string
 
   // Per-project Agent resource limits

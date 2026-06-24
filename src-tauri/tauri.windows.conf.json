@@ -1,5 +1,11 @@
 {
   "bundle": {
-    "resources": ["pdfium/pdfium.dll", "sidecar/dist-bin/sidecar.exe"]
+    "resources": {
+      "pdfium/pdfium.dll": "pdfium/pdfium.dll",
+      "sidecar/dist-bin/sidecar.exe": "sidecar/dist-bin/sidecar.exe",
+      "../mcp-server/package.json": "mcp-server/package.json",
+      "../mcp-server/dist": "mcp-server/dist",
+      "../mcp-server/node_modules": "mcp-server/node_modules"
+    }
   }
 }

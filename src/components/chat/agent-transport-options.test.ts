@@ -15,6 +15,7 @@ const baseLlmConfig = {
 const apiConfig = {
   enabled: true,
   allowUnauthenticated: false,
+  mcpEnabled: false,
   token: "api-token",
 }
 
