@@ -99,6 +99,45 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().streamingContent).toBe("")
   })
 
+  it("finalizeStream binds the message to the conversation that started the stream, not the live active one (P1-6)", () => {
+    // P1-6: finalizeStream previously read the live activeConversationId at
+    // onDone time. If the user switched conversations mid-stream, the
+    // assistant reply was injected into the wrong conversation. The new
+    // optional conversationId param binds it to the stream's owner.
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    // Stream started in convA (captured), but by onDone the user has
+    // switched active to convB.
+    useChatStore.setState({
+      isStreaming: true,
+      streamingContent: "partial",
+      activeConversationId: convB,
+    })
+
+    useChatStore.getState().finalizeStream("done", undefined, convA)
+
+    const state = useChatStore.getState()
+    const message = state.messages[0]
+    // Lands in convA (the stream owner), NOT convB (the live active).
+    // This is the core P1-6 fix: the reply goes to the conversation that
+    // owned the stream, not the one the user switched to.
+    expect(message.conversationId).toBe(convA)
+    expect(message.content).toBe("done")
+    // No message was created in convB.
+    expect(state.messages.filter((m) => m.conversationId === convB)).toHaveLength(0)
+  })
+
+  it("finalizeStream falls back to the live activeConversationId when no conversationId is passed", () => {
+    // Backward compat: callers that don't pass the new arg keep the old
+    // behavior (live activeConversationId).
+    const convA = useChatStore.getState().createConversation()
+    useChatStore.setState({ isStreaming: true, streamingContent: "p", activeConversationId: convA })
+
+    useChatStore.getState().finalizeStream("done")
+
+    expect(useChatStore.getState().messages[0].conversationId).toBe(convA)
+  })
+
   it("finalizeAgentStream stores stats and updates conversation session", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({ isStreaming: true, streamingContent: "partial" })
@@ -352,6 +391,43 @@ describe("chat store agent data model", () => {
       agentSessionId: "new-session",
     })
     expect(useChatStore.getState().conversations[0].agentForkSessionPending).toBeUndefined()
+  })
+
+  it("finishAgentStreamMessage updates the message's conversation, not the live active one (P1-6)", () => {
+    // P1-6: Codex review P2: the agent stream's conversation metadata
+    // (agentSessionId / agentForkSessionPending / updatedAt) must update
+    // the conversation the agent MESSAGE belongs to, not the live
+    // activeConversationId. Switching conversations mid-agent-stream
+    // previously corrupted the wrong conversation's agent session.
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    // The agent message was created in convA; user has since switched to
+    // convB (the live active).
+    useChatStore.setState({
+      conversations: [
+        { id: convA, title: "A", createdAt: 0, updatedAt: 1 },
+        { id: convB, title: "B", createdAt: 0, updatedAt: 1 },
+      ],
+      activeConversationId: convB,
+      messages: [makeAssistantMessage("m1", convA)],
+    })
+
+    useChatStore.getState().finishAgentStreamMessage("m1", "agent done", {
+      agentSessionId: "session-A",
+    })
+
+    // The agent session lands on convA (the message owner), NOT convB.
+    const a = useChatStore.getState().conversations.find((c) => c.id === convA)!
+    const b = useChatStore.getState().conversations.find((c) => c.id === convB)!
+    expect(a.agentSessionId).toBe("session-A")
+    expect(b.agentSessionId).toBeUndefined()
+    // The message content + stats are keyed by messageId, so always correct.
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      id: "m1",
+      content: "agent done",
+      agentSessionId: "session-A",
+      conversationId: convA,
+    })
   })
 
   it("setAgentToolCalls replaces one message's tool calls only", () => {

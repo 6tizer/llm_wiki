@@ -270,6 +270,7 @@ test("canUseTool pre-approves allowed Wiki tools and denies disabled Wiki writes
 			},
 			handleResponse: () => {},
 			rejectStream: () => {},
+			hasPending: () => false,
 		},
 	});
 
@@ -344,6 +345,7 @@ test("canUseTool asks permission bridge for non-Wiki tools", async () => {
 			},
 			handleResponse: () => {},
 			rejectStream: () => {},
+			hasPending: () => false,
 		},
 	});
 
@@ -591,6 +593,7 @@ test("kill request aborts active query and removes it from tracking", async () =
 			rejectStream: (streamId) => {
 				rejectedStream = streamId;
 			},
+			hasPending: () => false,
 		},
 	});
 

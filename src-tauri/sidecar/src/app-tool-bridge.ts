@@ -38,6 +38,9 @@ export interface AppToolBridge {
 	): Promise<unknown>;
 	handleResponse(response: AppToolResponseMessage): void;
 	rejectStream(streamId: string, reason: string): void;
+	/** True if any app-tool call is awaiting a host response. The sidecar
+	 *  idle-exit guard uses this so it doesn't kill the process mid-bridge. */
+	hasPending(): boolean;
 }
 
 interface PendingCall {
@@ -100,6 +103,10 @@ export function createAppToolBridge(args: {
 				clearTimeout(call.timer);
 				call.reject(new Error(reason));
 			}
+		},
+
+		hasPending() {
+			return pending.size > 0;
 		},
 	};
 }

@@ -25,10 +25,32 @@ function cancelScheduledExit(): void {
 }
 
 function scheduleExitIfIdle(): void {
-	if (activeQueries.size !== 0 || activeSdkQueries.size !== 0 || exitTimer) return;
+	// P1-5: also block exit while a bridge call (app-tool / permission) is
+	// awaiting a host response. The activeQueries/activeSdkQueries maps can
+	// be momentarily empty at the boundary where a query released but a
+	// bridge promise hasn't settled yet — exiting then drops the in-flight
+	// bridge call silently. hasPending() guards that window. The bridges
+	// are created after this function (TDZ-safe: scheduleExitIfIdle is only
+	// invoked at runtime after they exist).
+	if (
+		activeQueries.size !== 0 ||
+		activeSdkQueries.size !== 0 ||
+		appToolBridge.hasPending() ||
+		permissionBridge.hasPending() ||
+		exitTimer
+	) {
+		return;
+	}
 	exitTimer = setTimeout(() => {
 		exitTimer = undefined;
-		if (activeQueries.size === 0 && activeSdkQueries.size === 0) process.exit(0);
+		if (
+			activeQueries.size === 0 &&
+			activeSdkQueries.size === 0 &&
+			!appToolBridge.hasPending() &&
+			!permissionBridge.hasPending()
+		) {
+			process.exit(0);
+		}
 	}, 250);
 }
 
@@ -88,7 +110,14 @@ rl.on("close", () => {
 	// This setInterval prevents Node from exiting while queries are running.
 	const keepAlive = setInterval(() => {}, 60000);
 	const check = setInterval(() => {
-		if (activeQueries.size === 0 && activeSdkQueries.size === 0) {
+		// P1-5: include bridge pending state — a tool/permission call
+		// awaiting a host response keeps the process alive.
+		if (
+			activeQueries.size === 0 &&
+			activeSdkQueries.size === 0 &&
+			!appToolBridge.hasPending() &&
+			!permissionBridge.hasPending()
+		) {
 			clearInterval(keepAlive);
 			clearInterval(check);
 			scheduleExitIfIdle();
