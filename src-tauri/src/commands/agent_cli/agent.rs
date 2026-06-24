@@ -433,9 +433,15 @@ pub async fn agent_tool_response(
     .to_string()
         + "\n";
     let mut guard = stdin.lock().await;
-    write_stdin_capped(&mut guard, &line)
-        .await
-        .map_err(|e| format!("Failed to write app tool response: {e}"))?;
+    if let Err(e) = write_stdin_capped(&mut guard, &line).await {
+        let msg = format!("Failed to write app tool response: {e}");
+        if is_stdin_pipe_poisoned(&msg) {
+            // Pipe is wedged — partial bytes may corrupt further JSON.
+            // Kill the sidecar so the next run spawns fresh.
+            poison_agent_sidecar(&state, &stream_id).await;
+        }
+        return Err(msg);
+    }
     Ok(())
 }
 
@@ -465,9 +471,13 @@ pub async fn agent_permission_response(
     .to_string()
         + "\n";
     let mut guard = stdin.lock().await;
-    write_stdin_capped(&mut guard, &line)
-        .await
-        .map_err(|e| format!("Failed to write permission response: {e}"))?;
+    if let Err(e) = write_stdin_capped(&mut guard, &line).await {
+        let msg = format!("Failed to write permission response: {e}");
+        if is_stdin_pipe_poisoned(&msg) {
+            poison_agent_sidecar(&state, &stream_id).await;
+        }
+        return Err(msg);
+    }
     Ok(())
 }
 
@@ -491,14 +501,38 @@ pub async fn agent_rewind_files(
     .to_string()
         + "\n";
     let mut guard = stdin.lock().await;
-    write_stdin_capped(&mut guard, &line)
-        .await
-        .map_err(|e| format!("Failed to write rewind request: {e}"))?;
+    if let Err(e) = write_stdin_capped(&mut guard, &line).await {
+        let msg = format!("Failed to write rewind request: {e}");
+        if is_stdin_pipe_poisoned(&msg) {
+            poison_agent_sidecar(&state, &stream_id).await;
+        }
+        return Err(msg);
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn is_stdin_pipe_poisoned_detects_timeout_and_broken_pipe() {
+        // A timed-out write_all may have left partial bytes in the OS
+        // pipe — the sidecar must be killed, not reused.
+        assert!(super::is_stdin_pipe_poisoned(
+            "Failed to write app tool response: sidecar stdin write timed out after 10s"
+        ));
+        assert!(super::is_stdin_pipe_poisoned(
+            "Failed to write rewind request: Broken pipe (os error 32)"
+        ));
+        // A size-cap rejection is NOT a pipe poison (no bytes were written).
+        assert!(!super::is_stdin_pipe_poisoned(
+            "Failed to write app tool response: sidecar stdin payload 99999999 bytes exceeds cap 8388608"
+        ));
+        // A transient non-pipe error is not fatal to the stream.
+        assert!(!super::is_stdin_pipe_poisoned(
+            "Failed to write app tool response: resource busy"
+        ));
+    }
+
     #[test]
     fn agent_request_serializes_checkpoint_and_sandbox_options() {
         let mut args = args_with_optional_fields_none();
@@ -948,6 +982,11 @@ pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Resu
     if let Some(mut process) = state.children.lock().await.remove(&stream_id) {
         kill_agent_tree(&mut process.child)
             .map_err(|e| format!("Failed to kill agent sidecar: {e}"))?;
+        // Reap the killed child so it doesn't linger as a zombie. The
+        // reader task can't reap here (the map entry is already removed),
+        // so we do it inline. SIGKILL was just sent to the whole group,
+        // so wait() returns quickly once stdout closes; bounded latency.
+        let _ = process.child.wait().await;
     }
     Ok(())
 }
@@ -1019,6 +1058,28 @@ async fn write_stdin_capped(stdin: &mut tokio::process::ChildStdin, line: &str) 
             std::io::ErrorKind::TimedOut,
             format!("sidecar stdin write timed out after {:?}", STDIN_WRITE_TIMEOUT),
         )),
+    }
+}
+
+/// Sentinel substring in a stdin-write error indicating the sidecar's
+/// pipe is wedged (write timed out). A timed-out `write_all` may have
+/// left partial bytes in the OS pipe buffer, which would corrupt the
+/// sidecar's line-delimited JSON parsing for every subsequent write.
+/// When detected, the caller MUST poison the sidecar (kill + remove it
+/// so the next agent run spawns a fresh process) rather than continue.
+fn is_stdin_pipe_poisoned(err: &str) -> bool {
+    err.contains("timed out") || err.contains("Broken pipe") || err.contains("timed-out")
+}
+
+/// Remove + kill the sidecar for `stream_id` after a fatal stdin error.
+/// The next agent_spawn will start a fresh process, so we don't try to
+/// recover the poisoned pipe. Best-effort: a missing entry or a kill
+/// failure is logged but not propagated (the caller already has a
+/// fatal error to return).
+async fn poison_agent_sidecar(state: &State<'_, AgentState>, stream_id: &str) {
+    if let Some(mut process) = state.children.lock().await.remove(stream_id) {
+        let _ = kill_agent_tree(&mut process.child);
+        let _ = process.child.wait().await;
     }
 }
 
