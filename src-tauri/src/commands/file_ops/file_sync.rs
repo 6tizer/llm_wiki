@@ -39,7 +39,6 @@ pub struct FileSyncState {
 
 impl FileSyncState {
     /// Returns the currently-watched project root, if the watcher is active.
-    /// Used by fs commands to validate paths stay within the project (#119 P0-2).
     pub fn project_root(&self) -> Option<PathBuf> {
         self.inner.lock().ok()?.project_path.clone()
     }
@@ -50,6 +49,35 @@ struct FileSyncInner {
     watcher: Option<RecommendedWatcher>,
     project_id: Option<String>,
     project_path: Option<PathBuf>,
+}
+
+/// Independent project-root state for filesystem sandboxing (#119 P0-2).
+///
+/// This is deliberately SEPARATE from `FileSyncState` so that the sandbox root
+/// is NOT tied to the source-watch lifecycle. Source watching is an optional
+/// feature toggle; disabling it must not disable filesystem authorization.
+/// Set by `open_project`, cleared by the frontend on project-switch.
+#[derive(Default)]
+pub struct ProjectRootState {
+    root: Mutex<Option<PathBuf>>,
+}
+
+impl ProjectRootState {
+    pub fn set(&self, path: PathBuf) {
+        if let Ok(mut guard) = self.root.lock() {
+            *guard = Some(path);
+        }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut guard) = self.root.lock() {
+            *guard = None;
+        }
+    }
+
+    pub fn get(&self) -> Option<PathBuf> {
+        self.root.lock().ok()?.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

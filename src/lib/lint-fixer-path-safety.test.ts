@@ -160,4 +160,38 @@ describe("applyLlmFix — path-traversal guard (#119 P1-3)", () => {
       .catch(() => false)
     expect(exists).toBe(true)
   })
+
+  it("applyLlmFix accepts a bare page path (no wiki/ prefix) from semantic lint fix", async () => {
+    // This is the Codex-review P1-3 regression test: lint prompts produce
+    // bare paths like `concepts/foo.md` (no wiki/ prefix). applyLlmFix must
+    // normalize them to wiki/concepts/foo.md and write successfully.
+    // type:"semantic" routes through fixSemantic → applyLlmFix.
+    await fs.mkdir(path.join(projectDir, "wiki", "concepts"), { recursive: true })
+    await fs.writeFile(
+      path.join(projectDir, "wiki", "concepts", "test.md"),
+      "---\ntype: concept\ntitle: Test\n---\n\n# Test\n\nSome content.",
+    )
+
+    // LLM emits a BARE path (no wiki/ prefix) — this is what lint prompts ask for.
+    mockStreamChatWithBlock(
+      "concepts/test.md",
+      "---\ntype: concept\ntitle: Test\n---\n\n# Test\n\nFixed by semantic autofix.",
+    )
+    const { fixLintResult } = await import("./lint-fixer")
+
+    const result: LintResult = {
+      type: "semantic",
+      severity: "warning",
+      page: "concepts/test.md",
+      detail: "Contradiction detected between statements.",
+      affectedPages: ["concepts/test.md"],
+    }
+
+    const ok = await fixLintResult(projectDir, result, fakeLlmConfig)
+    expect(ok).toBe(true)
+
+    const writtenPath = path.join(projectDir, "wiki", "concepts", "test.md")
+    const content = await fs.readFile(writtenPath, "utf8")
+    expect(content).toContain("Fixed by semantic autofix")
+  })
 })

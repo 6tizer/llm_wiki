@@ -7,25 +7,30 @@ use std::time::Duration;
 use calamine::{open_workbook_auto, Data, Reader};
 use tauri::State;
 
-use super::file_sync::{self, FileSyncState};
+use super::file_sync::{self, ProjectRootState};
 use super::path_safety::validate_within_project;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
 
 /// Validate a path against the project root. Write/delete commands fail-closed
-/// when the root is unknown (watcher not started); read commands degrade to
+/// when the root is unknown (no project open); read commands degrade to
 /// allowing the path (legacy behavior) so project-open flows still work.
+///
+/// Uses `ProjectRootState` (set by `open_project`), NOT `FileSyncState` (set by
+/// the source watcher). This ensures the sandbox works even when source
+/// watching is disabled — the sandbox root must not be tied to the watcher
+/// lifecycle (#119 P0-2, Codex review P1-1).
 fn sandbox_path(
-    state: &State<'_, FileSyncState>,
+    state: &State<'_, ProjectRootState>,
     path: &str,
     mode: SandboxMode,
 ) -> Result<PathBuf, String> {
-    match state.project_root() {
+    match state.get() {
         Some(root) => validate_within_project(&root, path),
         None => match mode {
             // No known project root + write/delete = fail-closed (#119 P0-2).
             SandboxMode::Write => Err(format!(
-                "Cannot write to '{path}': no active project root (file watcher not started). \
+                "Cannot write to '{path}': no active project root (no project open). \
                  Open a project first."
             )),
             // No known project root + read = allow (degrade to legacy).
@@ -54,7 +59,7 @@ const LEGACY_DOC_EXTS: &[&str] = &["doc", "xls", "ppt", "pages", "numbers", "key
 #[tauri::command]
 pub async fn read_file(
     path: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
     let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     read_file_validated(validated, path).await
@@ -132,13 +137,13 @@ async fn read_file_validated(validated: PathBuf, path_orig: String) -> Result<St
 #[tauri::command]
 pub async fn preprocess_file(
     path: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
     // Sandbox in Read mode: the source is read, and the cache is written next
     // to it (inside the project). Read degrades gracefully if no root is known
     // so project-open flows still work. (#119 P2-A)
     let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
-    let path_for_msg = path.clone();
+    let validated_str = validated.to_string_lossy().to_string();
     // See `read_file` above for why `spawn_blocking` is required.
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("preprocess_file", || {
@@ -150,8 +155,8 @@ pub async fn preprocess_file(
                 .to_lowercase();
 
             let text = match ext.as_str() {
-                "pdf" => extract_pdf_text(&path_for_msg)?,
-                e if OFFICE_EXTS.contains(&e) => extract_office_text(&path_for_msg, e)?,
+                "pdf" => extract_pdf_text(&validated_str)?,
+                e if OFFICE_EXTS.contains(&e) => extract_office_text(&validated_str, e)?,
                 _ => return Ok("no preprocessing needed".to_string()),
             };
 
@@ -981,7 +986,7 @@ fn extract_odf_text(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, S
 pub async fn write_file(
     path: String,
     contents: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<(), String> {
     let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1006,7 +1011,7 @@ pub async fn write_file(
 pub async fn write_file_atomic(
     path: String,
     contents: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<(), String> {
     let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1052,17 +1057,20 @@ pub async fn write_file_atomic(
 }
 
 #[tauri::command]
-pub async fn list_directory(path: String) -> Result<Vec<FileNode>, String> {
+pub async fn list_directory(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<Vec<FileNode>, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("list_directory", || {
-            let p = Path::new(&path);
-            if !p.exists() {
+            if !validated.exists() {
                 return Err(format!("Path does not exist: '{}'", path));
             }
-            if !p.is_dir() {
+            if !validated.is_dir() {
                 return Err(format!("Path is not a directory: '{}'", path));
             }
-            let nodes = build_tree(p, 0, 30)?;
+            let nodes = build_tree(&validated, 0, 30)?;
             Ok(nodes)
         })
     })
@@ -1137,7 +1145,7 @@ fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<Vec<FileNode
 pub async fn copy_file(
     source: String,
     destination: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<(), String> {
     let src_validated = sandbox_path(&state, &source, SandboxMode::Read)?;
     let dest_validated = sandbox_path(&state, &destination, SandboxMode::Write)?;
@@ -1168,7 +1176,7 @@ pub async fn copy_file(
 pub async fn copy_directory(
     source: String,
     destination: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<Vec<String>, String> {
     let src_validated = sandbox_path(&state, &source, SandboxMode::Read)?;
     let dest_validated = sandbox_path(&state, &destination, SandboxMode::Write)?;
@@ -1219,17 +1227,18 @@ fn copy_recursive(src: &Path, dest: &Path, files: &mut Vec<String>) -> Result<()
 #[tauri::command]
 pub async fn delete_file(
     path: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<(), String> {
     let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
+    let validated_str = validated.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("delete_file", || {
             file_sync::mark_app_write_path(&validated);
             if validated.is_dir() {
-                remove_path_with_retry(&path, true)
+                remove_path_with_retry(&validated_str, true)
                     .map_err(|e| format!("Failed to delete directory '{}': {}", path, e))?;
             } else {
-                remove_path_with_retry(&path, false)
+                remove_path_with_retry(&validated_str, false)
                     .map_err(|e| format!("Failed to delete file '{}': {}", path, e))?;
             }
             file_sync::mark_app_write_path(&validated);
@@ -1423,7 +1432,7 @@ fn collect_related_pages(
 #[tauri::command]
 pub async fn create_directory(
     path: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<(), String> {
     let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1458,7 +1467,7 @@ pub struct FileBase64 {
 #[tauri::command]
 pub async fn read_file_as_base64(
     path: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<FileBase64, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
@@ -1495,14 +1504,13 @@ pub async fn read_file_as_base64(
 /// Cheap existence check without reading or classifying the file.
 /// Returns true iff `path` refers to something on disk right now.
 #[tauri::command]
-pub async fn file_exists(path: String) -> Result<bool, String> {
-    // `Path::exists()` does a `stat(2)` syscall — fast on a hot
-    // cache, but a blocking syscall nonetheless. Wrapping it keeps
-    // the rule "no sync IO on tokio worker threads" uniform across
-    // every fs command rather than carving out an exception that's
-    // easy to violate later.
+pub async fn file_exists(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<bool, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
-        run_guarded("file_exists", || Ok(Path::new(&path).exists()))
+        run_guarded("file_exists", || Ok(validated.exists()))
     })
     .await
     .map_err(|e| format!("file_exists blocking task join error: {e}"))?
@@ -1510,10 +1518,14 @@ pub async fn file_exists(path: String) -> Result<bool, String> {
 
 /// Resolve symlinks and `..` segments to an absolute canonical path.
 #[tauri::command]
-pub async fn canonicalize_path(path: String) -> Result<String, String> {
+pub async fn canonicalize_path(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<String, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("canonicalize_path", || {
-            let canonical = fs::canonicalize(&path)
+            let canonical = fs::canonicalize(&validated)
                 .map_err(|e| format!("Failed to canonicalize '{}': {}", path, e))?;
             Ok(canonical.to_string_lossy().to_string())
         })
@@ -1525,10 +1537,14 @@ pub async fn canonicalize_path(path: String) -> Result<String, String> {
 /// Get the last modified timestamp of a file in milliseconds since Unix epoch.
 /// Returns 0 if the file doesn't exist or metadata can't be read.
 #[tauri::command]
-pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
+pub async fn get_file_modified_time(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<u64, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_modified_time", || {
-            let metadata = fs::metadata(&path)
+            let metadata = fs::metadata(&validated)
                 .map_err(|e| format!("Failed to get metadata for '{}': {}", path, e))?;
             let modified = metadata
                 .modified()
@@ -1544,10 +1560,14 @@ pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub async fn get_file_size(path: String) -> Result<u64, String> {
+pub async fn get_file_size(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<u64, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_size", || {
-            let metadata = fs::metadata(&path)
+            let metadata = fs::metadata(&validated)
                 .map_err(|e| format!("Failed to get metadata for '{}': {}", path, e))?;
             Ok(metadata.len())
         })
@@ -1560,7 +1580,7 @@ pub async fn get_file_size(path: String) -> Result<u64, String> {
 #[tauri::command]
 pub async fn get_file_md5(
     path: String,
-    state: State<'_, FileSyncState>,
+    state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
     use md5::{Digest, Md5};
     let validated = sandbox_path(&state, &path, SandboxMode::Read)?;

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use chrono::Local;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::panic_guard::run_guarded;
@@ -242,11 +242,22 @@ related: []
 }
 
 #[tauri::command]
-pub fn open_project(path: String) -> Result<WikiProject, String> {
+pub fn open_project(
+    path: String,
+    root_state: State<'_, crate::commands::file_sync::ProjectRootState>,
+) -> Result<WikiProject, String> {
     run_guarded("open_project", || {
         let root = Path::new(&path);
 
         validate_wiki_project_root(root)?;
+
+        // Set the sandbox root so fs commands can validate paths (#119 P0-2).
+        // This is independent of the source-watcher lifecycle (Codex review P1-1).
+        if let Ok(canonical) = root.canonicalize() {
+            root_state.set(canonical);
+        } else {
+            root_state.set(root.to_path_buf());
+        }
 
         // Derive project name from the directory name
         let name = root
