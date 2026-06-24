@@ -31,7 +31,9 @@
 
 ## What is this?
 
-LLM Wiki is a cross-platform desktop app that turns a pile of documents into an organized, interlinked knowledge base — automatically.
+LLM Wiki is a macOS-first desktop app that turns a pile of documents into an organized, interlinked knowledge base — automatically.
+
+Current active maintenance targets the Mac desktop app. Older or transitional Windows/Linux artifacts may still exist in releases, CI, or historical documentation, but they are not the active product target. CI and release pruning is planned for the next implementation PR, [`mac-product-baseline`](docs/plans/mac-product-baseline.md).
 
 Most LLM-and-documents workflows look like RAG: you upload files, the model retrieves relevant chunks at query time, and answers from scratch. Nothing accumulates. LLM Wiki takes the opposite approach. The LLM **incrementally builds and maintains a persistent wiki** — a directory of markdown pages with cross-references, contradictions flagged, and an evolving synthesis. Knowledge is compiled **once** and kept current, not re-derived on every question.
 
@@ -127,7 +129,7 @@ my-wiki/
 - **Lint loop** — agent-driven detection and auto-fix with concurrency control
 
 ### Platform
-- **Cross-platform** — native desktop on macOS (ARM + Intel), Windows, Linux via Tauri v2
+- **Mac-only active maintenance** — native desktop on macOS (Apple Silicon + Intel) via Tauri v2
 - **Multi-provider LLM** — OpenAI, Anthropic, Google, Ollama, Azure, or any OpenAI-compatible endpoint
 - **Local HTTP API** — token-protected `127.0.0.1` JSON API for external tools and agents
 - **i18n** — English + Chinese interface
@@ -149,14 +151,16 @@ my-wiki/
 | Web Search | Tavily, SerpApi, SearXNG |
 | Agent | Claude Agent SDK via a Node.js sidecar |
 
+The near-term product direction remains a Mac app built with Tauri, Rust, TypeScript, and the Agent SDK. Swift, SwiftUI, and iOS are tracked only as long-range architecture discussion, not near-term roadmap work.
+
 ## Installation
 
 ### Pre-built binaries
 
 Download from [Releases](https://github.com/6tizer/llm_wiki/releases):
 - **macOS** — `.dmg` (Apple Silicon + Intel)
-- **Windows** — `.msi`
-- **Linux** — `.deb` / `.AppImage`
+
+Windows/Linux artifacts may appear in older releases or during the transition, but they are no longer an active support promise. The repository will clean up CI and release packaging in the upcoming `mac-product-baseline` PR.
 
 ### Build from source
 
@@ -247,7 +251,7 @@ src/                        # Frontend (React + TypeScript)
 
 ## Roadmap
 
-The agent is the active area of development. Phases 1–4 (sidecar, custom MCP tools, hooks/permissions, tool parity, and UI integration) are complete; Phase 5 focuses on session-behavior fixes, configurable resource limits, and single-binary sidecar packaging. See [`docs/plans/`](docs/plans/) for detailed phase plans.
+The active product direction is Mac-only desktop maintenance plus Agent productization. The next implementation PR is [`mac-product-baseline`](docs/plans/mac-product-baseline.md), followed by upstream v0.5.0 delta work and Phase 7 Agent SDK productization. See [`docs/plans/`](docs/plans/) for the current plan index.
 
 ## Credits
 

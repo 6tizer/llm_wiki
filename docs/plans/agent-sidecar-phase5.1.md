@@ -16,7 +16,7 @@ Phase 5 已经把 Agent Sidecar 主链路推进到可用状态，但 UI 验收�
 
 Phase 6 会同步上游大量 Chat、Settings、Ingest、MCP 和 Rust 后端改动。上面这些问题如果不先修，会在同步期间继续污染测试项目，资源限制和测试失败也会变成后续大 PR 的噪音。
 
-**结论**：Phase 5.1 只修安全边界和会写坏数据的问题。Agent 体验类大改放到 Phase 6.1。
+**结论**：Phase 5.1 只修安全边界和会写坏数据的问题。Agent 体验类大改放到 [Phase 7 backlog](./agent-sidecar-phase6.1.md)。
 
 ---
 
@@ -38,11 +38,11 @@ Phase 6 会同步上游大量 Chat、Settings、Ingest、MCP 和 Rust 后端改�
 
 | Issue | 原因 | 去向 |
 |-------|------|------|
-| #60, #66, #67, #68, #86 | 都涉及 Agent Chat UI、resume/compact/rewind/timeline，Phase 6 会改 Chat 和 transport，先做会冲突 | Phase 6.1 |
-| #84 | Settings 和 Agent 权限入口会和 Phase 6 settings 同步冲突 | Phase 6.1 |
-| #65 | Ingest 文案和上游 Ingest/Chat 同步有接触点，不阻塞 Phase 6 | Phase 6.1 |
-| #88 | Embedding/source identity 与上游 v0.4.23 同步强相关 | Phase 6 PR C |
-| #3 | MCP/Agent sidecar 边界与上游 MCP Server 同步强相关 | Phase 6 PR A；真正内部 RPC 设计放 Phase 6.1 或更后 |
+| #60, #66, #67, #68, #86 | 都涉及 Agent Chat UI、resume/compact/rewind/timeline，Phase 6 会改 Chat 和 transport，先做会冲突 | Phase 7 backlog |
+| #84 | Settings 和 Agent 权限入口会和 Phase 6 settings 同步冲突 | Phase 7 backlog |
+| #65 | Ingest 文案和上游 Ingest/Chat 同步有接触点，不阻塞 Phase 6 | Phase 7 backlog |
+| #88 | Embedding/source identity 与上游同步强相关 | Phase 6 PR C（已完成，#88 CLOSED 2026-06-23） |
+| #3 | MCP/Agent sidecar 边界与上游 MCP Server 同步强相关 | Phase 6 PR A；真正内部 RPC 设计放 Phase 7 backlog 或更后 |
 
 ---
 
@@ -125,7 +125,7 @@ Phase 5.1 最少用 4 个 PR 完成。主线边界保持清楚：一个修单文
 - 复用已有 Markdown 清洗逻辑，新增 `stripMarkdownCodeFence()` 或放到更通用的 sanitize helper。
 - QA 写入前校验 frontmatter。不能识别为 `type: qa` 时阻止写入并显示错误。
 - delete-only 判断保持保守：删除、清理、移除、无需删除、权限拒绝中断等场景不推荐 QA。
-- 不引入新的 Agent timeline 或 session UX，这些留给 Phase 6.1。
+- 不引入新的 Agent timeline 或 session UX，这些留给 Phase 7 backlog。
 
 **预计工时**：1-1.5 days
 **风险**：LOW-MEDIUM
