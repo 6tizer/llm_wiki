@@ -684,18 +684,18 @@ async function applyLlmFix(
 		// which is attacker-controllable via prompt injection in lint sources.
 		// Normalize to a wiki/-rooted relative path and reject anything that
 		// tries to escape wiki/ (.., absolute paths, drive letters, UNC).
-		// parseFileBlocks already enforces wiki/ prefix for blocks it returns,
-		// but this belt-and-suspenders check also covers the startsWith(pp)
-		// branch below and the bare-path convention lint prompts use.
+		// We always construct targetPath from the validated wikiRel — never
+		// trust block.path directly, even if it looks like an absolute path
+		// that starts with pp (string prefix can be fooled: pp=/x/abc vs
+		// block.path=/x/abc-evil/...). LLM output should never legitimately
+		// be absolute, so we drop that branch entirely.
 		const stripped = block.path.replace(/^\/+/, "");
 		const wikiRel = stripped.startsWith("wiki/") ? stripped : `wiki/${stripped}`;
 		if (!isSafeIngestPath(wikiRel)) {
 			console.warn(`[lint-fixer] rejecting unsafe path "${block.path}" (normalized "${wikiRel}")`);
 			continue;
 		}
-		const targetPath = block.path.startsWith(pp)
-			? block.path
-			: `${pp}/${wikiRel}`;
+		const targetPath = `${pp}/${wikiRel}`;
 		const sanitized = sanitizeIngestedFileContent(block.content);
 		await writeFile(targetPath, sanitized);
 		filesWritten.push(getRelativePath(targetPath, pp));

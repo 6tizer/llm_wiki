@@ -22,6 +22,26 @@ use std::path::Path;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tauri::State;
+
+use super::file_sync::FileSyncState;
+use super::path_safety::validate_within_project;
+
+/// Sandbox helper for extract_images commands. Write mode for dest paths,
+/// fail-closed if no project root is known. See fs.rs::sandbox_path for the
+/// read/write policy rationale (#119 P0-2).
+fn sandbox_write(
+    state: &State<'_, FileSyncState>,
+    path: &str,
+) -> Result<std::path::PathBuf, String> {
+    match state.project_root() {
+        Some(root) => validate_within_project(&root, path),
+        None => Err(format!(
+            "Cannot write to '{path}': no active project root (file watcher not started). \
+             Open a project first."
+        )),
+    }
+}
 
 /// Filter knobs. The defaults mirror what's documented in
 /// plans/multimodal-images.md; callers (the TS layer wiring this up)
@@ -875,13 +895,23 @@ pub async fn extract_and_save_pdf_images_cmd(
     source_path: String,
     dest_dir: String,
     rel_to: String,
+    state: State<'_, FileSyncState>,
 ) -> Result<Vec<SavedImage>, String> {
+    // Sandbox dest_dir (write) and rel_to (write-derived). source_path is a
+    // read; we validate it too to prevent traversal on the read side.
+    let dest_validated = sandbox_write(&state, &dest_dir)?;
+    let rel_validated = sandbox_write(&state, &rel_to)?;
+    let source_validated = match state.project_root() {
+        Some(root) => validate_within_project(&root, &source_path)
+            .map_err(|e| e)?,
+        None => std::path::PathBuf::from(&source_path),
+    };
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_and_save_pdf_images", || {
             extract_and_save_pdf_images(
-                &source_path,
-                Path::new(&dest_dir),
-                Path::new(&rel_to),
+                source_validated.to_string_lossy().as_ref(),
+                &dest_validated,
+                &rel_validated,
                 &ExtractOptions::default(),
             )
         })
@@ -895,13 +925,21 @@ pub async fn extract_and_save_office_images_cmd(
     source_path: String,
     dest_dir: String,
     rel_to: String,
+    state: State<'_, FileSyncState>,
 ) -> Result<Vec<SavedImage>, String> {
+    let dest_validated = sandbox_write(&state, &dest_dir)?;
+    let rel_validated = sandbox_write(&state, &rel_to)?;
+    let source_validated = match state.project_root() {
+        Some(root) => validate_within_project(&root, &source_path)
+            .map_err(|e| e)?,
+        None => std::path::PathBuf::from(&source_path),
+    };
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_and_save_office_images", || {
             extract_and_save_office_images(
-                &source_path,
-                Path::new(&dest_dir),
-                Path::new(&rel_to),
+                source_validated.to_string_lossy().as_ref(),
+                &dest_validated,
+                &rel_validated,
                 &ExtractOptions::default(),
             )
         })

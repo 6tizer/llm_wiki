@@ -96,12 +96,19 @@ pub fn validate_within_project(project_root: &Path, target: &str) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::env;
 
+    // Unique per-call counter so parallel tests don't share the same temp dir
+    // (which caused flaky canonicalize/remove_dir_all races — P1-A).
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     fn tmp_root() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = env::temp_dir().join(format!(
-            "llm-wiki-path-safety-test-{}",
-            std::process::id()
+            "llm-wiki-path-safety-test-{}-{}",
+            std::process::id(),
+            id
         ));
         std::fs::create_dir_all(&dir).ok();
         dir

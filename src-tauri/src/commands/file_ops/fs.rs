@@ -130,11 +130,19 @@ async fn read_file_validated(validated: PathBuf, path_orig: String) -> Result<St
 
 /// Pre-process a file and cache the extracted text.
 #[tauri::command]
-pub async fn preprocess_file(path: String) -> Result<String, String> {
+pub async fn preprocess_file(
+    path: String,
+    state: State<'_, FileSyncState>,
+) -> Result<String, String> {
+    // Sandbox in Read mode: the source is read, and the cache is written next
+    // to it (inside the project). Read degrades gracefully if no root is known
+    // so project-open flows still work. (#119 P2-A)
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
+    let path_for_msg = path.clone();
     // See `read_file` above for why `spawn_blocking` is required.
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("preprocess_file", || {
-            let p = Path::new(&path);
+            let p = validated.as_path();
             let ext = p
                 .extension()
                 .and_then(|e| e.to_str())
@@ -142,8 +150,8 @@ pub async fn preprocess_file(path: String) -> Result<String, String> {
                 .to_lowercase();
 
             let text = match ext.as_str() {
-                "pdf" => extract_pdf_text(&path)?,
-                e if OFFICE_EXTS.contains(&e) => extract_office_text(&path, e)?,
+                "pdf" => extract_pdf_text(&path_for_msg)?,
+                e if OFFICE_EXTS.contains(&e) => extract_office_text(&path_for_msg, e)?,
                 _ => return Ok("no preprocessing needed".to_string()),
             };
 
