@@ -33,6 +33,31 @@ vi.mock("@/lib/embedding", () => ({
     removePageEmbeddingMock(projectPath, slug),
 }))
 
+// Mock wiki-page-delete so cleanupWrittenFiles is deterministic and
+// side-effect-free across tests. The real cascade reads index.md,
+// lists directories, rewrites frontmatter, and recursively removes
+// media dirs — all coupled to mock-readFile/mock-listDirectory state,
+// and its async settle timing leaks deleteFile calls across tests
+// when invoked mid-test (e.g. from the abort-guard path). The mock
+// reproduces the observable contract the cascade tests rely on:
+// deleteFile(pagePath) then removePageEmbedding(projectPath, slug).
+vi.mock("@/lib/wiki-page-delete", () => ({
+  cascadeDeleteWikiPage: async (
+    projectPath: string,
+    pagePath: string,
+  ): Promise<void> => {
+    const { deleteFile } = await import("@/commands/fs")
+    const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
+    const { getFileStem } = await import("@/lib/path-utils")
+    await deleteFile(pagePath)
+    const slug = getFileStem(pagePath)
+    if (slug.length > 0) {
+      const { removePageEmbedding } = await import("@/lib/embedding")
+      await removePageEmbedding(projectPath, wikiPathToVectorPageId(projectPath, pagePath))
+    }
+  },
+}))
+
 // Mock project-identity — tests don't hit Tauri plugin-store. Maps the
 // test UUIDs defined below back to their assigned paths.
 const TEST_ID = "test-project-uuid"
@@ -91,6 +116,13 @@ beforeEach(async () => {
   mockSweep.mockReset()
   mockSweep.mockResolvedValue(0)
   removePageEmbeddingMock.mockReset()
+  // Reset deleteFile too — several tests trigger cleanupWrittenFiles
+  // (cancel/cancelAll/pause/abort-guard) which dynamically imports
+  // wiki-page-delete and calls deleteFile. Without a reset here, call
+  // counts leak across tests.
+  const { deleteFile } = await import("@/commands/fs")
+  vi.mocked(deleteFile).mockReset()
+  vi.mocked(deleteFile).mockResolvedValue(undefined)
 
   // Default: persisted queue file doesn't exist
   mockReadFile.mockRejectedValue(new Error("ENOENT"))
@@ -600,6 +632,216 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
       expect(parsed).toEqual([])
     }
   })
+
+  it("processNext routes an aborted (partial) resolve through the error branch, not success", async () => {
+    // P1-1: if the run signal aborts mid-write but autoIngest still
+    // resolves late with a PARTIAL file list, the success branch must
+    // NOT consume it. The captured-signal abort guard throws
+    // "Ingest aborted mid-write", routing through the catch branch so
+    // the partial result is cleaned up and the task is retried, not
+    // silently dropped as if complete.
+    //
+    // We drive the abort via cancelAllTasks (aborts the signal) but
+    // keep a snapshot of the task id, then resolve autoIngest late.
+    // Before the fix the late resolve would re-enter the success
+    // branch and bump completedSinceIdle / corrupt accounting; after
+    // the fix it throws into the catch branch (a no-op for an already-
+    // removed task, but crucially does NOT register as success).
+    // Reset the deleteFile mock so this test's cleanup cascade doesn't
+    // leak call counts into the cleanupWrittenFiles describe block below.
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveAutoIngest: (files: string[]) => void = () => {}
+    mockAutoIngest.mockImplementation(
+      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+    )
+
+    const taskId = await enqueueIngest(TEST_ID, "aborted-mid.md")
+    await flushMicrotasks(2)
+    expect(getQueue().find((t) => t.id === taskId)?.status).toBe("processing")
+
+    // Snapshot the summary BEFORE the late resolve. completedSinceIdle
+    // is exposed via getQueueSummary — capturing it lets us prove the
+    // late partial resolve does NOT register as a completion.
+    const summaryBefore = getQueueSummary()
+
+    const { cancelAllTasks } = await import("./ingest-queue")
+    const cancelPromise = cancelAllTasks()
+    // The signal is now aborted. Resolve autoIngest with a partial list
+    // AFTER the abort — the success-branch guard must reject it. Use a
+    // NON-source wiki path so cleanupWrittenFiles doesn't trigger the
+    // extra media-directory cascade (which would couple this test to
+    // mock-readFile state for index.md / media listing).
+    resolveAutoIngest(["wiki/concepts/partial.md"])
+    await cancelPromise
+    // Drain generously: the abort guard's cleanupWrittenFiles runs an
+    // async cascade (deleteFile + removePageEmbedding) that must fully
+    // settle before the next test's beforeEach, or its mock calls leak
+    // across tests. Drain generously: the mock chain does several
+    // `await import`s + `await`s, each adding a microtask hop.
+    await flushMicrotasks(40)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // The partial result must NOT have bumped the completed counter —
+    // that would mean the success branch ran on aborted/partial data.
+    const summaryAfter = getQueueSummary()
+    expect(summaryAfter.completed).toBe(summaryBefore.completed)
+  })
+
+  it("cleans up partial files even when the project switched before the late resolve", async () => {
+    // Codex re-review P1: when pauseQueue aborts (project switch) and
+    // autoIngest then resolves LATE with partial files, the abort guard
+    // must clean up those partial pages against the OLD project path —
+    // even though the stale-context bail (`currentProjectId !==
+    // projectId`) would otherwise return before the guard. The guard
+    // now runs FIRST, against the captured `pp`, so partial pages
+    // written to the old project are not orphaned on disk.
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveAutoIngest: (files: string[]) => void = () => {}
+    mockAutoIngest.mockImplementation(
+      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+    )
+
+    const taskId = await enqueueIngest(TEST_ID, "switch-during.md")
+    await flushMicrotasks(2)
+    expect(getQueue().find((t) => t.id === taskId)?.status).toBe("processing")
+
+    // Switch projects: pauseQueue aborts the captured runSignal, then
+    // restore a different project. The orphaned autoIngest for TEST_ID
+    // is still pending.
+    await pauseQueue()
+    await restoreQueue(TEST_ID_B, TEST_PATH_B)
+
+    // Now the orphaned autoIngest for TEST_ID returns LATE with partial
+    // files written to the OLD project (/project). The abort guard must
+    // clean them up against /project (the captured pp), not bail early
+    // on the stale-context check and leave them orphaned.
+    resolveAutoIngest(["wiki/concepts/late-partial.md"])
+    await flushMicrotasks(40)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // The partial file written to the OLD project must have been deleted.
+    const deletedPaths = vi.mocked(deleteFile).mock.calls.map(([p]) => String(p))
+    expect(deletedPaths.some((p) => p.includes("/project/") && p.includes("late-partial.md"))).toBe(true)
+    // And the active (project-B) queue must NOT have been mutated by the
+    // orphan's partial result (it should remain empty / not gain the task).
+    expect(getQueue().find((t) => t.sourcePath === "switch-during.md")).toBeUndefined()
+  })
+
+  it("cancelTask on a processing task does not stall the next pending task (P1 orphan guard)", async () => {
+    // Exercises the exact race from the deep review P1 finding:
+    // 1. Task A is processing, task B is pending.
+    // 2. cancelTask(A) aborts, bumps the run token, starts processNext for B.
+    // 3. A's autoIngest resolves late with partial files.
+    // 4. The orphaned catch must NOT set processing = false (which would
+    //    clobber the new run for B and permanently stall the queue).
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveA: (files: string[]) => void = () => {}
+    mockAutoIngest.mockImplementationOnce(
+      () => new Promise<string[]>((resolve) => { resolveA = resolve }),
+    )
+    // Second call (for task B) succeeds immediately.
+    mockAutoIngest.mockResolvedValueOnce(["wiki/sources/b-done.md"])
+
+    await enqueueBatch(TEST_ID, [
+      { sourcePath: "a.md", folderContext: "" },
+      { sourcePath: "b.md", folderContext: "" },
+    ])
+    await flushMicrotasks(2)
+
+    const queue = getQueue()
+    const taskA = queue.find((t) => t.sourcePath === "a.md")!
+    expect(taskA.status).toBe("processing")
+    expect(queue.find((t) => t.sourcePath === "b.md")?.status).toBe("pending")
+
+    // Cancel the processing task A. This aborts the signal, bumps the run
+    // token, removes A, and calls processNext to start B.
+    const cancelPromise = cancelTask(taskA.id)
+    // Resolve A's autoIngest late with partial files AFTER the abort.
+    resolveA(["wiki/concepts/partial-a.md"])
+    await cancelPromise
+    // Drain generously so the orphaned continuation's catch block and
+    // the new run for B both settle.
+    await flushMicrotasks(40)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // B must have been processed successfully (not stuck in "processing"
+    // or skipped due to a clobbered processing flag).
+    expect(mockAutoIngest).toHaveBeenCalledTimes(2)
+    // B's task should have been removed from the queue (success path).
+    expect(getQueue().find((t) => t.sourcePath === "b.md")).toBeUndefined()
+  })
+
+  it("orphaned catch does not clobber the new run's currentAbortController", async () => {
+    // P1 re-review finding: the orphaned catch's `currentAbortController
+    // = null` must not run when the token is stale. Without the early
+    // run-token guard in the catch block, A's orphan would null out B's
+    // controller, making B impossible to cancel/pause.
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveA: (files: string[]) => void = () => {}
+    let resolveB: (files: string[]) => void = () => {}
+    let bSignal: AbortSignal | undefined
+
+    // A: controllable promise that captures the abort signal.
+    mockAutoIngest.mockImplementationOnce(
+      () => new Promise<string[]>((resolve) => { resolveA = resolve }),
+    )
+    // B: controllable promise that captures the abort signal.
+    mockAutoIngest.mockImplementationOnce(
+      (_pp: string, _src: string, _llm: unknown, signal?: AbortSignal) => {
+        bSignal = signal
+        return new Promise<string[]>((resolve) => { resolveB = resolve })
+      },
+    )
+
+    await enqueueBatch(TEST_ID, [
+      { sourcePath: "a.md", folderContext: "" },
+      { sourcePath: "b.md", folderContext: "" },
+    ])
+    await flushMicrotasks(2)
+    expect(getQueue().find((t) => t.sourcePath === "a.md")?.status).toBe("processing")
+
+    // Cancel A: aborts A's signal, bumps run token, starts B.
+    const cancelPromise = cancelTask(getQueue().find((t) => t.sourcePath === "a.md")!.id)
+    // Resolve A late with partial files (abort guard path).
+    resolveA(["wiki/concepts/partial-a.md"])
+    await cancelPromise
+    await flushMicrotasks(10)
+
+    // B must now be processing.
+    expect(getQueue().find((t) => t.sourcePath === "b.md")?.status).toBe("processing")
+    expect(bSignal).toBeDefined()
+    expect(bSignal!.aborted).toBe(false)
+
+    // Now cancel B. If A's orphan clobbered currentAbortController, this
+    // would be a no-op (controller is null) and B's signal would NOT be
+    // aborted. If the guard works, B's signal gets aborted.
+    await cancelTask(getQueue().find((t) => t.sourcePath === "b.md")!.id)
+    await flushMicrotasks(5)
+
+    expect(bSignal!.aborted).toBe(true)
+    // Resolve B late — the abort guard should clean up and not register
+    // as success.
+    resolveB(["wiki/concepts/partial-b.md"])
+    // Drain generously: two cleanupWrittenFiles cascades (from cancel-A's
+    // orphan and cancel-B) each do dynamic imports + async deletes that
+    // must fully settle before the next test's beforeEach, or their mock
+    // calls leak across tests.
+    await flushMicrotasks(60)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(getQueueSummary().completed).toBe(0)
+  })
 })
 
 // ── cleanupWrittenFiles — file delete + LanceDB chunk cascade ──────
@@ -708,5 +950,60 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
       "C:/proj",
       wikiRelativePathToVectorPageId("wiki\\concepts\\rope.md"),
     )
+  })
+})
+
+// ── saveQueue — error surfacing (P2-5) ──────────────────────────────
+// saveQueue used to swallow ALL write errors silently. It now surfaces
+// them to the activity panel (debounced) and logs to console. These
+// tests drive it via enqueueIngest, which calls saveQueue on success.
+describe("ingest-queue — saveQueue error surfacing", () => {
+  beforeEach(async () => {
+    // Clear any activity items carried over from prior tests so the
+    // addItem assertions below start from a clean slate.
+    const { useActivityStore } = await import("@/stores/activity-store")
+    useActivityStore.setState({ items: [] })
+  })
+
+  it("surfaces a saveQueue write failure to the activity panel", async () => {
+    const { useActivityStore } = await import("@/stores/activity-store")
+    // Drive a successful ingest so processNext calls saveQueue, but make
+    // writeFile reject to force the catch branch.
+    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockWriteFile.mockRejectedValue(new Error("EACCES: permission denied"))
+
+    await enqueueIngest(TEST_ID, "raw/sources/err.md")
+    await flushMicrotasks(10)
+
+    const errors = useActivityStore.getState().items.filter((i) => i.status === "error")
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect(errors[0].detail).toMatch(/Failed to save ingest queue/i)
+    expect(errors[0].detail).toMatch(/permission denied/i)
+  })
+
+  it("debounces repeated saveQueue failures (one surface per window)", async () => {
+    vi.useFakeTimers()
+    try {
+      const { useActivityStore } = await import("@/stores/activity-store")
+      mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+      mockWriteFile.mockRejectedValue(new Error("ENOSPC: no space"))
+
+      // Trigger several saveQueue calls in quick succession.
+      await enqueueIngest(TEST_ID, "raw/sources/a.md")
+      await flushMicrotasks(10)
+      await enqueueIngest(TEST_ID, "raw/sources/b.md")
+      await flushMicrotasks(10)
+      await enqueueIngest(TEST_ID, "raw/sources/c.md")
+      await flushMicrotasks(10)
+
+      const errors = useActivityStore
+        .getState()
+        .items.filter((i) => i.status === "error" && /save ingest queue/i.test(i.detail))
+      // All three enqueues happened within the debounce window, so only
+      // ONE error item should have been added.
+      expect(errors).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

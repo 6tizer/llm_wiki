@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "@/commands/fs"
 import { autoIngest } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useActivityStore } from "@/stores/activity-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 import { getProjectPathById } from "@/lib/project-identity"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
@@ -42,6 +43,18 @@ let processedSinceDrain = false
 // Abort controller for the review-sweep LLM call so switching projects
 // cancels a long-running judgment instead of burning tokens.
 let sweepAbortController: AbortController | null = null
+// Debounce for surfacing saveQueue errors to the activity panel: a
+// persistent disk-full / permission error would otherwise spam one
+// item per call (saveQueue runs from enqueue, retry, cancel, etc.).
+// One surface per window is enough; the error is non-fatal.
+let lastSaveQueueErrorAt = 0
+const SAVE_QUEUE_ERROR_DEBOUNCE_MS = 5000
+// Run-token guard for processNext: each invocation captures the current
+// token at entry. cancelTask / pauseQueue bump the token so orphaned
+// continuations (whose catch block runs after the cancel already started
+// a new processNext) bail instead of clobbering `processing = false` and
+// stalling the queue.
+let currentRunToken = 0
 
 function resetQueueAccounting(): void {
   completedSinceIdle = 0
@@ -58,8 +71,30 @@ async function saveQueue(projectPath: string): Promise<void> {
     // Only save pending and failed tasks (done tasks are removed)
     const toSave = queue.filter((t) => t.status !== "done")
     await writeFile(queueFilePath(projectPath), JSON.stringify(toSave, null, 2))
-  } catch {
-    // non-critical
+  } catch (err) {
+    // Non-fatal (the queue also lives in memory), but no longer silent:
+    // a persistent disk-full / permission error would otherwise make
+    // every enqueue/retry/cancel fail invisibly. Surface it to the
+    // activity panel once per debounce window so the user can act, and
+    // always log so the console retains the full picture.
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[ingest] saveQueue failed for "${projectPath}": ${message}`)
+    const now = Date.now()
+    if (now - lastSaveQueueErrorAt > SAVE_QUEUE_ERROR_DEBOUNCE_MS) {
+      lastSaveQueueErrorAt = now
+      try {
+        useActivityStore.getState().addItem({
+          type: "ingest",
+          title: "Ingest queue",
+          status: "error",
+          detail: `Failed to save ingest queue: ${message}`,
+          filesWritten: [],
+        })
+      } catch {
+        // activity-store unavailable (e.g. headless test) — the
+        // console.error above still preserves the signal.
+      }
+    }
   }
 }
 
@@ -292,6 +327,10 @@ export async function cancelTask(taskId: string): Promise<void> {
     }
 
     processing = false
+    // Bump the run token so any orphaned processNext continuation
+    // (whose catch block hasn't run yet) sees a stale token and bails
+    // instead of clobbering the new run started by processNext below.
+    currentRunToken++
   }
 
   queue = queue.filter((t) => t.id !== taskId)
@@ -323,6 +362,7 @@ export async function cancelAllTasks(): Promise<number> {
     currentAbortController = null
   }
   processing = false
+  currentRunToken++
 
   if (lastWrittenFiles.length > 0) {
     await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles)
@@ -381,6 +421,10 @@ export function clearQueueState(): void {
   lastWrittenFiles = []
   processedSinceDrain = false
   resetQueueAccounting()
+  currentRunToken = 0
+  // Reset the saveQueue error debounce so a prior test's surfaced error
+  // doesn't suppress the next test's expected surface.
+  lastSaveQueueErrorAt = 0
 }
 
 /**
@@ -404,11 +448,20 @@ export async function pauseQueue(): Promise<void> {
     currentAbortController.abort()
     currentAbortController = null
   }
+  // Clean up any files the in-flight ingest wrote before the abort
+  // landed. Without this, partial pages from a paused ingest are
+  // orphaned on disk (the abort only stops further writes; it does
+  // not undo the ones already made). The task is reverted to pending
+  // below so it re-runs from scratch on the next restore.
+  if (lastWrittenFiles.length > 0) {
+    await cleanupWrittenFiles(pausedProjectPath, lastWrittenFiles)
+  }
   if (sweepAbortController) {
     sweepAbortController.abort()
     sweepAbortController = null
   }
   processing = false
+  currentRunToken++
 
   // Revert any in-flight processing task back to pending so when the
   // user returns to this project, the task is re-tried from scratch.
@@ -546,9 +599,13 @@ async function processNext(projectId: string): Promise<void> {
   }
 
   processing = true
+  const runToken = ++currentRunToken
   next.status = "processing"
   await saveQueue(pp)
-  if (currentProjectId !== projectId) return
+  if (currentProjectId !== projectId) {
+    if (runToken === currentRunToken) processing = false
+    return
+  }
 
   const llmConfig = useWikiStore.getState().llmConfig
 
@@ -569,15 +626,50 @@ async function processNext(projectId: string): Promise<void> {
   console.log(`[Ingest Queue] Processing: ${next.sourcePath} (${queue.filter((t) => t.projectId === projectId && t.status === "pending").length} remaining)`)
 
   currentAbortController = new AbortController()
+  // Capture the signal for THIS run locally. cancelTask / pauseQueue
+  // null out the module-level `currentAbortController` after aborting,
+  // so a late-resolving autoIngest cannot rely on reading
+  // `currentAbortController?.signal.aborted` below — that would be
+  // `undefined` (falsy) and the partial result would slip into the
+  // success branch. The captured reference survives the null-out.
+  const runSignal = currentAbortController.signal
   lastWrittenFiles = []
 
   try {
-    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, currentAbortController.signal, next.folderContext)
+    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, runSignal, next.folderContext)
+
+    // Abort guard (FIRST, before the stale-context bail): if the run
+    // signal aborted mid-write but the promise still resolved late
+    // (a trailing onDone fast-path), `writtenFiles` may be a PARTIAL
+    // set. This must run even when the project has since switched,
+    // because the partial pages were written to THIS run's project
+    // path (`pp`) — pauseQueue's lastWrittenFiles cleanup won't see
+    // them (lastWrittenFiles is only set AFTER this point at line
+    // below). Clean up against the captured `pp`, then bail/throw
+    // without touching the active queue.
+    if (runSignal.aborted) {
+      if (writtenFiles.length > 0) {
+        await cleanupWrittenFiles(pp, writtenFiles)
+      }
+      lastWrittenFiles = []
+      // If the project switched, bail silently (pauseQueue already
+      // persisted the correct state); otherwise throw so the catch
+      // branch keeps the task for retry.
+      if (currentProjectId !== projectId) {
+        if (runToken === currentRunToken) processing = false
+        return
+      }
+      throw new Error("Ingest aborted mid-write")
+    }
+
     // Stale-context guard: project switched during the long LLM call.
     // Bail without mutating queue or writing to disk — pauseQueue has
     // already persisted the correct state to the old project's file,
     // and the new project's queue must not be touched by this orphan.
-    if (currentProjectId !== projectId) return
+    if (currentProjectId !== projectId) {
+      if (runToken === currentRunToken) processing = false
+      return
+    }
     lastWrittenFiles = writtenFiles
 
     // Safety net: autoIngest resolving with zero files means nothing
@@ -598,7 +690,16 @@ async function processNext(projectId: string): Promise<void> {
 
     console.log(`[Ingest Queue] Done: ${next.sourcePath}`)
   } catch (err) {
-    if (currentProjectId !== projectId) return
+    if (currentProjectId !== projectId) {
+      if (runToken === currentRunToken) processing = false
+      return
+    }
+    // Run-token guard (early): an orphaned catch must NOT touch any
+    // global state — `currentAbortController = null` below would clobber
+    // the NEW run's controller (task B), making B impossible to cancel
+    // or pause. The abort guard's cleanupWrittenFiles already ran in
+    // the try block before the throw, so bailing here loses nothing.
+    if (runToken !== currentRunToken) return
     currentAbortController = null
     const message = err instanceof Error ? err.message : String(err)
     next.retryCount++
@@ -615,6 +716,11 @@ async function processNext(projectId: string): Promise<void> {
     await saveQueue(pp)
   }
 
+  // Run-token guard: if cancelTask / pauseQueue bumped the token, this
+  // continuation is orphaned — a new processNext is already running (or
+  // the project switched). Bailing here prevents clobbering the new run's
+  // `processing` flag, which would otherwise stall the queue permanently.
+  if (runToken !== currentRunToken) return
   processing = false
   processNext(projectId)
 }

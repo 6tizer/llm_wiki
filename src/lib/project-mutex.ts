@@ -20,9 +20,24 @@
  * re-entrancy detection — those would all be overkill. If `fn`
  * hangs, the lock is held until it resolves; we'd rather have
  * back-pressure than corruption.
+ *
+ * The map key is the *normalized* project path so that two callers
+ * who pass the same logical project with different string forms
+ * (trailing slash, backslashes on Windows) still serialize. Without
+ * this, the exact silent-overwrite race this lock exists to prevent
+ * could re-emerge for path-variant callers.
  */
 
+import { normalizePath } from "@/lib/path-utils"
+
 const locks = new Map<string, Promise<unknown>>()
+
+/** Collapse a project path to a stable lock key: backslashes → forward
+ *  slashes (via `normalizePath`) and strip trailing slashes so `/proj`
+ *  and `/proj/` map to the same slot. */
+function lockKey(projectPath: string): string {
+  return normalizePath(projectPath).replace(/\/+$/, "")
+}
 
 /**
  * Run `fn` while holding the per-`projectPath` lock. Returns the
@@ -33,7 +48,8 @@ export async function withProjectLock<T>(
   projectPath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const prev = locks.get(projectPath) ?? Promise.resolve()
+  const key = lockKey(projectPath)
+  const prev = locks.get(key) ?? Promise.resolve()
   // We have to install our own promise into the map BEFORE awaiting
   // `prev`, otherwise a third caller can race in and find the map
   // still pointing at `prev`, and chain off the wrong slot.
@@ -42,7 +58,7 @@ export async function withProjectLock<T>(
     release = resolve
   })
   locks.set(
-    projectPath,
+    key,
     prev.then(() => next),
   )
   try {
@@ -52,22 +68,19 @@ export async function withProjectLock<T>(
     return await fn()
   } finally {
     release()
-    // Best-effort cleanup: if our promise is still the tail, drop the
-    // map entry. Otherwise a later caller has chained on; leave it.
-    if (locks.get(projectPath) === next || locks.size > 1024) {
-      // Tail check is approximate (the map stores prev.then(() => next),
-      // not next directly). The size guard prevents pathological
-      // unbounded growth if many distinct projectPaths cycle through.
-      const tail = locks.get(projectPath)
-      if (tail) {
-        // Defer the delete one tick so a caller that just chained on
-        // doesn't see us yank the entry mid-chain.
-        Promise.resolve().then(() => {
-          if (locks.get(projectPath) === tail) {
-            locks.delete(projectPath)
-          }
-        })
-      }
+    // Best-effort cleanup: schedule a deferred delete so a caller that
+    // just chained on doesn't see us yank the entry mid-chain. The
+    // stored value is prev.then(() => next), not next itself, so we
+    // can't do a cheap identity check — instead always schedule the
+    // deferred compare-and-delete, which is correct regardless of
+    // whether another caller has chained on.
+    const tail = locks.get(key)
+    if (tail) {
+      Promise.resolve().then(() => {
+        if (locks.get(key) === tail) {
+          locks.delete(key)
+        }
+      })
     }
   }
 }
