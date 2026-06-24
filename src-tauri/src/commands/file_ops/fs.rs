@@ -1,14 +1,44 @@
 use std::fs;
 use std::io::Read as IoRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
 use calamine::{open_workbook_auto, Data, Reader};
+use tauri::State;
 
-use super::file_sync;
+use super::file_sync::{self, FileSyncState};
+use super::path_safety::validate_within_project;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
+
+/// Validate a path against the project root. Write/delete commands fail-closed
+/// when the root is unknown (watcher not started); read commands degrade to
+/// allowing the path (legacy behavior) so project-open flows still work.
+fn sandbox_path(
+    state: &State<'_, FileSyncState>,
+    path: &str,
+    mode: SandboxMode,
+) -> Result<PathBuf, String> {
+    match state.project_root() {
+        Some(root) => validate_within_project(&root, path),
+        None => match mode {
+            // No known project root + write/delete = fail-closed (#119 P0-2).
+            SandboxMode::Write => Err(format!(
+                "Cannot write to '{path}': no active project root (file watcher not started). \
+                 Open a project first."
+            )),
+            // No known project root + read = allow (degrade to legacy).
+            SandboxMode::Read => Ok(PathBuf::from(path)),
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SandboxMode {
+    Read,
+    Write,
+}
 
 /// Known binary formats that need special extraction
 const OFFICE_EXTS: &[&str] = &["docx", "pptx", "xlsx", "odt", "ods", "odp"];
@@ -22,7 +52,21 @@ const MEDIA_EXTS: &[&str] = &[
 const LEGACY_DOC_EXTS: &[&str] = &["doc", "xls", "ppt", "pages", "numbers", "key", "epub"];
 
 #[tauri::command]
-pub async fn read_file(path: String) -> Result<String, String> {
+pub async fn read_file(
+    path: String,
+    state: State<'_, FileSyncState>,
+) -> Result<String, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
+    read_file_validated(validated, path).await
+}
+
+/// Inner implementation taking a pre-validated path. Used by the command
+/// wrapper and by unit tests that don't have a Tauri `State` context.
+/// `path_orig` is retained only for error-message fidelity.
+async fn read_file_validated(validated: PathBuf, path_orig: String) -> Result<String, String> {
+    // Bind `path` so the extraction helpers below (which take &str) and error
+    // messages keep working unchanged.
+    let path = validated.to_string_lossy().to_string();
     // `spawn_blocking` is REQUIRED, not a perf nicety. The body does
     // synchronous PDF/Office text extraction (pdfium FFI, calamine,
     // zip + image decode) that can take 10s+ on big files. Running
@@ -34,7 +78,8 @@ pub async fn read_file(path: String) -> Result<String, String> {
     // pool where blocking-for-seconds is the contract.
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file", || {
-            let p = Path::new(&path);
+            let _ = &path_orig; // preserved for potential future error-message use
+            let p = validated.as_path();
             let ext = p
                 .extension()
                 .and_then(|e| e.to_str())
@@ -925,16 +970,21 @@ fn extract_odf_text(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, S
 }
 
 #[tauri::command]
-pub async fn write_file(path: String, contents: String) -> Result<(), String> {
+pub async fn write_file(
+    path: String,
+    contents: String,
+    state: State<'_, FileSyncState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file", || {
-            let p = Path::new(&path);
+            let p = validated.as_path();
             if let Some(parent) = p.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
             }
             file_sync::mark_app_write_path(p);
-            fs::write(&path, contents)
+            fs::write(p, contents)
                 .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
             file_sync::mark_app_write_path(p);
             Ok(())
@@ -945,10 +995,15 @@ pub async fn write_file(path: String, contents: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn write_file_atomic(path: String, contents: String) -> Result<(), String> {
+pub async fn write_file_atomic(
+    path: String,
+    contents: String,
+    state: State<'_, FileSyncState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file_atomic", || {
-            let p = Path::new(&path);
+            let p = validated.as_path();
             if let Some(parent) = p.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
@@ -1071,18 +1126,27 @@ fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<Vec<FileNode
 }
 
 #[tauri::command]
-pub async fn copy_file(source: String, destination: String) -> Result<(), String> {
+pub async fn copy_file(
+    source: String,
+    destination: String,
+    state: State<'_, FileSyncState>,
+) -> Result<(), String> {
+    let src_validated = sandbox_path(&state, &source, SandboxMode::Read)?;
+    let dest_validated = sandbox_path(&state, &destination, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("copy_file", || {
-            let dest = Path::new(&destination);
-            if let Some(parent) = dest.parent() {
+            if let Some(parent) = dest_validated.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dirs: {}", e))?;
             }
-            file_sync::mark_app_write_path(dest);
-            fs::copy(&source, &destination)
-                .map_err(|e| format!("Failed to copy '{}' to '{}': {}", source, destination, e))?;
-            file_sync::mark_app_write_path(dest);
+            file_sync::mark_app_write_path(&dest_validated);
+            fs::copy(&src_validated, &dest_validated).map_err(|e| {
+                format!(
+                    "Failed to copy '{}' to '{}': {}",
+                    source, destination, e
+                )
+            })?;
+            file_sync::mark_app_write_path(&dest_validated);
             Ok(())
         })
     })
@@ -1093,53 +1157,23 @@ pub async fn copy_file(source: String, destination: String) -> Result<(), String
 /// Recursively copy a directory, preserving structure.
 /// Returns list of copied file paths (destination paths).
 #[tauri::command]
-pub async fn copy_directory(source: String, destination: String) -> Result<Vec<String>, String> {
+pub async fn copy_directory(
+    source: String,
+    destination: String,
+    state: State<'_, FileSyncState>,
+) -> Result<Vec<String>, String> {
+    let src_validated = sandbox_path(&state, &source, SandboxMode::Read)?;
+    let dest_validated = sandbox_path(&state, &destination, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("copy_directory", || {
-            let src = Path::new(&source);
-            let dest = Path::new(&destination);
-            file_sync::mark_app_write_path(dest);
+            file_sync::mark_app_write_path(&dest_validated);
 
-            if !src.is_dir() {
+            if !src_validated.is_dir() {
                 return Err(format!("'{}' is not a directory", source));
             }
 
             let mut copied_files = Vec::new();
-
-            fn copy_recursive(
-                src: &Path,
-                dest: &Path,
-                files: &mut Vec<String>,
-            ) -> Result<(), String> {
-                fs::create_dir_all(dest)
-                    .map_err(|e| format!("Failed to create dir '{}': {}", dest.display(), e))?;
-
-                let entries = fs::read_dir(src)
-                    .map_err(|e| format!("Failed to read dir '{}': {}", src.display(), e))?;
-
-                for entry in entries {
-                    let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
-                    let path = entry.path();
-                    let name = entry.file_name();
-                    let dest_path = dest.join(&name);
-
-                    if name.to_string_lossy().starts_with('.') {
-                        continue;
-                    }
-
-                    if path.is_dir() {
-                        copy_recursive(&path, &dest_path, files)?;
-                    } else {
-                        fs::copy(&path, &dest_path)
-                            .map_err(|e| format!("Failed to copy '{}': {}", path.display(), e))?;
-                        file_sync::mark_app_write_path(&dest_path);
-                        files.push(dest_path.to_string_lossy().replace('\\', "/"));
-                    }
-                }
-                Ok(())
-            }
-
-            copy_recursive(src, dest, &mut copied_files)?;
+            copy_recursive(&src_validated, &dest_validated, &mut copied_files)?;
             Ok(copied_files)
         })
     })
@@ -1147,20 +1181,50 @@ pub async fn copy_directory(source: String, destination: String) -> Result<Vec<S
     .map_err(|e| format!("copy_directory blocking task join error: {e}"))?
 }
 
+/// Inner recursive copy used by `copy_directory`. Kept module-private so the
+/// command-level sandbox validation cannot be bypassed by calling it directly.
+fn copy_recursive(src: &Path, dest: &Path, files: &mut Vec<String>) -> Result<(), String> {
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("Failed to create dir '{}': {}", dest.display(), e))?;
+    let entries = fs::read_dir(src)
+        .map_err(|e| format!("Failed to read dir '{}': {}", src.display(), e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let dest_path = dest.join(&name);
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            copy_recursive(&path, &dest_path, files)?;
+        } else {
+            fs::copy(&path, &dest_path)
+                .map_err(|e| format!("Failed to copy '{}': {}", path.display(), e))?;
+            file_sync::mark_app_write_path(&dest_path);
+            files.push(dest_path.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn delete_file(path: String) -> Result<(), String> {
+pub async fn delete_file(
+    path: String,
+    state: State<'_, FileSyncState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("delete_file", || {
-            let p = Path::new(&path);
-            file_sync::mark_app_write_path(p);
-            if p.is_dir() {
+            file_sync::mark_app_write_path(&validated);
+            if validated.is_dir() {
                 remove_path_with_retry(&path, true)
                     .map_err(|e| format!("Failed to delete directory '{}': {}", path, e))?;
             } else {
                 remove_path_with_retry(&path, false)
                     .map_err(|e| format!("Failed to delete file '{}': {}", path, e))?;
             }
-            file_sync::mark_app_write_path(p);
+            file_sync::mark_app_write_path(&validated);
             Ok(())
         })
     })
@@ -1349,10 +1413,14 @@ fn collect_related_pages(
 }
 
 #[tauri::command]
-pub async fn create_directory(path: String) -> Result<(), String> {
+pub async fn create_directory(
+    path: String,
+    state: State<'_, FileSyncState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("create_directory", || {
-            fs::create_dir_all(&path)
+            fs::create_dir_all(&validated)
                 .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
         })
     })
@@ -1380,13 +1448,17 @@ pub struct FileBase64 {
 }
 
 #[tauri::command]
-pub async fn read_file_as_base64(path: String) -> Result<FileBase64, String> {
+pub async fn read_file_as_base64(
+    path: String,
+    state: State<'_, FileSyncState>,
+) -> Result<FileBase64, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file_as_base64", || {
-            let bytes = fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-            let p = Path::new(&path);
-            let ext = p
+            let bytes =
+                fs::read(&validated).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+            let ext = validated
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
@@ -1478,11 +1550,15 @@ pub async fn get_file_size(path: String) -> Result<u64, String> {
 
 /// Compute MD5 hash of a file. Returns the hex-encoded hash string.
 #[tauri::command]
-pub async fn get_file_md5(path: String) -> Result<String, String> {
+pub async fn get_file_md5(
+    path: String,
+    state: State<'_, FileSyncState>,
+) -> Result<String, String> {
     use md5::{Digest, Md5};
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_md5", || {
-            let mut file = fs::File::open(&path)
+            let mut file = fs::File::open(&validated)
                 .map_err(|e| format!("Failed to open file '{}': {}", path, e))?;
             let mut hasher = Md5::new();
             let mut buffer = [0u8; 64 * 1024];
@@ -1553,7 +1629,7 @@ mod tests {
 
         for (name, bytes) in payloads {
             let path = tmp_pdf_with_bytes(bytes);
-            let result = read_file(path.clone()).await;
+            let result = read_file_validated(PathBuf::from(&path), path.clone()).await;
             let _ = fs::remove_file(&path);
             eprintln!(
                 "[{name}] => {:?}",
@@ -1568,7 +1644,10 @@ mod tests {
     /// through read_file's guarded path.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_file_returns_err_on_missing_file_instead_of_panicking() {
-        let result = read_file("/nonexistent/path/that/does/not/exist.pdf".to_string()).await;
+        let result =
+            read_file_validated(PathBuf::from("/nonexistent/path/that/does/not/exist.pdf"),
+                "/nonexistent/path/that/does/not/exist.pdf".to_string())
+            .await;
         assert!(result.is_err() || result.is_ok()); // must at least return
     }
 

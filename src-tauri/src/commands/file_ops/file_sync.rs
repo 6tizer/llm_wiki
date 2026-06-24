@@ -37,6 +37,14 @@ pub struct FileSyncState {
     inner: Mutex<FileSyncInner>,
 }
 
+impl FileSyncState {
+    /// Returns the currently-watched project root, if the watcher is active.
+    /// Used by fs commands to validate paths stay within the project (#119 P0-2).
+    pub fn project_root(&self) -> Option<PathBuf> {
+        self.inner.lock().ok()?.project_path.clone()
+    }
+}
+
 #[derive(Default)]
 struct FileSyncInner {
     watcher: Option<RecommendedWatcher>,

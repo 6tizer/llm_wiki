@@ -53,3 +53,8 @@ pnpm-debug.log*
 CLAUDE.md
 litellm/
 .agent-loop/
+
+# Lockfiles — npm is the canonical package manager (all scripts use npm run).
+# pnpm-lock.yaml is generated locally and should not be committed; it causes
+# resolution drift vs package-lock.json.
+pnpm-lock.yaml
