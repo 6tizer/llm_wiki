@@ -203,7 +203,7 @@ export async function flushQaForConversation(
 		// P1-7: only clear the pending flag on SUCCESS. Previously this
 		// lived in `finally`, so a thrown runQaExtraction marked the
 		// conversation clean and the QA page was silently lost (no retry).
-			// Move the clear here so a failure can retry until the cap below.
+		// Move the clear here so a failure can retry until the cap below.
 		clearPendingConversation(convId);
 		return result;
 	} catch (err) {
