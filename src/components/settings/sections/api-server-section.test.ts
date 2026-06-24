@@ -56,6 +56,7 @@ const sourceWatch = {
 const agent = {
   maxTurns: 25,
   maxFilesChanged: 20,
+  maxFilesChangedEnabled: false,
   maxWriteBytes: 256 * 1024,
 }
 

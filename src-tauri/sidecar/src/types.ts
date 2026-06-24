@@ -48,6 +48,8 @@ export interface AgentRequest {
 		enableWriteTools?: boolean;
 		maxWriteBytes?: number;
 		maxFilesChanged?: number;
+		/** Threaded from AgentResourceConfig.maxFilesChangedEnabled. */
+		maxFilesChangedEnabled?: boolean;
 		enableFileCheckpointing?: boolean;
 		sandbox?: {
 			enabled?: boolean;

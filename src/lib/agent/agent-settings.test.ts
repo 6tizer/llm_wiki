@@ -48,8 +48,17 @@ describe("agent resource settings", () => {
     ).toEqual({
       maxTurns: 1,
       maxFilesChanged: 200,
+      maxFilesChangedEnabled: false,
       maxWriteBytes: DEFAULT_AGENT_RESOURCE_CONFIG.maxWriteBytes,
     })
+  })
+
+  it("normalizes maxFilesChangedEnabled to a strict boolean (default false)", () => {
+    expect(normalizeAgentResourceConfig({ maxFilesChangedEnabled: true }).maxFilesChangedEnabled).toBe(true)
+    expect(normalizeAgentResourceConfig({ maxFilesChangedEnabled: false }).maxFilesChangedEnabled).toBe(false)
+    expect(normalizeAgentResourceConfig({}).maxFilesChangedEnabled).toBe(false)
+    // Truthy non-boolean values are NOT coerced to true — only explicit true.
+    expect(normalizeAgentResourceConfig({ maxFilesChangedEnabled: "yes" as unknown as boolean }).maxFilesChangedEnabled).toBe(false)
   })
 
   it("saves normalized settings under .llm-wiki/agent-settings.json", async () => {
@@ -62,6 +71,7 @@ describe("agent resource settings", () => {
     expect(saved).toEqual({
       maxTurns: 40,
       maxFilesChanged: 12,
+      maxFilesChangedEnabled: false,
       maxWriteBytes: 512 * 1024,
     })
     expect(fsMocks.createDirectory).toHaveBeenCalledWith("/project/.llm-wiki")

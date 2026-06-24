@@ -591,7 +591,11 @@ describe("flushQaForConversation", () => {
 		expect(isConversationPending("conv-empty")).toBe(false);
 	});
 
-	it("removes from pending even on error", async () => {
+	it("keeps pending on error so the conversation retries (P1-7)", async () => {
+		// P1-7: flushQaForConversation previously cleared the pending flag
+		// in a `finally` block, so a failed extraction silently dropped the
+		// QA page and the conversation was never retried. The clear now
+		// happens only on success, so an error leaves it pending.
 		markConversationDirty("conv-err");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onError?.(new Error("LLM error"));
@@ -609,7 +613,8 @@ describe("flushQaForConversation", () => {
 				{ provider: "none" } as never,
 			),
 		).rejects.toThrow("LLM error");
-		expect(isConversationPending("conv-err")).toBe(false);
+		// Still pending → will be retried on the next flush cycle.
+		expect(isConversationPending("conv-err")).toBe(true);
 	});
 
 	it("skips when existing QA has matching title (dedup)", async () => {
@@ -750,8 +755,10 @@ describe("flushAllPendingQa", () => {
 			{ provider: "none" } as never,
 		);
 		expect(results).toHaveLength(3);
-		// All removed from pending despite mixed results (finally block)
-		expect(getPendingQaIds()).toHaveLength(0);
+		// P1-7: success and skip clear pending; error leaves it pending
+		// for retry. Previously the `finally` block cleared all three.
+		const pending = getPendingQaIds();
+		expect(pending).toEqual(["conv-err"]);
 	});
 });
 

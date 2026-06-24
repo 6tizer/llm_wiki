@@ -148,13 +148,23 @@ export async function flushQaForConversation(
 			convMessages,
 			options.trigger ?? "auto",
 		);
-		return result;
-	} finally {
+		// P1-7: only clear the pending flag on SUCCESS. Previously this
+		// lived in `finally`, so a thrown runQaExtraction marked the
+		// conversation clean and the QA page was silently lost (no retry).
+		// Move the clear here so a failure leaves it pending for the next
+		// flushAllPendingQa / markConversationDirty cycle.
 		pendingQa.delete(convId);
 		persistPendingQa();
 		if (pendingQa.size === 0) {
 			clearPersistedPendingQa();
 		}
+		return result;
+	} catch (err) {
+		// On failure, leave the conversation pending so it retries. Still
+		// persist the (unchanged) set so the on-disk state is consistent
+		// with memory if the app closes before the next flush.
+		persistPendingQa();
+		throw err;
 	}
 }
 

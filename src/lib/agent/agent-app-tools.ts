@@ -118,6 +118,14 @@ function preflightUnknownWriteBudget(
 ): AgentAppToolResourceLimitResponse | undefined {
   if (!budget) return undefined
   const changedPaths = uniqueStrings(budget.changedPaths)
+  // Fan-out tools don't know how many files they'll write up front, so
+  // a true path-enumerating preflight isn't possible — this is a "last
+  // seat" guard: block once the run is already at/over the limit, so
+  // a fan-out cannot START when there's no budget headroom left.
+  // maxFilesChangedEnabled doesn't change this threshold (the count is
+  // unknowable pre-run); it only matters for tools that CAN enumerate
+  // target paths, which call preflightBudget directly. The post-write
+  // postflightBudget still runs as a safety net in both modes.
   if (changedPaths.length < budget.maxFilesChanged) return undefined
   const message = `Write would exceed maxFilesChanged (${budget.maxFilesChanged})`
   return {
