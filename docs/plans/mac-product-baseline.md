@@ -13,7 +13,7 @@
 - Bundle targets：`app` + `dmg`。README/release 只承诺 DMG；保留 `app` target 避免 dev/app bundle 行为意外回退。
 - Active CI：macOS only。
 - Active release：`macos-latest` + `aarch64-apple-darwin`，只上传 Apple Silicon DMG。
-- Bundle id 从旧 `com.llmwiki.app` 变为 `com.6tizer.llmwiki.agent` 会让旧 app-state 孤立；本 PR 接受 pre-1.0 state reset，不做迁移。PR body 需声明该限制。
+- Bundle id 从旧 `com.llmwiki.app` 变为 `com.6tizer.llmwiki.agent`；启动时若新 `app-state.json` 不存在，会从旧 bundle id / 旧 product name 路径复制一次，避免用户设置静默消失。
 - `tauri.linux.conf.json`、`tauri.windows.conf.json`、`windows-app-manifest.xml` 和非 Mac PDFium assets 保留为 legacy reference，不是 active target。
 
 本地已确认：
@@ -38,7 +38,7 @@
 - 不引入 iOS target。
 - 不删除 Tauri/Rust/TypeScript/Agent SDK 架构。
 - 不删除 Linux/Windows Tauri 配置或 legacy assets。
-- 不迁移旧 `com.llmwiki.app` app-state。
+- 不做复杂双向同步或旧状态清理；只做一次性 legacy app-state copy。
 
 ## Implementation Notes
 
@@ -46,7 +46,7 @@
 2. 区分两类产物：actively maintained Apple Silicon macOS、legacy Windows/Linux。
 3. Release matrix 只保留 `macos-latest` + `aarch64-apple-darwin`，同时保留 Agent sidecar binary、MCP resources、Tauri resources 的 build/test 步骤。
 4. `bundle.targets` 使用 `["app", "dmg"]`，不是仅 `["dmg"]`。
-5. PR body 必须说明 bundle id 改变导致的 pre-1.0 state reset。
+5. PR body 必须说明 bundle id 改变和一次性 app-state migration 行为。
 
 ## Acceptance
 

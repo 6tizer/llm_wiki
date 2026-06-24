@@ -100,6 +100,10 @@ jobs:
 
   package-extension:
     name: Package browser extension
+    # Keep this after the Tauri release job: the extension upload
+    # attaches to the GitHub Release created by tauri-action above.
+    # The zip step itself is platform-neutral, but the upload target
+    # does not exist until the signed Mac build has published it.
     needs: build
     # Browser extension is only published as part of an actual
     # tagged release; manual builds don't need it.
