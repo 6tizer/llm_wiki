@@ -485,14 +485,14 @@ export function SettingsView() {
   }, [active, draft, setDraft])
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full min-h-0 overflow-hidden">
       {/* Sidebar — category nav. Matches the IconSidebar's pill-on-accent
           pattern so the two navigational surfaces feel like one app. */}
-      <aside className="flex w-56 shrink-0 flex-col border-r bg-muted/30">
+      <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r bg-muted/30">
         <div className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {t("settings.title")}
         </div>
-        <nav className="flex-1 overflow-y-auto px-2 pb-3">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {CATEGORIES.map((c) => {
             const Icon = c.icon
             const isActive = c.id === active
@@ -536,8 +536,8 @@ export function SettingsView() {
       </aside>
 
       {/* Content */}
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-2xl">{body}</div>
         </div>
 
