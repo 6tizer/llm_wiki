@@ -68,22 +68,19 @@ export async function withProjectLock<T>(
     return await fn()
   } finally {
     release()
-    // Best-effort cleanup: if our promise is still the tail, drop the
-    // map entry. Otherwise a later caller has chained on; leave it.
-    if (locks.get(key) === next || locks.size > 1024) {
-      // Tail check is approximate (the map stores prev.then(() => next),
-      // not next directly). The size guard prevents pathological
-      // unbounded growth if many distinct projectPaths cycle through.
-      const tail = locks.get(key)
-      if (tail) {
-        // Defer the delete one tick so a caller that just chained on
-        // doesn't see us yank the entry mid-chain.
-        Promise.resolve().then(() => {
-          if (locks.get(key) === tail) {
-            locks.delete(key)
-          }
-        })
-      }
+    // Best-effort cleanup: schedule a deferred delete so a caller that
+    // just chained on doesn't see us yank the entry mid-chain. The
+    // stored value is prev.then(() => next), not next itself, so we
+    // can't do a cheap identity check — instead always schedule the
+    // deferred compare-and-delete, which is correct regardless of
+    // whether another caller has chained on.
+    const tail = locks.get(key)
+    if (tail) {
+      Promise.resolve().then(() => {
+        if (locks.get(key) === tail) {
+          locks.delete(key)
+        }
+      })
     }
   }
 }

@@ -732,6 +732,53 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
     // orphan's partial result (it should remain empty / not gain the task).
     expect(getQueue().find((t) => t.sourcePath === "switch-during.md")).toBeUndefined()
   })
+
+  it("cancelTask on a processing task does not stall the next pending task (P1 orphan guard)", async () => {
+    // Exercises the exact race from the deep review P1 finding:
+    // 1. Task A is processing, task B is pending.
+    // 2. cancelTask(A) aborts, bumps the run token, starts processNext for B.
+    // 3. A's autoIngest resolves late with partial files.
+    // 4. The orphaned catch must NOT set processing = false (which would
+    //    clobber the new run for B and permanently stall the queue).
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveA: (files: string[]) => void = () => {}
+    mockAutoIngest.mockImplementationOnce(
+      () => new Promise<string[]>((resolve) => { resolveA = resolve }),
+    )
+    // Second call (for task B) succeeds immediately.
+    mockAutoIngest.mockResolvedValueOnce(["wiki/sources/b-done.md"])
+
+    await enqueueBatch(TEST_ID, [
+      { sourcePath: "a.md", folderContext: "" },
+      { sourcePath: "b.md", folderContext: "" },
+    ])
+    await flushMicrotasks(2)
+
+    const queue = getQueue()
+    const taskA = queue.find((t) => t.sourcePath === "a.md")!
+    expect(taskA.status).toBe("processing")
+    expect(queue.find((t) => t.sourcePath === "b.md")?.status).toBe("pending")
+
+    // Cancel the processing task A. This aborts the signal, bumps the run
+    // token, removes A, and calls processNext to start B.
+    const cancelPromise = cancelTask(taskA.id)
+    // Resolve A's autoIngest late with partial files AFTER the abort.
+    resolveA(["wiki/concepts/partial-a.md"])
+    await cancelPromise
+    // Drain generously so the orphaned continuation's catch block and
+    // the new run for B both settle.
+    await flushMicrotasks(40)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // B must have been processed successfully (not stuck in "processing"
+    // or skipped due to a clobbered processing flag).
+    expect(mockAutoIngest).toHaveBeenCalledTimes(2)
+    // B's task should have been removed from the queue (success path).
+    expect(getQueue().find((t) => t.sourcePath === "b.md")).toBeUndefined()
+  })
 })
 
 // ── cleanupWrittenFiles — file delete + LanceDB chunk cascade ──────
@@ -872,23 +919,28 @@ describe("ingest-queue — saveQueue error surfacing", () => {
   })
 
   it("debounces repeated saveQueue failures (one surface per window)", async () => {
-    const { useActivityStore } = await import("@/stores/activity-store")
-    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
-    mockWriteFile.mockRejectedValue(new Error("ENOSPC: no space"))
+    vi.useFakeTimers()
+    try {
+      const { useActivityStore } = await import("@/stores/activity-store")
+      mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+      mockWriteFile.mockRejectedValue(new Error("ENOSPC: no space"))
 
-    // Trigger several saveQueue calls in quick succession.
-    await enqueueIngest(TEST_ID, "raw/sources/a.md")
-    await flushMicrotasks(10)
-    await enqueueIngest(TEST_ID, "raw/sources/b.md")
-    await flushMicrotasks(10)
-    await enqueueIngest(TEST_ID, "raw/sources/c.md")
-    await flushMicrotasks(10)
+      // Trigger several saveQueue calls in quick succession.
+      await enqueueIngest(TEST_ID, "raw/sources/a.md")
+      await flushMicrotasks(10)
+      await enqueueIngest(TEST_ID, "raw/sources/b.md")
+      await flushMicrotasks(10)
+      await enqueueIngest(TEST_ID, "raw/sources/c.md")
+      await flushMicrotasks(10)
 
-    const errors = useActivityStore
-      .getState()
-      .items.filter((i) => i.status === "error" && /save ingest queue/i.test(i.detail))
-    // All three enqueues happened within the debounce window, so only
-    // ONE error item should have been added.
-    expect(errors).toHaveLength(1)
+      const errors = useActivityStore
+        .getState()
+        .items.filter((i) => i.status === "error" && /save ingest queue/i.test(i.detail))
+      // All three enqueues happened within the debounce window, so only
+      // ONE error item should have been added.
+      expect(errors).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

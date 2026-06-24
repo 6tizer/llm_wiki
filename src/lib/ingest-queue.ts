@@ -49,6 +49,12 @@ let sweepAbortController: AbortController | null = null
 // One surface per window is enough; the error is non-fatal.
 let lastSaveQueueErrorAt = 0
 const SAVE_QUEUE_ERROR_DEBOUNCE_MS = 5000
+// Run-token guard for processNext: each invocation captures the current
+// token at entry. cancelTask / pauseQueue bump the token so orphaned
+// continuations (whose catch block runs after the cancel already started
+// a new processNext) bail instead of clobbering `processing = false` and
+// stalling the queue.
+let currentRunToken = 0
 
 function resetQueueAccounting(): void {
   completedSinceIdle = 0
@@ -321,6 +327,10 @@ export async function cancelTask(taskId: string): Promise<void> {
     }
 
     processing = false
+    // Bump the run token so any orphaned processNext continuation
+    // (whose catch block hasn't run yet) sees a stale token and bails
+    // instead of clobbering the new run started by processNext below.
+    currentRunToken++
   }
 
   queue = queue.filter((t) => t.id !== taskId)
@@ -352,6 +362,7 @@ export async function cancelAllTasks(): Promise<number> {
     currentAbortController = null
   }
   processing = false
+  currentRunToken++
 
   if (lastWrittenFiles.length > 0) {
     await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles)
@@ -410,6 +421,7 @@ export function clearQueueState(): void {
   lastWrittenFiles = []
   processedSinceDrain = false
   resetQueueAccounting()
+  currentRunToken = 0
   // Reset the saveQueue error debounce so a prior test's surfaced error
   // doesn't suppress the next test's expected surface.
   lastSaveQueueErrorAt = 0
@@ -449,6 +461,7 @@ export async function pauseQueue(): Promise<void> {
     sweepAbortController = null
   }
   processing = false
+  currentRunToken++
 
   // Revert any in-flight processing task back to pending so when the
   // user returns to this project, the task is re-tried from scratch.
@@ -586,9 +599,13 @@ async function processNext(projectId: string): Promise<void> {
   }
 
   processing = true
+  const runToken = ++currentRunToken
   next.status = "processing"
   await saveQueue(pp)
-  if (currentProjectId !== projectId) return
+  if (currentProjectId !== projectId) {
+    if (runToken === currentRunToken) processing = false
+    return
+  }
 
   const llmConfig = useWikiStore.getState().llmConfig
 
@@ -638,7 +655,10 @@ async function processNext(projectId: string): Promise<void> {
       // If the project switched, bail silently (pauseQueue already
       // persisted the correct state); otherwise throw so the catch
       // branch keeps the task for retry.
-      if (currentProjectId !== projectId) return
+      if (currentProjectId !== projectId) {
+        if (runToken === currentRunToken) processing = false
+        return
+      }
       throw new Error("Ingest aborted mid-write")
     }
 
@@ -646,7 +666,10 @@ async function processNext(projectId: string): Promise<void> {
     // Bail without mutating queue or writing to disk — pauseQueue has
     // already persisted the correct state to the old project's file,
     // and the new project's queue must not be touched by this orphan.
-    if (currentProjectId !== projectId) return
+    if (currentProjectId !== projectId) {
+      if (runToken === currentRunToken) processing = false
+      return
+    }
     lastWrittenFiles = writtenFiles
 
     // Safety net: autoIngest resolving with zero files means nothing
@@ -667,7 +690,10 @@ async function processNext(projectId: string): Promise<void> {
 
     console.log(`[Ingest Queue] Done: ${next.sourcePath}`)
   } catch (err) {
-    if (currentProjectId !== projectId) return
+    if (currentProjectId !== projectId) {
+      if (runToken === currentRunToken) processing = false
+      return
+    }
     currentAbortController = null
     const message = err instanceof Error ? err.message : String(err)
     next.retryCount++
@@ -684,6 +710,11 @@ async function processNext(projectId: string): Promise<void> {
     await saveQueue(pp)
   }
 
+  // Run-token guard: if cancelTask / pauseQueue bumped the token, this
+  // continuation is orphaned — a new processNext is already running (or
+  // the project switched). Bailing here prevents clobbering the new run's
+  // `processing` flag, which would otherwise stall the queue permanently.
+  if (runToken !== currentRunToken) return
   processing = false
   processNext(projectId)
 }
