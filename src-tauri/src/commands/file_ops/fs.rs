@@ -1288,10 +1288,15 @@ fn is_windows_transient_delete_error(err: &std::io::Error) -> bool {
 pub async fn find_related_wiki_pages(
     project_path: String,
     source_name: String,
+    state: State<'_, ProjectRootState>,
 ) -> Result<Vec<String>, String> {
+    // Validate project_path against the sandbox root (Read mode) before
+    // joining "wiki" and scanning it. Closes the last un-sandboxed read
+    // probe on the webview command surface (#119 P0-2, re-review P2).
+    let validated = sandbox_path(&state, &project_path, SandboxMode::Read)?;
+    let wiki_dir = validated.join("wiki");
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("find_related_wiki_pages", || {
-            let wiki_dir = Path::new(&project_path).join("wiki");
             if !wiki_dir.is_dir() {
                 return Ok(vec![]);
             }
@@ -1802,8 +1807,15 @@ mod tests {
     // would be surfaced here and then wrongly deleted downstream.
 
     fn make_wiki(files: &[(&str, &str)]) -> std::path::PathBuf {
+        // Atomic counter so parallel tests never collide on the same temp
+        // dir (nanosecond-only uniqueness raced under `cargo test`'s
+        // default thread-pool — same flake class as path_safety P1-A).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static WIKI_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = WIKI_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "wiki-test-{}",
+            "wiki-test-{}-{}",
+            id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -2153,5 +2165,42 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    /// Regression for re-review P2: `find_related_wiki_pages` now sandboxes
+    /// `project_path` via `validate_within_project` before scanning. This test
+    /// exercises the post-sandbox code path (`collect_related_pages` over a
+    /// validated wiki dir) to confirm the integration still finds references.
+    #[test]
+    fn collect_related_pages_finds_source_reference_under_sandbox() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-wiki-find-related-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let wiki_dir = root.join("wiki").join("sources");
+        std::fs::create_dir_all(&wiki_dir).unwrap();
+
+        // A source page that references our source filename via a frontmatter
+        // `sources:` block — this is the primary match path in
+        // collect_related_pages (Match 1/3: quoted filename or sources list).
+        let page = wiki_dir.join("wei-2022-chain-of-thought.md");
+        std::fs::write(
+            &page,
+            "---\ntype: source\nsources:\n  - \"report.pdf\"\n---\n# CoT paper",
+        )
+        .unwrap();
+
+        let mut related = Vec::new();
+        collect_related_pages(&wiki_dir, "report.pdf", &mut related).unwrap();
+        assert!(
+            related.iter().any(|p| p.contains("wei-2022-chain-of-thought")),
+            "collect_related_pages should find the reference; got {related:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

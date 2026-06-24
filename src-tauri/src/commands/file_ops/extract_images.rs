@@ -879,10 +879,21 @@ pub fn extract_and_save_office_images(
 // when two PDF extractions raced on different workers.)
 
 #[tauri::command]
-pub async fn extract_pdf_images_cmd(path: String) -> Result<Vec<ExtractedImage>, String> {
+pub async fn extract_pdf_images_cmd(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<Vec<ExtractedImage>, String> {
+    // Read-mode sandbox: validate path against the project root before
+    // PDFium FFI touches it. These raw (no-save) variants are not invoked
+    // from the webview today, but they remain on the invoke handler so
+    // we close the boundary uniformly (#119 P0-2, re-review P2).
+    let validated = sandbox_read(&state, &path)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_pdf_images", || {
-            extract_pdf_images(&path, &ExtractOptions::default())
+            extract_pdf_images(
+                validated.to_string_lossy().as_ref(),
+                &ExtractOptions::default(),
+            )
         })
     })
     .await
@@ -890,10 +901,17 @@ pub async fn extract_pdf_images_cmd(path: String) -> Result<Vec<ExtractedImage>,
 }
 
 #[tauri::command]
-pub async fn extract_office_images_cmd(path: String) -> Result<Vec<ExtractedImage>, String> {
+pub async fn extract_office_images_cmd(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<Vec<ExtractedImage>, String> {
+    let validated = sandbox_read(&state, &path)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_office_images", || {
-            extract_office_images(&path, &ExtractOptions::default())
+            extract_office_images(
+                validated.to_string_lossy().as_ref(),
+                &ExtractOptions::default(),
+            )
         })
     })
     .await
