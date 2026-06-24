@@ -955,19 +955,24 @@ pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Resu
 /// Kill the agent sidecar AND its descendants.
 ///
 /// On Unix the sidecar is spawned in its own process group (see the
-/// `process_group(0)` call in agent_spawn), so we killpg(-pid, SIGKILL)
-/// to also reap grandchildren (tool subprocesses) that the direct-child
-/// `Child::kill` (SIGKILL on the leader only) would orphan. On non-Unix
-/// we fall back to killing the direct child (best-effort, matches the
-/// pre-fix behavior).
+/// `process_group(0)` call in agent_spawn, which makes the child the
+/// leader of a new group whose pgid == child pid), so we send SIGKILL to
+/// the whole group. We use `kill(-pgid, sig)` (the negative-pid form of
+/// `kill(2)`, which targets the process group) rather than `killpg`:
+/// `killpg(pgrp, sig)` expects a *positive* pgrp and internally negates
+/// it — passing a negative value to `killpg` is undefined. The negative
+/// form of `kill` is the documented, portable way to signal a group.
+/// This reaps the sidecar + all its descendants (tool subprocesses) that
+/// the direct-child `Child::kill` (SIGKILL on the leader only) would
+/// orphan. On non-Unix we fall back to killing the direct child.
 fn kill_agent_tree(child: &mut tokio::process::Child) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
-            // Negative pid → kill the process group whose ID == pid.
-            // Safe: killpg is a libc syscall. ESRCH just means the group
-            // already exited, so we treat it as success.
-            let rc = unsafe { libc::killpg(-(pid as i32), libc::SIGKILL) };
+            // kill(-pgid, sig) → signal the process group whose pgid == pid.
+            // Safe: a libc syscall. ESRCH just means the group already
+            // exited, so we treat it as success.
+            let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
             if rc != 0 {
                 let err = std::io::Error::last_os_error();
                 if err.raw_os_error() != Some(libc::ESRCH) {

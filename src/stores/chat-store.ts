@@ -507,7 +507,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   finishAgentStreamMessage: (messageId, content, stats, options) =>
     set((state) => {
-      const { activeConversationId, conversations } = state
+      // P1-6: bind conversation metadata updates to the conversation the
+      // agent message belongs to (looked up by messageId), not the live
+      // activeConversationId. The message itself is keyed by messageId so
+      // its content always lands correctly, but the conversation-level
+      // agentSessionId / agentForkSessionPending / updatedAt were
+      // previously written to whatever conversation was active at finish
+      // time — corrupting the wrong conversation on a mid-stream switch.
+      const target = state.messages.find((m) => m.id === messageId)
+      const targetConversationId = target?.conversationId ?? state.activeConversationId
       return {
         isStreaming: false,
         streamingContent: "",
@@ -527,8 +535,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }
             : m
         ),
-        conversations: conversations.map((c) =>
-          c.id === activeConversationId
+        conversations: state.conversations.map((c) =>
+          c.id === targetConversationId
             ? {
                 ...c,
                 agentSessionId: stats?.agentSessionId ?? c.agentSessionId,
