@@ -31,7 +31,9 @@
 
 ## 这是什么？
 
-LLM Wiki 是一个跨平台桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
+LLM Wiki 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
+
+当前只主动维护 Mac 桌面应用。Windows/Linux 的旧产物或过渡产物可能仍出现在 release、CI 或历史文档里，但它们不是当前 active product target。CI/release 清理会放到下一轮实现 PR [`mac-product-baseline`](docs/plans/mac-product-baseline.md)。
 
 大多数"LLM + 文档"的玩法都是 RAG：上传文件，模型在查询时检索相关片段，每次都从零生成答案——知识不会沉淀。LLM Wiki 走相反的路线：LLM **增量构建并维护一个持久化的 Wiki**——一个互相交叉引用的 markdown 页面目录，矛盾被标记出来，综合判断不断演进。知识**编译一次**就保持更新，而不是每次提问都重新推导。
 
@@ -127,7 +129,7 @@ my-wiki/
 - **Lint 闭环** —— Agent 驱动的检测与自动修复，带并发控制
 
 ### 平台
-- **跨平台** —— 基于 Tauri v2 的原生桌面应用，支持 macOS（ARM + Intel）、Windows、Linux
+- **Mac-only active maintenance** —— 基于 Tauri v2 的 macOS 原生桌面应用，支持 Apple Silicon + Intel
 - **多 LLM 提供商** —— OpenAI、Anthropic、Google、Ollama、Azure，或任意 OpenAI 兼容端点
 - **本地 HTTP API** —— token 保护的 `127.0.0.1` JSON API，供外部工具和 Agent 使用
 - **国际化** —— 中英文界面
@@ -149,22 +151,26 @@ my-wiki/
 | 网络搜索 | Tavily、SerpApi、SearXNG |
 | Agent | 通过 Node.js sidecar 调用 Claude Agent SDK |
 
+近期产品方向仍是基于 Tauri、Rust、TypeScript 和 Agent SDK 的 Mac App。Swift、SwiftUI、iOS 只作为远期架构讨论，不进入近期规划。
+
 ## 安装
 
 ### 预编译二进制
 
 从 [Releases](https://github.com/6tizer/llm_wiki/releases) 下载：
 - **macOS** —— `.dmg`（Apple Silicon + Intel）
-- **Windows** —— `.msi`
-- **Linux** —— `.deb` / `.AppImage`
+
+Windows/Linux 产物可能仍存在于旧 release 或迁移期构建中，但不再作为主动支持承诺。仓库会在后续 `mac-product-baseline` PR 清理 CI 和 release 打包口径。
 
 ### 从源码构建
 
 ```bash
 # 前置条件：Node.js 20+、Rust 1.70+
+# 生产 Tauri 构建还需要 Bun，用于 Agent sidecar binary。
 git clone https://github.com/6tizer/llm_wiki.git
 cd llm_wiki
 npm install
+npm --prefix src-tauri/sidecar install
 npm run tauri dev      # 开发模式
 npm run tauri build    # 生产构建
 ```
@@ -245,7 +251,7 @@ src/                        # 前端（React + TypeScript）
 
 ## 路线图
 
-Agent 是当前活跃的开发方向。Phase 1–4（sidecar、自定义 MCP 工具、hooks/权限、工具能力对齐、UI 集成）已完成；Phase 5 聚焦 session 行为修复、资源限制配置化、sidecar 单文件打包。详见 [`docs/plans/`](docs/plans/) 中各阶段计划。
+当前产品方向是 Mac-only 桌面维护和 Agent 产品化。下一轮实现 PR 是 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.0 delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
 
 ## 致谢
 
