@@ -2,18 +2,28 @@ use std::fs;
 use std::path::Path;
 
 use chrono::Local;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::WikiProject;
 
 #[tauri::command]
-pub fn create_project(name: String, path: String) -> Result<WikiProject, String> {
-    run_guarded("create_project", || create_project_impl(name, path))
+pub fn create_project(
+    name: String,
+    path: String,
+    root_state: State<'_, crate::commands::file_sync::ProjectRootState>,
+) -> Result<WikiProject, String> {
+    run_guarded("create_project", || {
+        create_project_impl(name, path, &root_state)
+    })
 }
 
-fn create_project_impl(name: String, path: String) -> Result<WikiProject, String> {
+fn create_project_impl(
+    name: String,
+    path: String,
+    root_state: &crate::commands::file_sync::ProjectRootState,
+) -> Result<WikiProject, String> {
     let root = Path::new(&path).join(&name);
 
     if root.exists() {
@@ -234,6 +244,19 @@ related: []
         obsidian_core_plugins,
     )?;
 
+    // Set the sandbox root so the immediate template writes from the
+    // create-project UI (writeFile schema.md/purpose.md, createDirectory)
+    // pass ProjectRootState validation. Without this, the sandbox fails
+    // closed because no project is "open" yet (#119 P0-2, re-review P1).
+    // `root` was just created by the scaffolding above, so canonicalize
+    // should always succeed; we degrade to the literal root on failure
+    // to match `open_project`'s behavior.
+    if let Ok(canonical) = root.canonicalize() {
+        root_state.set(canonical);
+    } else {
+        root_state.set(root.to_path_buf());
+    }
+
     Ok(WikiProject {
         name,
         // Forward slashes for cross-platform consistency in the TS layer.
@@ -242,11 +265,22 @@ related: []
 }
 
 #[tauri::command]
-pub fn open_project(path: String) -> Result<WikiProject, String> {
+pub fn open_project(
+    path: String,
+    root_state: State<'_, crate::commands::file_sync::ProjectRootState>,
+) -> Result<WikiProject, String> {
     run_guarded("open_project", || {
         let root = Path::new(&path);
 
         validate_wiki_project_root(root)?;
+
+        // Set the sandbox root so fs commands can validate paths (#119 P0-2).
+        // This is independent of the source-watcher lifecycle (Codex review P1-1).
+        if let Ok(canonical) = root.canonicalize() {
+            root_state.set(canonical);
+        } else {
+            root_state.set(root.to_path_buf());
+        }
 
         // Derive project name from the directory name
         let name = root
@@ -325,4 +359,49 @@ fn write_file_inner(path: std::path::PathBuf, contents: &str) -> Result<(), Stri
     }
     fs::write(&path, contents)
         .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::file_sync::ProjectRootState;
+
+    /// `create_project` must seed `ProjectRootState` before returning, so that
+    /// the frontend's immediate template writes (`writeFile schema.md` etc.)
+    /// pass sandbox validation. Regression for re-review P1: before this fix,
+    /// template writes failed-closed because no root was "open" yet.
+    #[test]
+    fn create_project_sets_sandbox_root() {
+        // Unique temp dir per call to avoid parallel-test collisions.
+        let tmp = std::env::temp_dir().join(format!(
+            "llm-wiki-create-project-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let root_state = ProjectRootState::default();
+        assert!(root_state.get().is_none(), "root must start unset");
+
+        let project = create_project_impl(
+            "MyWiki".to_string(),
+            tmp.to_string_lossy().to_string(),
+            &root_state,
+        )
+        .expect("create_project_impl should succeed");
+
+        let set_root = root_state
+            .get()
+            .expect("create_project must set ProjectRootState before returning");
+        // The set root must match the created project directory.
+        let expected = tmp.join("MyWiki");
+        assert_eq!(set_root.canonicalize().unwrap(), expected.canonicalize().unwrap());
+        // And the returned path must point there too.
+        assert_eq!(project.path, expected.to_string_lossy().replace('\\', "/"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

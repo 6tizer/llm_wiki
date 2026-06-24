@@ -193,6 +193,7 @@ pub fn run() {
             app.manage(commands::claude_cli::ClaudeCliState::default());
             app.manage(commands::codex_cli::CodexCliState::default());
             app.manage(commands::file_sync::FileSyncState::default());
+            app.manage(commands::file_sync::ProjectRootState::default());
             app.manage(commands::agent::AgentState::default());
             api_server::start_api_server(app.handle().clone());
             Ok(())

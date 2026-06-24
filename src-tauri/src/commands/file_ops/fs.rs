@@ -1,14 +1,49 @@
 use std::fs;
 use std::io::Read as IoRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
 use calamine::{open_workbook_auto, Data, Reader};
+use tauri::State;
 
-use super::file_sync;
+use super::file_sync::{self, ProjectRootState};
+use super::path_safety::validate_within_project;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
+
+/// Validate a path against the project root. Write/delete commands fail-closed
+/// when the root is unknown (no project open); read commands degrade to
+/// allowing the path (legacy behavior) so project-open flows still work.
+///
+/// Uses `ProjectRootState` (set by `open_project`), NOT `FileSyncState` (set by
+/// the source watcher). This ensures the sandbox works even when source
+/// watching is disabled — the sandbox root must not be tied to the watcher
+/// lifecycle (#119 P0-2, Codex review P1-1).
+fn sandbox_path(
+    state: &State<'_, ProjectRootState>,
+    path: &str,
+    mode: SandboxMode,
+) -> Result<PathBuf, String> {
+    match state.get() {
+        Some(root) => validate_within_project(&root, path),
+        None => match mode {
+            // No known project root + write/delete = fail-closed (#119 P0-2).
+            SandboxMode::Write => Err(format!(
+                "Cannot write to '{path}': no active project root (no project open). \
+                 Open a project first."
+            )),
+            // No known project root + read = allow (degrade to legacy).
+            SandboxMode::Read => Ok(PathBuf::from(path)),
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SandboxMode {
+    Read,
+    Write,
+}
 
 /// Known binary formats that need special extraction
 const OFFICE_EXTS: &[&str] = &["docx", "pptx", "xlsx", "odt", "ods", "odp"];
@@ -22,7 +57,21 @@ const MEDIA_EXTS: &[&str] = &[
 const LEGACY_DOC_EXTS: &[&str] = &["doc", "xls", "ppt", "pages", "numbers", "key", "epub"];
 
 #[tauri::command]
-pub async fn read_file(path: String) -> Result<String, String> {
+pub async fn read_file(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<String, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
+    read_file_validated(validated, path).await
+}
+
+/// Inner implementation taking a pre-validated path. Used by the command
+/// wrapper and by unit tests that don't have a Tauri `State` context.
+/// `path_orig` is retained only for error-message fidelity.
+async fn read_file_validated(validated: PathBuf, path_orig: String) -> Result<String, String> {
+    // Bind `path` so the extraction helpers below (which take &str) and error
+    // messages keep working unchanged.
+    let path = validated.to_string_lossy().to_string();
     // `spawn_blocking` is REQUIRED, not a perf nicety. The body does
     // synchronous PDF/Office text extraction (pdfium FFI, calamine,
     // zip + image decode) that can take 10s+ on big files. Running
@@ -34,7 +83,8 @@ pub async fn read_file(path: String) -> Result<String, String> {
     // pool where blocking-for-seconds is the contract.
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file", || {
-            let p = Path::new(&path);
+            let _ = &path_orig; // preserved for potential future error-message use
+            let p = validated.as_path();
             let ext = p
                 .extension()
                 .and_then(|e| e.to_str())
@@ -85,11 +135,19 @@ pub async fn read_file(path: String) -> Result<String, String> {
 
 /// Pre-process a file and cache the extracted text.
 #[tauri::command]
-pub async fn preprocess_file(path: String) -> Result<String, String> {
+pub async fn preprocess_file(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<String, String> {
+    // Sandbox in Read mode: the source is read, and the cache is written next
+    // to it (inside the project). Read degrades gracefully if no root is known
+    // so project-open flows still work. (#119 P2-A)
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
+    let validated_str = validated.to_string_lossy().to_string();
     // See `read_file` above for why `spawn_blocking` is required.
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("preprocess_file", || {
-            let p = Path::new(&path);
+            let p = validated.as_path();
             let ext = p
                 .extension()
                 .and_then(|e| e.to_str())
@@ -97,8 +155,8 @@ pub async fn preprocess_file(path: String) -> Result<String, String> {
                 .to_lowercase();
 
             let text = match ext.as_str() {
-                "pdf" => extract_pdf_text(&path)?,
-                e if OFFICE_EXTS.contains(&e) => extract_office_text(&path, e)?,
+                "pdf" => extract_pdf_text(&validated_str)?,
+                e if OFFICE_EXTS.contains(&e) => extract_office_text(&validated_str, e)?,
                 _ => return Ok("no preprocessing needed".to_string()),
             };
 
@@ -925,16 +983,21 @@ fn extract_odf_text(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, S
 }
 
 #[tauri::command]
-pub async fn write_file(path: String, contents: String) -> Result<(), String> {
+pub async fn write_file(
+    path: String,
+    contents: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file", || {
-            let p = Path::new(&path);
+            let p = validated.as_path();
             if let Some(parent) = p.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
             }
             file_sync::mark_app_write_path(p);
-            fs::write(&path, contents)
+            fs::write(p, contents)
                 .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
             file_sync::mark_app_write_path(p);
             Ok(())
@@ -945,10 +1008,15 @@ pub async fn write_file(path: String, contents: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn write_file_atomic(path: String, contents: String) -> Result<(), String> {
+pub async fn write_file_atomic(
+    path: String,
+    contents: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("write_file_atomic", || {
-            let p = Path::new(&path);
+            let p = validated.as_path();
             if let Some(parent) = p.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path, e))?;
@@ -989,17 +1057,20 @@ pub async fn write_file_atomic(path: String, contents: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn list_directory(path: String) -> Result<Vec<FileNode>, String> {
+pub async fn list_directory(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<Vec<FileNode>, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("list_directory", || {
-            let p = Path::new(&path);
-            if !p.exists() {
+            if !validated.exists() {
                 return Err(format!("Path does not exist: '{}'", path));
             }
-            if !p.is_dir() {
+            if !validated.is_dir() {
                 return Err(format!("Path is not a directory: '{}'", path));
             }
-            let nodes = build_tree(p, 0, 30)?;
+            let nodes = build_tree(&validated, 0, 30)?;
             Ok(nodes)
         })
     })
@@ -1071,18 +1142,27 @@ fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<Vec<FileNode
 }
 
 #[tauri::command]
-pub async fn copy_file(source: String, destination: String) -> Result<(), String> {
+pub async fn copy_file(
+    source: String,
+    destination: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<(), String> {
+    let src_validated = sandbox_path(&state, &source, SandboxMode::Read)?;
+    let dest_validated = sandbox_path(&state, &destination, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("copy_file", || {
-            let dest = Path::new(&destination);
-            if let Some(parent) = dest.parent() {
+            if let Some(parent) = dest_validated.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent dirs: {}", e))?;
             }
-            file_sync::mark_app_write_path(dest);
-            fs::copy(&source, &destination)
-                .map_err(|e| format!("Failed to copy '{}' to '{}': {}", source, destination, e))?;
-            file_sync::mark_app_write_path(dest);
+            file_sync::mark_app_write_path(&dest_validated);
+            fs::copy(&src_validated, &dest_validated).map_err(|e| {
+                format!(
+                    "Failed to copy '{}' to '{}': {}",
+                    source, destination, e
+                )
+            })?;
+            file_sync::mark_app_write_path(&dest_validated);
             Ok(())
         })
     })
@@ -1093,53 +1173,23 @@ pub async fn copy_file(source: String, destination: String) -> Result<(), String
 /// Recursively copy a directory, preserving structure.
 /// Returns list of copied file paths (destination paths).
 #[tauri::command]
-pub async fn copy_directory(source: String, destination: String) -> Result<Vec<String>, String> {
+pub async fn copy_directory(
+    source: String,
+    destination: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<Vec<String>, String> {
+    let src_validated = sandbox_path(&state, &source, SandboxMode::Read)?;
+    let dest_validated = sandbox_path(&state, &destination, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("copy_directory", || {
-            let src = Path::new(&source);
-            let dest = Path::new(&destination);
-            file_sync::mark_app_write_path(dest);
+            file_sync::mark_app_write_path(&dest_validated);
 
-            if !src.is_dir() {
+            if !src_validated.is_dir() {
                 return Err(format!("'{}' is not a directory", source));
             }
 
             let mut copied_files = Vec::new();
-
-            fn copy_recursive(
-                src: &Path,
-                dest: &Path,
-                files: &mut Vec<String>,
-            ) -> Result<(), String> {
-                fs::create_dir_all(dest)
-                    .map_err(|e| format!("Failed to create dir '{}': {}", dest.display(), e))?;
-
-                let entries = fs::read_dir(src)
-                    .map_err(|e| format!("Failed to read dir '{}': {}", src.display(), e))?;
-
-                for entry in entries {
-                    let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
-                    let path = entry.path();
-                    let name = entry.file_name();
-                    let dest_path = dest.join(&name);
-
-                    if name.to_string_lossy().starts_with('.') {
-                        continue;
-                    }
-
-                    if path.is_dir() {
-                        copy_recursive(&path, &dest_path, files)?;
-                    } else {
-                        fs::copy(&path, &dest_path)
-                            .map_err(|e| format!("Failed to copy '{}': {}", path.display(), e))?;
-                        file_sync::mark_app_write_path(&dest_path);
-                        files.push(dest_path.to_string_lossy().replace('\\', "/"));
-                    }
-                }
-                Ok(())
-            }
-
-            copy_recursive(src, dest, &mut copied_files)?;
+            copy_recursive(&src_validated, &dest_validated, &mut copied_files)?;
             Ok(copied_files)
         })
     })
@@ -1147,20 +1197,51 @@ pub async fn copy_directory(source: String, destination: String) -> Result<Vec<S
     .map_err(|e| format!("copy_directory blocking task join error: {e}"))?
 }
 
+/// Inner recursive copy used by `copy_directory`. Kept module-private so the
+/// command-level sandbox validation cannot be bypassed by calling it directly.
+fn copy_recursive(src: &Path, dest: &Path, files: &mut Vec<String>) -> Result<(), String> {
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("Failed to create dir '{}': {}", dest.display(), e))?;
+    let entries = fs::read_dir(src)
+        .map_err(|e| format!("Failed to read dir '{}': {}", src.display(), e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let dest_path = dest.join(&name);
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            copy_recursive(&path, &dest_path, files)?;
+        } else {
+            fs::copy(&path, &dest_path)
+                .map_err(|e| format!("Failed to copy '{}': {}", path.display(), e))?;
+            file_sync::mark_app_write_path(&dest_path);
+            files.push(dest_path.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn delete_file(path: String) -> Result<(), String> {
+pub async fn delete_file(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
+    let validated_str = validated.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("delete_file", || {
-            let p = Path::new(&path);
-            file_sync::mark_app_write_path(p);
-            if p.is_dir() {
-                remove_path_with_retry(&path, true)
+            file_sync::mark_app_write_path(&validated);
+            if validated.is_dir() {
+                remove_path_with_retry(&validated_str, true)
                     .map_err(|e| format!("Failed to delete directory '{}': {}", path, e))?;
             } else {
-                remove_path_with_retry(&path, false)
+                remove_path_with_retry(&validated_str, false)
                     .map_err(|e| format!("Failed to delete file '{}': {}", path, e))?;
             }
-            file_sync::mark_app_write_path(p);
+            file_sync::mark_app_write_path(&validated);
             Ok(())
         })
     })
@@ -1207,10 +1288,15 @@ fn is_windows_transient_delete_error(err: &std::io::Error) -> bool {
 pub async fn find_related_wiki_pages(
     project_path: String,
     source_name: String,
+    state: State<'_, ProjectRootState>,
 ) -> Result<Vec<String>, String> {
+    // Validate project_path against the sandbox root (Read mode) before
+    // joining "wiki" and scanning it. Closes the last un-sandboxed read
+    // probe on the webview command surface (#119 P0-2, re-review P2).
+    let validated = sandbox_path(&state, &project_path, SandboxMode::Read)?;
+    let wiki_dir = validated.join("wiki");
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("find_related_wiki_pages", || {
-            let wiki_dir = Path::new(&project_path).join("wiki");
             if !wiki_dir.is_dir() {
                 return Ok(vec![]);
             }
@@ -1349,10 +1435,14 @@ fn collect_related_pages(
 }
 
 #[tauri::command]
-pub async fn create_directory(path: String) -> Result<(), String> {
+pub async fn create_directory(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("create_directory", || {
-            fs::create_dir_all(&path)
+            fs::create_dir_all(&validated)
                 .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
         })
     })
@@ -1380,13 +1470,17 @@ pub struct FileBase64 {
 }
 
 #[tauri::command]
-pub async fn read_file_as_base64(path: String) -> Result<FileBase64, String> {
+pub async fn read_file_as_base64(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<FileBase64, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file_as_base64", || {
-            let bytes = fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-            let p = Path::new(&path);
-            let ext = p
+            let bytes =
+                fs::read(&validated).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+            let ext = validated
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
@@ -1415,14 +1509,13 @@ pub async fn read_file_as_base64(path: String) -> Result<FileBase64, String> {
 /// Cheap existence check without reading or classifying the file.
 /// Returns true iff `path` refers to something on disk right now.
 #[tauri::command]
-pub async fn file_exists(path: String) -> Result<bool, String> {
-    // `Path::exists()` does a `stat(2)` syscall — fast on a hot
-    // cache, but a blocking syscall nonetheless. Wrapping it keeps
-    // the rule "no sync IO on tokio worker threads" uniform across
-    // every fs command rather than carving out an exception that's
-    // easy to violate later.
+pub async fn file_exists(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<bool, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
-        run_guarded("file_exists", || Ok(Path::new(&path).exists()))
+        run_guarded("file_exists", || Ok(validated.exists()))
     })
     .await
     .map_err(|e| format!("file_exists blocking task join error: {e}"))?
@@ -1430,10 +1523,14 @@ pub async fn file_exists(path: String) -> Result<bool, String> {
 
 /// Resolve symlinks and `..` segments to an absolute canonical path.
 #[tauri::command]
-pub async fn canonicalize_path(path: String) -> Result<String, String> {
+pub async fn canonicalize_path(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<String, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("canonicalize_path", || {
-            let canonical = fs::canonicalize(&path)
+            let canonical = fs::canonicalize(&validated)
                 .map_err(|e| format!("Failed to canonicalize '{}': {}", path, e))?;
             Ok(canonical.to_string_lossy().to_string())
         })
@@ -1445,10 +1542,14 @@ pub async fn canonicalize_path(path: String) -> Result<String, String> {
 /// Get the last modified timestamp of a file in milliseconds since Unix epoch.
 /// Returns 0 if the file doesn't exist or metadata can't be read.
 #[tauri::command]
-pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
+pub async fn get_file_modified_time(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<u64, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_modified_time", || {
-            let metadata = fs::metadata(&path)
+            let metadata = fs::metadata(&validated)
                 .map_err(|e| format!("Failed to get metadata for '{}': {}", path, e))?;
             let modified = metadata
                 .modified()
@@ -1464,10 +1565,14 @@ pub async fn get_file_modified_time(path: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub async fn get_file_size(path: String) -> Result<u64, String> {
+pub async fn get_file_size(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<u64, String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_size", || {
-            let metadata = fs::metadata(&path)
+            let metadata = fs::metadata(&validated)
                 .map_err(|e| format!("Failed to get metadata for '{}': {}", path, e))?;
             Ok(metadata.len())
         })
@@ -1478,11 +1583,15 @@ pub async fn get_file_size(path: String) -> Result<u64, String> {
 
 /// Compute MD5 hash of a file. Returns the hex-encoded hash string.
 #[tauri::command]
-pub async fn get_file_md5(path: String) -> Result<String, String> {
+pub async fn get_file_md5(
+    path: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<String, String> {
     use md5::{Digest, Md5};
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_md5", || {
-            let mut file = fs::File::open(&path)
+            let mut file = fs::File::open(&validated)
                 .map_err(|e| format!("Failed to open file '{}': {}", path, e))?;
             let mut hasher = Md5::new();
             let mut buffer = [0u8; 64 * 1024];
@@ -1553,7 +1662,7 @@ mod tests {
 
         for (name, bytes) in payloads {
             let path = tmp_pdf_with_bytes(bytes);
-            let result = read_file(path.clone()).await;
+            let result = read_file_validated(PathBuf::from(&path), path.clone()).await;
             let _ = fs::remove_file(&path);
             eprintln!(
                 "[{name}] => {:?}",
@@ -1568,7 +1677,10 @@ mod tests {
     /// through read_file's guarded path.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn read_file_returns_err_on_missing_file_instead_of_panicking() {
-        let result = read_file("/nonexistent/path/that/does/not/exist.pdf".to_string()).await;
+        let result =
+            read_file_validated(PathBuf::from("/nonexistent/path/that/does/not/exist.pdf"),
+                "/nonexistent/path/that/does/not/exist.pdf".to_string())
+            .await;
         assert!(result.is_err() || result.is_ok()); // must at least return
     }
 
@@ -1695,8 +1807,15 @@ mod tests {
     // would be surfaced here and then wrongly deleted downstream.
 
     fn make_wiki(files: &[(&str, &str)]) -> std::path::PathBuf {
+        // Atomic counter so parallel tests never collide on the same temp
+        // dir (nanosecond-only uniqueness raced under `cargo test`'s
+        // default thread-pool — same flake class as path_safety P1-A).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static WIKI_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = WIKI_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "wiki-test-{}",
+            "wiki-test-{}-{}",
+            id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -2046,5 +2165,42 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    /// Regression for re-review P2: `find_related_wiki_pages` now sandboxes
+    /// `project_path` via `validate_within_project` before scanning. This test
+    /// exercises the post-sandbox code path (`collect_related_pages` over a
+    /// validated wiki dir) to confirm the integration still finds references.
+    #[test]
+    fn collect_related_pages_finds_source_reference_under_sandbox() {
+        let root = std::env::temp_dir().join(format!(
+            "llm-wiki-find-related-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let wiki_dir = root.join("wiki").join("sources");
+        std::fs::create_dir_all(&wiki_dir).unwrap();
+
+        // A source page that references our source filename via a frontmatter
+        // `sources:` block — this is the primary match path in
+        // collect_related_pages (Match 1/3: quoted filename or sources list).
+        let page = wiki_dir.join("wei-2022-chain-of-thought.md");
+        std::fs::write(
+            &page,
+            "---\ntype: source\nsources:\n  - \"report.pdf\"\n---\n# CoT paper",
+        )
+        .unwrap();
+
+        let mut related = Vec::new();
+        collect_related_pages(&wiki_dir, "report.pdf", &mut related).unwrap();
+        assert!(
+            related.iter().any(|p| p.contains("wei-2022-chain-of-thought")),
+            "collect_related_pages should find the reference; got {related:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1,6 +1,6 @@
 import { listDirectory, readFile, writeFile } from "@/commands/fs";
 import { hasUsableLlm } from "@/lib/has-usable-llm";
-import { parseFileBlocks } from "@/lib/ingest";
+import { isSafeIngestPath } from "@/lib/ingest";
 import { sanitizeIngestedFileContent } from "@/lib/ingest-sanitize";
 import { type LintResult, runStructuralLint, runSemanticLint, generateLintReport, lintReportToMarkdown, type LintReport } from "@/lib/lint";
 import { streamChat } from "@/lib/llm-client";
@@ -669,8 +669,21 @@ async function applyLlmFix(
 
 	if (hadError || !raw.trim()) return false;
 
-	const parsed = parseFileBlocks(raw);
-	if (parsed.blocks.length === 0) {
+	// Parse FILE blocks. We use the legacy FILE_BLOCK_REGEX here (NOT
+	// parseFileBlocks from ingest.ts) because lint prompts deliberately
+	// produce BARE page paths like `concepts/foo.md` (no `wiki/` prefix):
+	// see the prompt templates at lines 400-405, 477-482, 544-549, 619-624.
+	// parseFileBlocks enforces a `wiki/` prefix via isSafeIngestPath and
+	// would silently drop every lint-fix block (Codex review P1-3).
+	// The regex is safe FOR PARSING; the security guard is the
+	// isSafeIngestPath(wikiRel) check applied below after normalization.
+	const FILE_BLOCK_RE = /---FILE:\s*([^\n]+?)\s*---\n([\s\S]*?)---END FILE---/g;
+	const blocks: { path: string; content: string }[] = [];
+	let m: RegExpExecArray | null;
+	while ((m = FILE_BLOCK_RE.exec(raw)) !== null) {
+		blocks.push({ path: m[1].trim(), content: m[2] });
+	}
+	if (blocks.length === 0) {
 		activity.updateItem(activityId, {
 			status: "error",
 			detail: "LLM did not output valid file blocks.",
@@ -679,10 +692,20 @@ async function applyLlmFix(
 	}
 
 	const filesWritten: string[] = [];
-	for (const block of parsed.blocks) {
-		const targetPath = block.path.startsWith(pp)
-			? block.path
-			: `${pp}/wiki/${block.path.replace(/^\/+/, "")}`;
+	for (const block of blocks) {
+		// Path-traversal guard (#119 P1-3). block.path comes from LLM output,
+		// which is attacker-controllable via prompt injection in lint sources.
+		// Normalize to a wiki/-rooted relative path and reject anything that
+		// tries to escape wiki/ (.., absolute paths, drive letters, UNC).
+		// We always construct targetPath from the validated wikiRel — never
+		// trust block.path directly.
+		const stripped = block.path.replace(/^\/+/, "");
+		const wikiRel = stripped.startsWith("wiki/") ? stripped : `wiki/${stripped}`;
+		if (!isSafeIngestPath(wikiRel)) {
+			console.warn(`[lint-fixer] rejecting unsafe path "${block.path}" (normalized "${wikiRel}")`);
+			continue;
+		}
+		const targetPath = `${pp}/${wikiRel}`;
 		const sanitized = sanitizeIngestedFileContent(block.content);
 		await writeFile(targetPath, sanitized);
 		filesWritten.push(getRelativePath(targetPath, pp));

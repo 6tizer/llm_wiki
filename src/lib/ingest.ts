@@ -1627,13 +1627,24 @@ export async function executeIngestWrites(
   )
 
   const writtenPaths: string[] = []
-  const matches = accumulated.matchAll(FILE_BLOCK_REGEX)
+  // Parse the LLM generation with the hardened parser. This replaces the
+  // legacy FILE_BLOCK_REGEX loop, which skipped every safety check that
+  // writeFileBlocks applies (see #119 P0-1): CRLF normalization, fence-aware
+  // closer, path-traversal guard (isSafeIngestPath), empty/unclosed-block
+  // surfacing. parseFileBlocks runs isSafeIngestPath internally and drops
+  // unsafe paths with a warning, so the loop below only ever sees wiki/-rooted
+  // traversal-safe paths. The chat-mode-specific behavior (source-summary
+  // rewrite, canonicalizeSourcesField, log append, absolute-path return) is
+  // preserved on top of the safe parser.
+  const { blocks: parsedBlocks, warnings: parseWarnings } = parseFileBlocks(accumulated)
+  for (const warning of parseWarnings) {
+    console.warn(`[executeIngestWrites] ${warning}`)
+  }
 
-  for (const match of matches) {
-    let relativePath = match[1].trim()
-    let content = match[2]
+  for (const { path: rawRelativePath, content: rawContent } of parsedBlocks) {
+    let relativePath = rawRelativePath
+    let content = rawContent
 
-    if (!relativePath) continue
     if (
       activeSourceSummaryPath &&
       relativePath.startsWith("wiki/sources/")
