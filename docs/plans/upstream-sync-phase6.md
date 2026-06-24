@@ -1,22 +1,22 @@
-# Phase 6: upstream sync to nashsu/llm_wiki v0.5.0
+# Phase 6: upstream sync to nashsu/llm_wiki v0.5.x
 
 > 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-24 | 状态：active
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 计划索引：[Plans Index](./README.md)
-> Delta 入口：[Upstream v0.5.0 Delta](./upstream-0.5-delta.md)
+> Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
 > 后续：[Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)
-> 上游：`nashsu/llm_wiki` `upstream/main@997db74` / tag `v0.5.0`
+> 上游基线：`nashsu/llm_wiki` tag `v0.5.0@997db74`；截至 2026-06-24 已看到 `v0.5.1@cc4b98f`
 
 ## 结论
 
-Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍采用按功能手动 port，不直接 merge upstream。
+Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍采用按功能手动 port，不直接 merge upstream。
 
 不能直接 `git merge upstream/main`：上游会覆盖或删除本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary、产品定位和本地 Agent workflow 差异。Phase 6 的原则是吸收 upstream 功能与修复，同时保留本地 Agent 产品线。
 
 本地已确认：
 
-- `upstream/main@997db74`
-- upstream tag `v0.5.0`
+- upstream tag `v0.5.0@997db74`
+- upstream tag/current main `v0.5.1@cc4b98f`
 - Issue #88 已 CLOSED（2026-06-23），可作为 PR C 完成证据。
 
 ## Current State
@@ -28,16 +28,16 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍�
 | PR C：Embedding + vector safety | completed; #88 closed on 2026-06-23 |
 | PR D：LLM provider / dedup / deep research stability | completed |
 | follow-up sweep | completed |
-| v0.4.26 through v0.5.0 delta assessment | required before every remaining implementation PR |
+| v0.4.26 through latest v0.5.x delta assessment | required before every remaining implementation PR |
 
-历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以 `v0.5.0` 为准。
+历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以开工时最新 `v0.5.x` 为准。
 
-## Required Pre-step: v0.5.0 Delta Assessment
+## Required Pre-step: v0.5.x Delta Assessment
 
 每个后续 PR 开工前必须先跑一次 delta assessment：
 
-1. 确认 upstream remote、`upstream/main@997db74` 和 tag `v0.5.0`；若 upstream 已变化，记录新的 commit/tag 事实。
-2. 查看 `v0.4.26` through `v0.5.0` 的 upstream delta，也可用 `v0.4.25..v0.5.0` range 抽取 commit/file 变化。
+1. 确认 upstream remote、latest tag 和 `upstream/main` commit；若 upstream 已变化，记录新的 commit/tag 事实。
+2. 查看 `v0.4.26` through latest `v0.5.x` 的 upstream delta，也可用 `v0.4.25..latest` range 抽取 commit/file 变化。
 3. 标出会触碰本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary 或 Mac-only product positioning 的冲突点。
 4. 按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 分流到 PR E / H-lite / G / F / I / J / K，或记录为 follow-up。
 5. 在对应 PR plan、PR body 和 reviewer packet 写明 delta 结论。
@@ -54,7 +54,16 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍�
 6. PR J：图形渲染优化
 7. PR K：AnyTXT、源文件导入、Lint 持久化和低风险杂项
 
-每个 PR 都必须重新核对 upstream `v0.5.0` delta，不得沿用旧 `v0.4.25` 结论。
+每个 PR 都必须重新核对 upstream `v0.5.x` delta，不得沿用旧 `v0.4.25` 结论。
+
+## Agent Boundary From Upstream v0.5.x
+
+上游 `v0.5.x` 的 Agent 是 Chat Agent Router，不是本 fork 的 Agent SDK sidecar。
+
+- Chat Agent Router：普通 Chat 内的 TypeScript planner，按 `fast / standard / deep / local_first` mode 调用只读 project/wiki/graph/web/AnyTXT 工具，最后通过当前 LLM provider 回答。
+- Agent SDK sidecar：本 fork 的 Claude Agent SDK runtime，经 Rust/Tauri sidecar bridge 运行，支持可写 Wiki 工具、permission approval、session resume/fork/continue、resource limits 和 multi-agent pipeline。
+
+同步原则：可以 port 上游 Chat Agent Router 的 query understanding、agent mode、tool progress、project file read 和 reasoning fallback；不能把它当成 sidecar 替代品，也不能因此删除或弱化本地 Agent permission/session/pipeline 设计。
 
 ## Remaining PR Charters
 
@@ -69,7 +78,7 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍�
 - Rust fs 写入路径安全。
 - Review preservation / missing-page create page。
 - Markdown / Obsidian image resolver。
-- v0.5.0 delta 中所有 ingest/review/source safety 变更。
+- v0.5.x delta 中所有 ingest/review/source safety 变更。
 
 风险：HIGH。`ingest.ts` 与本地 Agent pipeline 有重叠，必须手动融合并补回归。
 
@@ -88,7 +97,7 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍�
 
 ### PR G：聊天图片粘贴 + 多模态消息 + chat standalone
 
-目标：普通 Chat 支持图片和 multimodal message，同时不破坏 Agent stream UI。
+目标：普通 Chat 支持图片和 multimodal message，同时重新评估 upstream Chat Agent Router 是否进入普通 Chat；不得破坏 Agent SDK sidecar stream UI。
 
 重点：
 
@@ -96,6 +105,7 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍�
 - User message image rendering。
 - LLM message ContentBlock[] 转换。
 - Chat standalone 迁移。
+- 上游 Chat Agent Router 的 agent mode、tool progress、project file read、reasoning fallback 分流。
 - 保留本地 Agent permission、timeline、rewind、resume、resource limit notice。
 
 风险：HIGH。Chat 与 Agent UI 冲突最大，必须补 Agent 回归。
@@ -151,7 +161,7 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.0`。后续仍�
 
 ## Phase 7 Boundary
 
-Agent UX/session/permission/internal RPC 后续不再称为 Phase 6.1；它们进入 [Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)。#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
+Agent SDK sidecar 的 UX/session/permission/internal RPC 后续不再称为 Phase 6.1；它们进入 [Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)。上游 Chat Agent Router 的普通 Chat 集成先在 PR G 评估，只有 sidecar session/permission/pipeline 相关项进入 Phase 7。#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
 
 ## Mac-only Product Boundary
 
@@ -160,7 +170,7 @@ README 已改为 macOS-first / Mac-only active maintenance，但本 docs PR 不�
 ## Done When
 
 - PR E / H-lite / G / F / I / J / K 都完成或明确路由。
-- 每个 PR 都记录 v0.5.0 delta assessment。
+- 每个 PR 都记录 v0.5.x delta assessment。
 - 本地 Agent sidecar、Agent UI、Agent pipeline 行为不回退。
 - Mac-only product baseline 完成 CI/release/app identity 清理。
 - Phase 7 backlog 有独立入口，不再作为 Phase 6 尾项混入。

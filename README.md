@@ -39,7 +39,7 @@ Most LLM-and-documents workflows look like RAG: you upload files, the model retr
 
 The wiki is just markdown on disk: a git repo, an Obsidian vault, yours to keep. You curate sources and ask questions; the LLM does the reading, summarizing, cross-referencing, and bookkeeping.
 
-It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and has grown into a full application with a knowledge graph, vector search, web research, a Chrome clipper, and a built-in agent that can research and update the wiki on its own.
+It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and has grown into a full application with a knowledge graph, vector search, web research, a Chrome clipper, and a built-in Agent SDK sidecar that can research and update the wiki on its own.
 
 <p align="center">
   <img src="assets/llm_wiki_arch.jpg" width="100%" alt="LLM Wiki Architecture">
@@ -47,7 +47,7 @@ It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://
 
 ## Highlights
 
-- **Built-in Agent** — an agent powered by the Claude Agent SDK runs inside the app with custom wiki tools, multi-turn dialog, tool-call timeline, permission approval, and session resume/fork. It can search, read, and write wiki pages, run research, and drive a multi-agent pipeline (compiler → linter → fixer → synthesizer → qa).
+- **Built-in Agent SDK sidecar** — an agent powered by the Claude Agent SDK runs inside the app with custom wiki tools, multi-turn dialog, tool-call timeline, permission approval, and session resume/fork. It can search, read, and write wiki pages, run research, and drive a multi-agent pipeline (compiler → linter → fixer → synthesizer → qa).
 - **Two-step ingest** — the LLM analyzes a source first, then generates pages, with source traceability and SHA-256 incremental caching.
 - **Knowledge graph** — a 4-signal relevance engine plus Louvain community detection, surfacing clusters, surprising connections, and knowledge gaps.
 - **Hybrid search** — tokenized keyword search (English + CJK) with optional vector semantic search via LanceDB.
@@ -197,6 +197,8 @@ npm run tauri build    # Production build
 
 LLM Wiki Agent ships a built-in agent powered by the **Claude Agent SDK**, running as a bundled sidecar binary in production and a Node.js sidecar in development. It communicates with the Rust backend over stdin/stdout JSON-lines.
 
+Terminology note: upstream LLM Wiki v0.5.x also added a **Chat Agent Router** inside normal Chat. That upstream agent is a TypeScript planner that routes a chat turn through read-only project/wiki/graph/web/AnyTXT tools before calling the configured LLM provider. In this fork, **Agent SDK sidecar** means the separate Claude Agent SDK runtime with write-capable wiki tools, permission approval, session lifecycle, and multi-agent workflows. Future upstream sync work should port useful Chat Agent Router behavior without treating it as a replacement for the sidecar.
+
 - **Wiki MCP tools** — `read_page`, `search_pages`, `update_page`, `create_entity` / `create_concept`, `get_graph`
 - **Hooks & permissions** — wiki tools auto-allowed within safe boundaries (writes restricted to `wiki/**/*.md`); built-in tools go through SDK permission approval
 - **Session management** — resume / fork / continue, with cost controls (`maxTurns`, `maxBudgetUsd`)
@@ -251,7 +253,7 @@ src/                        # Frontend (React + TypeScript)
 
 ## Roadmap
 
-The active product direction is Mac-only Apple Silicon desktop maintenance plus Agent productization. The current implementation baseline is tracked in [`mac-product-baseline`](docs/plans/mac-product-baseline.md), followed by upstream v0.5.0 delta work and Phase 7 Agent SDK productization. See [`docs/plans/`](docs/plans/) for the current plan index.
+The active product direction is Mac-only Apple Silicon desktop maintenance plus Agent productization. The current implementation baseline is tracked in [`mac-product-baseline`](docs/plans/mac-product-baseline.md), followed by upstream v0.5.x delta work and Phase 7 Agent SDK productization. See [`docs/plans/`](docs/plans/) for the current plan index.
 
 ## Credits
 

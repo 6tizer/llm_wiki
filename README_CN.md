@@ -39,7 +39,7 @@ LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成�
 
 Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完全归你所有。你负责筛选源文件、提出问题；LLM 负责阅读、总结、交叉引用和繁琐的维护工作。
 
-它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个能自主研究和更新 Wiki 的内置 Agent。
+它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个能自主研究和更新 Wiki 的内置 Agent SDK sidecar。
 
 <p align="center">
   <img src="assets/llm_wiki_arch.jpg" width="100%" alt="LLM Wiki 架构">
@@ -47,7 +47,7 @@ Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完
 
 ## 核心亮点
 
-- **内置 Agent** —— 基于 Claude Agent SDK 的 Agent 运行在应用内，配有专属 Wiki 工具、多轮对话、工具调用时间线、权限审批、session resume/fork。它能搜索、读取、写入 Wiki 页面，执行研究，并驱动多 Agent 流水线（compiler → linter → fixer → synthesizer → qa）。
+- **内置 Agent SDK sidecar** —— 基于 Claude Agent SDK 的 Agent 运行在应用内，配有专属 Wiki 工具、多轮对话、工具调用时间线、权限审批、session resume/fork。它能搜索、读取、写入 Wiki 页面，执行研究，并驱动多 Agent 流水线（compiler → linter → fixer → synthesizer → qa）。
 - **两步 ingest** —— LLM 先分析源文档，再生成页面，带源文件溯源和 SHA-256 增量缓存。
 - **知识图谱** —— 4 信号相关性引擎 + Louvain 社区检测，呈现知识簇、惊喜连接和知识缺口。
 - **混合搜索** —— 分词关键词搜索（英文 + 中文 CJK）配合可选的 LanceDB 向量语义搜索。
@@ -197,6 +197,8 @@ npm run tauri build    # 生产构建
 
 LLM Wiki Agent 内置一个基于 **Claude Agent SDK** 的 Agent，以 Node.js sidecar 进程运行，通过 stdin/stdout JSON-lines 与 Rust 后端通信。
 
+术语说明：上游 LLM Wiki v0.5.x 也在普通 Chat 里加入了 **Chat Agent Router**。这个上游 Agent 是一个 TypeScript planner，会在一次聊天中按需调用只读的项目文件、Wiki、图谱、Web、AnyTXT 工具，再交给当前配置的 LLM provider 回答。本 fork 里的 **Agent SDK sidecar** 指独立的 Claude Agent SDK runtime，包含可写 Wiki 工具、权限审批、session 生命周期和多 Agent 工作流。后续上游同步可以吸收 Chat Agent Router 的有用能力，但不能把它当成 sidecar 的替代品。
+
 - **Wiki MCP 工具** —— `read_page`、`search_pages`、`update_page`、`create_entity` / `create_concept`、`get_graph`
 - **Hooks 与权限** —— Wiki 工具在安全边界内自动允许（写入限制在 `wiki/**/*.md`）；内置工具走 SDK 权限审批
 - **Session 管理** —— resume / fork / continue，带成本控制（`maxTurns`、`maxBudgetUsd`）
@@ -251,7 +253,7 @@ src/                        # 前端（React + TypeScript）
 
 ## 路线图
 
-当前产品方向是 Apple Silicon Mac-only 桌面维护和 Agent 产品化。当前实现基线记录在 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.0 delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
+当前产品方向是 Apple Silicon Mac-only 桌面维护和 Agent 产品化。当前实现基线记录在 [`mac-product-baseline`](docs/plans/mac-product-baseline.md)，之后继续上游 v0.5.x delta 分流和 Phase 7 Agent SDK 产品化。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
 
 ## 致谢
 

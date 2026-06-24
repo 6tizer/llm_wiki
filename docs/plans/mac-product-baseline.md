@@ -18,8 +18,8 @@
 
 本地已确认：
 
-- `upstream/main@997db74`
-- upstream tag `v0.5.0`
+- upstream tag `v0.5.0@997db74`
+- upstream tag/current main `v0.5.1@cc4b98f`
 - Issue #88 已 CLOSED（2026-06-23），可作为 Phase 6 PR C 完成证据。
 
 ## Scope

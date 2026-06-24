@@ -7,7 +7,9 @@
 
 ## 结论
 
-本文件不再表示 Phase 6 的尾项，而是 Phase 7 backlog：Agent SDK productization。等 Phase 6 upstream `v0.5.0` P0/P1 同步和 Mac-only baseline 稳定后，再集中处理 Agent UX、session continuity、permission entry、QA fixture 和内部 RPC 评估。
+本文件不再表示 Phase 6 的尾项，而是 Phase 7 backlog：Agent SDK productization。等 Phase 6 upstream `v0.5.x` P0/P1 同步和 Mac-only baseline 稳定后，再集中处理 Agent SDK sidecar 的 UX、session continuity、permission entry、QA fixture 和内部 RPC 评估。
+
+术语边界：upstream `v0.5.x` 的 Agent 是普通 Chat 内的 **Chat Agent Router**，负责 query understanding、只读工具路由和 tool progress。Phase 7 的 Agent 是本 fork 的 **Agent SDK sidecar**，负责 Claude Agent SDK runtime、写入能力、permission/session/resource-limit/pipeline 产品化。Chat Agent Router 的 port 与 UI 融合优先在 Phase 6 PR G 评估；只有 sidecar 生命周期和权限相关问题进入本文件。
 
 #3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
 
@@ -26,7 +28,7 @@
 
 ## Preconditions
 
-- Phase 6 remaining PRs have completed or routed upstream `v0.5.0` P0/P1 delta.
+- Phase 6 remaining PRs have completed or routed upstream `v0.5.x` P0/P1 delta.
 - `mac-product-baseline` has cleaned up Mac-only CI/release/app identity.
 - Agent sidecar binary, Agent settings, Chat Agent mode, MCP resources and local HTTP API are stable after upstream sync.
 - GitNexus index is current.

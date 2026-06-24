@@ -9,8 +9,8 @@
 | Plan | Charter | Status |
 |------|---------|--------|
 | [mac-product-baseline.md](./mac-product-baseline.md) | 下一实现 PR：把产品、CI、release、app identity 口径收敛到 Mac-only active maintenance。 | active |
-| [upstream-sync-phase6.md](./upstream-sync-phase6.md) | Phase 6：基于上游 `v0.5.0` 的手动同步路线，保留本地 Agent sidecar/docs/Agent UI 差异。 | active |
-| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | 每个后续实现 PR 前的 v0.5.0 delta 调研入口和分流规则。 | active |
+| [upstream-sync-phase6.md](./upstream-sync-phase6.md) | Phase 6：基于上游 `v0.5.x` 的手动同步路线，保留本地 Agent SDK sidecar/docs/Agent UI 差异。 | active |
+| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | 每个后续实现 PR 前的 v0.5.x delta 调研入口和分流规则，含上游 Chat Agent Router 与本地 Agent SDK sidecar 边界。 | active |
 | [agent-sidecar-phase6.1.md](./agent-sidecar-phase6.1.md) | Phase 7 backlog：Agent SDK productization；文件名保留历史编号。 | backlog |
 | [native-architecture.md](./native-architecture.md) | Swift/SwiftUI/iOS/native 架构 ADR 入口；当前不改变 Tauri/Rust/TS 主线。 | ADR backlog |
 
