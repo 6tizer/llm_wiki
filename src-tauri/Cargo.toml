@@ -41,9 +41,13 @@ futures = "0.3"
 # Claude Code CLI subprocess transport: spawn `claude` as a child process,
 # stream stdout line-by-line back to the frontend. tokio::process gives us
 # async io and clean cancellation; `which` locates the binary on PATH.
-tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt", "fs"] }
+tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt", "fs", "time"] }
 which = "7"
 uuid = { version = "1", features = ["v4"] }
+# libc (Unix only): process-group kill (killpg) for agent_kill, so we reap
+# the sidecar's grandchildren (tool subprocesses), not just the direct child.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 # Multimodal image extraction (Phase 1):
 #   `image` re-encodes pdfium's raw bitmap output to PNG so the IPC
 #   payload is self-contained (the frontend doesn't need to know

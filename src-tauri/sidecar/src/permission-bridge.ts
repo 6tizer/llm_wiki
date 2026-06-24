@@ -57,6 +57,10 @@ export interface PermissionBridge {
 	): Promise<PermissionResult>;
 	handleResponse(response: AgentPermissionResponseMessage): void;
 	rejectStream(streamId: string, reason: string): void;
+	/** True if any permission request is awaiting a host response. The
+	 *  sidecar idle-exit guard uses this so it doesn't kill the process
+	 *  mid-permission-ask. */
+	hasPending(): boolean;
 }
 
 interface PendingPermission {
@@ -158,6 +162,10 @@ export function createPermissionBridge(args: {
 				clearTimeout(call.timer);
 				call.reject(new Error(reason));
 			}
+		},
+
+		hasPending() {
+			return pending.size > 0;
 		},
 	};
 }

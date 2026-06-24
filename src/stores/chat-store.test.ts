@@ -99,6 +99,45 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().streamingContent).toBe("")
   })
 
+  it("finalizeStream binds the message to the conversation that started the stream, not the live active one (P1-6)", () => {
+    // P1-6: finalizeStream previously read the live activeConversationId at
+    // onDone time. If the user switched conversations mid-stream, the
+    // assistant reply was injected into the wrong conversation. The new
+    // optional conversationId param binds it to the stream's owner.
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    // Stream started in convA (captured), but by onDone the user has
+    // switched active to convB.
+    useChatStore.setState({
+      isStreaming: true,
+      streamingContent: "partial",
+      activeConversationId: convB,
+    })
+
+    useChatStore.getState().finalizeStream("done", undefined, convA)
+
+    const state = useChatStore.getState()
+    const message = state.messages[0]
+    // Lands in convA (the stream owner), NOT convB (the live active).
+    // This is the core P1-6 fix: the reply goes to the conversation that
+    // owned the stream, not the one the user switched to.
+    expect(message.conversationId).toBe(convA)
+    expect(message.content).toBe("done")
+    // No message was created in convB.
+    expect(state.messages.filter((m) => m.conversationId === convB)).toHaveLength(0)
+  })
+
+  it("finalizeStream falls back to the live activeConversationId when no conversationId is passed", () => {
+    // Backward compat: callers that don't pass the new arg keep the old
+    // behavior (live activeConversationId).
+    const convA = useChatStore.getState().createConversation()
+    useChatStore.setState({ isStreaming: true, streamingContent: "p", activeConversationId: convA })
+
+    useChatStore.getState().finalizeStream("done")
+
+    expect(useChatStore.getState().messages[0].conversationId).toBe(convA)
+  })
+
   it("finalizeAgentStream stores stats and updates conversation session", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({ isStreaming: true, streamingContent: "partial" })

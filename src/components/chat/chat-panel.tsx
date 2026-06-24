@@ -1128,15 +1128,18 @@ export function ChatPanel() {
 					onReasoningToken: appendReasoning,
 					onDone: () => {
 						closeReasoning();
-						finalizeStream(accumulated, queryRefs);
+						// P1-6: bind the finalized message to the conversation
+						// that started the stream (captured above), so a
+						// mid-stream conversation switch can't inject the
+						// reply into the wrong conversation.
+						finalizeStream(accumulated, queryRefs, convId);
 						// QA Hook: mark conversation dirty (defer extraction to conversation switch)
-						const qaConvId = useChatStore.getState().activeConversationId;
-						if (qaConvId) markConversationDirty(qaConvId);
+						if (convId) markConversationDirty(convId);
 						abortRef.current = null;
 						// save-worthy detection removed — user has direct "Save to Wiki" button on each message
 					},
 					onError: (err) => {
-						finalizeStream(`Error: ${err.message}`, undefined);
+						finalizeStream(`Error: ${err.message}`, undefined, convId);
 						abortRef.current = null;
 					},
 				},

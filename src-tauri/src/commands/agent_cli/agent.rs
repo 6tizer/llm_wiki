@@ -10,6 +10,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -17,7 +18,7 @@ use std::os::unix::fs::PermissionsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 
@@ -286,6 +287,13 @@ pub async fn agent_spawn(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    // Put the sidecar in its OWN process group (setpgid(0,0)) on Unix so
+    // agent_kill can later killpg the whole tree — the sidecar spawns
+    // grandchildren (tool subprocesses, e.g. the MCP/agent workers) that
+    // `Child::kill` (SIGKILL on the direct child only) would orphan.
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn agent sidecar: {e}"))?;
@@ -317,17 +325,11 @@ pub async fn agent_spawn(
     let stdin = Arc::new(Mutex::new(stdin));
     {
         let mut stdin_guard = stdin.lock().await;
-        if let Err(e) = stdin_guard.write_all(request_line.as_bytes()).await {
+        if let Err(e) = write_stdin_capped(&mut stdin_guard, &request_line).await {
             if let Some(token) = &internal_api_token {
                 api_server::revoke_agent_internal_api_token(token);
             }
             return Err(format!("Failed to write to sidecar stdin: {e}"));
-        }
-        if let Err(e) = stdin_guard.flush().await {
-            if let Some(token) = &internal_api_token {
-                api_server::revoke_agent_internal_api_token(token);
-            }
-            return Err(format!("Failed to flush sidecar stdin: {e}"));
         }
     }
 
@@ -372,13 +374,22 @@ pub async fn agent_spawn(
                 match process.child.try_wait() {
                     Ok(Some(status)) => status.code().unwrap_or(-1),
                     Ok(None) => {
-                        let _ = process.child.kill().await;
+                        // Child still running (e.g. stream ended before
+                        // exit). Kill the whole tree and reap to avoid a
+                        // zombie, then report non-zero (did not exit
+                        // cleanly on its own).
+                        let _ = kill_agent_tree(&mut process.child);
+                        let _ = process.child.wait().await;
                         -1
                     }
                     Err(_) => -1,
                 }
             } else {
-                0
+                // Entry already removed (agent_kill ran). This stream was
+                // explicitly killed — report non-zero, NOT 0 (false
+                // success). Previously this returned 0, telling the
+                // frontend a killed agent "succeeded".
+                -1
             }
         };
 
@@ -422,14 +433,9 @@ pub async fn agent_tool_response(
     .to_string()
         + "\n";
     let mut guard = stdin.lock().await;
-    guard
-        .write_all(line.as_bytes())
+    write_stdin_capped(&mut guard, &line)
         .await
         .map_err(|e| format!("Failed to write app tool response: {e}"))?;
-    guard
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush app tool response: {e}"))?;
     Ok(())
 }
 
@@ -459,14 +465,9 @@ pub async fn agent_permission_response(
     .to_string()
         + "\n";
     let mut guard = stdin.lock().await;
-    guard
-        .write_all(line.as_bytes())
+    write_stdin_capped(&mut guard, &line)
         .await
         .map_err(|e| format!("Failed to write permission response: {e}"))?;
-    guard
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush permission response: {e}"))?;
     Ok(())
 }
 
@@ -490,14 +491,9 @@ pub async fn agent_rewind_files(
     .to_string()
         + "\n";
     let mut guard = stdin.lock().await;
-    guard
-        .write_all(line.as_bytes())
+    write_stdin_capped(&mut guard, &line)
         .await
         .map_err(|e| format!("Failed to write rewind request: {e}"))?;
-    guard
-        .flush()
-        .await
-        .map_err(|e| format!("Failed to flush rewind request: {e}"))?;
     Ok(())
 }
 
@@ -950,12 +946,75 @@ mod tests {
 #[tauri::command]
 pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Result<(), String> {
     if let Some(mut process) = state.children.lock().await.remove(&stream_id) {
-        process
-            .child
-            .start_kill()
+        kill_agent_tree(&mut process.child)
             .map_err(|e| format!("Failed to kill agent sidecar: {e}"))?;
     }
     Ok(())
+}
+
+/// Kill the agent sidecar AND its descendants.
+///
+/// On Unix the sidecar is spawned in its own process group (see the
+/// `process_group(0)` call in agent_spawn), so we killpg(-pid, SIGKILL)
+/// to also reap grandchildren (tool subprocesses) that the direct-child
+/// `Child::kill` (SIGKILL on the leader only) would orphan. On non-Unix
+/// we fall back to killing the direct child (best-effort, matches the
+/// pre-fix behavior).
+fn kill_agent_tree(child: &mut tokio::process::Child) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // Negative pid → kill the process group whose ID == pid.
+            // Safe: killpg is a libc syscall. ESRCH just means the group
+            // already exited, so we treat it as success.
+            let rc = unsafe { libc::killpg(-(pid as i32), libc::SIGKILL) };
+            if rc != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(err);
+                }
+            }
+            return Ok(());
+        }
+    }
+    // Non-Unix, or Unix child with no pid (already gone): direct kill.
+    child.start_kill()
+}
+
+/// Hard timeout for stdin writes to the sidecar. A blocked/full pipe would
+/// otherwise hang the Tauri command indefinitely (and serialize all writes
+/// behind the stuck one via the stdin mutex).
+const STDIN_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Reject stdin payloads larger than this before writing — a runaway tool
+/// response or malformed JSON shouldn't be megabytes. Generous ceiling to
+/// avoid rejecting legitimate large diffs/context.
+const STDIN_WRITE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Write a line to the sidecar stdin with a size guard + hard timeout.
+/// A full/blocked pipe would otherwise hang the caller forever; the
+/// timeout turns that into a clean error. The size guard rejects
+/// pathological payloads before they hit the pipe.
+async fn write_stdin_capped(stdin: &mut tokio::process::ChildStdin, line: &str) -> std::io::Result<()> {
+    let bytes = line.as_bytes();
+    if bytes.len() > STDIN_WRITE_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "sidecar stdin payload {} bytes exceeds cap {}",
+                bytes.len(),
+                STDIN_WRITE_MAX_BYTES
+            ),
+        ));
+    }
+    use tokio::io::AsyncWriteExt;
+    match tokio::time::timeout(STDIN_WRITE_TIMEOUT, stdin.write_all(bytes)).await {
+        Ok(Ok(())) => stdin.flush().await,
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("sidecar stdin write timed out after {:?}", STDIN_WRITE_TIMEOUT),
+        )),
+    }
 }
 
 #[tauri::command]

@@ -470,6 +470,7 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -527,6 +528,7 @@ test("app-level tool resource limits are emitted and returned as tool errors", a
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -576,6 +578,7 @@ test("app-level batch writes register changed paths before later writes are bloc
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 	const save = toolByName("save_query_page", {
@@ -590,6 +593,7 @@ test("app-level batch writes register changed paths before later writes are bloc
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -622,6 +626,7 @@ test("save_query_page tracks result relativePath when bridge omits wikiChanged",
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -650,6 +655,7 @@ test("save_query_page preflights maxFilesChanged before calling app bridge", asy
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -694,6 +700,7 @@ test("save_query_page preflights maxWriteBytes before calling app bridge", async
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -741,6 +748,7 @@ test("ingest_source calls app bridge as write tool and returns task id", async (
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -769,6 +777,7 @@ test("caption_source_images rejects when write tools are disabled", async () => 
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -795,6 +804,7 @@ test("run_deep_research calls app bridge as write tool and returns app task id",
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	});
 
@@ -907,6 +917,7 @@ test("research and merge tools reject missing seed inputs before bridge calls", 
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	};
 	const collect = toolByName("collect_research_sources", context);
@@ -934,6 +945,7 @@ test("read-side app tools are allowed without write tools", async () => {
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	};
 	const collect = toolByName("collect_research_sources", context);
@@ -982,6 +994,7 @@ test("merge_duplicate_group real writes and sweep_reviews require write tools", 
 			},
 			handleResponse() {},
 			rejectStream() {},
+			hasPending() { return false; },
 		},
 	};
 	const merge = toolByName("merge_duplicate_group", context);

@@ -158,8 +158,8 @@ interface ChatState {
   setConversations: (conversations: Conversation[]) => void
   setStreaming: (streaming: boolean) => void
   appendStreamToken: (token: string) => void
-  finalizeStream: (content: string, references?: MessageReference[]) => void
-  finalizeAgentStream: (content: string, stats?: AgentStreamStats) => void
+  finalizeStream: (content: string, references?: MessageReference[], conversationId?: string) => void
+  finalizeAgentStream: (content: string, stats?: AgentStreamStats, conversationId?: string) => void
   startAgentStreamMessage: (options?: StartAgentStreamMessageOptions) => string | null
   updateAgentStreamMessage: (messageId: string, patch: AgentStreamMessagePatch) => void
   finishAgentStreamMessage: (
@@ -380,10 +380,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingContent: state.streamingContent + token,
     })),
 
-  finalizeStream: (content, references) =>
+  finalizeStream: (content, references, conversationId) =>
     set((state) => {
-      const { activeConversationId, conversations } = state
-      if (!activeConversationId) {
+      // P1-6: bind the finalized message to the conversation that owned
+      // the stream when it STARTED, not the live activeConversationId at
+      // onDone time. Switching conversations mid-stream previously
+      // injected the assistant reply into the wrong conversation.
+      const targetId = conversationId ?? state.activeConversationId
+      const { conversations } = state
+      if (!targetId) {
         return {
           isStreaming: false,
           streamingContent: "",
@@ -395,7 +400,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role: "assistant" as const,
         content,
         timestamp: Date.now(),
-        conversationId: activeConversationId,
+        conversationId: targetId,
         references,
       }
 
@@ -404,17 +409,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingContent: "",
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
-          c.id === activeConversationId
+          c.id === targetId
             ? { ...c, updatedAt: Date.now() }
             : c
         ),
       }
     }),
 
-  finalizeAgentStream: (content, stats) =>
+  finalizeAgentStream: (content, stats, conversationId) =>
     set((state) => {
-      const { activeConversationId, conversations } = state
-      if (!activeConversationId) {
+      // P1-6: same binding fix as finalizeStream — use the conversation
+      // that started the agent stream, not the live activeConversationId.
+      const targetId = conversationId ?? state.activeConversationId
+      const { conversations } = state
+      if (!targetId) {
         return {
           isStreaming: false,
           streamingContent: "",
@@ -426,7 +434,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role: "assistant" as const,
         content,
         timestamp: Date.now(),
-        conversationId: activeConversationId,
+        conversationId: targetId,
         mode: "agent",
         agentSessionId: stats?.agentSessionId,
         costUsd: stats?.costUsd,
@@ -441,7 +449,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingContent: "",
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
-          c.id === activeConversationId
+          c.id === targetId
             ? {
                 ...c,
                 agentSessionId: stats?.agentSessionId ?? c.agentSessionId,
