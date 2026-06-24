@@ -817,7 +817,7 @@ export async function runAgentAppTool(
     const schema = BUILTIN_PIPELINES[pipelineName]
     if (!schema) throw new Error(`Unknown pipeline: ${pipelineName}. Available: ${Object.keys(BUILTIN_PIPELINES).join(", ")}`)
     const pipelineBudget = budget
-      ? { maxFilesChanged: budget.maxFilesChanged, changedPaths: [...budget.changedPaths] }
+      ? { maxFilesChanged: budget.maxFilesChanged, changedPaths: [...budget.changedPaths], maxFilesChangedEnabled: budget.maxFilesChangedEnabled }
       : undefined
     const result = await executePipeline(schema, async (stepToolName, stepArgs) => {
       const response = pipelineBudget

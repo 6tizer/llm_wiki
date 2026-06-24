@@ -5,17 +5,21 @@ export interface AgentResourceConfig {
   maxTurns: number
   maxFilesChanged: number
   /**
-   * Whether fan-out app tools (wiki_synthesis, run_lint_and_report,
-   * caption_source_images) enforce the file-count budget BEFORE writing
-   * (true preflight) instead of only after the write has landed.
+   * Opt-in flag for stricter app-tool file-count budget enforcement.
    *
-   * Default false: keeps the historical behavior (post-write enforcement
-   * + weak preflight that only blocks once the budget is already full).
-   * When true, those tools enumerate their planned target paths up front
-   * and block before any write — closing the "files already on disk when
-   * the limit fires" gap for the tools where the target set is knowable.
-   * `ingest_source` stays post-write either way (its output count is not
-   * knowable without running the 566-line autoIngestImpl).
+   * STATUS (2026-06): PLUMBING ONLY — no production code path reads this
+   * flag yet. It is threaded through all 4 config layers (settings →
+   * transport → agent.rs → sidecar core/wiki-tools/app-tool-bridge) so a
+   * follow-up can wire the fan-out app tools (wiki_synthesis,
+   * run_lint_and_report, caption_source_images) to a true path-enumerating
+   * preflight when set. Today the fan-out tools' preflight
+   * (`preflightUnknownWriteBudget`) is unchanged regardless of this flag,
+   * because those tools cannot enumerate their target paths before
+   * running. The settings save path preserves the current value so a
+   * hand-edited `true` isn't silently reset.
+   *
+   * Default false → historical behavior (post-write enforcement + weak
+   * preflight). See #119 P0-3.
    */
   maxFilesChangedEnabled: boolean
   maxWriteBytes: number

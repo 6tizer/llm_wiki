@@ -824,6 +824,7 @@ mod tests {
         args.enable_write_tools = Some(true);
         args.max_write_bytes = Some(262144);
         args.max_files_changed = Some(3);
+        args.max_files_changed_enabled = Some(true);
 
         let request = build_agent_request(args);
         let value: Value = serde_json::to_value(request).unwrap();
@@ -910,6 +911,12 @@ mod tests {
         assert_eq!(
             options.get("maxFilesChanged").and_then(Value::as_u64),
             Some(3)
+        );
+        // max_files_changed_enabled serializes camelCase (rename_all) and
+        // forwards into the sidecar request options.
+        assert_eq!(
+            options.get("maxFilesChangedEnabled").and_then(Value::as_bool),
+            Some(true)
         );
     }
 
