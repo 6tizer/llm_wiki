@@ -78,6 +78,7 @@ pub struct AgentSpawnArgs {
     enable_write_tools: Option<bool>,
     max_write_bytes: Option<u32>,
     max_files_changed: Option<u32>,
+    max_files_changed_enabled: Option<bool>,
     enable_file_checkpointing: Option<bool>,
     // PR E: subagents + skills + plugins
     agent_name: Option<String>,
@@ -150,6 +151,8 @@ struct AgentRequestOptions {
     max_write_bytes: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_files_changed: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_files_changed_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     enable_file_checkpointing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,6 +230,7 @@ fn build_agent_request(args: AgentSpawnArgs) -> AgentRequest {
             enable_write_tools: args.enable_write_tools,
             max_write_bytes: args.max_write_bytes,
             max_files_changed: args.max_files_changed,
+            max_files_changed_enabled: args.max_files_changed_enabled,
             enable_file_checkpointing: args.enable_file_checkpointing,
             sandbox: args.sandbox,
             // PR E: subagents + skills + plugins
@@ -641,6 +645,7 @@ mod tests {
             enable_write_tools: None,
             max_write_bytes: None,
             max_files_changed: None,
+            max_files_changed_enabled: None,
             enable_file_checkpointing: None,
             agent_name: None,
             agents: None,
@@ -819,6 +824,7 @@ mod tests {
         args.enable_write_tools = Some(true);
         args.max_write_bytes = Some(262144);
         args.max_files_changed = Some(3);
+        args.max_files_changed_enabled = Some(true);
 
         let request = build_agent_request(args);
         let value: Value = serde_json::to_value(request).unwrap();
@@ -905,6 +911,12 @@ mod tests {
         assert_eq!(
             options.get("maxFilesChanged").and_then(Value::as_u64),
             Some(3)
+        );
+        // max_files_changed_enabled serializes camelCase (rename_all) and
+        // forwards into the sidecar request options.
+        assert_eq!(
+            options.get("maxFilesChangedEnabled").and_then(Value::as_bool),
+            Some(true)
         );
     }
 

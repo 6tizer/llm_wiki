@@ -421,6 +421,10 @@ export function SettingsView() {
         maxTurns: draft.agentMaxTurns,
         maxFilesChanged: draft.agentMaxFilesChanged,
         maxWriteBytes: draft.agentMaxWriteKiB * 1024,
+        // The preflight toggle has no UI control yet (plumbing only, see
+        // #119 P0-3). Preserve the current value so saving unrelated
+        // settings doesn't silently reset a hand-edited flag to false.
+        maxFilesChangedEnabled: agentConfig.maxFilesChangedEnabled,
       })
       setAgentResourceConfig(newAgentConfig)
     }

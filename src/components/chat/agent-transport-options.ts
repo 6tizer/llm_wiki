@@ -56,6 +56,7 @@ export function buildAgentTransportOptionsFromState({
     apiToken: apiConfig.token || undefined,
     maxTurns: resourceConfig.maxTurns,
     maxFilesChanged: resourceConfig.maxFilesChanged,
+    maxFilesChangedEnabled: resourceConfig.maxFilesChangedEnabled,
     maxWriteBytes: resourceConfig.maxWriteBytes,
   }
 }

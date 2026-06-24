@@ -53,6 +53,9 @@ export interface LlmWikiToolContext extends WikiApiClientOptions {
 	enableWriteTools?: boolean;
 	maxWriteBytes?: number;
 	maxFilesChanged?: number;
+	/** Plumbing-only toggle threaded from AgentResourceConfig for future
+	 * stricter file-count preflight. */
+	maxFilesChangedEnabled?: boolean;
 	fs?: FileSystemLike;
 	onWikiChanged?: (payload: WikiChangedPayload) => void;
 	changedPaths?: Set<string>;
@@ -128,10 +131,11 @@ function ensureChangedPaths(context: LlmWikiToolContext): Set<string> {
 	return context.changedPaths;
 }
 
-function appToolBudget(context: LlmWikiToolContext): { maxFilesChanged: number; changedPaths: string[] } {
+function appToolBudget(context: LlmWikiToolContext): { maxFilesChanged: number; changedPaths: string[]; maxFilesChangedEnabled?: boolean } {
 	return {
 		maxFilesChanged: normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED),
 		changedPaths: Array.from(ensureChangedPaths(context)).sort(),
+		maxFilesChangedEnabled: context.maxFilesChangedEnabled === true,
 	};
 }
 

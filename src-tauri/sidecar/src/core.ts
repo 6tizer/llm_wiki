@@ -139,6 +139,7 @@ export function createRequestHandler({
 							enableWriteTools,
 							maxWriteBytes: req.options.maxWriteBytes,
 							maxFilesChanged: req.options.maxFilesChanged,
+							maxFilesChangedEnabled: req.options.maxFilesChangedEnabled,
 							changedPaths,
 							streamId: req.streamId,
 							appToolBridge,

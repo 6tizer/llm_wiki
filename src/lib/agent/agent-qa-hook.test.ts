@@ -591,7 +591,11 @@ describe("flushQaForConversation", () => {
 		expect(isConversationPending("conv-empty")).toBe(false);
 	});
 
-	it("removes from pending even on error", async () => {
+	it("keeps pending on error so the conversation retries before the cap (P1-7)", async () => {
+		// P1-7: flushQaForConversation previously cleared the pending flag
+		// in a `finally` block, so a failed extraction silently dropped the
+		// QA page and the conversation was never retried. The clear now
+		// happens only on success, so an error leaves it pending.
 		markConversationDirty("conv-err");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onError?.(new Error("LLM error"));
@@ -609,7 +613,42 @@ describe("flushQaForConversation", () => {
 				{ provider: "none" } as never,
 			),
 		).rejects.toThrow("LLM error");
-		expect(isConversationPending("conv-err")).toBe(false);
+		// Still pending → will be retried on the next flush cycle.
+		expect(isConversationPending("conv-err")).toBe(true);
+	});
+
+	it("clears pending after repeated QA extraction errors hit the retry cap", async () => {
+		markConversationDirty("conv-dead-letter");
+		streamChatMock.mockImplementation(async (_c, _m, h) => {
+			h.onError?.(new Error("LLM error"));
+		});
+		const messages = [
+			msg("user", "What is RAG?", "conv-dead-letter"),
+			msg("assistant", longAnswer, "conv-dead-letter"),
+		];
+
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			await expect(
+				flushQaForConversation(
+					"conv-dead-letter",
+					messages,
+					"/project",
+					{ model: "test" } as never,
+					{ provider: "none" } as never,
+				),
+			).rejects.toThrow("LLM error");
+			expect(isConversationPending("conv-dead-letter")).toBe(attempt < 3);
+		}
+
+		const skipped = await flushQaForConversation(
+			"conv-dead-letter",
+			messages,
+			"/project",
+			{ model: "test" } as never,
+			{ provider: "none" } as never,
+		);
+		expect(skipped.skipReason).toBe("not-pending");
+		expect(streamChatMock).toHaveBeenCalledTimes(3);
 	});
 
 	it("skips when existing QA has matching title (dedup)", async () => {
@@ -750,8 +789,10 @@ describe("flushAllPendingQa", () => {
 			{ provider: "none" } as never,
 		);
 		expect(results).toHaveLength(3);
-		// All removed from pending despite mixed results (finally block)
-		expect(getPendingQaIds()).toHaveLength(0);
+		// P1-7: success and skip clear pending; error leaves it pending
+		// for retry. Previously the `finally` block cleared all three.
+		const pending = getPendingQaIds();
+		expect(pending).toEqual(["conv-err"]);
 	});
 });
 

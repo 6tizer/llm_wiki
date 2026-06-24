@@ -14,6 +14,10 @@ export interface AppToolBudget {
 	maxFilesChanged: number;
 	/** Distinct wiki-relative paths already changed in the current Agent run. */
 	changedPaths: string[];
+	/** Plumbing-only toggle for future stricter file-count preflight.
+	 * Current fan-out tools still use the unknown-write guard plus
+	 * postflight enforcement. */
+	maxFilesChangedEnabled?: boolean;
 }
 
 export interface AppToolResponseMessage {

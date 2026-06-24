@@ -446,7 +446,11 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 		streamId: string;
 		toolName: string;
 		args: Record<string, unknown>;
-		budget?: { maxFilesChanged: number; changedPaths: string[] };
+		budget?: {
+			maxFilesChanged: number;
+			changedPaths: string[];
+			maxFilesChangedEnabled?: boolean;
+		};
 	}> = [];
 	const changed: WikiChangedPayload[] = [];
 	const save = toolByName("save_query_page", {
@@ -477,7 +481,11 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 			streamId: "stream-1",
 			toolName: "save_query_page",
 			args: { content: "Saved answer", title: "Saved" },
-			budget: { maxFilesChanged: 3, changedPaths: ["wiki/index.md"] },
+			budget: {
+				maxFilesChanged: 3,
+				changedPaths: ["wiki/index.md"],
+				maxFilesChangedEnabled: false,
+			},
 		},
 	]);
 	assert.deepEqual(changed, [{ path: "wiki/queries/saved.md", operation: "create" }]);

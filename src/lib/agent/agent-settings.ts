@@ -4,6 +4,24 @@ import { normalizePath } from "@/lib/path-utils"
 export interface AgentResourceConfig {
   maxTurns: number
   maxFilesChanged: number
+  /**
+   * Opt-in flag for stricter app-tool file-count budget enforcement.
+   *
+   * STATUS (2026-06): PLUMBING ONLY — no production code path reads this
+   * flag yet. It is threaded through all 4 config layers (settings →
+   * transport → agent.rs → sidecar core/wiki-tools/app-tool-bridge) so a
+   * follow-up can wire the fan-out app tools (wiki_synthesis,
+   * run_lint_and_report, caption_source_images) to a true path-enumerating
+   * preflight when set. Today the fan-out tools' preflight
+   * (`preflightUnknownWriteBudget`) is unchanged regardless of this flag,
+   * because those tools cannot enumerate their target paths before
+   * running. The settings save path preserves the current value so a
+   * hand-edited `true` isn't silently reset.
+   *
+   * Default false → historical behavior (post-write enforcement + weak
+   * preflight). See #119 P0-3.
+   */
+  maxFilesChangedEnabled: boolean
   maxWriteBytes: number
 }
 
@@ -11,6 +29,7 @@ export interface AgentResourceConfig {
 export const DEFAULT_AGENT_RESOURCE_CONFIG: AgentResourceConfig = {
   maxTurns: 30,
   maxFilesChanged: 10,
+  maxFilesChangedEnabled: false,
   maxWriteBytes: 256 * 1024,
 }
 
@@ -42,6 +61,8 @@ export function normalizeAgentResourceConfig(
       1,
       200,
     ),
+    maxFilesChangedEnabled:
+      config?.maxFilesChangedEnabled === true,
     maxWriteBytes: clampInteger(
       config?.maxWriteBytes,
       DEFAULT_AGENT_RESOURCE_CONFIG.maxWriteBytes,

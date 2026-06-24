@@ -234,6 +234,10 @@ export interface AgentAppToolBudget {
 	maxFilesChanged: number;
 	/** Distinct wiki-relative paths already changed in the current Agent run. */
 	changedPaths: string[];
+	/** Plumbing-only toggle threaded from the resource config for future
+	 * stricter file-count preflight. Current fan-out tools still use the
+	 * unknown-write guard plus postflight enforcement. */
+	maxFilesChangedEnabled?: boolean;
 }
 
 /** Shared subagent configuration — used by agent-types, agent-transport, and sidecar types. */
@@ -273,6 +277,10 @@ export interface AgentTransportOptions {
 	enableWriteTools?: boolean;
 	maxWriteBytes?: number;
 	maxFilesChanged?: number;
+	/** Plumbing-only toggle threaded to app-tool budgets for future stricter
+	 * file-count preflight. Current fan-out tools still use the unknown-write
+	 * guard plus postflight enforcement. */
+	maxFilesChangedEnabled?: boolean;
 	enableFileCheckpointing?: boolean;
 	sandbox?: {
 		enabled?: boolean;

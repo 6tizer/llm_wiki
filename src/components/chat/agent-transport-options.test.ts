@@ -56,6 +56,7 @@ describe("buildAgentTransportOptionsFromState", () => {
       resourceConfig: {
         maxTurns: 45,
         maxFilesChanged: 15,
+        maxFilesChangedEnabled: false,
         maxWriteBytes: 512 * 1024,
       },
     })
@@ -65,8 +66,27 @@ describe("buildAgentTransportOptionsFromState", () => {
       forkSession: true,
       maxTurns: 45,
       maxFilesChanged: 15,
+      maxFilesChangedEnabled: false,
       maxWriteBytes: 512 * 1024,
     })
+  })
+
+  it("threads maxFilesChangedEnabled through to transport options when on", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [],
+      activeConversationId: null,
+      resourceConfig: {
+        maxTurns: 30,
+        maxFilesChanged: 10,
+        maxFilesChangedEnabled: true,
+        maxWriteBytes: 256 * 1024,
+      },
+    })
+
+    expect(options?.maxFilesChangedEnabled).toBe(true)
   })
 
   it("does not fork without a resume session", () => {
