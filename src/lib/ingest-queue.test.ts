@@ -689,6 +689,49 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
     const summaryAfter = getQueueSummary()
     expect(summaryAfter.completed).toBe(summaryBefore.completed)
   })
+
+  it("cleans up partial files even when the project switched before the late resolve", async () => {
+    // Codex re-review P1: when pauseQueue aborts (project switch) and
+    // autoIngest then resolves LATE with partial files, the abort guard
+    // must clean up those partial pages against the OLD project path —
+    // even though the stale-context bail (`currentProjectId !==
+    // projectId`) would otherwise return before the guard. The guard
+    // now runs FIRST, against the captured `pp`, so partial pages
+    // written to the old project are not orphaned on disk.
+    const { deleteFile } = await import("@/commands/fs")
+    vi.mocked(deleteFile).mockReset()
+    vi.mocked(deleteFile).mockResolvedValue(undefined)
+
+    let resolveAutoIngest: (files: string[]) => void = () => {}
+    mockAutoIngest.mockImplementation(
+      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+    )
+
+    const taskId = await enqueueIngest(TEST_ID, "switch-during.md")
+    await flushMicrotasks(2)
+    expect(getQueue().find((t) => t.id === taskId)?.status).toBe("processing")
+
+    // Switch projects: pauseQueue aborts the captured runSignal, then
+    // restore a different project. The orphaned autoIngest for TEST_ID
+    // is still pending.
+    await pauseQueue()
+    await restoreQueue(TEST_ID_B, TEST_PATH_B)
+
+    // Now the orphaned autoIngest for TEST_ID returns LATE with partial
+    // files written to the OLD project (/project). The abort guard must
+    // clean them up against /project (the captured pp), not bail early
+    // on the stale-context check and leave them orphaned.
+    resolveAutoIngest(["wiki/concepts/late-partial.md"])
+    await flushMicrotasks(40)
+    await new Promise((r) => setTimeout(r, 0))
+
+    // The partial file written to the OLD project must have been deleted.
+    const deletedPaths = vi.mocked(deleteFile).mock.calls.map(([p]) => String(p))
+    expect(deletedPaths.some((p) => p.includes("/project/") && p.includes("late-partial.md"))).toBe(true)
+    // And the active (project-B) queue must NOT have been mutated by the
+    // orphan's partial result (it should remain empty / not gain the task).
+    expect(getQueue().find((t) => t.sourcePath === "switch-during.md")).toBeUndefined()
+  })
 })
 
 // ── cleanupWrittenFiles — file delete + LanceDB chunk cascade ──────

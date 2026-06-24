@@ -620,6 +620,28 @@ async function processNext(projectId: string): Promise<void> {
 
   try {
     const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, runSignal, next.folderContext)
+
+    // Abort guard (FIRST, before the stale-context bail): if the run
+    // signal aborted mid-write but the promise still resolved late
+    // (a trailing onDone fast-path), `writtenFiles` may be a PARTIAL
+    // set. This must run even when the project has since switched,
+    // because the partial pages were written to THIS run's project
+    // path (`pp`) — pauseQueue's lastWrittenFiles cleanup won't see
+    // them (lastWrittenFiles is only set AFTER this point at line
+    // below). Clean up against the captured `pp`, then bail/throw
+    // without touching the active queue.
+    if (runSignal.aborted) {
+      if (writtenFiles.length > 0) {
+        await cleanupWrittenFiles(pp, writtenFiles)
+      }
+      lastWrittenFiles = []
+      // If the project switched, bail silently (pauseQueue already
+      // persisted the correct state); otherwise throw so the catch
+      // branch keeps the task for retry.
+      if (currentProjectId !== projectId) return
+      throw new Error("Ingest aborted mid-write")
+    }
+
     // Stale-context guard: project switched during the long LLM call.
     // Bail without mutating queue or writing to disk — pauseQueue has
     // already persisted the correct state to the old project's file,
@@ -633,22 +655,6 @@ async function processNext(projectId: string): Promise<void> {
     // as failure so the task stays in the queue and retries.
     if (writtenFiles.length === 0) {
       throw new Error("Ingest produced no output files")
-    }
-
-    // Abort guard: if the signal fired DURING the LLM/stream but the
-    // promise still resolved late (a trailing onDone fast-path), the
-    // returned `writtenFiles` may be a PARTIAL set. Without this check
-    // we'd treat it as full success — null the controller, clear
-    // lastWrittenFiles, drop the task from the queue, and leave the
-    // partial pages on disk with no retry path. Instead: clean up the
-    // partial output and fall through to the catch branch (preserving
-    // retry semantics), matching the cancelTask/cancelAllTasks flow.
-    if (runSignal.aborted) {
-      if (writtenFiles.length > 0) {
-        await cleanupWrittenFiles(pp, writtenFiles)
-      }
-      lastWrittenFiles = []
-      throw new Error("Ingest aborted mid-write")
     }
 
     // Success: remove from queue
