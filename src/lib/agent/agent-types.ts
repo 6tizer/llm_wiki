@@ -234,9 +234,9 @@ export interface AgentAppToolBudget {
 	maxFilesChanged: number;
 	/** Distinct wiki-relative paths already changed in the current Agent run. */
 	changedPaths: string[];
-	/** When true, fan-out tools (wiki_synthesis, run_lint_and_report,
-	 *  caption_source_images) do a true preflight against the known target
-	 *  paths before writing. Threaded from the resource config. */
+	/** Plumbing-only toggle threaded from the resource config for future
+	 * stricter file-count preflight. Current fan-out tools still use the
+	 * unknown-write guard plus postflight enforcement. */
 	maxFilesChangedEnabled?: boolean;
 }
 
@@ -277,9 +277,9 @@ export interface AgentTransportOptions {
 	enableWriteTools?: boolean;
 	maxWriteBytes?: number;
 	maxFilesChanged?: number;
-	/** When true, fan-out app tools enforce the file-count budget BEFORE
-	 *  writing (true preflight) instead of only after. Threaded from
-	 *  AgentResourceConfig.maxFilesChangedEnabled. */
+	/** Plumbing-only toggle threaded to app-tool budgets for future stricter
+	 * file-count preflight. Current fan-out tools still use the unknown-write
+	 * guard plus postflight enforcement. */
 	maxFilesChangedEnabled?: boolean;
 	enableFileCheckpointing?: boolean;
 	sandbox?: {

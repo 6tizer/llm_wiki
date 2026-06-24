@@ -53,8 +53,8 @@ export interface LlmWikiToolContext extends WikiApiClientOptions {
 	enableWriteTools?: boolean;
 	maxWriteBytes?: number;
 	maxFilesChanged?: number;
-	/** Threaded from AgentResourceConfig.maxFilesChangedEnabled. When true,
-	 *  fan-out app tools do a true preflight. */
+	/** Plumbing-only toggle threaded from AgentResourceConfig for future
+	 * stricter file-count preflight. */
 	maxFilesChangedEnabled?: boolean;
 	fs?: FileSystemLike;
 	onWikiChanged?: (payload: WikiChangedPayload) => void;

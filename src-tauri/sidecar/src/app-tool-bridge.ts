@@ -14,8 +14,9 @@ export interface AppToolBudget {
 	maxFilesChanged: number;
 	/** Distinct wiki-relative paths already changed in the current Agent run. */
 	changedPaths: string[];
-	/** When true, fan-out tools do a true preflight against known target
-	 *  paths before writing. Threaded from the resource config. */
+	/** Plumbing-only toggle for future stricter file-count preflight.
+	 * Current fan-out tools still use the unknown-write guard plus
+	 * postflight enforcement. */
 	maxFilesChangedEnabled?: boolean;
 }
 

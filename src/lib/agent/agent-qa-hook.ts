@@ -54,16 +54,29 @@ export interface QaHookFlushOptions {
 
 const pendingQa = new Set<string>();
 const STORAGE_KEY = "llm-wiki:pendingQa";
+const RETRY_STORAGE_KEY = "llm-wiki:pendingQaRetryCounts";
+const MAX_QA_FLUSH_ATTEMPTS = 3;
+const qaRetryCounts = new Map<string, number>();
+
+function removeStorageItem(key: string, emptyValue: string): void {
+	if (typeof localStorage.removeItem === "function") {
+		localStorage.removeItem(key);
+		return;
+	}
+	localStorage.setItem(key, emptyValue);
+}
 
 /** Mark a conversation as needing QA extraction (called on each onDone). */
 export function markConversationDirty(convId: string): void {
 	pendingQa.add(convId);
+	qaRetryCounts.delete(convId);
 	persistPendingQa();
 }
 
 /** Remove a conversation from the pending queue (e.g. when deleted). */
 export function unmarkConversation(convId: string): void {
 	pendingQa.delete(convId);
+	qaRetryCounts.delete(convId);
 	persistPendingQa();
 }
 
@@ -81,6 +94,14 @@ export function getPendingQaIds(): string[] {
 function persistPendingQa(): void {
 	try {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify([...pendingQa]));
+		if (qaRetryCounts.size === 0) {
+			removeStorageItem(RETRY_STORAGE_KEY, "{}");
+		} else {
+			localStorage.setItem(
+				RETRY_STORAGE_KEY,
+				JSON.stringify(Object.fromEntries(qaRetryCounts)),
+			);
+		}
 	} catch {
 		// localStorage unavailable (SSR, private browsing edge case)
 	}
@@ -98,6 +119,18 @@ export function loadPendingQa(): string[] {
 		for (const id of ids) {
 			pendingQa.add(id);
 		}
+		const rawRetryCounts = localStorage.getItem(RETRY_STORAGE_KEY);
+		const retryCounts = rawRetryCounts ? JSON.parse(rawRetryCounts) : {};
+		const parsedRetryCounts =
+			retryCounts && typeof retryCounts === "object" && !Array.isArray(retryCounts)
+				? retryCounts as Record<string, unknown>
+				: {};
+		for (const id of ids) {
+			const count = parsedRetryCounts[id];
+			if (typeof count === "number" && Number.isInteger(count) && count > 0) {
+				qaRetryCounts.set(id, Math.min(count, MAX_QA_FLUSH_ATTEMPTS));
+			}
+		}
 		return ids;
 	} catch {
 		return [];
@@ -107,10 +140,30 @@ export function loadPendingQa(): string[] {
 /** Clear localStorage after all pending QAs are flushed. */
 function clearPersistedPendingQa(): void {
 	try {
-		localStorage.removeItem(STORAGE_KEY);
+		removeStorageItem(STORAGE_KEY, "[]");
+		removeStorageItem(RETRY_STORAGE_KEY, "{}");
 	} catch {
 		// ignore
 	}
+}
+
+function clearPendingConversation(convId: string): void {
+	pendingQa.delete(convId);
+	qaRetryCounts.delete(convId);
+	persistPendingQa();
+	if (pendingQa.size === 0) {
+		clearPersistedPendingQa();
+	}
+}
+
+function recordQaFailure(convId: string): void {
+	const attempts = (qaRetryCounts.get(convId) ?? 0) + 1;
+	if (attempts >= MAX_QA_FLUSH_ATTEMPTS) {
+		clearPendingConversation(convId);
+		return;
+	}
+	qaRetryCounts.set(convId, attempts);
+	persistPendingQa();
 }
 
 // ── Flush (actual QA extraction) ─────────────────────────────────────────────
@@ -135,8 +188,7 @@ export async function flushQaForConversation(
 	// Get messages for this specific conversation
 	const convMessages = messages.filter((m) => m.conversationId === convId);
 	if (convMessages.length === 0) {
-		pendingQa.delete(convId);
-		persistPendingQa();
+		clearPendingConversation(convId);
 		return { ok: true, skipped: true, skipReason: "no-messages" };
 	}
 
@@ -151,19 +203,14 @@ export async function flushQaForConversation(
 		// P1-7: only clear the pending flag on SUCCESS. Previously this
 		// lived in `finally`, so a thrown runQaExtraction marked the
 		// conversation clean and the QA page was silently lost (no retry).
-		// Move the clear here so a failure leaves it pending for the next
-		// flushAllPendingQa / markConversationDirty cycle.
-		pendingQa.delete(convId);
-		persistPendingQa();
-		if (pendingQa.size === 0) {
-			clearPersistedPendingQa();
-		}
+			// Move the clear here so a failure can retry until the cap below.
+		clearPendingConversation(convId);
 		return result;
 	} catch (err) {
-		// On failure, leave the conversation pending so it retries. Still
-		// persist the (unchanged) set so the on-disk state is consistent
-		// with memory if the app closes before the next flush.
-		persistPendingQa();
+		// On transient failures, leave the conversation pending so it retries.
+		// Persistent failures are capped so startup/switch hooks cannot retry
+		// the same broken extraction forever.
+		recordQaFailure(convId);
 		throw err;
 	}
 }
