@@ -1,6 +1,9 @@
 # Agent Sidecar — 基于 Claude Agent SDK 的智能代理系统
 
-> 类型：总规划 | 创建：2026-05-27 | 状态：进行中
+> 类型：总规划 | 创建：2026-05-27 | 状态：历史总规划
+> 当前入口：[Plans Index](./README.md)、[Phase 6 upstream sync](./upstream-sync-phase6.md)、[Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)
+
+> 历史状态提示：本文保留 Phase 1-5/6 的设计背景和已完成证据，但不再作为当前执行顺序的唯一来源。旧 Phase 5/6 状态若与 `docs/plans/README.md`、`upstream-sync-phase6.md` 或 `agent-sidecar-phase6.1.md` 冲突，以当前计划索引为准。
 
 ## 概述
 
@@ -116,7 +119,7 @@ Claude Agent SDK sandbox 可作为以后增强 Claude Code 内置工具隔离的
 - Session resume/fork、权限审批、checkpoint rewind 的用户交互
 - 成本/用量统计面板
 
-### Phase 5: Agent 稳定性、资源控制与打包优化 — 待开始
+### Phase 5: Agent 稳定性、资源控制与打包优化 — 开发完成，待 UI 验证
 - 详见 [Phase 5 计划](./agent-sidecar-phase5.md)
 - **5a Session 行为修复**：compact/resume 摘要过滤、resume 意图保护、rewind 生命周期修复
 - **5b 资源限制与配置**：maxTurns/maxFilesChanged 配置化、session 存储整理

@@ -8,6 +8,8 @@ Swift、SwiftUI、AppKit 和 iOS 只作为远期 native architecture ADR 议题�
 
 Mac-only active maintenance 不等于立即 native rewrite。近期目标是把现有 Mac desktop app 打磨稳定，而不是拆掉 Tauri 架构。
 
+OKF 兼容、upstream `v0.5.x` Chat Agent Router 对齐和 Claude Agent SDK latest stable 对齐都不改变近期技术主线。它们分别属于知识包格式兼容、普通 Chat/RAG/UI 对齐和 sidecar SDK 维护，不是 native rewrite 触发条件。
+
 ## Current Architecture
 
 | Layer | Current choice |
@@ -30,7 +32,7 @@ Mac-only active maintenance 不等于立即 native rewrite。近期目标是把�
 只有当以下条件同时成立时，才重新打开 native rewrite ADR：
 
 - Mac-only baseline 已完成。
-- Phase 6 upstream v0.5.0 P0/P1 手动同步完成。
+- Phase 6 upstream v0.5.x P0/P1 手动同步完成。
 - Phase 7 Agent SDK productization 的核心体验稳定。
 - Tauri 架构出现明确、可量化、无法局部修复的产品限制。
 
