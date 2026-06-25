@@ -62,6 +62,10 @@ describe("source-lifecycle path helpers", () => {
     expect(isIngestableSourcePath("/project/raw/sources/.cache/report.pdf.txt")).toBe(false)
   })
 
+  it("accepts legacy .doc files as ingestable sources", () => {
+    expect(isIngestableSourcePath("/external/report.doc")).toBe(true)
+  })
+
   it("derives folder context from absolute raw/sources paths without leaking the project prefix", () => {
     expect(
       folderContextForSourcePath("/tmp/project/raw/sources/reports/2026/report.pdf"),
@@ -118,6 +122,26 @@ describe("source-lifecycle path helpers", () => {
         folderContext: "imported",
       },
     ])
+  })
+
+  it("rejects importing the current project folder or its managed subfolders", async () => {
+    await expect(
+      importSourceFolder(
+        { id: "p1", name: "Project", path: "/project" },
+        "/project/raw/sources",
+        {
+          provider: "openai",
+          endpoint: "https://api.example.com/v1",
+          apiKey: "key",
+          model: "model",
+          customModel: "",
+          reasoning: { enabled: false, effort: "low" },
+        } as never,
+      ),
+    ).rejects.toThrow(/Cannot import the project folder/)
+
+    expect(mocks.listDirectory).not.toHaveBeenCalled()
+    expect(mocks.copyFile).not.toHaveBeenCalled()
   })
 
   it("filters single-file imports using the original source path before copying", async () => {

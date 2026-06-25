@@ -34,6 +34,7 @@ interface WikiReaderProps {
 export function WikiReader({ body }: WikiReaderProps) {
 	const project = useWikiStore((s) => s.project);
 	const fileTree = useWikiStore((s) => s.fileTree);
+	const selectedFile = useWikiStore((s) => s.selectedFile);
 	const setSelectedFile = useWikiStore((s) => s.setSelectedFile);
 
 	const transformed = useMemo(() => transformWikilinks(body), [body]);
@@ -42,6 +43,9 @@ export function WikiReader({ body }: WikiReaderProps) {
 	const htmlLang = getHtmlLang(renderLanguage);
 	const projectPath = project ? normalizePath(project.path) : null;
 	const wikiRoot = projectPath ? `${projectPath}/wiki` : null;
+	const currentFileDir = selectedFile
+		? normalizePath(selectedFile).replace(/\/[^/]*$/, "")
+		: null;
 
 	function handleAnchorClick(
 		e: React.MouseEvent<HTMLAnchorElement>,
@@ -119,7 +123,7 @@ export function WikiReader({ body }: WikiReaderProps) {
 						<img
 							src={
 								typeof src === "string"
-									? resolveMarkdownImageSrc(src, projectPath)
+									? resolveMarkdownImageSrc(src, projectPath, currentFileDir)
 									: undefined
 							}
 							data-mdsrc={typeof src === "string" ? src : undefined}

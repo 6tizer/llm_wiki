@@ -38,6 +38,7 @@ vi.mock("@/lib/project-store", () => ({
 }))
 
 import {
+  isProjectManagedScheduledImportPath,
   resolveImportPath,
   scheduledImportDestinationForFile,
   scanAndImport,
@@ -120,6 +121,13 @@ describe("scheduled import path handling", () => {
         `${projectPath}/raw/sources/.cache/source.pdf.txt`,
       ),
     ).toBe(true)
+  })
+
+  it("detects project-managed scheduled import roots", () => {
+    expect(isProjectManagedScheduledImportPath(projectPath, projectPath)).toBe(true)
+    expect(isProjectManagedScheduledImportPath(projectPath, `${projectPath}/raw/sources`)).toBe(true)
+    expect(isProjectManagedScheduledImportPath(projectPath, "/Users/me")).toBe(true)
+    expect(isProjectManagedScheduledImportPath(projectPath, "/Users/me/inbox")).toBe(false)
   })
 })
 
@@ -211,5 +219,14 @@ describe("scanAndImport failure handling", () => {
     expect(mocks.getFileMd5).not.toHaveBeenCalled()
     expect(mocks.copyFile).not.toHaveBeenCalled()
     expect(mocks.enqueueSourceIngest).not.toHaveBeenCalled()
+  })
+
+  it("skips self-referential project paths before scanning", async () => {
+    await scanAndImport(project, `${project.path}/raw/sources`)
+
+    expect(mocks.listDirectory).not.toHaveBeenCalled()
+    expect(mocks.copyFile).not.toHaveBeenCalled()
+    expect(mocks.enqueueSourceIngest).not.toHaveBeenCalled()
+    expect(mocks.writeFileAtomic).not.toHaveBeenCalled()
   })
 })

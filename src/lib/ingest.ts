@@ -8,6 +8,7 @@ import { useReviewStore } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import {
   sourceIdentityForPath,
+  sourceSummarySlugCandidatesFromIdentity,
   sourceSummarySlugFromIdentity,
 } from "@/lib/source-identity"
 import { parseSources, writeSources } from "@/lib/sources-merge"
@@ -23,6 +24,11 @@ import {
 } from "@/lib/extract-source-images"
 import { captionMarkdownImages } from "@/lib/image-caption-pipeline"
 import type { MultimodalConfig } from "@/stores/wiki-store"
+import {
+  parseWikiSchemaRouting,
+  validateWikiPageRouting,
+  type WikiSchemaRouting,
+} from "@/lib/wiki-schema"
 
 
 function appendSavedImageRefsForCaption(content: string, images: SavedImage[]): string {
@@ -581,6 +587,7 @@ async function autoIngestImpl(
     tryReadFile(`${pp}/wiki/index.md`),
     tryReadFile(`${pp}/wiki/overview.md`),
   ])
+  const schemaRouting = parseWikiSchemaRouting(schema)
 
   // ── Low-quality guard: skip placeholder/TOC/stub sources ──
   const lqCheck = isLowQualitySource(fileName, sourceContent)
@@ -979,6 +986,7 @@ async function autoIngestImpl(
     sourceIdentity,
     sourceSummaryPath,
     signal,
+    Object.keys(schemaRouting.typeDirs).length > 0 ? schemaRouting : null,
   )
 
   // Surface parser / writer warnings to the activity panel so users
@@ -1215,12 +1223,15 @@ async function migrateLegacySourceSummaryIfSafe(
   if (!normalizedIdentity.includes("/")) return
 
   const basename = getFileName(normalizedIdentity)
-  const legacySlug = basename.replace(/\.[^.]+$/, "")
-  const legacyPath = `wiki/sources/${legacySlug}.md`
-  if (legacyPath === sourceSummaryPath) return
+  const legacyBasenamePath = `wiki/sources/${basename.replace(/\.[^.]+$/, "")}.md`
+  const legacyPaths = Array.from(new Set([
+    legacyBasenamePath,
+    ...sourceSummarySlugCandidatesFromIdentity(sourceIdentity)
+      .map((slug) => `wiki/sources/${slug}.md`),
+  ])).filter((path) => path !== sourceSummaryPath)
+  if (legacyPaths.length === 0) return
 
   const pp = normalizePath(projectPath)
-  const legacyFullPath = `${pp}/${legacyPath}`
   const canonicalFullPath = `${pp}/${sourceSummaryPath}`
 
   const matchingIdentities = await matchingRawSourceIdentitiesForBasename(pp, basename)
@@ -1239,23 +1250,33 @@ async function migrateLegacySourceSummaryIfSafe(
     return
   }
 
-  const legacyContent = await tryReadFile(legacyFullPath)
+  let legacyPath: string | null = null
+  let legacyContent = ""
+  for (const candidate of legacyPaths) {
+    const content = await tryReadFile(`${pp}/${candidate}`)
+    if (content) {
+      legacyPath = candidate
+      legacyContent = content
+      break
+    }
+  }
   if (!legacyContent) return
 
   const sources = parseSources(legacyContent)
   const basenameKey = basename.toLowerCase()
-  const legacyOnlyReferencesBasename =
+  const legacyReferencesCurrentSource =
     sources.length > 0 &&
-    sources.every(
-      (source) =>
-        !normalizePath(source).includes("/") &&
-        getFileName(source).toLowerCase() === basenameKey,
-    )
-  if (!legacyOnlyReferencesBasename) return
+    sources.every((source) => {
+      const normalized = normalizePath(source)
+      const key = normalized.toLowerCase()
+      if (key === normalizedIdentityKey) return true
+      return !normalized.includes("/") && getFileName(source).toLowerCase() === basenameKey
+    })
+  if (!legacyReferencesCurrentSource) return
 
   try {
     await writeFile(canonicalFullPath, canonicalizeSourcesField(legacyContent, sourceIdentity))
-    await deleteFile(legacyFullPath)
+    if (legacyPath) await deleteFile(`${pp}/${legacyPath}`)
   } catch (err) {
     console.warn(
       `[ingest] failed to migrate legacy source summary ${legacyPath} -> ${sourceSummaryPath}:`,
@@ -1308,6 +1329,7 @@ async function writeFileBlocks(
   sourceFileName: string,
   sourceSummaryPath?: string,
   signal?: AbortSignal,
+  schemaRouting?: WikiSchemaRouting | null,
 ): Promise<{ writtenPaths: string[]; warnings: string[]; hardFailures: string[] }> {
   const { blocks, warnings: parseWarnings } = parseFileBlocks(text)
   const warnings = [...parseWarnings]
@@ -1341,6 +1363,16 @@ async function writeFileBlocks(
     let content = sanitizeIngestedFileContent(rawContent)
     if (!isLogPath(relativePath) && !isListingPath(relativePath)) {
       content = canonicalizeSourcesField(content, sourceFileName)
+    }
+
+    if (schemaRouting) {
+      const issue = validateWikiPageRouting(relativePath, content, schemaRouting)
+      if (issue) {
+        const msg = `Dropped "${relativePath}" — ${issue.message}`
+        console.warn(`[ingest:schema] ${msg}`)
+        warnings.push(msg)
+        continue
+      }
     }
 
     // Language guard: reject individual FILE blocks whose body contradicts

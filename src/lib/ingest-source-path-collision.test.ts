@@ -218,6 +218,49 @@ describe("autoIngest source summary paths", () => {
     expect(allSummaries).toContain("project-b/config.yaml")
   })
 
+  it("drops generated pages whose frontmatter type violates schema routing", async () => {
+    if (!tmp) throw new Error("missing temp project")
+    sourceMarkers = ["project-a config"]
+    generationSuffix = [
+      "",
+      "---FILE: wiki/concepts/bad-source.md---",
+      "---",
+      "type: source",
+      "title: Bad Source",
+      "---",
+      "",
+      "# Bad Source",
+      "",
+      "This should not be written under concepts.",
+      "---END FILE---",
+    ].join("\n")
+    await writeFileRaw(
+      `${tmp.path}/schema.md`,
+      [
+        "# Schema",
+        "",
+        "## Page Types",
+        "",
+        "| Type | Directory | Purpose |",
+        "| ---- | --------- | ------- |",
+        "| source | wiki/sources/ | Source summaries |",
+        "| concept | wiki/concepts/ | Concepts |",
+      ].join("\n"),
+    )
+
+    await autoIngest(
+      tmp.path,
+      `${tmp.path}/raw/sources/project-a/config.yaml`,
+      useWikiStore.getState().llmConfig,
+      undefined,
+      "project-a",
+    )
+
+    await expect(
+      fs.access(path.join(tmp.path, "wiki", "concepts", "bad-source.md")),
+    ).rejects.toThrow()
+  })
+
   it("embeds nested pages with structural basenames while skipping root structural pages", async () => {
     if (!tmp) throw new Error("missing temp project")
     const projectPath = tmp.path
