@@ -15,6 +15,19 @@ const UI_LANGUAGES = [
   { value: "zh", label: "中文" },
 ]
 
+/** Parse a zoom percent input and fall back to the current level when invalid. */
+export function parseZoomPercentInput(
+  inputText: string,
+  fallbackLevel: number,
+): number {
+  const raw = inputText.replace(/[^0-9.]/g, "")
+  const parsed = Number.parseFloat(raw)
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return clampZoomLevel(parsed / 100)
+  }
+  return fallbackLevel
+}
+
 export function InterfaceSection({ draft, setDraft }: Props) {
   const { t } = useTranslation()
   const level = draft.zoomLevel
@@ -29,10 +42,9 @@ export function InterfaceSection({ draft, setDraft }: Props) {
   }
 
   const commitInput = () => {
-    const raw = inputText.replace(/[^0-9.]/g, "")
-    const parsed = Number.parseFloat(raw)
-    if (Number.isFinite(parsed) && parsed > 0) {
-      setDraft("zoomLevel", clampZoomLevel(parsed / 100))
+    const nextLevel = parseZoomPercentInput(inputText, level)
+    if (nextLevel !== level) {
+      setDraft("zoomLevel", nextLevel)
       return
     }
     setInputText(String(Math.round(level * 100)))

@@ -101,60 +101,60 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
       <div className="flex min-h-0 flex-1">
         <IconSidebar onSwitchProject={onSwitchProject} />
         <div ref={containerRef} className="flex min-w-0 flex-1 overflow-hidden">
-        {showLeftPanel && (
-          <>
-            {/* Left: File tree + Activity */}
-            <div
-              className="flex shrink-0 flex-col overflow-hidden border-r"
-              style={{ width: leftWidth }}
-            >
-              <div className="flex-1 overflow-hidden">
-                <SidebarPanel />
+          {showLeftPanel && (
+            <>
+              {/* Left: File tree + Activity */}
+              <div
+                className="flex shrink-0 flex-col overflow-hidden border-r"
+                style={{ width: leftWidth }}
+              >
+                <div className="flex-1 overflow-hidden">
+                  <SidebarPanel />
+                </div>
+                <ActivityPanel />
               </div>
-              <ActivityPanel />
-            </div>
-            <div
-              className="w-1.5 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/30 active:bg-primary/40"
-              onMouseDown={startDrag("left")}
-            />
-          </>
-        )}
+              <div
+                className="w-1.5 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/30 active:bg-primary/40"
+                onMouseDown={startDrag("left")}
+              />
+            </>
+          )}
 
-        {/* Center: Chat or view (sources/settings/review) */}
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <ErrorBoundary>
-            <ContentArea />
-          </ErrorBoundary>
-        </div>
+          {/* Center: Chat or view (sources/settings/review) */}
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <ErrorBoundary>
+              <ContentArea />
+            </ErrorBoundary>
+          </div>
 
-        {/* Right panels */}
-        {hasRightPanel && (
-          <>
-            <div
-              className="w-1.5 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/30 active:bg-primary/40"
-              onMouseDown={startDrag("right")}
-            />
-            <div
-              className="flex shrink-0 flex-col overflow-hidden border-l"
-              style={{ width: rightWidth }}
-            >
-              <ErrorBoundary>
-                {/* File preview on top (if file selected) */}
-                {selectedFile && (
-                  <div className={researchPanelOpen ? "flex-1 overflow-hidden border-b" : "flex-1 overflow-hidden"}>
-                    <PreviewPanel />
-                  </div>
-                )}
-                {/* Research panel on bottom (if open) */}
-                {researchPanelOpen && (
-                  <div className={selectedFile ? "h-1/2 shrink-0 overflow-hidden" : "flex-1 overflow-hidden"}>
-                    <ResearchPanel />
-                  </div>
-                )}
-              </ErrorBoundary>
-            </div>
-          </>
-        )}
+          {/* Right panels */}
+          {hasRightPanel && (
+            <>
+              <div
+                className="w-1.5 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/30 active:bg-primary/40"
+                onMouseDown={startDrag("right")}
+              />
+              <div
+                className="flex shrink-0 flex-col overflow-hidden border-l"
+                style={{ width: rightWidth }}
+              >
+                <ErrorBoundary>
+                  {/* File preview on top (if file selected) */}
+                  {selectedFile && (
+                    <div className={researchPanelOpen ? "flex-1 overflow-hidden border-b" : "flex-1 overflow-hidden"}>
+                      <PreviewPanel />
+                    </div>
+                  )}
+                  {/* Research panel on bottom (if open) */}
+                  {researchPanelOpen && (
+                    <div className={selectedFile ? "h-1/2 shrink-0 overflow-hidden" : "flex-1 overflow-hidden"}>
+                      <ResearchPanel />
+                    </div>
+                  )}
+                </ErrorBoundary>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
