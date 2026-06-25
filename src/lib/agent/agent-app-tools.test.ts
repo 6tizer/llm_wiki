@@ -774,10 +774,14 @@ describe("runAgentAppTool ingest parity tools", () => {
         ...useWikiStore.getState().llmConfig,
         apiKey: "llm-secret",
       },
+      mineruConfig: {
+        ...useWikiStore.getState().mineruConfig,
+        token: "mineru-secret",
+      },
     })
     connectionTestsMock.testLlmConnection.mockResolvedValue({
       ok: false,
-      message: "provider rejected llm-secret",
+      message: "provider rejected llm-secret and mineru-secret",
     })
 
     const response = await runAgentAppTool("test_provider_connection", {})
@@ -787,7 +791,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     )
     expect(response.result).toEqual({
       ok: false,
-      message: "provider rejected REDACTED",
+      message: "provider rejected REDACTED and REDACTED",
     })
   })
 })

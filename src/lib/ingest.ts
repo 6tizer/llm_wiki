@@ -1,4 +1,4 @@
-import { readFile, writeFile, fileExists, deleteFile, listDirectory } from "@/commands/fs"
+import { readFile, writeFile, fileExists, deleteFile, listDirectory, getFileMd5 } from "@/commands/fs"
 import { streamChat } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -16,6 +16,7 @@ import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
 import { sanitizeIngestedFileContent } from "@/lib/ingest-sanitize"
 import { mergePageContent } from "@/lib/page-merge"
 import { withProjectLock } from "@/lib/project-mutex"
+import { parseWithMineru } from "@/lib/mineru"
 import type { FileNode } from "@/types/wiki"
 import {
   extractAndSaveSourceImages,
@@ -54,6 +55,132 @@ function promptImageUrlToAbs(projectPath: string, url: string): string {
 
 function stripWikiMediaAbsPaths(projectPath: string, content: string): string {
   return content.split(`${projectPath}/wiki/media/`).join("media/")
+}
+
+function stripMarkdownImageRefs(content: string): string {
+  return content
+    .replace(/!\[\[[^\]]+]\]/g, " ")
+    .replace(/!\[[^\]]*]\(((?:[^()]|\([^()]*\))*)\)/g, " ")
+}
+
+interface ParsedIngestSource {
+  content: string
+  parser: string
+  cacheContent: string
+}
+
+interface IngestSourcePlan {
+  parser: string
+  cacheContent: string
+  content?: string
+}
+
+function safeMineruParsedCacheSegment(segment: string): string {
+  const cleaned = segment
+    .replace(/[<>:"|?*\x00-\x1f]/g, "_")
+    .replace(/[\\/]+/g, "_")
+    .replace(/^\.+$/, "_")
+    .replace(/[. ]+$/g, "_")
+  return cleaned || "source"
+}
+
+function mineruParsedMarkdownCachePath(
+  projectPath: string,
+  sourceSummarySlug: string,
+  parser: string,
+): string {
+  const safeSlug = safeMineruParsedCacheSegment(sourceSummarySlug)
+  const safeParser = safeMineruParsedCacheSegment(parser)
+  return `${normalizePath(projectPath)}/.llm-wiki/mineru/${safeSlug}-${safeParser}.md`
+}
+
+async function readMineruParsedMarkdownCache(
+  projectPath: string,
+  sourceSummarySlug: string,
+  parser: string,
+): Promise<string | null> {
+  if (!parser.startsWith("mineru:")) return null
+  try {
+    return await readFile(mineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser))
+  } catch {
+    return null
+  }
+}
+
+async function saveMineruParsedMarkdownCache(
+  projectPath: string,
+  sourceSummarySlug: string,
+  parser: string,
+  content: string,
+): Promise<void> {
+  if (!parser.startsWith("mineru:")) return
+  try {
+    await writeFile(mineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser), content)
+  } catch (err) {
+    console.warn(
+      "[MinerU] failed to save parsed Markdown cache:",
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
+function isPdfSourcePath(sourcePath: string): boolean {
+  return getFileName(sourcePath).split(".").pop()?.toLowerCase() === "pdf"
+}
+
+async function parseSourceForIngest(
+  projectPath: string,
+  sourcePath: string,
+  sourceSummarySlug: string,
+  activityId: string,
+  signal?: AbortSignal,
+): Promise<ParsedIngestSource> {
+  const mineruConfig = useWikiStore.getState().mineruConfig
+  if (!mineruConfig.enabled || !isPdfSourcePath(sourcePath)) {
+    const content = await tryReadFile(sourcePath)
+    return { content, parser: "local", cacheContent: content }
+  }
+
+  const activity = useActivityStore.getState()
+  const parser = `mineru:${mineruConfig.modelVersion}`
+  try {
+    const content = await parseWithMineru(
+      mineruConfig,
+      sourcePath,
+      undefined,
+      (detail) => activity.updateItem(activityId, { detail }),
+      signal,
+      { projectPath, sourceSummarySlug },
+    )
+    await saveMineruParsedMarkdownCache(projectPath, sourceSummarySlug, parser, content)
+    return { content, parser, cacheContent: await mineruCacheContent(sourcePath) }
+  } catch (err) {
+    if (signal?.aborted) throw err
+    const message = err instanceof Error ? err.message : String(err)
+    console.warn(`[MinerU] parsing failed; falling back to local PDF parser: ${message}`)
+    activity.updateItem(activityId, {
+      detail: `MinerU failed; falling back to local PDF parser: ${message}`,
+    })
+    const content = await tryReadFile(sourcePath)
+    return { content, parser: "local", cacheContent: content }
+  }
+}
+
+async function mineruCacheContent(sourcePath: string): Promise<string> {
+  return `mineru-source-md5:${await getFileMd5(sourcePath)}`
+}
+
+async function planSourceForIngestCache(sourcePath: string): Promise<IngestSourcePlan> {
+  const mineruConfig = useWikiStore.getState().mineruConfig
+  if (mineruConfig.enabled && isPdfSourcePath(sourcePath)) {
+    return {
+      parser: `mineru:${mineruConfig.modelVersion}`,
+      cacheContent: await mineruCacheContent(sourcePath),
+    }
+  }
+
+  const content = await tryReadFile(sourcePath)
+  return { parser: "local", cacheContent: content, content }
 }
 
 
@@ -580,14 +707,61 @@ async function autoIngestImpl(
     filesWritten: [],
   })
 
-  const [sourceContent, schema, purpose, index, overview] = await Promise.all([
-    tryReadFile(sp),
+  let [sourcePlan, schema, purpose, index, overview] = await Promise.all([
+    planSourceForIngestCache(sp),
     tryReadFile(`${pp}/schema.md`),
     tryReadFile(`${pp}/purpose.md`),
     tryReadFile(`${pp}/wiki/index.md`),
     tryReadFile(`${pp}/wiki/overview.md`),
   ])
   const schemaRouting = parseWikiSchemaRouting(schema)
+
+  let precheckedCachedFiles: string[] | null = null
+  if (sourcePlan.content === undefined) {
+    const cachedFiles = await checkIngestCache(
+      pp,
+      sourceIdentity,
+      sourcePlan.cacheContent,
+      sourcePlan.parser,
+    )
+    console.log(
+      `[ingest:diag] cache pre-check for "${sourceIdentity}":`,
+      cachedFiles === null ? "MISS (parse source)" : `HIT (${cachedFiles.length} cached files)`,
+    )
+    if (cachedFiles !== null) {
+      const cachedMineruMarkdown = await readMineruParsedMarkdownCache(pp, sourceSummarySlug, sourcePlan.parser)
+      if (cachedMineruMarkdown !== null) {
+        precheckedCachedFiles = cachedFiles
+        sourcePlan = { ...sourcePlan, content: cachedMineruMarkdown }
+      } else {
+        // Valid ingest cache means the PDF is unchanged. If the local
+        // parsed Markdown side cache is gone, prefer privacy/cost safety:
+        // do not re-upload to MinerU just to repair media references.
+        // A later parse miss, model change, or manual cache cleanup can
+        // rebuild this side cache.
+        console.warn(
+          `[MinerU] ingest cache hit for "${sourceIdentity}" but parsed Markdown cache is missing; skipping media repair to avoid cloud re-parse`,
+        )
+        activity.updateItem(activityId, {
+          status: "done",
+          detail: `Skipped (unchanged) — ${cachedFiles.length} files from previous ingest; MinerU parsed cache missing, skipped media repair`,
+          filesWritten: cachedFiles,
+        })
+        return cachedFiles
+      }
+    }
+  }
+
+  const parsedSource = sourcePlan.content === undefined
+    ? await parseSourceForIngest(pp, sp, sourceSummarySlug, activityId, signal)
+    : {
+        content: sourcePlan.content,
+        parser: sourcePlan.parser,
+        cacheContent: sourcePlan.cacheContent,
+      }
+  const sourceContent = parsedSource.content
+  const sourceParser = parsedSource.parser
+  const sourceCacheContent = parsedSource.cacheContent
 
   // ── Low-quality guard: skip placeholder/TOC/stub sources ──
   const lqCheck = isLowQualitySource(fileName, sourceContent)
@@ -607,13 +781,32 @@ async function autoIngestImpl(
   // re-running them costs only the extraction time and converges the
   // source-summary page on the current pipeline's contract regardless
   // of when the file was first ingested.
-  const cachedFiles = await checkIngestCache(pp, sourceIdentity, sourceContent)
-  console.log(`[ingest:diag] cache check for "${sourceIdentity}":`, cachedFiles === null ? "MISS (full pipeline)" : `HIT (${cachedFiles.length} cached files)`)
+  const cachedFiles = precheckedCachedFiles ?? await checkIngestCache(
+    pp,
+    sourceIdentity,
+    sourceCacheContent,
+    sourceParser,
+  )
+  console.log(
+    `[ingest:diag] cache check for "${sourceIdentity}":`,
+    cachedFiles === null ? "MISS (full pipeline)" : `HIT (${cachedFiles.length} cached files)`,
+  )
   if (cachedFiles !== null) {
     try {
       console.log(`[ingest:diag] cache-hit branch: starting image extraction for ${sp}`)
-      let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
-      const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
+      const mineruMarkdownImageOptions = sourceParser.startsWith("mineru:")
+        ? { baseDir: `${pp}/wiki`, reuseExistingWikiMedia: true }
+        : undefined
+      let savedImages = sourceParser.startsWith("mineru:")
+        ? []
+        : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+      const markdownImages = await extractAndSaveMarkdownImages(
+        pp,
+        sp,
+        sourceContent,
+        sourceSummarySlug,
+        mineruMarkdownImageOptions,
+      )
       savedImages = [...savedImages, ...markdownImages]
       console.log(`[ingest:diag] cache-hit branch: got ${savedImages.length} image(s)`)
       if (savedImages.length > 0) {
@@ -705,8 +898,19 @@ async function autoIngestImpl(
   // and returns [] on any error.
   activity.updateItem(activityId, { detail: "Extracting embedded images..." })
   console.log(`[ingest:diag] full-pipeline branch: starting image extraction for ${sp}`)
-  let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
-  const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
+  const mineruMarkdownImageOptions = sourceParser.startsWith("mineru:")
+    ? { baseDir: `${pp}/wiki`, reuseExistingWikiMedia: true }
+    : undefined
+  let savedImages = sourceParser.startsWith("mineru:")
+    ? []
+    : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
+  const markdownImages = await extractAndSaveMarkdownImages(
+    pp,
+    sp,
+    sourceContent,
+    sourceSummarySlug,
+    mineruMarkdownImageOptions,
+  )
   savedImages = [...savedImages, ...markdownImages]
   console.log(`[ingest:diag] full-pipeline branch: got ${savedImages.length} image(s)`)
   if (savedImages.length > 0) {
@@ -761,13 +965,9 @@ async function autoIngestImpl(
   const mmCfg = useWikiStore.getState().multimodalConfig
   const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
   if (!mmCfg.enabled && savedImages.length > 0) {
-    // Strip `![alt](url)` references — match the same regex shape
-    // we use elsewhere for image refs. Preserve a single space
-    // where the ref used to sit so adjacent words don't fuse.
-    enrichedSourceContent = sourceContent.replace(
-      /!\[[^\]]*\]\([^)\s]+\)/g,
-      " ",
-    )
+    // Strip markdown image references. Preserve a single space where
+    // each ref used to sit so adjacent words do not fuse.
+    enrichedSourceContent = stripMarkdownImageRefs(sourceContent)
     console.log(
       `[ingest:caption] disabled — stripped image refs from sourceContent (${savedImages.length} image(s) won't appear in wiki pages)`,
     )
@@ -1082,7 +1282,7 @@ async function autoIngestImpl(
   // as the hardFailure branch above. The caller's abort path owns
   // cleaning up the partial files; here we only refuse to freeze them.
   if (writtenPaths.length > 0 && hardFailures.length === 0 && !signal?.aborted) {
-    await saveIngestCache(pp, sourceIdentity, sourceContent, writtenPaths)
+    await saveIngestCache(pp, sourceIdentity, sourceCacheContent, writtenPaths, sourceParser)
     if (longSourceCheckpointPath) {
       await clearLongSourceCheckpoint(longSourceCheckpointPath)
     }

@@ -32,6 +32,13 @@ export interface SavedImage {
   sha256: string
 }
 
+export interface ExtractMarkdownImagesOptions {
+  /** Directory used to resolve relative markdown image refs. Defaults to source file dir. */
+  baseDir?: string
+  /** Treat existing `wiki/media/<slug>/...` refs as already-imported images instead of copying them. */
+  reuseExistingWikiMedia?: boolean
+}
+
 /** File extensions we currently extract images from. Excludes XLS/XLSX
  *  because spreadsheets generally don't have charts as images (charts
  *  are XML-rendered shapes, not embedded raster). Adding them later is
@@ -203,13 +210,14 @@ export async function extractAndSaveMarkdownImages(
   sourcePath: string,
   markdown: string,
   slugOverride?: string,
+  options: ExtractMarkdownImagesOptions = {},
 ): Promise<SavedImage[]> {
   const refs = findLocalMarkdownImageRefs(markdown)
   if (refs.length === 0) return []
 
   const pp = normalizePath(projectPath)
   const sp = normalizePath(sourcePath)
-  const sourceDir = dirname(sp)
+  const sourceDir = normalizePath(options.baseDir ?? dirname(sp))
   const slug = slugOverride ?? getFileName(sp).replace(/\.[^.]+$/, "")
   const destDir = `${pp}/wiki/media/${slug}`
   const images: SavedImage[] = []
@@ -229,6 +237,22 @@ export async function extractAndSaveMarkdownImages(
     )
     try {
       if (!(await fileExists(abs))) continue
+      const wikiMediaPrefix = `${pp}/wiki/media/${slug}/`
+      if (options.reuseExistingWikiMedia && abs.startsWith(wikiMediaPrefix)) {
+        const relPath = abs.slice(`${pp}/wiki/`.length)
+        images.push({
+          index: images.length + 1,
+          mimeType: imageMimeType(abs),
+          page: null,
+          width: 0,
+          height: 0,
+          relPath,
+          absPath: abs,
+          sha256: await sha256OfFile(abs),
+        })
+        continue
+      }
+
       const destName = uniqueDestName(images.length + 1, abs)
       const dest = `${destDir}/${destName}`
       await copyFile(abs, dest)

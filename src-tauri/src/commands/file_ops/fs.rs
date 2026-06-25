@@ -1008,6 +1008,44 @@ pub async fn write_file(
 }
 
 #[tauri::command]
+pub async fn write_file_base64(
+    path: String,
+    base64: String,
+    state: State<'_, ProjectRootState>,
+) -> Result<(), String> {
+    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
+    write_file_base64_validated(validated, path, base64).await
+}
+
+async fn write_file_base64_validated(
+    validated: PathBuf,
+    path_orig: String,
+    base64: String,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    tauri::async_runtime::spawn_blocking(move || {
+        run_guarded("write_file_base64", || {
+            let bytes = B64
+                .decode(base64.as_bytes())
+                .map_err(|e| format!("Failed to decode base64 for '{}': {}", path_orig, e))?;
+            let p = validated.as_path();
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent dirs for '{}': {}", path_orig, e))?;
+            }
+            file_sync::mark_app_write_path(p);
+            fs::write(p, bytes)
+                .map_err(|e| format!("Failed to write file '{}': {}", path_orig, e))?;
+            file_sync::mark_app_write_path(p);
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("write_file_base64 blocking task join error: {e}"))?
+}
+
+#[tauri::command]
 pub async fn write_file_atomic(
     path: String,
     contents: String,
@@ -1587,18 +1625,23 @@ pub async fn get_file_md5(
     path: String,
     state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
-    use md5::{Digest, Md5};
     let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
+    get_file_md5_validated(validated, path).await
+}
+
+async fn get_file_md5_validated(validated: PathBuf, path_orig: String) -> Result<String, String> {
+    use md5::{Digest, Md5};
+
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("get_file_md5", || {
             let mut file = fs::File::open(&validated)
-                .map_err(|e| format!("Failed to open file '{}': {}", path, e))?;
+                .map_err(|e| format!("Failed to open file '{}': {}", path_orig, e))?;
             let mut hasher = Md5::new();
             let mut buffer = [0u8; 64 * 1024];
             loop {
                 let read = file
                     .read(&mut buffer)
-                    .map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
+                    .map_err(|e| format!("Failed to read file '{}': {}", path_orig, e))?;
                 if read == 0 {
                     break;
                 }
@@ -1631,6 +1674,48 @@ mod tests {
         let mut f = fs::File::create(&path).unwrap();
         f.write_all(bytes).unwrap();
         path.to_string_lossy().to_string()
+    }
+
+    fn tmp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{}-{}",
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_file_base64_validated_writes_decoded_bytes() {
+        let path = tmp_path("write-file-base64").join("nested").join("image.bin");
+        let result = write_file_base64_validated(
+            path.clone(),
+            path.to_string_lossy().to_string(),
+            "aW1hZ2UtYnl0ZXM=".to_string(),
+        )
+        .await;
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(fs::read(&path).unwrap(), b"image-bytes");
+        let _ = fs::remove_file(&path);
+        if let Some(parent) = path.parent().and_then(|p| p.parent()) {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_file_md5_validated_hashes_file_contents() {
+        let path = tmp_path("get-file-md5.txt");
+        fs::write(&path, b"hello").unwrap();
+
+        let hash = get_file_md5_validated(path.clone(), path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(hash, "5d41402abc4b2a76b9719d911017c592");
+        let _ = fs::remove_file(&path);
     }
 
     /// Verify read_file does NOT crash the test process on malformed PDFs.

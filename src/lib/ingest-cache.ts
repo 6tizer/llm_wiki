@@ -9,6 +9,7 @@ import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 
 interface CacheEntry {
   hash: string
+  parser?: string
   timestamp: number
   filesWritten: string[]
 }
@@ -62,10 +63,12 @@ export async function checkIngestCache(
   projectPath: string,
   sourceFileName: string,
   sourceContent: string,
+  parser: string = "local",
 ): Promise<string[] | null> {
   const cache = await loadCache(projectPath)
   const entry = cache.entries[sourceFileName]
   if (!entry) return null
+  if ((entry.parser ?? "local") !== parser) return null
 
   const currentHash = await sha256(sourceContent)
   if (entry.hash !== currentHash) return null
@@ -100,12 +103,14 @@ export async function saveIngestCache(
   sourceFileName: string,
   sourceContent: string,
   filesWritten: string[],
+  parser: string = "local",
 ): Promise<void> {
   const cache = await loadCache(projectPath)
   const hash = await sha256(sourceContent)
   const newEntries = { ...cache.entries }
   newEntries[sourceFileName] = {
     hash,
+    parser,
     timestamp: Date.now(),
     filesWritten,
   }

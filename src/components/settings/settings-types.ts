@@ -1,5 +1,5 @@
 import type { CustomApiMode } from "./llm-presets"
-import type { AzureModelFamily, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { AzureModelFamily, MineruModelVersion, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
 
 /**
  * Shape of the draft state each section reads from and writes into.
@@ -72,6 +72,12 @@ export interface SettingsDraft {
 
   // Source folder auto watch
   sourceWatchConfig: SourceWatchConfig
+
+  // MinerU PDF parsing
+  mineruEnabled: boolean
+  mineruToken: string
+  mineruModelVersion: MineruModelVersion
+  mineruApiBaseUrl: string
 
   // Local HTTP API server
   apiEnabled: boolean

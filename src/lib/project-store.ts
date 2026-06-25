@@ -1,6 +1,6 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { ApiConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { ApiConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 import { DEFAULT_ZOOM_LEVEL, clampZoomLevel } from "@/stores/zoom-store"
@@ -109,6 +109,19 @@ export async function saveMultimodalConfig(config: MultimodalConfig): Promise<vo
 export async function loadMultimodalConfig(): Promise<MultimodalConfig | null> {
   const store = await getStore()
   return (await store.get<MultimodalConfig>(MULTIMODAL_KEY)) ?? null
+}
+
+const MINERU_CONFIG_KEY = "mineruConfig"
+
+export async function saveMineruConfig(config: MineruConfig): Promise<void> {
+  const store = await getStore()
+  await store.set(MINERU_CONFIG_KEY, config)
+  await store.save()
+}
+
+export async function loadMineruConfig(): Promise<MineruConfig | null> {
+  const store = await getStore()
+  return (await store.get<MineruConfig>(MINERU_CONFIG_KEY)) ?? null
 }
 
 // IMPORTANT: Keep this key in sync with the Rust setup hook

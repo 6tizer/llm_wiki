@@ -53,6 +53,13 @@ const sourceWatch = {
   maxFileSizeMb: 10,
 }
 
+const mineru = {
+  enabled: false,
+  token: "",
+  modelVersion: "vlm",
+  apiBaseUrl: "",
+}
+
 const agent = {
   maxTurns: 25,
   maxFilesChanged: 20,
@@ -74,6 +81,7 @@ function draftFor(apiConfig: {
     proxy,
     scheduledImport,
     sourceWatch,
+    mineru as never,
     apiConfig as never,
     agent,
     20,
