@@ -897,7 +897,13 @@ async function runExternalSearchTool(args: {
     try {
       const batch = args.source === "web"
         ? await args.webSearchImpl?.(query, args.searchConfig, 5, args.signal) ?? []
-        : await args.anyTxtSearchSmartImpl?.(query, args.searchConfig.anyTxt, args.llmConfig, 5, args.projectPath, args.signal) ?? []
+        : await args.anyTxtSearchSmartImpl?.(query, {
+          config: args.searchConfig.anyTxt,
+          llmConfig: args.llmConfig,
+          maxResults: 5,
+          projectPath: args.projectPath,
+          signal: args.signal,
+        }) ?? []
       throwIfAborted(args.signal)
       appendUniqueExternalResults(results, seen, batch, 8)
     } catch (err) {

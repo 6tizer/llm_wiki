@@ -23,6 +23,15 @@ interface AnyTxtItem {
   snippet: string
 }
 
+/** Options for smart AnyTXT search, including local config and optional query rewrite context. */
+export interface AnyTxtSearchSmartOptions {
+  config?: AnyTxtConfig
+  llmConfig?: LlmConfig
+  maxResults?: number
+  projectPath?: string
+  signal?: AbortSignal
+}
+
 export function normalizeAnyTxtConfig(config?: AnyTxtConfig, _projectPath?: string): Required<AnyTxtConfig> {
   return {
     enabled: config?.enabled ?? Boolean(config?.endpoint?.trim()),
@@ -89,12 +98,9 @@ export async function anyTxtSearch(
 
 export async function anyTxtSearchSmart(
   query: string | string[],
-  config?: AnyTxtConfig,
-  llmConfig?: LlmConfig,
-  maxResults: number = DEFAULT_ANYTXT_LIMIT,
-  projectPath?: string,
-  signal?: AbortSignal,
+  options: AnyTxtSearchSmartOptions = {},
 ): Promise<WebSearchResult[]> {
+  const { config, llmConfig, maxResults = DEFAULT_ANYTXT_LIMIT, projectPath, signal } = options
   const resolved = normalizeAnyTxtConfig(config, projectPath)
   if (!resolved.enabled) return []
   const queries = Array.isArray(query) ? query : [query]

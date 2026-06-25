@@ -9,6 +9,7 @@ import {
   parseUnderstanding,
   shouldBypassAgentPlanner,
 } from "./chat-agent"
+import type { AnyTxtSearchSmartOptions } from "./anytxt-search"
 import type { LlmConfig, SearchApiConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 
@@ -276,6 +277,71 @@ describe("chat agent router", () => {
     })
 
     expect(webSearch).toHaveBeenCalledTimes(1)
+  })
+
+  it("passes AnyTXT search settings as named options", async () => {
+    const controller = new AbortController()
+    const streamChat = vi.fn(async (
+      _config: LlmConfig,
+      _messages: ChatMessage[],
+      callbacks: StreamCallbacks,
+    ) => {
+      callbacks.onToken(JSON.stringify({
+        intent: "external",
+        rewrittenQuery: "local docs",
+        wikiQueries: [],
+        graphQueries: [],
+        externalQueries: ["local docs"],
+        needsWiki: false,
+        needsGraph: false,
+        needsExternal: true,
+        isFollowUp: false,
+        reason: "needs local source",
+      }))
+      callbacks.onDone()
+    })
+    const anyTxtSearchSmart = vi.fn(async (
+      _query: string | string[],
+      options?: AnyTxtSearchSmartOptions,
+    ) => {
+      expect(options).toMatchObject({
+        config: { endpoint: "http://127.0.0.1:9920" },
+        llmConfig,
+        maxResults: 5,
+        projectPath: "",
+        signal: controller.signal,
+      })
+      return [
+        {
+          title: "Local Docs",
+          url: "file:///tmp/local.md",
+          snippet: "local docs",
+          source: "AnyTXT",
+        },
+      ]
+    })
+
+    await buildChatAgentMessages({
+      project: null,
+      llmConfig,
+      searchApiConfig: {
+        ...searchApiConfig,
+        anyTxt: { endpoint: "http://127.0.0.1:9920" },
+      },
+      text: "local docs",
+      historyMessages: [{ role: "user", content: "local docs" }],
+      dataVersion: 1,
+      options: {
+        useWebSearch: false,
+        useAnyTxtSearch: true,
+        mode: "standard",
+      },
+      signal: controller.signal,
+      deps: { streamChat, anyTxtSearchSmart },
+    })
+
+    expect(anyTxtSearchSmart).toHaveBeenCalledTimes(1)
+    expect(anyTxtSearchSmart.mock.calls[0][0]).toBe("local docs")
   })
 
   it("answers directly when no project or external retrieval source is available", async () => {

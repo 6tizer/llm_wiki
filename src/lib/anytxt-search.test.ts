@@ -458,8 +458,13 @@ describe("AnyTXT query rewrite", () => {
     }))
 
     const out = await anyTxtSearchSmart("请帮我找一下煤矿安全相关资料", {
-      endpoint: "http://127.0.0.1:9920",
-    }, llmConfig, 1, "/Users/me/wiki")
+      config: {
+        endpoint: "http://127.0.0.1:9920",
+      },
+      llmConfig,
+      maxResults: 1,
+      projectPath: "/Users/me/wiki",
+    })
 
     expect(fetchMock).toHaveBeenCalled()
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
