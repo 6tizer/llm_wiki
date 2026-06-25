@@ -69,6 +69,7 @@ import {
 import {
 	chatMessagesToLLM,
 	type DisplayMessage,
+	type MessageImage,
 	type MessageReference,
 	useChatStore,
 } from "@/stores/chat-store";
@@ -111,6 +112,19 @@ function formatDate(timestamp: number): string {
 		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	}
 	return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function prependReminderToContent(
+	content: LLMMessage["content"],
+	reminder: string,
+): LLMMessage["content"] {
+	const prefix = `[${reminder}]`;
+	if (typeof content === "string") return `${prefix}\n\n${content}`;
+	const [first, ...rest] = content;
+	if (first?.type === "text") {
+		return [{ ...first, text: `${prefix}\n\n${first.text}` }, ...rest];
+	}
+	return [{ type: "text", text: prefix }, ...content];
 }
 
 export function shouldPromptForQaBeforeConversationDelete(
@@ -785,6 +799,7 @@ export function ChatPanel() {
 	const handleSend = useCallback(
 		async (
 			text: string,
+			images: MessageImage[] = [],
 			options: ChatSendOptions = {
 				useWebSearch: false,
 				useAnyTxtSearch: false,
@@ -794,13 +809,17 @@ export function ChatPanel() {
 				await handleAgentSend(text);
 				return;
 			}
+			const chatImages = mode === "chat" ? images : [];
 
 			// Auto-create a conversation if none is active
 			let convId = useChatStore.getState().activeConversationId;
 			if (!convId) {
 				convId = createConversation();
 			}
-			addMessage("user", text);
+			addMessage("user", text, {
+				images: chatImages,
+				mode: mode === "ingest" ? "ingest" : undefined,
+			});
 			setStreaming(true);
 			// Build system prompt with wiki context using graph-enhanced retrieval
 			const systemMessages: LLMMessage[] = [];
@@ -1092,7 +1111,10 @@ export function ChatPanel() {
 				if (last && last.role === "user") {
 					llmMessages = [
 						...llmMessages.slice(0, lastIdx),
-						{ role: "user", content: `[${langReminder}]\n\n${last.content}` },
+						{
+							role: "user",
+							content: prependReminderToContent(last.content, langReminder),
+						},
 					];
 				}
 			}
@@ -1195,7 +1217,7 @@ export function ChatPanel() {
 				messages: s.messages.filter((m) => m.id !== lastUser.id),
 			}));
 		}
-		handleSend(lastUserMsg.content);
+		handleSend(lastUserMsg.content, lastUserMsg.images ?? []);
 	}, [isStreaming, removeLastAssistantMessage, handleSend]);
 	const handleWriteToWiki = useCallback(async () => {
 		if (!project) return;
@@ -1346,6 +1368,7 @@ export function ChatPanel() {
 					onStop={handleStop}
 					isStreaming={isStreaming}
 					anyTxtAvailable={anyTxtAvailable}
+					imageInputAvailable={mode === "chat"}
 					showSearchToggles={mode === "chat"}
 					placeholder={
 						mode === "agent"

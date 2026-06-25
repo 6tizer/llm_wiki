@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import type { ChatMessage } from "@/lib/llm-client"
+import type { ContentBlock } from "@/lib/llm-providers"
 import type {
   AgentResourceLimitPayload,
   AgentWikiChangedPayload,
@@ -29,6 +30,12 @@ export interface MessageReference {
   snippet?: string
 }
 
+/** Image attached to a normal Chat user message. */
+export interface MessageImage {
+  mediaType: string
+  dataBase64: string
+}
+
 export interface DisplayMessage {
   id: string
   role: "user" | "assistant" | "system"
@@ -36,7 +43,8 @@ export interface DisplayMessage {
   timestamp: number
   conversationId: string
   references?: MessageReference[]  // pages cited in this response, saved at creation time
-  mode?: "chat" | "agent"
+  mode?: "chat" | "agent" | "ingest"
+  images?: MessageImage[]
   agentSessionId?: string
   agentUserMessageId?: string
   agentAssistantMessageId?: string
@@ -99,6 +107,7 @@ interface AddMessageOptions {
   mode?: DisplayMessage["mode"]
   agentSessionId?: string
   references?: MessageReference[]
+  images?: MessageImage[]
 }
 
 interface StartAgentStreamMessageOptions {
@@ -335,6 +344,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const { activeConversationId, conversations } = state
       if (!activeConversationId) return state
 
+      const images =
+        role === "user" && (options?.mode === undefined || options.mode === "chat")
+          ? options?.images?.filter(Boolean)
+          : undefined
       const newMessage: DisplayMessage = {
         id: nextId(),
         role,
@@ -344,6 +357,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         references: options?.references,
         mode: options?.mode,
         agentSessionId: options?.agentSessionId,
+        ...(images && images.length > 0 ? { images } : {}),
       }
 
       // Auto-set title from first user message (first 50 chars)
@@ -354,7 +368,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role === "user" && convMessages.length === 0
           ? conversations.map((c) =>
               c.id === activeConversationId
-                ? { ...c, title: content.slice(0, 50), updatedAt: Date.now() }
+                ? {
+                    ...c,
+                    title:
+                      content.slice(0, 50) ||
+                      (images && images.length > 0
+                        ? i18n.t("chat.imageMessage")
+                        : c.title),
+                    updatedAt: Date.now(),
+                  }
                 : c
             )
           : conversations.map((c) =>
@@ -761,8 +783,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
 export function chatMessagesToLLM(messages: DisplayMessage[]): ChatMessage[] {
   return messages
     .filter((m) => !isCompactOnlyAgentMessage(m))
-    .map((m) => ({
-      role: m.role,
-      content: m.content,
-    }))
+    .map((m) => {
+      const isNormalChat = m.role === "user" && (m.mode === undefined || m.mode === "chat")
+      if (!isNormalChat || !m.images || m.images.length === 0) {
+        return {
+          role: m.role,
+          content: m.content,
+        }
+      }
+      const textBlocks: ContentBlock[] = m.content.trim()
+        ? [{ type: "text", text: m.content }]
+        : []
+      const blocks: ContentBlock[] = [
+        ...textBlocks,
+        ...m.images.map((img): ContentBlock => ({
+          type: "image",
+          mediaType: img.mediaType,
+          dataBase64: img.dataBase64,
+        })),
+      ]
+      return {
+        role: m.role,
+        content: blocks,
+      }
+    })
 }
