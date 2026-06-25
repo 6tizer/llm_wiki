@@ -3,6 +3,11 @@ import { flattenMdFiles } from "@/lib/wiki-utils"
 import type { FileNode } from "@/types/wiki"
 import { buildRetrievalGraph, calculateRelevance } from "./graph-relevance"
 import { normalizePath } from "@/lib/path-utils"
+import {
+  createGraphWikilinkResolver,
+  graphPageIdentityForPath,
+  type GraphWikilinkResolver,
+} from "@/lib/graph-page-identity"
 import Graph from "graphology"
 import louvain from "graphology-communities-louvain"
 
@@ -142,14 +147,11 @@ function extractWikilinks(content: string): string[] {
   return links
 }
 
-function fileNameToId(fileName: string): string {
-  return fileName.replace(/\.md$/, "")
-}
-
 export async function buildWikiGraph(
   projectPath: string,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; communities: CommunityInfo[] }> {
-  const wikiRoot = `${normalizePath(projectPath)}/wiki`
+  const normalizedProjectPath = normalizePath(projectPath)
+  const wikiRoot = `${normalizedProjectPath}/wiki`
 
   let tree: FileNode[]
   try {
@@ -166,11 +168,19 @@ export async function buildWikiGraph(
   // Build a map of id -> node data
   const nodeMap = new Map<
     string,
-    { id: string; label: string; type: string; path: string; links: string[] }
+    {
+      id: string
+      label: string
+      type: string
+      path: string
+      wikiPath: string
+      legacyStem: string
+      links: string[]
+    }
   >()
 
   for (const file of mdFiles) {
-    const id = fileNameToId(file.name)
+    const identity = graphPageIdentityForPath(normalizedProjectPath, file.path)
     let content = ""
     try {
       content = await readFile(file.path)
@@ -179,11 +189,13 @@ export async function buildWikiGraph(
       continue
     }
 
-    nodeMap.set(id, {
-      id,
+    nodeMap.set(identity.id, {
+      id: identity.id,
       label: extractTitle(content, file.name),
       type: extractType(content),
       path: file.path,
+      wikiPath: identity.wikiPath,
+      legacyStem: identity.legacyStem,
       links: extractWikilinks(content),
     })
   }
@@ -197,6 +209,7 @@ export async function buildWikiGraph(
       nodeMap.delete(id)
     }
   }
+  const resolver = createGraphWikilinkResolver([...nodeMap.values()])
 
   // Count link references
   const linkCounts = new Map<string, number>()
@@ -209,7 +222,7 @@ export async function buildWikiGraph(
   for (const [sourceId, nodeData] of nodeMap) {
     for (const targetRaw of nodeData.links) {
       // Normalize target: try matching by id (case-insensitive, hyphen/space)
-      const targetId = resolveTarget(targetRaw, nodeMap)
+      const targetId = resolveTarget(targetRaw, resolver)
       if (targetId === null) continue
       if (targetId === sourceId) continue
 
@@ -277,18 +290,7 @@ export async function buildWikiGraph(
 
 function resolveTarget(
   raw: string,
-  nodeMap: Map<string, { id: string }>,
+  resolver: GraphWikilinkResolver,
 ): string | null {
-  // Direct match
-  if (nodeMap.has(raw)) return raw
-
-  // Normalize: lowercase, replace spaces with hyphens and vice versa
-  const normalized = raw.toLowerCase().replace(/\s+/g, "-")
-  for (const id of nodeMap.keys()) {
-    if (id.toLowerCase() === normalized) return id
-    if (id.toLowerCase() === raw.toLowerCase()) return id
-    if (id.toLowerCase().replace(/\s+/g, "-") === normalized) return id
-  }
-
-  return null
+  return resolver.resolve(raw)
 }

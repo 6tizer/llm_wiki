@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { readFile } from "@/commands/fs"
+import { listDirectory, readFile } from "@/commands/fs"
 import type { ChatMessage, StreamCallbacks } from "@/lib/llm-client"
+import type { SearchResult } from "@/lib/search"
 import {
   buildChatAgentMessages,
   getChatAgentTools,
@@ -9,10 +10,16 @@ import {
   shouldBypassAgentPlanner,
 } from "./chat-agent"
 import type { LlmConfig, SearchApiConfig } from "@/stores/wiki-store"
+import type { FileNode } from "@/types/wiki"
+
+const fsMock = vi.hoisted(() => ({
+  tree: [] as FileNode[],
+  files: new Map<string, string>(),
+}))
 
 vi.mock("@/commands/fs", () => ({
-  listDirectory: vi.fn(async () => []),
-  readFile: vi.fn(async () => ""),
+  listDirectory: vi.fn(async () => fsMock.tree),
+  readFile: vi.fn(async (path: string) => fsMock.files.get(path) ?? ""),
 }))
 
 const llmConfig: LlmConfig = {
@@ -32,6 +39,8 @@ const searchApiConfig: SearchApiConfig = {
 describe("chat agent router", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    fsMock.tree = []
+    fsMock.files.clear()
   })
 
   it("filters tools by project availability, external toggles, and mode", () => {
@@ -291,4 +300,100 @@ describe("chat agent router", () => {
       { action: "answer", queries: [], reason: "no retrieval sources" },
     ])
   })
+
+  it("graph_search expands same-stem search hits through path-aware graph ids", async () => {
+    setWikiFiles({
+      "wiki/foo.md": page("Root Foo", "Root page."),
+      "wiki/something/wiki/foo.md": page("Nested Foo", "Nested page links to [[related]]."),
+      "wiki/concepts/related.md": page("Related Concept", "Related page."),
+    })
+    const streamChat = vi.fn(async (
+      _config: LlmConfig,
+      _messages: ChatMessage[],
+      callbacks: StreamCallbacks,
+    ) => {
+      callbacks.onToken(JSON.stringify({
+        intent: "graph",
+        rewrittenQuery: "nested foo graph",
+        wikiQueries: [],
+        graphQueries: ["nested foo graph"],
+        externalQueries: [],
+        needsWiki: false,
+        needsGraph: true,
+        needsExternal: false,
+        isFollowUp: false,
+        reason: "graph relationship",
+      }))
+      callbacks.onDone()
+    })
+    const searchWiki = vi.fn(async (): Promise<SearchResult[]> => [
+      {
+        path: "/tmp/demo/wiki/something/wiki/foo.md",
+        title: "Nested Foo",
+        snippet: "Nested Foo",
+        titleMatch: true,
+        score: 1,
+        images: [],
+      },
+    ])
+
+    const result = await buildChatAgentMessages({
+      project: { name: "Demo", path: "/tmp/demo" },
+      llmConfig,
+      searchApiConfig,
+      text: "nested foo graph",
+      historyMessages: [{ role: "user", content: "nested foo graph" }],
+      dataVersion: 2,
+      options: {
+        useWebSearch: false,
+        useAnyTxtSearch: false,
+        mode: "standard",
+      },
+      deps: { streamChat, searchWiki },
+    })
+
+    expect(result.references.map((ref) => ref.path)).toContain("/tmp/demo/wiki/concepts/related.md")
+    expect(result.queryPages.map((page) => page.title)).toContain("Related Concept")
+    expect(listDirectory).toHaveBeenCalledWith("/tmp/demo/wiki")
+  })
 })
+
+function page(title: string, body = "", type = "concept"): string {
+  return `---\ntitle: ${title}\ntype: ${type}\n---\n# ${title}\n${body}\n`
+}
+
+function setWikiFiles(files: Record<string, string>): void {
+  fsMock.files.clear()
+  fsMock.files.set("/tmp/demo/wiki/index.md", "# Index\n")
+  fsMock.files.set("/tmp/demo/purpose.md", "")
+  for (const [relPath, content] of Object.entries(files)) {
+    fsMock.files.set(`/tmp/demo/${relPath}`, content)
+  }
+  fsMock.tree = buildTree(Object.keys(files))
+}
+
+function buildTree(paths: string[]): FileNode[] {
+  const root: FileNode[] = []
+  for (const relPath of paths) {
+    const wikiRel = relPath.replace(/^wiki\//, "")
+    const parts = wikiRel.split("/")
+    let children = root
+    let currentPath = "/tmp/demo/wiki"
+    for (let i = 0; i < parts.length; i++) {
+      const name = parts[i]
+      currentPath = `${currentPath}/${name}`
+      const isFile = i === parts.length - 1
+      if (isFile) {
+        children.push({ name, path: currentPath, is_dir: false })
+        continue
+      }
+      let dir = children.find((node) => node.is_dir && node.name === name)
+      if (!dir) {
+        dir = { name, path: currentPath, is_dir: true, children: [] }
+        children.push(dir)
+      }
+      children = dir.children ?? []
+    }
+  }
+  return root
+}
