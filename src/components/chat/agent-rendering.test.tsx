@@ -156,6 +156,27 @@ describe("agent message rendering", () => {
     expect(html).toContain("send &quot;continue&quot;")
   })
 
+  it("renders normal user message images without agent chrome", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={{
+          id: "m-img",
+          role: "user",
+          content: "see this",
+          timestamp: 0,
+          conversationId: "conv-1",
+          images: [{ mediaType: "image/png", dataBase64: "AAAA" }],
+        }}
+      />,
+    )
+
+    expect(html).toContain("data:image/png;base64,AAAA")
+    expect(html).toContain("see this")
+    expect(html).toContain("self-end")
+    expect(html).not.toContain("Tool calls")
+    expect(html).not.toContain("Agent run")
+  })
+
   it("renders max write bytes notices with split-content recovery", () => {
     const html = renderToStaticMarkup(
       <ChatMessage

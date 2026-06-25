@@ -63,6 +63,30 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().messages[0].mode).toBeUndefined()
   })
 
+  it("stores images only for ordinary chat user messages", () => {
+    useChatStore.getState().createConversation()
+    const image = { mediaType: "image/png", dataBase64: "AAAA" }
+
+    useChatStore.getState().addMessage("user", "look", { images: [image] })
+    useChatStore.getState().addMessage("user", "agent", {
+      mode: "agent",
+      images: [image],
+    })
+    useChatStore.getState().addMessage("user", "ingest", {
+      mode: "ingest",
+      images: [image],
+    })
+    useChatStore.getState().addMessage("assistant", "assistant", {
+      images: [image],
+    })
+
+    const messages = useChatStore.getState().messages
+    expect(messages[0].images).toEqual([image])
+    expect(messages[1].images).toBeUndefined()
+    expect(messages[2].images).toBeUndefined()
+    expect(messages[3].images).toBeUndefined()
+  })
+
   it("stores agent metadata when addMessage receives options", () => {
     const convId = useChatStore.getState().createConversation()
 

@@ -20,6 +20,7 @@ import type { FileNode } from "@/types/wiki"
 import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
 import { normalizePath, getFileName } from "@/lib/path-utils"
 import { saveQueryPage } from "@/lib/save-query-page"
+import { messageImageToDataUrl } from "@/lib/chat-image-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { detectLanguage } from "@/lib/detect-language"
@@ -119,26 +120,41 @@ function ChatMessageImpl({
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
       </div>
       <div className="flex min-w-0 max-w-[80%] flex-col gap-1.5">
-        <div
-          className={`rounded-lg px-3 py-2 text-sm ${
-            isUser
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-foreground"
-          }`}
-        >
-          {isUser ? (
-            <p dir="auto" className="whitespace-pre-wrap break-words">{content}</p>
-          ) : isSessionCompactOnly ? (
-            <AgentSessionCompactNotice />
-          ) : hasAgentBlocks ? (
-            <AgentBlockList
-              blocks={message.agentBlocks ?? []}
-              renderText={(text) => <MarkdownContent content={text} />}
-            />
-          ) : (
-            <MarkdownContent content={content} />
-          )}
-        </div>
+        {isUser && (message.images?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {message.images?.map((image, index) => (
+              <img
+                key={`${image.mediaType}-${index}`}
+                src={messageImageToDataUrl(image)}
+                alt=""
+                className="max-h-40 max-w-[180px] rounded-lg border border-border/40 object-contain"
+                loading="lazy"
+              />
+            ))}
+          </div>
+        )}
+        {(!isUser || content) && (
+          <div
+            className={`rounded-lg px-3 py-2 text-sm ${isUser ? "self-end" : "self-start"} ${
+              isUser
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-foreground"
+            }`}
+          >
+            {isUser ? (
+              <p dir="auto" className="whitespace-pre-wrap break-words">{content}</p>
+            ) : isSessionCompactOnly ? (
+              <AgentSessionCompactNotice />
+            ) : hasAgentBlocks ? (
+              <AgentBlockList
+                blocks={message.agentBlocks ?? []}
+                renderText={(text) => <MarkdownContent content={text} />}
+              />
+            ) : (
+              <MarkdownContent content={content} />
+            )}
+          </div>
+        )}
         {isAgent && message.agentResourceLimit && (
           <AgentResourceLimitNotice limit={message.agentResourceLimit} />
         )}
