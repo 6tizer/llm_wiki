@@ -2,6 +2,11 @@ import { readFile, listDirectory } from "@/commands/fs"
 import { flattenMdFiles } from "@/lib/wiki-utils"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
+import {
+  createGraphWikilinkResolver,
+  graphPageIdentityForPath,
+  type GraphWikilinkResolver,
+} from "@/lib/graph-page-identity"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,10 +58,6 @@ let cachedGraph: RetrievalGraph | null = null
 // Helpers (pure)
 // ---------------------------------------------------------------------------
 
-
-function fileNameToId(fileName: string): string {
-  return fileName.replace(/\.md$/, "")
-}
 
 function extractFrontmatter(content: string): { title: string; type: string; sources: string[] } {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
@@ -113,18 +114,9 @@ function extractWikilinks(content: string): string[] {
 
 function resolveTarget(
   raw: string,
-  nodeIds: ReadonlySet<string>,
+  resolver: GraphWikilinkResolver,
 ): string | null {
-  if (nodeIds.has(raw)) return raw
-
-  const normalized = raw.toLowerCase().replace(/\s+/g, "-")
-  for (const id of nodeIds) {
-    const idLower = id.toLowerCase()
-    if (idLower === normalized) return id
-    if (idLower === raw.toLowerCase()) return id
-    if (idLower.replace(/\s+/g, "-") === normalized) return id
-  }
-  return null
+  return resolver.resolve(raw)
 }
 
 function getNeighbors(node: RetrievalNode): ReadonlySet<string> {
@@ -169,13 +161,15 @@ export async function buildRetrievalGraph(
     title: string
     type: string
     path: string
+    wikiPath: string
+    legacyStem: string
     sources: string[]
     rawLinks: string[]
     fileName: string
   }> = []
 
   for (const file of mdFiles) {
-    const id = fileNameToId(file.name)
+    const identity = graphPageIdentityForPath(projectPath, file.path)
     let content = ""
     try {
       content = await readFile(file.path)
@@ -185,10 +179,12 @@ export async function buildRetrievalGraph(
 
     const fm = extractFrontmatter(content)
     rawNodes.push({
-      id,
+      id: identity.id,
       title: fm.title || file.name.replace(/\.md$/, "").replace(/-/g, " "),
       type: fm.type,
       path: file.path,
+      wikiPath: identity.wikiPath,
+      legacyStem: identity.legacyStem,
       sources: fm.sources,
       rawLinks: extractWikilinks(content),
       fileName: file.name,
@@ -196,6 +192,7 @@ export async function buildRetrievalGraph(
   }
 
   const nodeIds = new Set(rawNodes.map((n) => n.id))
+  const resolver = createGraphWikilinkResolver(rawNodes)
 
   // Second pass: resolve links and build graph nodes
   const outLinksMap = new Map<string, Set<string>>()
@@ -208,7 +205,7 @@ export async function buildRetrievalGraph(
 
   for (const raw of rawNodes) {
     for (const linkTarget of raw.rawLinks) {
-      const resolvedId = resolveTarget(linkTarget, nodeIds)
+      const resolvedId = resolveTarget(linkTarget, resolver)
       if (resolvedId === null || resolvedId === raw.id) continue
       outLinksMap.get(raw.id)!.add(resolvedId)
       inLinksMap.get(resolvedId)!.add(raw.id)

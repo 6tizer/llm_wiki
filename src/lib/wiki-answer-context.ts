@@ -1,5 +1,6 @@
 import { readFile } from "@/commands/fs";
 import { computeContextBudget } from "@/lib/context-budget";
+import { searchResultPathToGraphNodeId } from "@/lib/graph-page-identity";
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance";
 import { isGreeting } from "@/lib/greeting-detector";
 import type { ChatMessage as LLMMessage } from "@/lib/llm-client";
@@ -7,7 +8,7 @@ import {
 	buildLanguageReminder,
 	getOutputLanguage,
 } from "@/lib/output-language";
-import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils";
+import { getRelativePath, normalizePath } from "@/lib/path-utils";
 import { searchWiki, tokenizeQuery } from "@/lib/search";
 
 export interface WikiAnswerProject {
@@ -112,8 +113,7 @@ export async function buildWikiAnswerContext({
 	}[] = [];
 
 	for (const result of topSearchResults) {
-		const fileName = getFileName(result.path);
-		const nodeId = fileName.replace(/\.md$/, "");
+		const nodeId = searchResultPathToGraphNodeId(pp, result.path);
 		const related = getRelatedNodes(nodeId, graph, 3);
 		for (const { node, relevance } of related) {
 			if (relevance < 2.0) continue;

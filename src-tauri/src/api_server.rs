@@ -1290,6 +1290,91 @@ struct ApiGraphEdge {
     weight: f64,
 }
 
+#[derive(Debug, Clone)]
+struct RawGraphNode {
+    label: String,
+    node_type: String,
+    // API/frontend open-file path. Currently equal to `wiki_path`, but kept
+    // separate from resolver identity so future response-path changes do not
+    // silently alter graph link matching.
+    path: String,
+    // Canonical wiki-relative markdown path used for resolver identity.
+    wiki_path: String,
+    legacy_stem: String,
+    links: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct GraphLinkResolver {
+    ids: BTreeSet<String>,
+    by_path: BTreeMap<String, Vec<String>>,
+    by_path_slug: BTreeMap<String, Vec<String>>,
+    by_legacy_stem: BTreeMap<String, Vec<String>>,
+    by_legacy_slug: BTreeMap<String, Vec<String>>,
+}
+
+impl GraphLinkResolver {
+    fn from_nodes(nodes: &BTreeMap<String, RawGraphNode>) -> Self {
+        let mut resolver = Self::default();
+        for (id, node) in nodes {
+            resolver.ids.insert(id.clone());
+            resolver
+                .by_path
+                .entry(node.wiki_path.to_lowercase())
+                .or_default()
+                .push(id.clone());
+            resolver
+                .by_path_slug
+                .entry(graph_ref_key(&node.wiki_path))
+                .or_default()
+                .push(id.clone());
+            resolver
+                .by_legacy_stem
+                .entry(node.legacy_stem.to_lowercase())
+                .or_default()
+                .push(id.clone());
+            resolver
+                .by_legacy_slug
+                .entry(graph_ref_key(&node.legacy_stem))
+                .or_default()
+                .push(id.clone());
+        }
+        resolver
+    }
+
+    fn unique(map: &BTreeMap<String, Vec<String>>, key: &str) -> Option<String> {
+        let matches = map.get(key)?;
+        if matches.len() == 1 {
+            matches.first().cloned()
+        } else {
+            None
+        }
+    }
+
+    fn resolve(&self, raw: &str) -> Option<String> {
+        if self.ids.contains(raw) {
+            return Some(raw.to_string());
+        }
+
+        if let Some(wiki_path) = wikilink_to_wiki_path(raw) {
+            if let Some(id) = Self::unique(&self.by_path, &wiki_path.to_lowercase()) {
+                return Some(id);
+            }
+            if let Some(id) = Self::unique(&self.by_path_slug, &graph_ref_key(&wiki_path)) {
+                return Some(id);
+            }
+        }
+
+        if raw.contains('/') || raw.contains('\\') {
+            return None;
+        }
+
+        let stem = strip_markdown_extension(raw.trim());
+        Self::unique(&self.by_legacy_stem, &stem.to_lowercase())
+            .or_else(|| Self::unique(&self.by_legacy_slug, &graph_ref_key(stem)))
+    }
+}
+
 fn handle_graph(app: &AppHandle, project_id: &str, query: &str) -> ApiResponse {
     let project = match resolve_project(app, project_id) {
         Ok(project) => project,
@@ -1328,7 +1413,7 @@ fn handle_graph(app: &AppHandle, project_id: &str, query: &str) -> ApiResponse {
 
 fn build_graph(project_path: &str) -> Result<(Vec<ApiGraphNode>, Vec<ApiGraphEdge>), String> {
     let wiki_root = Path::new(project_path).join("wiki");
-    let mut raw: BTreeMap<String, (String, String, String, Vec<String>)> = BTreeMap::new();
+    let mut raw: BTreeMap<String, RawGraphNode> = BTreeMap::new();
     for entry in WalkDir::new(&wiki_root).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file()
             || entry.path().extension().and_then(|s| s.to_str()) != Some("md")
@@ -1339,29 +1424,42 @@ fn build_graph(project_path: &str) -> Result<(Vec<ApiGraphNode>, Vec<ApiGraphEdg
             Ok(content) => content,
             Err(_) => continue,
         };
-        let id = entry
+        let path = relative_to_project(project_path, entry.path());
+        let Some(id) = commands::search::wiki_relative_path_to_vector_page_id(&path) else {
+            continue;
+        };
+        let title =
+            commands::search::extract_title(&content, entry.file_name().to_string_lossy().as_ref());
+        let node_type = extract_type(&content);
+        if node_type == "query" {
+            continue;
+        }
+        let legacy_stem = entry
             .path()
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        if id.is_empty() {
-            continue;
-        }
-        let title =
-            commands::search::extract_title(&content, entry.file_name().to_string_lossy().as_ref());
-        let node_type = extract_type(&content);
-        let path = relative_to_project(project_path, entry.path());
         let links = extract_wikilinks(&content);
-        raw.insert(id, (title, node_type, path, links));
+        raw.insert(
+            id,
+            RawGraphNode {
+                label: title,
+                node_type,
+                wiki_path: path.clone(),
+                path,
+                legacy_stem,
+                links,
+            },
+        );
     }
-    let ids: BTreeSet<String> = raw.keys().cloned().collect();
+    let resolver = GraphLinkResolver::from_nodes(&raw);
     let mut link_count: BTreeMap<String, usize> = raw.keys().map(|id| (id.clone(), 0)).collect();
     let mut seen = BTreeSet::new();
     let mut edges = Vec::new();
-    for (source, (_, _, _, links)) in &raw {
-        for link in links {
-            let Some(target) = resolve_link(link, &ids) else {
+    for (source, node) in &raw {
+        for link in &node.links {
+            let Some(target) = resolve_link(link, &resolver) else {
                 continue;
             };
             if &target == source {
@@ -1385,13 +1483,12 @@ fn build_graph(project_path: &str) -> Result<(Vec<ApiGraphNode>, Vec<ApiGraphEdg
     }
     let nodes = raw
         .into_iter()
-        .filter(|(_, (_, node_type, _, _))| node_type != "query")
-        .map(|(id, (label, node_type, path, _))| ApiGraphNode {
+        .map(|(id, node)| ApiGraphNode {
             link_count: *link_count.get(&id).unwrap_or(&0),
             id,
-            label,
-            node_type,
-            path,
+            label: node.label,
+            node_type: node.node_type,
+            path: node.path,
         })
         .collect();
     Ok((nodes, edges))
@@ -1428,14 +1525,44 @@ fn extract_wikilinks(content: &str) -> Vec<String> {
     out
 }
 
-fn resolve_link(raw: &str, ids: &BTreeSet<String>) -> Option<String> {
-    if ids.contains(raw) {
-        return Some(raw.to_string());
+fn graph_ref_key(raw: &str) -> String {
+    raw.trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn strip_markdown_extension(raw: &str) -> &str {
+    raw.strip_suffix(".md")
+        .or_else(|| raw.strip_suffix(".MD"))
+        .or_else(|| raw.strip_suffix(".Md"))
+        .or_else(|| raw.strip_suffix(".mD"))
+        .unwrap_or(raw)
+}
+
+fn wikilink_to_wiki_path(raw: &str) -> Option<String> {
+    let mut target = raw.trim().replace('\\', "/");
+    if target.is_empty() || target.starts_with('/') || target.contains(':') {
+        return None;
     }
-    let normalized = raw.to_lowercase().replace(' ', "-");
-    ids.iter()
-        .find(|id| id.to_lowercase() == normalized || id.to_lowercase() == raw.to_lowercase())
-        .cloned()
+    if !target.starts_with("wiki/") {
+        target = format!("wiki/{target}");
+    }
+    if !target.ends_with(".md") {
+        target.push_str(".md");
+    }
+    if target
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(target)
+}
+
+fn resolve_link(raw: &str, resolver: &GraphLinkResolver) -> Option<String> {
+    resolver.resolve(raw)
 }
 
 fn handle_rescan(app: &AppHandle, project_id: &str) -> ApiResponse {
@@ -1497,7 +1624,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("llm-wiki-api-test-{id}"));
+        let path = std::env::temp_dir().join(format!(
+            "llm-wiki-api-test-{id}-{}",
+            Uuid::new_v4().simple()
+        ));
         fs::create_dir_all(path.join("wiki")).unwrap();
         path
     }
@@ -1648,6 +1778,145 @@ mod tests {
         assert!(is_text_content_rel("wiki/index.md"));
         assert!(!is_text_content_rel("wiki/media/image.png"));
         assert!(!is_text_content_rel("raw/sources/book.pdf"));
+    }
+
+    #[test]
+    fn graph_uses_path_aware_ids_for_same_stem_pages() {
+        let root = test_project_dir();
+        let nested = root.join("wiki/something/wiki");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join("wiki/foo.md"), "type: concept\n# Root Foo").unwrap();
+        fs::write(nested.join("foo.md"), "type: concept\n# Nested Foo").unwrap();
+
+        let (nodes, edges) = build_graph(root.to_str().unwrap()).unwrap();
+        let root_id =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/foo.md").unwrap();
+        let nested_id =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/something/wiki/foo.md")
+                .unwrap();
+
+        assert_ne!(root_id, nested_id);
+        assert!(nodes.iter().any(|n| n.id == root_id));
+        assert!(nodes.iter().any(|n| n.id == nested_id));
+        assert!(edges.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graph_resolves_unique_legacy_stem_wikilinks() {
+        let root = test_project_dir();
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::write(root.join("wiki/index.md"), "type: concept\nSee [[foo]].").unwrap();
+        fs::write(root.join("wiki/concepts/foo.md"), "type: concept\n# Foo").unwrap();
+
+        let (_, edges) = build_graph(root.to_str().unwrap()).unwrap();
+        let source =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/index.md").unwrap();
+        let target =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/concepts/foo.md").unwrap();
+
+        assert!(edges
+            .iter()
+            .any(|edge| edge.source == source && edge.target == target));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graph_resolves_unique_legacy_stem_wikilinks_with_uppercase_md_suffix() {
+        let root = test_project_dir();
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::write(root.join("wiki/index.md"), "type: concept\nSee [[foo.MD]].").unwrap();
+        fs::write(root.join("wiki/concepts/foo.md"), "type: concept\n# Foo").unwrap();
+
+        let (_, edges) = build_graph(root.to_str().unwrap()).unwrap();
+        let source = commands::search::wiki_relative_path_to_vector_page_id("wiki/index.md").unwrap();
+        let target =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/concepts/foo.md").unwrap();
+
+        assert!(edges
+            .iter()
+            .any(|edge| edge.source == source && edge.target == target));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graph_does_not_guess_ambiguous_legacy_stem_wikilinks() {
+        let root = test_project_dir();
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::create_dir_all(root.join("wiki/entities")).unwrap();
+        fs::write(root.join("wiki/index.md"), "type: concept\nSee [[foo]].").unwrap();
+        fs::write(
+            root.join("wiki/concepts/foo.md"),
+            "type: concept\n# Concept Foo",
+        )
+        .unwrap();
+        fs::write(
+            root.join("wiki/entities/foo.md"),
+            "type: entity\n# Entity Foo",
+        )
+        .unwrap();
+
+        let (_, edges) = build_graph(root.to_str().unwrap()).unwrap();
+
+        assert!(edges.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graph_resolves_path_prefixed_wikilinks_before_stem_fallback() {
+        let root = test_project_dir();
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::create_dir_all(root.join("wiki/entities")).unwrap();
+        fs::write(
+            root.join("wiki/index.md"),
+            "type: concept\nSee [[concepts/Attention]].",
+        )
+        .unwrap();
+        fs::write(
+            root.join("wiki/concepts/Attention.md"),
+            "type: concept\n# Concept Attention",
+        )
+        .unwrap();
+        fs::write(
+            root.join("wiki/entities/Attention.md"),
+            "type: entity\n# Entity Attention",
+        )
+        .unwrap();
+
+        let (_, edges) = build_graph(root.to_str().unwrap()).unwrap();
+        let source =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/index.md").unwrap();
+        let target =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/concepts/Attention.md")
+                .unwrap();
+
+        assert!(edges
+            .iter()
+            .any(|edge| edge.source == source && edge.target == target));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn graph_filters_query_nodes_before_counting_links() {
+        let root = test_project_dir();
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::create_dir_all(root.join("wiki/queries")).unwrap();
+        fs::write(root.join("wiki/concepts/foo.md"), "type: concept\n# Foo").unwrap();
+        fs::write(
+            root.join("wiki/queries/foo-answer.md"),
+            "type: query\nSee [[foo]].",
+        )
+        .unwrap();
+
+        let (nodes, edges) = build_graph(root.to_str().unwrap()).unwrap();
+        let target =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/concepts/foo.md").unwrap();
+        let target_node = nodes.iter().find(|node| node.id == target).unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(target_node.link_count, 0);
+        assert!(edges.is_empty());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

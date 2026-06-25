@@ -1,6 +1,7 @@
 import { listDirectory, readFile } from "@/commands/fs"
 import { anyTxtSearchSmart } from "@/lib/anytxt-search"
 import { computeContextBudget } from "@/lib/context-budget"
+import { searchResultPathToGraphNodeId } from "@/lib/graph-page-identity"
 import { isGreeting } from "@/lib/greeting-detector"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
@@ -1000,7 +1001,7 @@ function collectGraphResults(projectPath: string, base: SearchResult[], graph: R
   const candidates = new Map<string, { title: string; path: string; relevance: number }>()
   const hitPaths = new Set(base.slice(0, 6).map((item) => normalizePath(item.path)))
   for (const result of base.slice(0, 6)) {
-    const nodeId = getFileName(result.path).replace(/\.md$/, "")
+    const nodeId = searchResultPathToGraphNodeId(projectPath, result.path)
     for (const { node, relevance } of getRelatedNodes(nodeId, graph, 5)) {
       if (relevance < 1.5 || hitPaths.has(normalizePath(node.path))) continue
       const path = normalizePath(node.path)

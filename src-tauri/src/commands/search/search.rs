@@ -1048,7 +1048,7 @@ impl PageIdentityIndex {
     }
 }
 
-fn wiki_relative_path_to_vector_page_id(path: &str) -> Option<String> {
+pub(crate) fn wiki_relative_path_to_vector_page_id(path: &str) -> Option<String> {
     let wiki_path = normalize_path(path);
     if wiki_path.starts_with('/') || !wiki_path.starts_with("wiki/") {
         return None;
