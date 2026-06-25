@@ -225,6 +225,23 @@ export function apiConfigFromDraft(draft: SettingsDraft) {
   }
 }
 
+export async function persistAppPreferences(
+  draft: Pick<SettingsDraft, "theme" | "closeBehavior">,
+  deps: {
+    saveTheme: (theme: AppTheme) => Promise<void>
+    saveCloseBehavior: (behavior: CloseBehavior) => Promise<void>
+    activateThemePreference: (theme: AppTheme) => unknown
+    setSavedTheme: (theme: AppTheme) => void
+    setSavedCloseBehavior: (behavior: CloseBehavior) => void
+  },
+): Promise<void> {
+  await deps.saveTheme(draft.theme)
+  deps.setSavedTheme(draft.theme)
+  deps.activateThemePreference(draft.theme)
+  await deps.saveCloseBehavior(draft.closeBehavior)
+  deps.setSavedCloseBehavior(draft.closeBehavior)
+}
+
 export function SettingsView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
@@ -519,11 +536,13 @@ export function SettingsView() {
     setMaxHistoryMessages(draft.maxHistoryMessages)
     useZoomStore.getState().setLevel(draft.zoomLevel)
     await saveZoomLevel(draft.zoomLevel)
-    await saveTheme(draft.theme)
-    setSavedTheme(draft.theme)
-    activateThemePreference(draft.theme)
-    await saveCloseBehavior(draft.closeBehavior)
-    setSavedCloseBehavior(draft.closeBehavior)
+    await persistAppPreferences(draft, {
+      saveTheme,
+      saveCloseBehavior,
+      activateThemePreference,
+      setSavedTheme,
+      setSavedCloseBehavior,
+    })
 
     // ── API server: persist + push to store. The Rust side reads
     // `apiConfig.{enabled,token,mcpEnabled}` from this same `app-state.json` on

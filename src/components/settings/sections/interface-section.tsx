@@ -74,6 +74,7 @@ export function InterfaceSection({ draft, setDraft }: Props) {
               <button
                 key={l.value}
                 type="button"
+                aria-pressed={active}
                 onClick={() => setDraft("uiLanguage", l.value)}
                 className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                   active
@@ -100,6 +101,7 @@ export function InterfaceSection({ draft, setDraft }: Props) {
               <button
                 key={theme.value}
                 type="button"
+                aria-pressed={active}
                 onClick={() => setDraft("theme", theme.value)}
                 className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                   active

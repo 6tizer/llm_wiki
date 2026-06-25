@@ -4,6 +4,7 @@ import {
   coerceSettingsCategory,
   getSettingsCategories,
   isMacLikeRuntime,
+  persistAppPreferences,
 } from "./settings-view"
 
 describe("settings platform categories", () => {
@@ -24,5 +25,47 @@ describe("settings platform categories", () => {
     const nonMacCategories = getSettingsCategories(false)
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
     expect(coerceSettingsCategory("general", nonMacCategories)).toBe("llm")
+  })
+})
+
+describe("settings app preference save flow", () => {
+  it("flushes theme, applies it, then saves close behavior", async () => {
+    const calls: string[] = []
+    const saved = {
+      theme: "",
+      closeBehavior: "",
+    }
+
+    await persistAppPreferences(
+      { theme: "dark", closeBehavior: "quit" },
+      {
+        saveTheme: async (theme) => {
+          calls.push(`saveTheme:${theme}`)
+        },
+        activateThemePreference: (theme) => {
+          calls.push(`activateTheme:${theme}`)
+        },
+        saveCloseBehavior: async (behavior) => {
+          calls.push(`saveCloseBehavior:${behavior}`)
+        },
+        setSavedTheme: (theme) => {
+          saved.theme = theme
+          calls.push(`setSavedTheme:${theme}`)
+        },
+        setSavedCloseBehavior: (behavior) => {
+          saved.closeBehavior = behavior
+          calls.push(`setSavedCloseBehavior:${behavior}`)
+        },
+      },
+    )
+
+    expect(calls).toEqual([
+      "saveTheme:dark",
+      "setSavedTheme:dark",
+      "activateTheme:dark",
+      "saveCloseBehavior:quit",
+      "setSavedCloseBehavior:quit",
+    ])
+    expect(saved).toEqual({ theme: "dark", closeBehavior: "quit" })
   })
 })

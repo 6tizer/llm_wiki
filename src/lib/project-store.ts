@@ -1,4 +1,5 @@
 import { load } from "@tauri-apps/plugin-store"
+import { invoke } from "@tauri-apps/api/core"
 import type { WikiProject } from "@/types/wiki"
 import type { ApiConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
@@ -366,6 +367,7 @@ export async function loadZoomLevel(): Promise<number> {
 export async function saveTheme(theme: AppTheme): Promise<void> {
   const store = await getStore()
   await store.set(THEME_KEY, normalizeTheme(theme))
+  await store.save()
 }
 
 export async function loadTheme(): Promise<AppTheme> {
@@ -375,10 +377,16 @@ export async function loadTheme(): Promise<AppTheme> {
 
 export async function saveCloseBehavior(behavior: CloseBehavior): Promise<void> {
   const store = await getStore()
-  await store.set(CLOSE_BEHAVIOR_KEY, normalizeCloseBehavior(behavior))
+  const normalized = normalizeCloseBehavior(behavior)
+  await store.set(CLOSE_BEHAVIOR_KEY, normalized)
   // Rust reads this global setting directly from app-state.json in the
   // titlebar close handler, so Save must reach disk before the next close.
   await store.save()
+  try {
+    await invoke<string>("set_close_behavior", { behavior: normalized })
+  } catch (err) {
+    console.warn("[close-behavior] live update failed; restart will still apply:", err)
+  }
 }
 
 export async function loadCloseBehavior(): Promise<CloseBehavior> {

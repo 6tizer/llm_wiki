@@ -33,6 +33,7 @@ export function GeneralSection({ draft, setDraft }: Props) {
               <button
                 key={behavior.value}
                 type="button"
+                aria-pressed={active}
                 onClick={() => setDraft("closeBehavior", behavior.value)}
                 className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                   active
