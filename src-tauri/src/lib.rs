@@ -7,11 +7,49 @@ mod types;
 
 use panic_guard::run_guarded;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::Manager;
 
 const APP_STATE_FILE_NAME: &str = "app-state.json";
 const LEGACY_BUNDLE_ID: &str = "com.llmwiki.app";
 const LEGACY_PRODUCT_NAME: &str = "LLM Wiki";
+const CLOSE_BEHAVIOR_KEY: &str = "closeBehavior";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseBehavior {
+    Hide,
+    Quit,
+}
+
+impl CloseBehavior {
+    fn as_str(self) -> &'static str {
+        match self {
+            CloseBehavior::Hide => "hide",
+            CloseBehavior::Quit => "quit",
+        }
+    }
+}
+
+struct CloseBehaviorState(Mutex<CloseBehavior>);
+
+impl CloseBehaviorState {
+    fn new(initial: CloseBehavior) -> Self {
+        Self(Mutex::new(initial))
+    }
+
+    fn get(&self) -> CloseBehavior {
+        self.0
+            .lock()
+            .map(|behavior| *behavior)
+            .unwrap_or(CloseBehavior::Hide)
+    }
+
+    fn set(&self, behavior: CloseBehavior) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = behavior;
+        }
+    }
+}
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -97,6 +135,85 @@ fn set_proxy_env(config: proxy::ProxyConfig) -> String {
     summary
 }
 
+fn close_behavior_from_str(value: Option<&str>) -> CloseBehavior {
+    match value {
+        Some("quit") => CloseBehavior::Quit,
+        _ => CloseBehavior::Hide,
+    }
+}
+
+fn close_behavior_from_value(value: Option<&serde_json::Value>) -> CloseBehavior {
+    close_behavior_from_str(value.and_then(serde_json::Value::as_str))
+}
+
+fn read_close_behavior_from_store(store_path: &Path) -> CloseBehavior {
+    let Ok(raw) = std::fs::read_to_string(store_path) else {
+        return CloseBehavior::Hide;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return CloseBehavior::Hide;
+    };
+    close_behavior_from_value(parsed.get(CLOSE_BEHAVIOR_KEY))
+}
+
+#[tauri::command]
+fn set_close_behavior(
+    state: tauri::State<'_, CloseBehaviorState>,
+    behavior: String,
+) -> Result<String, String> {
+    let normalized = close_behavior_from_str(Some(behavior.as_str()));
+    state.set(normalized);
+    Ok(normalized.as_str().to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let mut tray = TrayIconBuilder::with_id("main")
+        .tooltip("LLM Wiki Agent")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            if event.id() == "show" {
+                show_main_window(app);
+            } else if event.id() == "quit" {
+                app.exit(0);
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon).icon_as_template(true);
+    }
+
+    tray.build(app)?;
+    Ok(())
+}
+
 fn legacy_app_state_candidates(current_app_data_dir: &Path) -> Vec<PathBuf> {
     let Some(parent) = current_app_data_dir.parent() else {
         return Vec::new();
@@ -174,7 +291,7 @@ pub fn run() {
             // to the resource-dir hint so the proxy applies to
             // everything: LLM, embedding, update check, deep
             // research, captioning. See src-tauri/src/proxy.rs.
-            if let Ok(dir) = app.path().app_data_dir() {
+            let app_state_path = if let Ok(dir) = app.path().app_data_dir() {
                 migrate_legacy_app_state(&dir);
                 let store_path = dir.join(APP_STATE_FILE_NAME);
                 eprintln!("[proxy] reading from {}", store_path.display());
@@ -184,9 +301,16 @@ pub fn run() {
                 } else {
                     eprintln!("[proxy] no proxyConfig in store, requests go direct");
                 }
+                Some(store_path)
             } else {
                 eprintln!("[proxy] could not resolve app_data_dir");
-            }
+                None
+            };
+            let initial_close_behavior = app_state_path
+                .as_deref()
+                .map(read_close_behavior_from_store)
+                .unwrap_or(CloseBehavior::Hide);
+            app.manage(CloseBehaviorState::new(initial_close_behavior));
             // Registry of running `claude` subprocesses, keyed by the
             // frontend-generated stream id. Populated by claude_cli_spawn,
             // drained on process exit or by claude_cli_kill.
@@ -196,6 +320,10 @@ pub fn run() {
             app.manage(commands::file_sync::ProjectRootState::default());
             app.manage(commands::agent::AgentState::default());
             api_server::start_api_server(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            if let Err(err) = setup_macos_tray(app) {
+                eprintln!("[tray] could not initialize macOS tray; continuing without tray: {err}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -224,6 +352,7 @@ pub fn run() {
             api_server_status,
             api_server_reload_config,
             mcp_server_entry_path,
+            set_close_behavior,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,
@@ -265,8 +394,16 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = window.hide();
-                    api.prevent_close();
+                    match window.app_handle().state::<CloseBehaviorState>().get() {
+                        CloseBehavior::Quit => {
+                            api.prevent_close();
+                            window.app_handle().exit(0);
+                        }
+                        CloseBehavior::Hide => {
+                            let _ = window.hide();
+                            api.prevent_close();
+                        }
+                    }
                 }
 
                 #[cfg(not(target_os = "macos"))]
@@ -315,6 +452,19 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_store_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "llm-wiki-close-behavior-{label}-{}-{nanos}.json",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn legacy_app_state_candidates_use_current_parent() {
@@ -330,5 +480,77 @@ mod tests {
                 PathBuf::from("/Users/example/Library/Application Support/LLM Wiki/app-state.json"),
             ]
         );
+    }
+
+    #[test]
+    fn close_behavior_defaults_to_hide_for_absent_or_invalid_values() {
+        assert_eq!(close_behavior_from_value(None), CloseBehavior::Hide);
+        assert_eq!(
+            close_behavior_from_value(Some(&serde_json::json!("ask"))),
+            CloseBehavior::Hide
+        );
+        assert_eq!(
+            close_behavior_from_value(Some(&serde_json::json!("minimize"))),
+            CloseBehavior::Hide
+        );
+    }
+
+    #[test]
+    fn close_behavior_accepts_hide_and_quit_only() {
+        assert_eq!(
+            close_behavior_from_value(Some(&serde_json::json!("hide"))),
+            CloseBehavior::Hide
+        );
+        assert_eq!(
+            close_behavior_from_value(Some(&serde_json::json!("quit"))),
+            CloseBehavior::Quit
+        );
+    }
+
+    #[test]
+    fn read_close_behavior_from_store_defaults_to_hide_for_absent_or_invalid_store() {
+        let missing = temp_store_path("missing");
+        assert_eq!(
+            read_close_behavior_from_store(&missing),
+            CloseBehavior::Hide
+        );
+
+        let invalid_json = temp_store_path("invalid-json");
+        fs::write(&invalid_json, "{").expect("write invalid json store");
+        assert_eq!(
+            read_close_behavior_from_store(&invalid_json),
+            CloseBehavior::Hide
+        );
+        let _ = fs::remove_file(invalid_json);
+
+        let invalid_value = temp_store_path("invalid-value");
+        fs::write(&invalid_value, r#"{"closeBehavior":"ask"}"#)
+            .expect("write invalid close behavior store");
+        assert_eq!(
+            read_close_behavior_from_store(&invalid_value),
+            CloseBehavior::Hide
+        );
+        let _ = fs::remove_file(invalid_value);
+    }
+
+    #[test]
+    fn read_close_behavior_from_store_accepts_hide_and_quit() {
+        let hide = temp_store_path("hide");
+        fs::write(&hide, r#"{"closeBehavior":"hide"}"#).expect("write hide store");
+        assert_eq!(read_close_behavior_from_store(&hide), CloseBehavior::Hide);
+        let _ = fs::remove_file(hide);
+
+        let quit = temp_store_path("quit");
+        fs::write(&quit, r#"{"closeBehavior":"quit"}"#).expect("write quit store");
+        assert_eq!(read_close_behavior_from_store(&quit), CloseBehavior::Quit);
+        let _ = fs::remove_file(quit);
+    }
+
+    #[test]
+    fn close_behavior_state_caches_and_updates_value() {
+        let state = CloseBehaviorState::new(CloseBehavior::Hide);
+        assert_eq!(state.get(), CloseBehavior::Hide);
+        state.set(CloseBehavior::Quit);
+        assert_eq!(state.get(), CloseBehavior::Quit);
     }
 }

@@ -1,5 +1,7 @@
 import type { CustomApiMode } from "./llm-presets"
 import type { AzureModelFamily, MineruModelVersion, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { AppTheme } from "@/lib/theme"
+import type { CloseBehavior } from "@/lib/project-store"
 
 /**
  * Shape of the draft state each section reads from and writes into.
@@ -69,6 +71,10 @@ export interface SettingsDraft {
   // UI
   uiLanguage: string
   zoomLevel: number
+  theme: AppTheme
+
+  // General app behavior
+  closeBehavior: CloseBehavior
 
   // Source folder auto watch
   sourceWatchConfig: SourceWatchConfig

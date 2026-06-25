@@ -8,7 +8,8 @@ import { useChatStore } from "@/stores/chat-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { BASE_FONT_SIZE_PX, useZoomStore } from "@/stores/zoom-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMineruConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig, loadZoomLevel } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMineruConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig, loadZoomLevel, loadTheme } from "@/lib/project-store"
+import { activateThemePreference } from "@/lib/theme"
 import { loadAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { cleanExpiredAgentSessions, loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
@@ -267,6 +268,7 @@ function App() {
           })
         }
         useZoomStore.getState().setLevel(await loadZoomLevel())
+        activateThemePreference(await loadTheme())
         const savedLang = await loadLanguage()
         if (savedLang) {
           await i18n.changeLanguage(savedLang)

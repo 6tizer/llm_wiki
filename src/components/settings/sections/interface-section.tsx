@@ -15,6 +15,12 @@ const UI_LANGUAGES = [
   { value: "zh", label: "中文" },
 ]
 
+const THEMES = [
+  { value: "system", labelKey: "settings.sections.interface.themeSystem" },
+  { value: "light", labelKey: "settings.sections.interface.themeLight" },
+  { value: "dark", labelKey: "settings.sections.interface.themeDark" },
+] as const
+
 /** Parse a zoom percent input and fall back to the current level when invalid. */
 export function parseZoomPercentInput(
   inputText: string,
@@ -68,6 +74,7 @@ export function InterfaceSection({ draft, setDraft }: Props) {
               <button
                 key={l.value}
                 type="button"
+                aria-pressed={active}
                 onClick={() => setDraft("uiLanguage", l.value)}
                 className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                   active
@@ -82,6 +89,33 @@ export function InterfaceSection({ draft, setDraft }: Props) {
         </div>
         <p className="text-xs text-muted-foreground">
           {t("settings.sections.interface.uiLanguageHint")}
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label>{t("settings.sections.interface.theme")}</Label>
+        <div className="flex flex-wrap gap-2">
+          {THEMES.map((theme) => {
+            const active = draft.theme === theme.value
+            return (
+              <button
+                key={theme.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setDraft("theme", theme.value)}
+                className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                  active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border hover:bg-accent"
+                }`}
+              >
+                {t(theme.labelKey)}
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {t("settings.sections.interface.themeHint")}
         </p>
       </div>
 

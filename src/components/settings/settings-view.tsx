@@ -5,6 +5,7 @@ import {
   Globe,
   Languages,
   Palette,
+  Settings,
   Info,
   Image as ImageIcon,
   Network,
@@ -25,8 +26,9 @@ import { useChatStore } from "@/stores/chat-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { useZoomStore } from "@/stores/zoom-store"
-import { loadSourceWatchConfig, saveLanguage } from "@/lib/project-store"
+import { loadCloseBehavior, loadSourceWatchConfig, loadTheme, saveLanguage, type CloseBehavior } from "@/lib/project-store"
 import { saveAgentResourceConfig } from "@/lib/agent/agent-settings"
+import { activateThemePreference, readThemeMirror, type AppTheme } from "@/lib/theme"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { LlmProviderSection } from "./sections/llm-provider-section"
@@ -35,6 +37,7 @@ import { MultimodalSection } from "./sections/multimodal-section"
 import { WebSearchSection } from "./sections/web-search-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
+import { GeneralSection } from "./sections/general-section"
 import { NetworkSection } from "./sections/network-section"
 import { ScheduledImportSection } from "./sections/scheduled-import-section"
 import { SourceWatchSection } from "./sections/source-watch-section"
@@ -45,7 +48,7 @@ import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
 
-type CategoryId =
+export type CategoryId =
   | "llm"
   | "embedding"
   | "multimodal"
@@ -56,11 +59,20 @@ type CategoryId =
   | "mineru"
   | "api-server"
   | "agent"
+  | "general"
   | "output"
   | "interface"
   | "maintenance"
   | "changelog"
   | "about"
+
+interface RuntimeNavigatorLike {
+  platform?: string
+  userAgent?: string
+  userAgentData?: {
+    platform?: string
+  }
+}
 
 interface Category {
   id: CategoryId
@@ -82,12 +94,38 @@ const CATEGORIES: Category[] = [
   { id: "mineru", labelKey: "settings.categories.mineru", icon: FileText },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
   { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
+  { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
+
+export function isMacLikeRuntime(
+  navigatorLike: RuntimeNavigatorLike =
+    typeof globalThis.navigator === "undefined" ? {} : globalThis.navigator,
+): boolean {
+  const signals = [
+    navigatorLike.userAgentData?.platform,
+    navigatorLike.platform,
+    navigatorLike.userAgent,
+  ]
+  return signals.some((signal) => /mac|darwin/i.test(signal ?? ""))
+}
+
+export function getSettingsCategories(isMacLike = isMacLikeRuntime()): Category[] {
+  return isMacLike ? CATEGORIES : CATEGORIES.filter((category) => category.id !== "general")
+}
+
+export function coerceSettingsCategory(
+  active: CategoryId,
+  categories: Category[],
+): CategoryId {
+  return categories.some((category) => category.id === active)
+    ? active
+    : categories[0]?.id ?? "llm"
+}
 
 export function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
@@ -104,6 +142,8 @@ export function initialDraft(
   uiLanguage: string,
   projectPath?: string,
   zoomLevel?: number,
+  theme: AppTheme = readThemeMirror(),
+  closeBehavior: CloseBehavior = "hide",
 ): SettingsDraft {
   // Show absolute path: if stored path is empty, show default using project path
   // If stored path is relative (legacy), prepend project path
@@ -171,6 +211,8 @@ export function initialDraft(
     agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
     uiLanguage,
     zoomLevel: zoomLevel ?? useZoomStore.getState().level,
+    theme,
+    closeBehavior,
   }
 }
 
@@ -181,6 +223,23 @@ export function apiConfigFromDraft(draft: SettingsDraft) {
     mcpEnabled: draft.apiMcpEnabled,
     token: draft.apiToken.trim(),
   }
+}
+
+export async function persistAppPreferences(
+  draft: Pick<SettingsDraft, "theme" | "closeBehavior">,
+  deps: {
+    saveTheme: (theme: AppTheme) => Promise<void>
+    saveCloseBehavior: (behavior: CloseBehavior) => Promise<void>
+    activateThemePreference: (theme: AppTheme) => unknown
+    setSavedTheme: (theme: AppTheme) => void
+    setSavedCloseBehavior: (behavior: CloseBehavior) => void
+  },
+): Promise<void> {
+  await deps.saveTheme(draft.theme)
+  deps.setSavedTheme(draft.theme)
+  deps.activateThemePreference(draft.theme)
+  await deps.saveCloseBehavior(draft.closeBehavior)
+  deps.setSavedCloseBehavior(draft.closeBehavior)
 }
 
 export function SettingsView() {
@@ -221,6 +280,8 @@ export function SettingsView() {
 
   const [active, setActive] = useState<CategoryId>("llm")
   const [saved, setSaved] = useState(false)
+  const [savedTheme, setSavedTheme] = useState<AppTheme>(() => readThemeMirror())
+  const [savedCloseBehavior, setSavedCloseBehavior] = useState<CloseBehavior>("hide")
   const [draft, setDraftState] = useState<SettingsDraft>(() =>
     initialDraft(
       llmConfig,
@@ -237,8 +298,32 @@ export function SettingsView() {
       i18n.language,
       project?.path,
       zoomLevel,
+      savedTheme,
+      savedCloseBehavior,
     ),
   )
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([loadTheme(), loadCloseBehavior()]).then(([theme, closeBehavior]) => {
+      if (cancelled) return
+      setDraftState((prev) => ({
+        ...prev,
+        theme: prev.theme === savedTheme ? theme : prev.theme,
+        closeBehavior:
+          prev.closeBehavior === savedCloseBehavior
+            ? closeBehavior
+            : prev.closeBehavior,
+      }))
+      setSavedTheme(theme)
+      setSavedCloseBehavior(closeBehavior)
+    }).catch(() => {
+      // Keep defaults if global preferences cannot be read.
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -268,6 +353,8 @@ export function SettingsView() {
   // revert the UI to the previous language.
   // Preserve pending zoom edits the same way; unrelated store updates can
   // happen before the user presses Save.
+  // Theme and close behavior are global app-state preferences; preserve
+  // pending edits across the same mid-save resyncs.
   useEffect(() => {
     setDraftState((prev) =>
       initialDraft(
@@ -285,6 +372,8 @@ export function SettingsView() {
         prev.uiLanguage,
         project?.path,
         prev.zoomLevel,
+        prev.theme,
+        prev.closeBehavior,
       ),
     )
   }, [
@@ -306,6 +395,15 @@ export function SettingsView() {
     setDraftState((prev) => ({ ...prev, [key]: value }))
   }, [])
 
+  const categories = useMemo(() => getSettingsCategories(), [])
+  const activeCategory = coerceSettingsCategory(active, categories)
+
+  useEffect(() => {
+    if (active !== activeCategory) {
+      setActive(activeCategory)
+    }
+  }, [active, activeCategory])
+
   const handleSave = useCallback(async () => {
     const {
       saveLlmConfig,
@@ -318,6 +416,8 @@ export function SettingsView() {
       saveMineruConfig,
       saveApiConfig,
       saveZoomLevel,
+      saveTheme,
+      saveCloseBehavior,
     } = await import("@/lib/project-store")
 
     const newLlm = {
@@ -436,6 +536,13 @@ export function SettingsView() {
     setMaxHistoryMessages(draft.maxHistoryMessages)
     useZoomStore.getState().setLevel(draft.zoomLevel)
     await saveZoomLevel(draft.zoomLevel)
+    await persistAppPreferences(draft, {
+      saveTheme,
+      saveCloseBehavior,
+      activateThemePreference,
+      setSavedTheme,
+      setSavedCloseBehavior,
+    })
 
     // ── API server: persist + push to store. The Rust side reads
     // `apiConfig.{enabled,token,mcpEnabled}` from this same `app-state.json` on
@@ -489,7 +596,7 @@ export function SettingsView() {
   ])
 
   const body = useMemo(() => {
-    switch (active) {
+    switch (activeCategory) {
       case "llm":
         // The LLM section manages its own store state (per-provider
         // configs + active preset) and persists directly — it bypasses
@@ -513,6 +620,8 @@ export function SettingsView() {
         return <ApiServerSection draft={draft} setDraft={setDraft} />
       case "agent":
         return <AgentSection draft={draft} setDraft={setDraft} projectReady={!!project} />
+      case "general":
+        return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":
@@ -524,7 +633,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [active, draft, setDraft])
+  }, [activeCategory, draft, setDraft])
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -535,9 +644,9 @@ export function SettingsView() {
           {t("settings.title")}
         </div>
         <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {CATEGORIES.map((c) => {
+          {categories.map((c) => {
             const Icon = c.icon
-            const isActive = c.id === active
+            const isActive = c.id === activeCategory
             // Mirror the gear-icon dot inside the settings sidebar
             // so the user can find which sub-section the update
             // notification is pointing at. Update info lives in
@@ -586,7 +695,7 @@ export function SettingsView() {
         {/* Global Save bar hidden for sections that persist inline:
             - "llm" saves per-row on every edit (independent per-preset state)
             - "about" has no draft-bound fields */}
-        {active !== "about" && active !== "llm" && (
+        {activeCategory !== "about" && activeCategory !== "llm" && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">

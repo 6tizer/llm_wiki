@@ -390,6 +390,7 @@
       "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
       "agent": "Agent",
+      "general": "General",
       "output": "Output",
       "interface": "Interface",
       "maintenance": "Maintenance",
@@ -715,11 +716,24 @@
         "historyHint": "Number of prior messages sent to the AI on each request. More = richer context but more tokens.",
         "historyCurrent": "Currently {{count}} messages (about {{turns}} turns)"
       },
+      "general": {
+        "title": "General",
+        "description": "App-level behavior for the desktop shell.",
+        "closeBehavior": "When closing the main window",
+        "closeBehaviorHide": "Hide",
+        "closeBehaviorQuit": "Quit",
+        "closeBehaviorHint": "Hide keeps LLM Wiki Agent running in the menu bar. Quit exits the app."
+      },
       "interface": {
         "title": "Interface",
-        "description": "UI language and appearance. Changes apply immediately and persist.",
+        "description": "UI language and appearance. Changes apply after saving Settings.",
         "uiLanguage": "UI Language",
         "uiLanguageHint": "Affects labels, buttons, and other UI strings only. The AI output language is set separately in Output Preferences.",
+        "theme": "Theme",
+        "themeSystem": "System",
+        "themeLight": "Light",
+        "themeDark": "Dark",
+        "themeHint": "Controls the app color scheme across windows.",
         "zoom": "Zoom",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

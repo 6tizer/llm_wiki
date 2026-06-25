@@ -1,9 +1,11 @@
 import { load } from "@tauri-apps/plugin-store"
+import { invoke } from "@tauri-apps/api/core"
 import type { WikiProject } from "@/types/wiki"
 import type { ApiConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MineruConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
 import { DEFAULT_ZOOM_LEVEL, clampZoomLevel } from "@/stores/zoom-store"
+import { DEFAULT_APP_THEME, normalizeTheme, type AppTheme } from "@/lib/theme"
 
 const STORE_NAME = "app-state.json"
 const RECENT_PROJECTS_KEY = "recentProjects"
@@ -329,6 +331,14 @@ export async function loadUpdateCheckState(): Promise<PersistedUpdateCheckState 
 }
 
 const ZOOM_LEVEL_KEY = "zoomLevel"
+const THEME_KEY = "theme"
+const CLOSE_BEHAVIOR_KEY = "closeBehavior"
+
+export type CloseBehavior = "hide" | "quit"
+
+function normalizeCloseBehavior(value: unknown): CloseBehavior {
+  return value === "quit" || value === "hide" ? value : "hide"
+}
 
 function normalizeZoomLevel(level: unknown): number {
   return typeof level === "number" && Number.isFinite(level)
@@ -338,6 +348,8 @@ function normalizeZoomLevel(level: unknown): number {
 
 export const __projectStoreTest = {
   normalizeZoomLevel,
+  normalizeCloseBehavior,
+  normalizeTheme,
 }
 
 export async function saveZoomLevel(level: number): Promise<void> {
@@ -350,4 +362,34 @@ export async function loadZoomLevel(): Promise<number> {
   const store = await getStore()
   const level = await store.get<number>(ZOOM_LEVEL_KEY)
   return normalizeZoomLevel(level)
+}
+
+export async function saveTheme(theme: AppTheme): Promise<void> {
+  const store = await getStore()
+  await store.set(THEME_KEY, normalizeTheme(theme))
+  await store.save()
+}
+
+export async function loadTheme(): Promise<AppTheme> {
+  const store = await getStore()
+  return normalizeTheme((await store.get<AppTheme>(THEME_KEY)) ?? DEFAULT_APP_THEME)
+}
+
+export async function saveCloseBehavior(behavior: CloseBehavior): Promise<void> {
+  const store = await getStore()
+  const normalized = normalizeCloseBehavior(behavior)
+  await store.set(CLOSE_BEHAVIOR_KEY, normalized)
+  // Rust reads this global setting directly from app-state.json in the
+  // titlebar close handler, so Save must reach disk before the next close.
+  await store.save()
+  try {
+    await invoke<string>("set_close_behavior", { behavior: normalized })
+  } catch (err) {
+    console.warn("[close-behavior] live update failed; restart will still apply:", err)
+  }
+}
+
+export async function loadCloseBehavior(): Promise<CloseBehavior> {
+  const store = await getStore()
+  return normalizeCloseBehavior(await store.get<CloseBehavior>(CLOSE_BEHAVIOR_KEY))
 }

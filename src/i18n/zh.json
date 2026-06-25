@@ -390,6 +390,7 @@
       "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
       "agent": "Agent",
+      "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
       "maintenance": "维护",
@@ -715,11 +716,24 @@
         "historyHint": "每次请求发给 AI 的历史消息条数。多 = 上下文更完整但更费 token。",
         "historyCurrent": "当前 {{count}} 条消息（约 {{turns}} 轮对话）"
       },
+      "general": {
+        "title": "通用",
+        "description": "桌面应用级行为设置。",
+        "closeBehavior": "关闭主窗口时",
+        "closeBehaviorHide": "隐藏",
+        "closeBehaviorQuit": "退出",
+        "closeBehaviorHint": "隐藏会让 LLM Wiki Agent 继续留在菜单栏运行；退出会关闭应用。"
+      },
       "interface": {
         "title": "界面",
-        "description": "界面语言和外观样式。切换后立即生效并持久化。",
+        "description": "界面语言和外观样式。保存设置后生效。",
         "uiLanguage": "UI 语言",
         "uiLanguageHint": "只影响按钮、标签这些 UI 文案,不影响 AI 输出语言(那个在\"输出偏好\"里单独设置)。",
+        "theme": "主题",
+        "themeSystem": "跟随系统",
+        "themeLight": "浅色",
+        "themeDark": "深色",
+        "themeHint": "控制整个应用窗口的颜色模式。",
         "zoom": "缩放",
         "zoomIn": "放大",
         "zoomOut": "缩小",
