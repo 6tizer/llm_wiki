@@ -16,7 +16,7 @@ import {
 	useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { deleteFile, listDirectory, readFile } from "@/commands/fs";
+import { deleteFile, listDirectory } from "@/commands/fs";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -49,23 +49,11 @@ import type {
 	AgentActionRequiredPayload,
 	AgentRewindFilesPayload,
 } from "@/lib/agent/agent-types";
-import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "@/lib/anytxt-search";
-import { computeContextBudget } from "@/lib/context-budget";
-import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance";
-import { isGreeting } from "@/lib/greeting-detector";
+import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
 import { executeIngestWrites } from "@/lib/ingest";
-import { type ChatMessage as LLMMessage, streamChat } from "@/lib/llm-client";
-import {
-	buildLanguageReminder,
-	getOutputLanguage,
-} from "@/lib/output-language";
-import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils";
-import { searchWiki } from "@/lib/search";
-import {
-	resolveSearchConfig,
-	type WebSearchResult,
-	webSearch,
-} from "@/lib/web-search";
+import { streamChat } from "@/lib/llm-client";
+import { normalizePath } from "@/lib/path-utils";
+import { buildChatAgentMessages, type ChatAgentEvent } from "@/lib/chat-agent";
 import {
 	chatMessagesToLLM,
 	type DisplayMessage,
@@ -90,20 +78,6 @@ import { ChatInput, type ChatSendOptions } from "./chat-input";
 import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message";
 // Store the page mapping from the last query so SourceFilesBar can show which pages were cited
 export let lastQueryPages: { title: string; path: string }[] = [];
-function formatExternalSearchContext(results: WebSearchResult[]): string {
-	if (results.length === 0) return "";
-	return results
-		.map((result, index) =>
-			[
-				`### [E${index + 1}] ${result.title}`,
-				`Source: ${result.source}`,
-				`URL: ${result.url}`,
-				"",
-				result.snippet,
-			].join("\n"),
-		)
-		.join("\n\n---\n\n");
-}
 function formatDate(timestamp: number): string {
 	const d = new Date(timestamp);
 	const now = new Date();
@@ -112,19 +86,6 @@ function formatDate(timestamp: number): string {
 		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	}
 	return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function prependReminderToContent(
-	content: LLMMessage["content"],
-	reminder: string,
-): LLMMessage["content"] {
-	const prefix = `[${reminder}]`;
-	if (typeof content === "string") return `${prefix}\n\n${content}`;
-	const [first, ...rest] = content;
-	if (first?.type === "text") {
-		return [{ ...first, text: `${prefix}\n\n${first.text}` }, ...rest];
-	}
-	return [{ type: "text", text: prefix }, ...content];
 }
 
 export function shouldPromptForQaBeforeConversationDelete(
@@ -543,6 +504,7 @@ export function ChatPanel() {
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const bottomRef = useRef<HTMLDivElement>(null);
 	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle");
+	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
 	// Auto-scroll to bottom when messages change or streaming content updates
 	useEffect(() => {
 		const container = scrollContainerRef.current;
@@ -803,6 +765,7 @@ export function ChatPanel() {
 			options: ChatSendOptions = {
 				useWebSearch: false,
 				useAnyTxtSearch: false,
+				agentMode: "standard",
 			},
 		) => {
 			if (mode === "agent") {
@@ -819,354 +782,103 @@ export function ChatPanel() {
 			addMessage("user", text, {
 				images: chatImages,
 				mode: mode === "ingest" ? "ingest" : undefined,
+				chatOptions: mode === "chat" ? options : undefined,
 			});
 			setStreaming(true);
-			// Build system prompt with wiki context using graph-enhanced retrieval
-			const systemMessages: LLMMessage[] = [];
-			let queryRefs: MessageReference[] = [];
-			let langReminder: string | undefined;
-			// Pure greetings ("hi", "你好", "嗨") don't warrant running the whole
-			// retrieval pipeline — it's slow, costs context, and drags in random
-			// wiki pages the user clearly didn't ask about. Short-circuit with a
-			// minimal system prompt and let the model reply conversationally.
-			const greetingOnly = isGreeting(text);
-			if (project && greetingOnly) {
-				const outLang = getOutputLanguage(text);
-				systemMessages.push({
-					role: "system",
-					content: [
-						`You are a wiki assistant for the project "${project.name}".`,
-						"The user sent a casual greeting — reply briefly and naturally, in one or two sentences.",
-						"Do NOT invent wiki content or pretend to have retrieved pages. Invite the user to ask a concrete question if they want information from the wiki.",
-						"",
-						`Respond in ${outLang}.`,
-					].join("\n"),
+			try {
+				setChatAgentEvents([]);
+				const controller = new AbortController();
+				abortRef.current = controller;
+				const activeConvMessages = useChatStore
+					.getState()
+					.getActiveMessages()
+					.filter((m) => m.role === "user" || m.role === "assistant")
+					.slice(-maxHistoryMessages);
+				const historyMessages = chatMessagesToLLM(activeConvMessages);
+				const retrievalHistory = collectRecentRetrievalHistory(activeConvMessages);
+				const agentResult = await buildChatAgentMessages({
+					project: project ? { name: project.name, path: project.path } : null,
+					llmConfig,
+					searchApiConfig,
+					text,
+					historyMessages,
+					retrievalHistory,
+					dataVersion: useWikiStore.getState().dataVersion,
+					options,
+					signal: controller.signal,
+					onEvent: (event) => {
+						setChatAgentEvents((prev) => [...prev, event].slice(-6));
+					},
 				});
-				// Skip retrieval; queryRefs stays empty so no "Sources" chip is shown.
-			} else if (project) {
-				const pp = normalizePath(project.path);
-				const dataVersion = useWikiStore.getState().dataVersion;
-				// ── Budget allocation (see context-budget.ts) ─────────
-				// Page budget scales with the LLM's context window; we now
-				// also reserve ~15% as headroom for the response so the
-				// model isn't truncated mid-sentence on a packed prompt.
-				const {
-					indexBudget: INDEX_BUDGET,
-					pageBudget: PAGE_BUDGET,
-					maxPageSize: MAX_PAGE_SIZE,
-				} = computeContextBudget(llmConfig.maxContextSize);
-				const [rawIndex, purpose] = await Promise.all([
-					readFile(`${pp}/wiki/index.md`).catch(() => ""),
-					readFile(`${pp}/purpose.md`).catch(() => ""),
-				]);
-				// ── Phase 1: Tokenized search → top 10 ────────────────
-				const searchResults = await searchWiki(pp, text);
-				const topSearchResults = searchResults.slice(0, 10);
-				const resolvedExternalSearchConfig =
-					resolveSearchConfig(searchApiConfig);
-				const externalSearchResults: WebSearchResult[] = [];
-				const externalSearchErrors: string[] = [];
-				const externalCalls: Promise<WebSearchResult[]>[] = [];
-				if (options.useWebSearch) {
-					externalCalls.push(
-						webSearch(text, resolvedExternalSearchConfig, 5).catch((err) => {
-							externalSearchErrors.push(
-								`Web Search: ${err instanceof Error ? err.message : String(err)}`,
-							);
-							return [];
-						}),
-					);
-				}
-				if (options.useAnyTxtSearch) {
-					externalCalls.push(
-						anyTxtSearchSmart(
-							text,
-							resolvedExternalSearchConfig.anyTxt,
-							llmConfig,
-							5,
-							pp,
-						).catch((err) => {
-							externalSearchErrors.push(
-								`AnyTXT: ${err instanceof Error ? err.message : String(err)}`,
-							);
-							return [];
-						}),
-					);
-				}
-				if (externalCalls.length > 0) {
-					const batches = await Promise.all(externalCalls);
-					const seenExternal = new Set<string>();
-					for (const result of batches.flat()) {
-						const key =
-							result.url ||
-							`${result.source}:${result.title}:${result.snippet}`;
-						if (seenExternal.has(key)) continue;
-						seenExternal.add(key);
-						externalSearchResults.push(result);
-						if (externalSearchResults.length >= 10) break;
+				lastQueryPages = agentResult.queryPages;
+
+				let accumulated = "";
+				let thinkingOpen = false;
+				const appendReasoning = (token: string) => {
+					if (!token) return;
+					if (!thinkingOpen) {
+						thinkingOpen = true;
+						accumulated += "<think>";
+						appendStreamToken("<think>");
 					}
-				}
-				// ── Trim index by relevance if over budget ─────────────
-				let index = rawIndex;
-				if (rawIndex.length > INDEX_BUDGET) {
-					const { tokenizeQuery } = await import("@/lib/search");
-					const tokens = tokenizeQuery(text);
-					const lines = rawIndex.split("\n");
-					const keptLines: string[] = [];
-					let keptSize = 0;
-					for (const line of lines) {
-						const isHeader = line.startsWith("##");
-						const lower = line.toLowerCase();
-						const isRelevant = tokens.some((t) => lower.includes(t));
-						if (isHeader || isRelevant) {
-							if (keptSize + line.length + 1 <= INDEX_BUDGET) {
-								keptLines.push(line);
-								keptSize += line.length + 1;
-							}
-						}
-					}
-					index = keptLines.join("\n");
-					if (index.length < rawIndex.length) {
-						index += "\n\n[...index trimmed to relevant entries...]";
-					}
-				}
-				// ── Phase 2: Graph 1-level expansion ───────────────────
-				// Note: Vector search (if enabled) is already merged into searchResults
-				// by searchWiki() in search.ts — no duplicate code needed here.
-				const graph = await buildRetrievalGraph(pp, dataVersion);
-				const expandedIds = new Set<string>();
-				const searchHitPaths = new Set(topSearchResults.map((r) => r.path));
-				const graphExpansions: {
-					title: string;
-					path: string;
-					relevance: number;
-				}[] = [];
-				for (const result of topSearchResults) {
-					const fileName = getFileName(result.path);
-					const nodeId = fileName.replace(/\.md$/, "");
-					const related = getRelatedNodes(nodeId, graph, 3);
-					for (const { node, relevance } of related) {
-						if (relevance < 2.0) continue;
-						if (searchHitPaths.has(node.path)) continue;
-						if (expandedIds.has(node.id)) continue;
-						expandedIds.add(node.id);
-						graphExpansions.push({
-							title: node.title,
-							path: node.path,
-							relevance,
-						});
-					}
-				}
-				graphExpansions.sort((a, b) => b.relevance - a.relevance);
-				// ── Phase 3 & 4: Page budget control ───────────────────
-				let usedChars = 0;
-				type PageEntry = {
-					title: string;
-					path: string;
-					content: string;
-					priority: number;
+					accumulated += token;
+					appendStreamToken(token);
 				};
-				const relevantPages: PageEntry[] = [];
-				const tryAddPage = async (
-					title: string,
-					filePath: string,
-					priority: number,
-				): Promise<boolean> => {
-					if (usedChars >= PAGE_BUDGET) return false;
-					try {
-						const raw = await readFile(filePath);
-						const relativePath = getRelativePath(filePath, pp);
-						const truncated =
-							raw.length > MAX_PAGE_SIZE
-								? raw.slice(0, MAX_PAGE_SIZE) + "\n\n[...truncated...]"
-								: raw;
-						if (usedChars + truncated.length > PAGE_BUDGET) return false;
-						usedChars += truncated.length;
-						relevantPages.push({
-							title,
-							path: relativePath,
-							content: truncated,
-							priority,
-						});
-						return true;
-					} catch {
-						return false;
-					}
+				const closeReasoning = () => {
+					if (!thinkingOpen) return;
+					thinkingOpen = false;
+					accumulated += "</think>";
+					appendStreamToken("</think>");
 				};
-				// P0: Title matches
-				for (const r of topSearchResults.filter((r) => r.titleMatch)) {
-					await tryAddPage(r.title, r.path, 0);
-				}
-				// P1: Content matches
-				for (const r of topSearchResults.filter((r) => !r.titleMatch)) {
-					await tryAddPage(r.title, r.path, 1);
-				}
-				// P2: Graph expansions
-				for (const exp of graphExpansions) {
-					await tryAddPage(exp.title, exp.path, 2);
-				}
-				// P3: Overview fallback
-				if (relevantPages.length === 0) {
-					await tryAddPage("Overview", `${pp}/wiki/overview.md`, 3);
-				}
-				const pagesContext =
-					relevantPages.length > 0
-						? relevantPages
-								.map(
-									(p, i) =>
-										`### [${i + 1}] ${p.title}\nPath: ${p.path}\n\n${p.content}`,
-								)
-								.join("\n\n---\n\n")
-						: "(No wiki pages found)";
-				const pageList = relevantPages
-					.map((p, i) => `[${i + 1}] ${p.title} (${p.path})`)
-					.join("\n");
-				const externalContext = formatExternalSearchContext(
-					externalSearchResults,
-				);
-				const outLang = getOutputLanguage(text);
-				systemMessages.push({
-					role: "system",
-					content: [
-						"You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
-						"",
-						"## Rules",
-						externalContext
-							? "- Answer based ONLY on the numbered wiki pages and external sources provided below."
-							: "- Answer based ONLY on the numbered wiki pages provided below.",
-						"- If the provided pages don't contain enough information, say so honestly.",
-						"- Use [[wikilink]] syntax to reference wiki pages.",
-						externalContext
-							? "- When citing wiki information, use page numbers like [1], [2]. When citing external information, use external source IDs like [E1], [E2]."
-							: "- When citing information, use the page number in brackets, e.g. [1], [2].",
-						"- At the VERY END of your response, add a hidden comment listing which page numbers you used:",
-						"  <!-- cited: 1, 3, 5 -->",
-						"",
-						"Use markdown formatting for clarity.",
-						"",
-						purpose ? `## Wiki Purpose\n${purpose}` : "",
-						index ? `## Wiki Index\n${index}` : "",
-						relevantPages.length > 0 ? `## Page List\n${pageList}` : "",
-						`## Wiki Pages\n\n${pagesContext}`,
-						externalContext ? `## External Sources\n\n${externalContext}` : "",
-						externalSearchErrors.length > 0
-							? `## External Source Errors\n${externalSearchErrors.map((err) => `- ${err}`).join("\n")}`
-							: "",
-						"",
-						"---",
-						"",
-						`## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
-						"",
-						`You MUST write your entire response in **${outLang}**.`,
-						`The wiki content above may be in a different language, but this is IRRELEVANT to your output language.`,
-						`Ignore the language of the wiki content. Write in ${outLang} only.`,
-						`Even proper nouns should use standard ${outLang} transliteration when appropriate.`,
-						`DO NOT use any other language. This overrides all other instructions.`,
-					]
-						.filter(Boolean)
-						.join("\n"),
-				});
-				// Reminder injected later, right before the user's current message
-				// (after history so it's the last system instruction the LLM sees).
-				langReminder = buildLanguageReminder(text);
-				lastQueryPages = relevantPages.map((p) => ({
-					title: p.title,
-					path: p.path,
-				}));
-				const externalRefs: MessageReference[] = externalSearchResults.map(
-					(result) => ({
-						title: result.title,
-						path: result.url,
-						kind: "external",
-						source: result.source,
-						url: result.url,
-						snippet: result.snippet,
-					}),
-				);
-				queryRefs = [
-					...lastQueryPages.map((page) => ({ ...page, kind: "wiki" as const })),
-					...externalRefs,
-				];
-			}
-			// ── Conversation history with count limit ────────────────
-			// Only include messages from the active conversation, last N messages
-			const activeConvMessages = useChatStore
-				.getState()
-				.getActiveMessages()
-				.filter((m) => m.role === "user" || m.role === "assistant")
-				.slice(-maxHistoryMessages);
-			// Prepend the language reminder onto the final user turn rather than
-			// inserting a second {role:"system"} between history and the final
-			// user message. vLLM / llama.cpp / Ollama drive their chat templates
-			// from HF Jinja, and Qwen3-family templates enforce "system only at
-			// index 0" — a mid-conversation system message gets rejected with
-			// "System message must be at the beginning." (HTTP 400). OpenAI and
-			// Anthropic are more lenient, but keeping a single system at the top
-			// is the safest shape across every OpenAI-compatible backend.
-			const historyMessages = chatMessagesToLLM(activeConvMessages);
-			let llmMessages: LLMMessage[] = [...systemMessages, ...historyMessages];
-			if (langReminder && historyMessages.length > 0) {
-				const lastIdx = llmMessages.length - 1;
-				const last = llmMessages[lastIdx];
-				if (last && last.role === "user") {
-					llmMessages = [
-						...llmMessages.slice(0, lastIdx),
+				const streamFinalAnswer = async (reasoningOff: boolean) => {
+					let streamError: Error | null = null;
+					await streamChat(
+						llmConfig,
+						agentResult.messages,
 						{
-							role: "user",
-							content: prependReminderToContent(last.content, langReminder),
+							onToken: (token) => {
+								closeReasoning();
+								accumulated += token;
+								appendStreamToken(token);
+							},
+							onReasoningToken: (token) => {
+								if (!reasoningOff) appendReasoning(token);
+							},
+							onDone: () => {},
+							onError: (err) => {
+								streamError = err;
+							},
 						},
-					];
+						controller.signal,
+						reasoningOff ? { reasoning: { mode: "off" } } : undefined,
+					);
+					if (streamError) throw streamError;
+				};
+				try {
+					await streamFinalAnswer(false);
+				} catch (err) {
+					if (!isReasoningOnlyResponseError(err)) throw err;
+					accumulated = "";
+					thinkingOpen = false;
+					useChatStore.setState({ streamingContent: "" });
+					await streamFinalAnswer(true);
+				}
+				closeReasoning();
+				finalizeStream(accumulated, agentResult.references, convId, agentResult.steps);
+				if (convId) markConversationDirty(convId);
+				setChatAgentEvents([]);
+				abortRef.current = null;
+			} catch (err) {
+				setChatAgentEvents([]);
+				abortRef.current = null;
+				if (isAbortLikeError(err)) {
+					useChatStore.setState({ isStreaming: false, streamingContent: "" });
+				} else {
+					const message = err instanceof Error ? err.message : String(err);
+					finalizeStream(`Error: ${message}`, undefined, convId);
 				}
 			}
-			const controller = new AbortController();
-			abortRef.current = controller;
-			let accumulated = "";
-			let thinkingOpen = false;
-			const appendReasoning = (token: string) => {
-				if (!token) return;
-				if (!thinkingOpen) {
-					thinkingOpen = true;
-					accumulated += "<think>";
-					appendStreamToken("<think>");
-				}
-				accumulated += token;
-				appendStreamToken(token);
-			};
-			const closeReasoning = () => {
-				if (!thinkingOpen) return;
-				thinkingOpen = false;
-				accumulated += "</think>";
-				appendStreamToken("</think>");
-			};
-			await streamChat(
-				llmConfig,
-				llmMessages,
-				{
-					onToken: (token) => {
-						closeReasoning();
-						accumulated += token;
-						appendStreamToken(token);
-					},
-					onReasoningToken: appendReasoning,
-					onDone: () => {
-						closeReasoning();
-						// P1-6: bind the finalized message to the conversation
-						// that started the stream (captured above), so a
-						// mid-stream conversation switch can't inject the
-						// reply into the wrong conversation.
-						finalizeStream(accumulated, queryRefs, convId);
-						// QA Hook: mark conversation dirty (defer extraction to conversation switch)
-						if (convId) markConversationDirty(convId);
-						abortRef.current = null;
-						// save-worthy detection removed — user has direct "Save to Wiki" button on each message
-					},
-					onError: (err) => {
-						finalizeStream(`Error: ${err.message}`, undefined, convId);
-						abortRef.current = null;
-					},
-				},
-				controller.signal,
-			);
+			return;
 		},
 		[
 			mode,
@@ -1186,13 +898,15 @@ export function ChatPanel() {
 		abortRef.current?.abort();
 		abortRef.current = null;
 		setAgentRunPhase("idle");
+		setChatAgentEvents([]);
+		setStreaming(false);
 		clearAgentPermissionRequests({
 			behavior: "deny",
 			interrupt: true,
 			message: t("agent.permission.stopped"),
 			decisionClassification: "user_reject",
 		});
-	}, [clearAgentPermissionRequests, t]);
+	}, [clearAgentPermissionRequests, setStreaming, t]);
 	const handleRegenerate = useCallback(async () => {
 		if (isStreaming) return;
 		// Find the last user message in active conversation
@@ -1217,7 +931,7 @@ export function ChatPanel() {
 				messages: s.messages.filter((m) => m.id !== lastUser.id),
 			}));
 		}
-		handleSend(lastUserMsg.content, lastUserMsg.images ?? []);
+		handleSend(lastUserMsg.content, lastUserMsg.images ?? [], lastUserMsg.chatOptions);
 	}, [isStreaming, removeLastAssistantMessage, handleSend]);
 	const handleWriteToWiki = useCallback(async () => {
 		if (!project) return;
@@ -1287,7 +1001,10 @@ export function ChatPanel() {
 									);
 								})}
 								{isStreaming && mode !== "agent" && (
-									<StreamingMessage content={streamingContent} />
+									<StreamingMessage
+										content={streamingContent}
+										agentEvents={chatAgentEvents}
+									/>
 								)}
 								<div ref={bottomRef} />
 							</div>
@@ -1381,4 +1098,31 @@ export function ChatPanel() {
 			</div>
 		</div>
 	);
+}
+
+function collectRecentRetrievalHistory(messages: DisplayMessage[]): MessageReference[] {
+	const refs: MessageReference[] = [];
+	const seen = new Set<string>();
+	for (const msg of [...messages].reverse()) {
+		if (msg.role !== "assistant" || !msg.references) continue;
+		for (const ref of msg.references) {
+			const key = `${ref.kind ?? "wiki"}:${ref.url ?? ref.path}`.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			refs.push(ref);
+			if (refs.length >= 10) return refs;
+		}
+	}
+	return refs;
+}
+
+function isReasoningOnlyResponseError(err: unknown): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return /^Model produced [\d,]+ characters of reasoning \/ chain-of-thought, but no actual response content\./.test(message);
+}
+
+function isAbortLikeError(err: unknown): boolean {
+	if (err instanceof DOMException && err.name === "AbortError") return true;
+	if (!(err instanceof Error)) return false;
+	return err.name === "AbortError" || /abort|cancel/i.test(err.message);
 }

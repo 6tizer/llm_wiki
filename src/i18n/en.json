@@ -137,6 +137,40 @@
     "typeAMessage": "Type a message...",
     "useWebSearch": "Web search",
     "useAnyTxtSearch": "AnyTXT search",
+    "agentMode": "Chat mode",
+    "agentModes": {
+      "fast": "Fast",
+      "standard": "Standard",
+      "deep": "Deep",
+      "localFirst": "Local first"
+    },
+    "agentStages": {
+      "understanding": "Understanding",
+      "routing": "Routing",
+      "toolCall": "Tool call",
+      "toolResult": "Tool result",
+      "searchingWiki": "Searching wiki",
+      "searchingGraph": "Searching graph",
+      "searchingWeb": "Searching web",
+      "searchingAnytxt": "Searching AnyTXT",
+      "readingContext": "Reading context",
+      "writing": "Writing",
+      "final": "Final answer"
+    },
+    "agentTools": {
+      "projectFiles": "Project files",
+      "projectFileRead": "Project file read",
+      "wikiSearch": "Wiki search",
+      "graphSearch": "Graph search",
+      "webSearch": "Web search",
+      "anytxtSearch": "AnyTXT search"
+    },
+    "agentStatus": {
+      "running": "Running",
+      "success": "Done",
+      "error": "Error",
+      "skipped": "Skipped"
+    },
     "enableAnyTxtInSettings": "Enable AnyTXT in Settings → External Information Sources",
     "sendMessage": "Send message",
     "stopGeneration": "Stop generation",

@@ -11,6 +11,7 @@ import type {
 import i18n from "@/i18n"
 import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
 import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
+import type { ChatAgentMode, ChatAgentStep } from "@/lib/chat-agent"
 
 export interface Conversation {
   id: string
@@ -36,6 +37,13 @@ export interface MessageImage {
   dataBase64: string
 }
 
+/** Normal Chat Router options captured with a user turn for regenerate. */
+export interface ChatMessageOptions {
+  useWebSearch: boolean
+  useAnyTxtSearch: boolean
+  agentMode: ChatAgentMode
+}
+
 export interface DisplayMessage {
   id: string
   role: "user" | "assistant" | "system"
@@ -45,6 +53,8 @@ export interface DisplayMessage {
   references?: MessageReference[]  // pages cited in this response, saved at creation time
   mode?: "chat" | "agent" | "ingest"
   images?: MessageImage[]
+  chatOptions?: ChatMessageOptions
+  agentSteps?: ChatAgentStep[]
   agentSessionId?: string
   agentUserMessageId?: string
   agentAssistantMessageId?: string
@@ -108,6 +118,7 @@ interface AddMessageOptions {
   agentSessionId?: string
   references?: MessageReference[]
   images?: MessageImage[]
+  chatOptions?: ChatMessageOptions
 }
 
 interface StartAgentStreamMessageOptions {
@@ -167,7 +178,12 @@ interface ChatState {
   setConversations: (conversations: Conversation[]) => void
   setStreaming: (streaming: boolean) => void
   appendStreamToken: (token: string) => void
-  finalizeStream: (content: string, references?: MessageReference[], conversationId?: string) => void
+  finalizeStream: (
+    content: string,
+    references?: MessageReference[],
+    conversationId?: string,
+    agentSteps?: ChatAgentStep[],
+  ) => void
   finalizeAgentStream: (content: string, stats?: AgentStreamStats, conversationId?: string) => void
   startAgentStreamMessage: (options?: StartAgentStreamMessageOptions) => string | null
   updateAgentStreamMessage: (messageId: string, patch: AgentStreamMessagePatch) => void
@@ -348,6 +364,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         role === "user" && (options?.mode === undefined || options.mode === "chat")
           ? options?.images?.filter(Boolean)
           : undefined
+      const chatOptions =
+        role === "user" && (options?.mode === undefined || options.mode === "chat")
+          ? options?.chatOptions
+          : undefined
       const newMessage: DisplayMessage = {
         id: nextId(),
         role,
@@ -358,6 +378,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         mode: options?.mode,
         agentSessionId: options?.agentSessionId,
         ...(images && images.length > 0 ? { images } : {}),
+        ...(chatOptions ? { chatOptions } : {}),
       }
 
       // Auto-set title from first user message (first 50 chars)
@@ -402,7 +423,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingContent: state.streamingContent + token,
     })),
 
-  finalizeStream: (content, references, conversationId) =>
+  finalizeStream: (content, references, conversationId, agentSteps) =>
     set((state) => {
       // P1-6: bind the finalized message to the conversation that owned
       // the stream when it STARTED, not the live activeConversationId at
@@ -424,6 +445,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: Date.now(),
         conversationId: targetId,
         references,
+        agentSteps,
       }
 
       return {

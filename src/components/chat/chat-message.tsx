@@ -32,6 +32,7 @@ import { AgentCostCard, hasAgentCostData } from "./agent-cost-card"
 import { extractAgentTextContent } from "./agent-format"
 import { AgentToolTimeline } from "./agent-tool-timeline"
 import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
+import type { ChatAgentEvent, ChatAgentStep } from "@/lib/chat-agent"
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -160,6 +161,9 @@ function ChatMessageImpl({
         )}
         {shouldRenderReferences && (
           <CitedReferencesPanel content={actionContent} savedReferences={message.references} />
+        )}
+        {!isAgent && message.agentSteps && message.agentSteps.length > 0 && (
+          <ChatAgentSteps steps={message.agentSteps} />
         )}
         {!isSessionCompactOnly && isAgent && message.toolCalls && message.toolCalls.length > 0 && (
           <AgentToolTimeline toolCalls={message.toolCalls} />
@@ -838,9 +842,10 @@ function extractCitedPages(text: string): CitedPage[] {
 
 interface StreamingMessageProps {
   content: string
+  agentEvents?: ChatAgentEvent[]
 }
 
-export function StreamingMessage({ content }: StreamingMessageProps) {
+export function StreamingMessage({ content, agentEvents = [] }: StreamingMessageProps) {
   const { thinking, answer } = useMemo(() => separateThinking(content), [content])
   const isThinking = thinking !== null && answer.length === 0
 
@@ -855,6 +860,7 @@ export function StreamingMessage({ content }: StreamingMessageProps) {
         ) : (
           <>
             {thinking && <ThinkingBlock content={thinking} />}
+            {agentEvents.length > 0 && <ChatAgentEvents events={agentEvents} />}
             <MarkdownContent content={answer} />
             <span className="animate-pulse">▊</span>
           </>
@@ -862,6 +868,144 @@ export function StreamingMessage({ content }: StreamingMessageProps) {
       </div>
     </div>
   )
+}
+
+function ChatAgentSteps({ steps }: { steps: ChatAgentStep[] }) {
+  const { t } = useTranslation()
+  const visible = steps.filter((step) => step.type !== "understanding" || step.message)
+  if (visible.length === 0) return null
+  return (
+    <div className="rounded-md border border-border/60 bg-background/70 px-2 py-1.5 text-xs">
+      <div className="space-y-1">
+        {visible.map((step) => (
+          <div key={step.id} className="flex items-start gap-1.5 text-muted-foreground">
+            <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${chatAgentStatusClass(step.status)}`} />
+            <span className="min-w-0 break-words">
+              {chatAgentStepLabel(step, t)}
+              {step.status ? <span className="opacity-70"> - {chatAgentStatusLabel(step.status, t)}</span> : null}
+              {step.count !== undefined ? ` (${step.count})` : ""}
+              {step.query ? <span className="opacity-70"> - {step.query}</span> : null}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ChatAgentEvents({ events }: { events: ChatAgentEvent[] }) {
+  const { t } = useTranslation()
+  const visible = events.filter((event) => event.message || event.stage)
+  if (visible.length === 0) return null
+  return (
+    <div className="mb-2 rounded-md border border-border/60 bg-background/70 px-2 py-1.5 text-xs">
+      <div className="space-y-1">
+        {visible.map((event, index) => (
+          <div key={`${event.stage}-${index}`} className="flex items-start gap-1.5 text-muted-foreground">
+            <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${chatAgentStatusClass(event.status)}`} />
+            <span className="min-w-0 break-words">
+              {chatAgentEventLabel(event, t)}
+              {event.status ? <span className="opacity-70"> - {chatAgentStatusLabel(event.status, t)}</span> : null}
+              {event.count !== undefined ? ` (${event.count})` : ""}
+              {event.query ? <span className="opacity-70"> - {event.query}</span> : null}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function chatAgentStatusClass(status?: ChatAgentEvent["status"]): string {
+  switch (status) {
+    case "error":
+      return "bg-destructive"
+    case "success":
+      return "bg-emerald-500"
+    case "skipped":
+      return "bg-muted-foreground/40"
+    case "running":
+    default:
+      return "bg-primary animate-pulse"
+  }
+}
+
+type ChatTranslation = ReturnType<typeof useTranslation>["t"]
+
+function chatAgentStepLabel(step: ChatAgentStep, t: ChatTranslation): string {
+  if (step.tool) return chatAgentToolLabel(step.tool, t)
+  switch (step.type) {
+    case "understanding":
+      return chatAgentStageLabel("understanding", t)
+    case "routing":
+      return chatAgentStageLabel("routing", t)
+    case "tool_call":
+      return chatAgentStageLabel("tool_call", t)
+    case "tool_result":
+      return chatAgentStageLabel("tool_result", t)
+    case "final":
+      return t("chat.agentStages.final", "Final answer")
+  }
+}
+
+function chatAgentEventLabel(event: ChatAgentEvent, t: ChatTranslation): string {
+  if (event.tool) return chatAgentToolLabel(event.tool, t)
+  return chatAgentStageLabel(event.stage, t)
+}
+
+function chatAgentStageLabel(stage: ChatAgentEvent["stage"], t: ChatTranslation): string {
+  switch (stage) {
+    case "understanding":
+      return t("chat.agentStages.understanding", "Understanding")
+    case "routing":
+      return t("chat.agentStages.routing", "Routing")
+    case "tool_call":
+      return t("chat.agentStages.toolCall", "Tool call")
+    case "tool_result":
+      return t("chat.agentStages.toolResult", "Tool result")
+    case "searching_wiki":
+      return t("chat.agentStages.searchingWiki", "Searching wiki")
+    case "searching_graph":
+      return t("chat.agentStages.searchingGraph", "Searching graph")
+    case "searching_web":
+      return t("chat.agentStages.searchingWeb", "Searching web")
+    case "searching_anytxt":
+      return t("chat.agentStages.searchingAnytxt", "Searching AnyTXT")
+    case "reading_context":
+      return t("chat.agentStages.readingContext", "Reading context")
+    case "writing":
+      return t("chat.agentStages.writing", "Writing")
+  }
+}
+
+function chatAgentToolLabel(tool: NonNullable<ChatAgentEvent["tool"]>, t: ChatTranslation): string {
+  switch (tool) {
+    case "project_files":
+      return t("chat.agentTools.projectFiles", "Project files")
+    case "project_file_read":
+      return t("chat.agentTools.projectFileRead", "Project file read")
+    case "wiki_search":
+      return t("chat.agentTools.wikiSearch", "Wiki search")
+    case "graph_search":
+      return t("chat.agentTools.graphSearch", "Graph search")
+    case "web_search":
+      return t("chat.agentTools.webSearch", "Web search")
+    case "anytxt_search":
+      return t("chat.agentTools.anytxtSearch", "AnyTXT search")
+  }
+}
+
+function chatAgentStatusLabel(status: NonNullable<ChatAgentEvent["status"]>, t: ChatTranslation): string {
+  switch (status) {
+    case "running":
+      return t("chat.agentStatus.running", "Running")
+    case "success":
+      return t("chat.agentStatus.success", "Done")
+    case "error":
+      return t("chat.agentStatus.error", "Error")
+    case "skipped":
+      return t("chat.agentStatus.skipped", "Skipped")
+  }
 }
 
 function MarkdownContent({ content }: { content: string }) {

@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
-import "@/i18n"
+import i18n from "@/i18n"
 import { ChatPanel, shouldPromptForQaBeforeConversationDelete } from "./chat-panel"
+import { ChatMessage, StreamingMessage } from "./chat-message"
 import type { DisplayMessage } from "@/stores/chat-store"
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -17,6 +18,96 @@ describe("ChatPanel agent mode rendering", () => {
     expect(html).toContain("Ingest")
     expect(html).toContain("Type a message")
     expect(html).toContain("max-w-full flex-wrap")
+  })
+})
+
+describe("normal Chat Router progress rendering", () => {
+  it("localizes streaming tool progress labels with status and counts", async () => {
+    await i18n.changeLanguage("zh")
+    const html = renderToStaticMarkup(
+      <StreamingMessage
+        content="回答"
+        agentEvents={[
+          {
+            stage: "searching_wiki",
+            tool: "wiki_search",
+            status: "running",
+            query: "router",
+          },
+          {
+            stage: "tool_result",
+            tool: "web_search",
+            status: "success",
+            count: 2,
+            query: "docs",
+          },
+          {
+            stage: "tool_result",
+            tool: "anytxt_search",
+            status: "error",
+            count: 0,
+            query: "local files",
+          },
+        ]}
+      />,
+    )
+
+    expect(html).toContain("Wiki 搜索")
+    expect(html).toContain("网页搜索")
+    expect(html).toContain("AnyTXT 搜索")
+    expect(html).toContain("进行中")
+    expect(html).toContain("完成")
+    expect(html).toContain("出错")
+    expect(html).toContain("(2)")
+    expect(html).toContain("(0)")
+    expect(html).not.toContain("Searching wiki")
+    await i18n.changeLanguage("en")
+  })
+
+  it("localizes persisted Chat Agent steps", async () => {
+    await i18n.changeLanguage("zh")
+    const message: DisplayMessage = {
+      id: "assistant-1",
+      conversationId: "conv-1",
+      role: "assistant",
+      content: "完成",
+      timestamp: 1,
+      agentSteps: [
+        {
+          id: "step-1",
+          type: "tool_call",
+          tool: "project_files",
+          status: "running",
+          query: "wiki",
+        },
+        {
+          id: "step-2",
+          type: "tool_result",
+          tool: "graph_search",
+          status: "success",
+          count: 3,
+          query: "links",
+        },
+        {
+          id: "step-3",
+          type: "final",
+          status: "success",
+          count: 2,
+        },
+      ],
+    }
+
+    const html = renderToStaticMarkup(<ChatMessage message={message} />)
+
+    expect(html).toContain("项目文件")
+    expect(html).toContain("图谱搜索")
+    expect(html).toContain("最终回答")
+    expect(html).toContain("进行中")
+    expect(html).toContain("完成")
+    expect(html).toContain("(3)")
+    expect(html).toContain("(2)")
+    expect(html).not.toContain("Project files")
+    await i18n.changeLanguage("en")
   })
 })
 
