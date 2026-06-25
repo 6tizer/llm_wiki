@@ -11,6 +11,7 @@ import { ResearchPanel } from "./research-panel"
 import { ActivityPanel } from "./activity-panel"
 import { useResearchStore } from "@/stores/research-store"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { getAppLayoutVisibility } from "./app-layout-visibility"
 
 interface AppLayoutProps {
   onSwitchProject: () => void
@@ -83,12 +84,11 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
     []
   )
 
-  // Settings is a full-width admin view — the file tree / activity panel
-  // are irrelevant there and their narrow column makes the settings form
-  // cramped. Hide both the left sidebar (and the file preview on the
-  // right) so the settings screen uses the whole content area.
-  const isSettings = activeView === "settings"
-  const hasRightPanel = !isSettings && !!(selectedFile || researchPanelOpen)
+  const { showLeftPanel, hasRightPanel } = getAppLayoutVisibility(
+    activeView,
+    selectedFile,
+    researchPanelOpen,
+  )
 
   return (
     // Outer column layout: full-width update banner on top (when an
@@ -101,7 +101,7 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
       <div className="flex min-h-0 flex-1">
         <IconSidebar onSwitchProject={onSwitchProject} />
         <div ref={containerRef} className="flex min-w-0 flex-1 overflow-hidden">
-        {!isSettings && (
+        {showLeftPanel && (
           <>
             {/* Left: File tree + Activity */}
             <div

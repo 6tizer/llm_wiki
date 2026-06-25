@@ -23,6 +23,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
+import { useZoomStore } from "@/stores/zoom-store"
 import { loadSourceWatchConfig, saveLanguage } from "@/lib/project-store"
 import { saveAgentResourceConfig } from "@/lib/agent/agent-settings"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
@@ -97,6 +98,7 @@ export function initialDraft(
   maxHistoryMessages: number,
   uiLanguage: string,
   projectPath?: string,
+  zoomLevel?: number,
 ): SettingsDraft {
   // Show absolute path: if stored path is empty, show default using project path
   // If stored path is relative (legacy), prepend project path
@@ -159,6 +161,7 @@ export function initialDraft(
     agentMaxFilesChanged: agentConfig.maxFilesChanged,
     agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
     uiLanguage,
+    zoomLevel: zoomLevel ?? useZoomStore.getState().level,
   }
 }
 
@@ -194,6 +197,7 @@ export function SettingsView() {
   const setAgentResourceConfig = useAgentSettingsStore((s) => s.setResourceConfig)
   const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
   const setMaxHistoryMessages = useChatStore((s) => s.setMaxHistoryMessages)
+  const zoomLevel = useZoomStore((s) => s.level)
   // Drives the red dot next to the "About" row in the settings
   // sidebar. Uses `hasAvailableUpdate` (NOT `shouldShowUpdateBanner`)
   // so the indicator remains even after the user dismisses the
@@ -220,6 +224,7 @@ export function SettingsView() {
       maxHistoryMessages,
       i18n.language,
       project?.path,
+      zoomLevel,
     ),
   )
 
@@ -249,6 +254,8 @@ export function SettingsView() {
   // pick with the still-stale `i18n.language`. The next save would then
   // see draft.uiLanguage out of sync with i18n.language and silently
   // revert the UI to the previous language.
+  // Preserve pending zoom edits the same way; unrelated store updates can
+  // happen before the user presses Save.
   useEffect(() => {
     setDraftState((prev) =>
       initialDraft(
@@ -264,6 +271,7 @@ export function SettingsView() {
         maxHistoryMessages,
         prev.uiLanguage,
         project?.path,
+        prev.zoomLevel,
       ),
     )
   }, [
@@ -294,6 +302,7 @@ export function SettingsView() {
       saveScheduledImportConfig,
       saveSourceWatchConfig,
       saveApiConfig,
+      saveZoomLevel,
     } = await import("@/lib/project-store")
 
     const newLlm = {
@@ -402,6 +411,8 @@ export function SettingsView() {
     }
 
     setMaxHistoryMessages(draft.maxHistoryMessages)
+    useZoomStore.getState().setLevel(draft.zoomLevel)
+    await saveZoomLevel(draft.zoomLevel)
 
     // ── API server: persist + push to store. The Rust side reads
     // `apiConfig.{enabled,token,mcpEnabled}` from this same `app-state.json` on

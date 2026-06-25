@@ -68,6 +68,7 @@ export interface SettingsDraft {
 
   // UI
   uiLanguage: string
+  zoomLevel: number
 
   // Source folder auto watch
   sourceWatchConfig: SourceWatchConfig

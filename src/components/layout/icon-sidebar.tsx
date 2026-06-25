@@ -10,6 +10,7 @@ import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
 import logoImg from "@/assets/logo.jpg"
 import type { WikiState } from "@/stores/wiki-store"
+import { nextResearchPanelNavState } from "./research-panel-nav"
 
 type NavView = WikiState["activeView"]
 
@@ -60,6 +61,14 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
     return () => clearInterval(interval)
   }, [])
 
+  function handleResearchClick() {
+    const next = nextResearchPanelNavState(activeView, researchPanelOpen)
+    if (next.activeView !== activeView) {
+      setActiveView(next.activeView)
+    }
+    toggleResearchPanel(next.researchPanelOpen)
+  }
+
   return (
     <TooltipProvider delay={300}>
       <div className="flex h-full w-12 flex-col items-center border-r bg-muted/50 py-2">
@@ -99,7 +108,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           {/* Deep Research — same row as other nav items */}
           <Tooltip>
             <TooltipTrigger
-              onClick={() => toggleResearchPanel(!researchPanelOpen)}
+              onClick={handleResearchClick}
               className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
                 researchPanelOpen
                   ? "bg-accent text-accent-foreground"

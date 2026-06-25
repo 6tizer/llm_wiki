@@ -654,7 +654,11 @@
         "title": "Interface",
         "description": "UI language and appearance. Changes apply immediately and persist.",
         "uiLanguage": "UI Language",
-        "uiLanguageHint": "Affects labels, buttons, and other UI strings only. The AI output language is set separately in Output Preferences."
+        "uiLanguageHint": "Affects labels, buttons, and other UI strings only. The AI output language is set separately in Output Preferences.",
+        "zoom": "Zoom",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "zoomHint": "Adjusts text and controls across the app."
       },
       "maintenance": {
         "title": "Maintenance",
