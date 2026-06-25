@@ -95,14 +95,13 @@ export async function collectResearchSources(
     }
   }
   if (useAnyTxt) {
-    calls.push(deps.anyTxtSearch(
-      queries,
-      resolvedSearchConfig.anyTxt,
-      options.llmConfig,
-      15,
+    calls.push(deps.anyTxtSearch(queries, {
+      config: resolvedSearchConfig.anyTxt,
+      llmConfig: options.llmConfig,
+      maxResults: 15,
       projectPath,
-      options.signal,
-    ).then((results) => ({ results })))
+      signal: options.signal,
+    }).then((results) => ({ results })))
   }
 
   const settled = await Promise.allSettled(calls)

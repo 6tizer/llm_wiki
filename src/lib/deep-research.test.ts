@@ -75,7 +75,12 @@ describe("collectResearchSources", () => {
     expect(webSearch).not.toHaveBeenCalled()
     expect(anyTxtSearch).toHaveBeenCalledTimes(1)
     expect(anyTxtSearch.mock.calls[0][0]).toEqual(["alpha"])
-    expect(anyTxtSearch.mock.calls[0][5]).toBe(controller.signal)
+    expect(anyTxtSearch.mock.calls[0][1]).toMatchObject({
+      config: { endpoint: "http://127.0.0.1:9920" },
+      maxResults: 15,
+      projectPath: "/project",
+      signal: controller.signal,
+    })
     expect(out.results).toEqual([localResult])
   })
 
@@ -101,7 +106,12 @@ describe("collectResearchSources", () => {
     expect(webSearch).toHaveBeenCalledTimes(1)
     expect(anyTxtSearch).toHaveBeenCalledTimes(1)
     expect(webSearch.mock.calls[0][3]).toBe(controller.signal)
-    expect(anyTxtSearch.mock.calls[0][5]).toBe(controller.signal)
+    expect(anyTxtSearch.mock.calls[0][1]).toMatchObject({
+      config: { endpoint: "http://127.0.0.1:9920" },
+      maxResults: 15,
+      projectPath: "/project",
+      signal: controller.signal,
+    })
     expect(out.results).toEqual([webResult, localResult])
   })
 
