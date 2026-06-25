@@ -87,6 +87,34 @@ describe("chat store agent data model", () => {
     expect(messages[3].images).toBeUndefined()
   })
 
+  it("stores Chat Router options only for ordinary chat user messages", () => {
+    useChatStore.getState().createConversation()
+    const chatOptions = {
+      useWebSearch: true,
+      useAnyTxtSearch: true,
+      agentMode: "deep" as const,
+    }
+
+    useChatStore.getState().addMessage("user", "chat", { chatOptions })
+    useChatStore.getState().addMessage("user", "agent", {
+      mode: "agent",
+      chatOptions,
+    })
+    useChatStore.getState().addMessage("user", "ingest", {
+      mode: "ingest",
+      chatOptions,
+    })
+    useChatStore.getState().addMessage("assistant", "assistant", {
+      chatOptions,
+    })
+
+    const messages = useChatStore.getState().messages
+    expect(messages[0].chatOptions).toEqual(chatOptions)
+    expect(messages[1].chatOptions).toBeUndefined()
+    expect(messages[2].chatOptions).toBeUndefined()
+    expect(messages[3].chatOptions).toBeUndefined()
+  })
+
   it("stores agent metadata when addMessage receives options", () => {
     const convId = useChatStore.getState().createConversation()
 

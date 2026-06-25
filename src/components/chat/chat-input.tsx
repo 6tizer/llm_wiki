@@ -14,12 +14,15 @@ import {
 } from "@/lib/chat-image-utils"
 import { isImeComposing } from "@/lib/keyboard-utils"
 import type { MessageImage } from "@/stores/chat-store"
+import type { ChatAgentMode } from "@/lib/chat-agent"
 
 const ACCEPTED_IMAGE_ACCEPT = ACCEPTED_CHAT_IMAGE_TYPES.join(",")
+const AGENT_MODE_OPTIONS: ChatAgentMode[] = ["fast", "standard", "deep", "local_first"]
 
 export interface ChatSendOptions {
   useWebSearch: boolean
   useAnyTxtSearch: boolean
+  agentMode: ChatAgentMode
 }
 
 interface ChatInputProps {
@@ -47,6 +50,7 @@ export function ChatInput({
   const [imageError, setImageError] = useState<string | null>(null)
   const [useWebSearch, setUseWebSearch] = useState(false)
   const [useAnyTxtSearch, setUseAnyTxtSearch] = useState(false)
+  const [agentMode, setAgentMode] = useState<ChatAgentMode>("standard")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -170,14 +174,14 @@ export function ChatInput({
       setImageError(t("chat.imageInputUnavailable", "Images are available in Chat mode only."))
       return
     }
-    onSend(trimmed, images, { useWebSearch, useAnyTxtSearch })
+    onSend(trimmed, images, { useWebSearch, useAnyTxtSearch, agentMode })
     setValue("")
     setImages([])
     setImageError(null)
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [imageInputAvailable, images, isStreaming, onSend, t, useAnyTxtSearch, useWebSearch, value])
+  }, [agentMode, imageInputAvailable, images, isStreaming, onSend, t, useAnyTxtSearch, useWebSearch, value])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -200,6 +204,20 @@ export function ChatInput({
         ? "border-border bg-accent text-foreground shadow-sm"
         : "border-transparent bg-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground"
     } disabled:pointer-events-none disabled:opacity-50`
+
+  const agentModeLabel = (mode: ChatAgentMode) => {
+    switch (mode) {
+      case "fast":
+        return t("chat.agentModes.fast", "Fast")
+      case "deep":
+        return t("chat.agentModes.deep", "Deep")
+      case "local_first":
+        return t("chat.agentModes.localFirst", "Local first")
+      case "standard":
+      default:
+        return t("chat.agentModes.standard", "Standard")
+    }
+  }
 
   return (
     <div className="border-t bg-background/95 p-3">
@@ -314,6 +332,33 @@ export function ChatInput({
                     )}
                   </Tooltip>
                 </TooltipProvider>
+                <div
+                  className="inline-flex h-7 max-w-full shrink-0 items-center overflow-x-auto rounded-md border border-border/70 bg-muted/30 p-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+                  role="radiogroup"
+                  aria-label={t("chat.agentMode", "Chat mode")}
+                  title={t("chat.agentMode", "Chat mode")}
+                >
+                  {AGENT_MODE_OPTIONS.map((mode) => {
+                    const active = agentMode === mode
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        disabled={isStreaming}
+                        onClick={() => setAgentMode(mode)}
+                        className={`h-6 shrink-0 rounded px-2 text-xs font-medium transition-colors ${
+                          active
+                            ? "bg-background text-foreground shadow-sm"
+                            : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                        } disabled:pointer-events-none disabled:opacity-50`}
+                      >
+                        {agentModeLabel(mode)}
+                      </button>
+                    )
+                  })}
+                </div>
               </>
             )}
           </div>

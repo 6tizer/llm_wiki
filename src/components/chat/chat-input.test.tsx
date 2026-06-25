@@ -164,7 +164,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "describe this",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false },
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
     )
     expect(container.querySelector("img")).toBeNull()
 
@@ -181,7 +181,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "caption: pasted text",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false },
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
     )
 
     act(() => root.unmount())
@@ -201,7 +201,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "from paste",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false },
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
     )
 
     act(() => root.unmount())
@@ -304,7 +304,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false },
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
     )
     expect(container.querySelector("img")).toBeNull()
 

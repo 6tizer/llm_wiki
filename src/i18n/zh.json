@@ -137,6 +137,40 @@
     "typeAMessage": "输入消息...",
     "useWebSearch": "网页搜索",
     "useAnyTxtSearch": "AnyTXT 搜索",
+    "agentMode": "对话模式",
+    "agentModes": {
+      "fast": "快速",
+      "standard": "标准",
+      "deep": "深入",
+      "localFirst": "本地优先"
+    },
+    "agentStages": {
+      "understanding": "理解问题",
+      "routing": "选择路径",
+      "toolCall": "调用工具",
+      "toolResult": "工具结果",
+      "searchingWiki": "搜索 Wiki",
+      "searchingGraph": "搜索图谱",
+      "searchingWeb": "搜索网页",
+      "searchingAnytxt": "搜索 AnyTXT",
+      "readingContext": "读取上下文",
+      "writing": "生成回答",
+      "final": "最终回答"
+    },
+    "agentTools": {
+      "projectFiles": "项目文件",
+      "projectFileRead": "读取项目文件",
+      "wikiSearch": "Wiki 搜索",
+      "graphSearch": "图谱搜索",
+      "webSearch": "网页搜索",
+      "anytxtSearch": "AnyTXT 搜索"
+    },
+    "agentStatus": {
+      "running": "进行中",
+      "success": "完成",
+      "error": "出错",
+      "skipped": "已跳过"
+    },
     "enableAnyTxtInSettings": "请在设置 → 外部信息源中启用 AnyTXT",
     "sendMessage": "发送消息",
     "stopGeneration": "停止生成",
