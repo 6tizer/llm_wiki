@@ -1294,7 +1294,11 @@ struct ApiGraphEdge {
 struct RawGraphNode {
     label: String,
     node_type: String,
+    // API/frontend open-file path. Currently equal to `wiki_path`, but kept
+    // separate from resolver identity so future response-path changes do not
+    // silently alter graph link matching.
     path: String,
+    // Canonical wiki-relative markdown path used for resolver identity.
     wiki_path: String,
     legacy_stem: String,
     links: Vec<String>,
