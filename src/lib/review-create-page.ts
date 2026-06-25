@@ -1,4 +1,5 @@
 import type { ReviewItem } from "@/stores/review-store"
+import type { WikiSchemaRouting } from "@/lib/wiki-schema"
 
 export type ReviewPageType = "entity" | "concept" | "comparison" | "synthesis" | "query"
 
@@ -24,6 +25,29 @@ export function createReviewPageDrafts(item: ReviewItem, action: string): Review
     pageType,
     dir: dirForPageType(pageType),
   }))
+}
+
+export function reviewPageDestinationDir(
+  draft: ReviewPageDraft,
+  routing: WikiSchemaRouting | null | undefined,
+): string {
+  const routed = routing?.typeDirs[draft.pageType]
+  return wikiSchemaDirToReviewDir(routed) ?? draft.dir
+}
+
+function wikiSchemaDirToReviewDir(dir: string | undefined): string | null {
+  if (!dir) return null
+  const normalized = dir
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+  if (normalized === "wiki") return ""
+  if (!normalized.startsWith("wiki/")) return null
+  const relative = normalized.slice("wiki/".length)
+  if (!relative || relative.split("/").some((part) => !part || part === "." || part === "..")) {
+    return null
+  }
+  return relative
 }
 
 function cleanCandidateTitle(value: string): string {

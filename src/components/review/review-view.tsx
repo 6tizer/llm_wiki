@@ -19,7 +19,8 @@ import { normalizePath } from "@/lib/path-utils"
 import { saveQueryPage } from "@/lib/save-query-page"
 import { hasConfiguredDeepResearchSources } from "@/lib/web-search"
 import { makeQueryFileName } from "@/lib/wiki-filename"
-import { createReviewPageDrafts } from "@/lib/review-create-page"
+import { createReviewPageDrafts, reviewPageDestinationDir } from "@/lib/review-create-page"
+import { loadProjectWikiSchemaRouting } from "@/lib/wiki-schema"
 import { useTranslation } from "react-i18next"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
@@ -146,6 +147,7 @@ export function ReviewView() {
       if (item) {
         try {
           const drafts = createReviewPageDrafts(item, realAction)
+          const schemaRouting = await loadProjectWikiSchemaRouting(pp)
           const created: Array<{
             title: string
             dir: string
@@ -158,12 +160,13 @@ export function ReviewView() {
 
           for (const draft of drafts) {
             const { date, fileName } = makeQueryFileName(draft.title)
-            const filePath = `${pp}/wiki/${draft.dir}/${fileName}`
+            const dir = reviewPageDestinationDir(draft, schemaRouting)
+            const filePath = [pp, "wiki", dir, fileName].filter(Boolean).join("/")
             const frontmatter = `---\ntype: ${draft.pageType}\ntitle: "${draft.title.replace(/"/g, '\\"')}"\ncreated: ${date}\ntags: []\nrelated: []\n---\n\n`
             const body = `# ${draft.title}\n\n${item.description}\n`
             const pageContent = frontmatter + body
             await writeFile(filePath, pageContent)
-            created.push({ title: draft.title, dir: draft.dir, fileName, filePath, pageContent, pageType: draft.pageType, date })
+            created.push({ title: draft.title, dir, fileName, filePath, pageContent, pageType: draft.pageType, date })
           }
 
           // Update index
@@ -171,9 +174,11 @@ export function ReviewView() {
           let indexContent = ""
           try { indexContent = await readFile(indexPath) } catch { indexContent = "# Wiki Index\n" }
           for (const createdPage of created) {
-            const sectionHeader = `## ${createdPage.dir.charAt(0).toUpperCase() + createdPage.dir.slice(1)}`
+            const sectionName = createdPage.dir || "Wiki"
+            const sectionHeader = `## ${sectionName.charAt(0).toUpperCase() + sectionName.slice(1)}`
             const linkTarget = createdPage.fileName.replace(/\.md$/, "")
-            const entry = `- [[${createdPage.dir}/${linkTarget}|${createdPage.title}]]`
+            const pageRef = createdPage.dir ? `${createdPage.dir}/${linkTarget}` : linkTarget
+            const entry = `- [[${pageRef}|${createdPage.title}]]`
             if (indexContent.includes(sectionHeader)) {
               indexContent = indexContent.replace(new RegExp(`(${sectionHeader}\n)`), (match) => `${match}${entry}\n`)
             } else {
@@ -201,7 +206,7 @@ export function ReviewView() {
           useWikiStore.getState().bumpDataVersion()
 
           resolveItem(id, created.length === 1
-            ? `Created: wiki/${created[0].dir}/${created[0].fileName}`
+            ? `Created: ${["wiki", created[0].dir, created[0].fileName].filter(Boolean).join("/")}`
             : `Created ${created.length} pages`)
         } catch (err) {
           console.error("Failed to create page from review:", err)

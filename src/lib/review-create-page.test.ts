@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { ReviewItem } from "@/stores/review-store"
-import { createReviewPageDrafts } from "./review-create-page"
+import {
+  createReviewPageDrafts,
+  reviewPageDestinationDir,
+  type ReviewPageDraft,
+} from "./review-create-page"
 
 function review(overrides: Partial<ReviewItem>): ReviewItem {
   return {
@@ -45,5 +49,49 @@ describe("createReviewPageDrafts", () => {
     expect(drafts).toEqual([
       { title: "Policy version gap", pageType: "query", dir: "queries" },
     ])
+  })
+})
+
+describe("reviewPageDestinationDir", () => {
+  it("routes page types through schema directories when available", () => {
+    const draft: ReviewPageDraft = {
+      title: "Ada Lovelace",
+      pageType: "entity",
+      dir: "entities",
+    }
+
+    expect(
+      reviewPageDestinationDir(draft, {
+        typeDirs: { entity: "wiki/people" },
+      }),
+    ).toBe("people")
+  })
+
+  it("falls back to draft dir when schema has no route for the page type", () => {
+    const draft: ReviewPageDraft = {
+      title: "Policy gap",
+      pageType: "query",
+      dir: "queries",
+    }
+
+    expect(
+      reviewPageDestinationDir(draft, {
+        typeDirs: { entity: "wiki/people" },
+      }),
+    ).toBe("queries")
+  })
+
+  it("supports schema routes to the wiki root", () => {
+    const draft: ReviewPageDraft = {
+      title: "Home",
+      pageType: "query",
+      dir: "queries",
+    }
+
+    expect(
+      reviewPageDestinationDir(draft, {
+        typeDirs: { query: "wiki" },
+      }),
+    ).toBe("")
   })
 })

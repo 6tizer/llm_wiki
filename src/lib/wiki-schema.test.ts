@@ -131,4 +131,29 @@ describe("validateWikiPageRouting", () => {
   it("does not enforce pages without a parseable type", () => {
     expect(validateWikiPageRouting("wiki/concepts/no-type.md", "# No Type", routing)).toBeNull()
   })
+
+  it("does not infer root structural pages from schema routes mapped to wiki", () => {
+    const rootRouting = parseWikiSchemaRouting([
+      "# Wiki Schema",
+      "",
+      "## Page Types",
+      "",
+      "| Type | Directory | Purpose |",
+      "| ---- | --------- | ------- |",
+      "| overview | wiki | Root pages |",
+      "| concept | wiki/concepts | Concepts |",
+    ].join("\n"))
+    const sourceContent = [
+      "---",
+      "type: source",
+      "title: Log",
+      "---",
+      "",
+      "# Log",
+    ].join("\n")
+
+    expect(validateWikiPageRouting("wiki/index.md", sourceContent, rootRouting)).toBeNull()
+    expect(validateWikiPageRouting("wiki/log.md", sourceContent, rootRouting)).toBeNull()
+    expect(validateWikiPageRouting("wiki/overview.md", sourceContent, rootRouting)).toBeNull()
+  })
 })

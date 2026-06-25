@@ -50,11 +50,13 @@ export function validateWikiPageRouting(
   content: string,
   routing: WikiSchemaRouting,
 ): WikiSchemaRoutingIssue | null {
+  const normalizedPath = normalizeRelativePath(relativePath)
+  if (isStructuralRootWikiPagePath(normalizedPath)) return null
+
   const parsed = parseFrontmatter(content)
   const type = parsed.frontmatter?.type
   if (typeof type !== "string" || !type.trim()) return null
 
-  const normalizedPath = normalizeRelativePath(relativePath)
   const actualDir = dirname(normalizedPath)
   const expectedDir = routing.typeDirs[type]
   if (expectedDir && actualDir !== expectedDir) {
@@ -105,6 +107,14 @@ function inferTypeFromSchemaPath(
 
 function normalizeRelativePath(relativePath: string): string {
   return relativePath.replace(/\\/g, "/").replace(/^\/+/, "")
+}
+
+function isStructuralRootWikiPagePath(relativePath: string): boolean {
+  return (
+    relativePath === "wiki/index.md" ||
+    relativePath === "wiki/log.md" ||
+    relativePath === "wiki/overview.md"
+  )
 }
 
 function dirname(relativePath: string): string {
