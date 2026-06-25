@@ -11,6 +11,7 @@ import {
   History,
   Wrench,
   Clock,
+  FileText,
   FolderSync,
   Server,
   SlidersHorizontal,
@@ -37,6 +38,7 @@ import { InterfaceSection } from "./sections/interface-section"
 import { NetworkSection } from "./sections/network-section"
 import { ScheduledImportSection } from "./sections/scheduled-import-section"
 import { SourceWatchSection } from "./sections/source-watch-section"
+import { MineruSection } from "./sections/mineru-section"
 import { ApiServerSection } from "./sections/api-server-section"
 import { AgentSection } from "./sections/agent-section"
 import { ChangelogSection } from "./sections/changelog-section"
@@ -51,6 +53,7 @@ type CategoryId =
   | "network"
   | "source-watch"
   | "scheduled-import"
+  | "mineru"
   | "api-server"
   | "agent"
   | "output"
@@ -76,6 +79,7 @@ const CATEGORIES: Category[] = [
   { id: "network", labelKey: "settings.categories.network", icon: Network },
   { id: "source-watch", labelKey: "settings.categories.sourceWatch", icon: FolderSync },
   { id: "scheduled-import", labelKey: "settings.categories.scheduledImport", icon: Clock },
+  { id: "mineru", labelKey: "settings.categories.mineru", icon: FileText },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
   { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
@@ -93,6 +97,7 @@ export function initialDraft(
   proxy: ReturnType<typeof useWikiStore.getState>["proxyConfig"],
   scheduledImport: ReturnType<typeof useWikiStore.getState>["scheduledImportConfig"],
   sourceWatch: ReturnType<typeof useWikiStore.getState>["sourceWatchConfig"],
+  mineru: ReturnType<typeof useWikiStore.getState>["mineruConfig"],
   apiConfig: ReturnType<typeof useWikiStore.getState>["apiConfig"],
   agentConfig: ReturnType<typeof useAgentSettingsStore.getState>["resourceConfig"],
   maxHistoryMessages: number,
@@ -153,6 +158,10 @@ export function initialDraft(
     scheduledImportPath: displayPath,
     scheduledImportInterval: scheduledImport.interval,
     sourceWatchConfig: normalizeSourceWatchConfig(sourceWatch),
+    mineruEnabled: mineru.enabled,
+    mineruToken: mineru.token,
+    mineruModelVersion: mineru.modelVersion,
+    mineruApiBaseUrl: mineru.apiBaseUrl ?? "",
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
     apiMcpEnabled: apiConfig.mcpEnabled ?? false,
@@ -191,6 +200,8 @@ export function SettingsView() {
   const setScheduledImportConfig = useWikiStore((s) => s.setScheduledImportConfig)
   const sourceWatchConfig = useWikiStore((s) => s.sourceWatchConfig)
   const setSourceWatchConfig = useWikiStore((s) => s.setSourceWatchConfig)
+  const mineruConfig = useWikiStore((s) => s.mineruConfig)
+  const setMineruConfig = useWikiStore((s) => s.setMineruConfig)
   const apiConfig = useWikiStore((s) => s.apiConfig)
   const setApiConfig = useWikiStore((s) => s.setApiConfig)
   const agentConfig = useAgentSettingsStore((s) => s.resourceConfig)
@@ -219,6 +230,7 @@ export function SettingsView() {
       proxyConfig,
       scheduledImportConfig,
       sourceWatchConfig,
+      mineruConfig,
       apiConfig,
       agentConfig,
       maxHistoryMessages,
@@ -266,6 +278,7 @@ export function SettingsView() {
         proxyConfig,
         scheduledImportConfig,
         sourceWatchConfig,
+        mineruConfig,
         apiConfig,
         agentConfig,
         maxHistoryMessages,
@@ -282,6 +295,7 @@ export function SettingsView() {
     proxyConfig,
     scheduledImportConfig,
     sourceWatchConfig,
+    mineruConfig,
     apiConfig,
     agentConfig,
     maxHistoryMessages,
@@ -301,6 +315,7 @@ export function SettingsView() {
       saveProxyConfig,
       saveScheduledImportConfig,
       saveSourceWatchConfig,
+      saveMineruConfig,
       saveApiConfig,
       saveZoomLevel,
     } = await import("@/lib/project-store")
@@ -355,6 +370,12 @@ export function SettingsView() {
       url: draft.proxyUrl.trim(),
       bypassLocal: draft.proxyBypassLocal,
     }
+    const newMineru = {
+      enabled: draft.mineruEnabled,
+      token: draft.mineruToken.trim(),
+      modelVersion: draft.mineruModelVersion,
+      apiBaseUrl: draft.mineruApiBaseUrl.trim(),
+    }
 
     setLlmConfig(newLlm)
     await saveLlmConfig(newLlm)
@@ -362,6 +383,8 @@ export function SettingsView() {
     await saveEmbeddingConfig(newEmbed)
     setMultimodalConfig(newMultimodal)
     await saveMultimodalConfig(newMultimodal)
+    setMineruConfig(newMineru)
+    await saveMineruConfig(newMineru)
     setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
     await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage, project?.id)
     setProxyConfig(newProxy)
@@ -452,6 +475,8 @@ export function SettingsView() {
     project,
     setLlmConfig,
     setEmbeddingConfig,
+    setMultimodalConfig,
+    setMineruConfig,
     setOutputLanguage,
     setProxyConfig,
     setScheduledImportConfig,
@@ -482,6 +507,8 @@ export function SettingsView() {
         return <SourceWatchSection draft={draft} setDraft={setDraft} projectReady={!!project} />
       case "scheduled-import":
         return <ScheduledImportSection draft={draft} setDraft={setDraft} />
+      case "mineru":
+        return <MineruSection draft={draft} setDraft={setDraft} />
       case "api-server":
         return <ApiServerSection draft={draft} setDraft={setDraft} />
       case "agent":

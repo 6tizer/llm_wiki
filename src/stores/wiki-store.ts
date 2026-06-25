@@ -227,6 +227,15 @@ interface SourceWatchConfig {
 	maxFileSizeMb: number;
 }
 
+export type MineruModelVersion = "pipeline" | "vlm";
+
+export interface MineruConfig {
+	enabled: boolean;
+	token: string;
+	modelVersion: MineruModelVersion;
+	apiBaseUrl?: string;
+}
+
 interface MultimodalConfig {
 	enabled: boolean;
 	/** Reuse `llmConfig` for caption calls. When true, the fields
@@ -338,6 +347,7 @@ interface WikiState {
 	proxyConfig: ProxyConfig
 	scheduledImportConfig: ScheduledImportConfig
 	sourceWatchConfig: SourceWatchConfig
+	mineruConfig: MineruConfig
 	apiConfig: ApiConfig
 	dataVersion: number
 
@@ -359,6 +369,7 @@ interface WikiState {
 	setProxyConfig: (config: ProxyConfig) => void
 	setScheduledImportConfig: (config: ScheduledImportConfig) => void
 	setSourceWatchConfig: (config: SourceWatchConfig) => void
+	setMineruConfig: (config: MineruConfig) => void
 	setApiConfig: (config: ApiConfig) => void
 	bumpDataVersion: () => void
 }
@@ -455,6 +466,12 @@ export const useWikiStore = create<WikiState>((set) => ({
 	},
 
 	sourceWatchConfig: DEFAULT_SOURCE_WATCH_CONFIG,
+	mineruConfig: {
+		enabled: false,
+		token: "",
+		modelVersion: "vlm",
+		apiBaseUrl: "",
+	},
 
 	// Default `enabled: true` preserves the pre-toggle behavior: anyone
 	// who already had `LLM_WIKI_API_TOKEN` set or `apiConfig.token`
@@ -479,6 +496,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	setScheduledImportConfig: (scheduledImportConfig) =>
 		set({ scheduledImportConfig }),
 	setSourceWatchConfig: (sourceWatchConfig) => set({ sourceWatchConfig }),
+	setMineruConfig: (mineruConfig) => set({ mineruConfig }),
 	setApiConfig: (apiConfig) => set({ apiConfig }),
 	bumpDataVersion: () =>
 		set((state) => ({ dataVersion: state.dataVersion + 1 })),

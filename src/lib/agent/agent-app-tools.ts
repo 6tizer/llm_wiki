@@ -239,6 +239,7 @@ function redactConfiguredSecrets(text: string, state: ReturnType<typeof useWikiS
   const secrets = [
     state.llmConfig.apiKey,
     state.searchApiConfig.apiKey,
+    state.mineruConfig.token,
     ...Object.values(state.searchApiConfig.providerConfigs ?? {}).map((config) => config?.apiKey ?? ""),
   ].filter((secret) => secret.length >= 6)
 

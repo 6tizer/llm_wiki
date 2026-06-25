@@ -94,6 +94,10 @@ export async function readFileAsBase64(path: string): Promise<FileBase64> {
   return invoke<FileBase64>("read_file_as_base64", { path })
 }
 
+export async function writeFileBase64(path: string, base64: string): Promise<void> {
+  return invoke<void>("write_file_base64", { path, base64 })
+}
+
 export async function createProject(
   name: string,
   path: string,

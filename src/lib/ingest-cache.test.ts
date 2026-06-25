@@ -80,6 +80,47 @@ describe("ingest-cache — checkIngestCache", () => {
     expect(result).toBeNull()
   })
 
+  it("keeps cache entries separate by parser provenance", async () => {
+    let persisted = ""
+    mockReadFile.mockImplementation(async () => persisted || JSON.stringify({ entries: {} }))
+    mockWriteFile.mockImplementation(async (_p: string, c: string) => {
+      persisted = c
+    })
+    await saveIngestCache(
+      "/project",
+      "foo.pdf",
+      "same markdown",
+      ["wiki/sources/foo.md"],
+      "mineru:vlm",
+    )
+
+    mockFileExists.mockResolvedValue(true)
+    await expect(checkIngestCache("/project", "foo.pdf", "same markdown")).resolves.toBeNull()
+    await expect(
+      checkIngestCache("/project", "foo.pdf", "same markdown", "mineru:vlm"),
+    ).resolves.toEqual(["wiki/sources/foo.md"])
+  })
+
+  it("treats legacy parser-less cache entries as local parser entries", async () => {
+    let persisted = ""
+    mockReadFile.mockImplementation(async () => persisted || JSON.stringify({ entries: {} }))
+    mockWriteFile.mockImplementation(async (_p: string, c: string) => {
+      persisted = c
+    })
+    await saveIngestCache("/project", "foo.pdf", "hello", ["wiki/sources/foo.md"])
+    const legacy = JSON.parse(persisted) as { entries: Record<string, { parser?: string }> }
+    delete legacy.entries["foo.pdf"].parser
+    persisted = JSON.stringify(legacy)
+
+    mockFileExists.mockResolvedValue(true)
+    await expect(checkIngestCache("/project", "foo.pdf", "hello")).resolves.toEqual([
+      "wiki/sources/foo.md",
+    ])
+    await expect(
+      checkIngestCache("/project", "foo.pdf", "hello", "mineru:vlm"),
+    ).resolves.toBeNull()
+  })
+
   it("returns null if fileExists itself throws (safer to re-ingest than to trust)", async () => {
     let persisted = ""
     mockReadFile.mockImplementation(async () => persisted || JSON.stringify({ entries: {} }))
