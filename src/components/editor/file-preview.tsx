@@ -15,7 +15,7 @@ import {
 } from "lucide-react"
 import { getFileCategory, getCodeLanguage } from "@/lib/file-types"
 import type { FileCategory } from "@/lib/file-types"
-import { getFileName } from "@/lib/path-utils"
+import { getFileName, normalizePath } from "@/lib/path-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { detectLanguage } from "@/lib/detect-language"
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
@@ -120,6 +120,11 @@ function CodePreview({ filePath, content }: { filePath: string; content: string 
 
 function TextPreview({ filePath, content, label }: { filePath: string; content: string; label: string }) {
   const projectPath = useWikiStore((s) => s.project?.path ?? null)
+  const currentFileDir = useMemo(() => {
+    const normalized = normalizePath(filePath)
+    const index = normalized.lastIndexOf("/")
+    return index > 0 ? normalized.slice(0, index) : null
+  }, [filePath])
   const pendingScrollImageSrc = useWikiStore((s) => s.pendingScrollImageSrc)
   const setPendingScrollImageSrc = useWikiStore((s) => s.setPendingScrollImageSrc)
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
@@ -212,7 +217,7 @@ function TextPreview({ filePath, content, label }: { filePath: string; content: 
             // URL (which differs per platform).
             img: ({ src, alt, ...props }) => (
               <img
-                src={typeof src === "string" ? resolveMarkdownImageSrc(src, projectPath) : undefined}
+                src={typeof src === "string" ? resolveMarkdownImageSrc(src, projectPath, currentFileDir) : undefined}
                 data-mdsrc={typeof src === "string" ? src : undefined}
                 alt={alt ?? ""}
                 className="max-w-full rounded border border-border/40 transition-all"
