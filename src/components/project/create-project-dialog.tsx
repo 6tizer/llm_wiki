@@ -23,6 +23,26 @@ interface CreateProjectDialogProps {
   onCreated: (project: WikiProject) => void
 }
 
+/** Translation keys returned by create-project form validation. */
+export type CreateProjectValidationError =
+  | "project.errorNameRequired"
+  | "project.errorLanguageRequired"
+
+/** Validate the required fields before creating a wiki project. */
+export function validateCreateProjectInput(
+  name: string,
+  path: string,
+  language: string,
+): CreateProjectValidationError | null {
+  if (!name.trim() || !path.trim()) {
+    return "project.errorNameRequired"
+  }
+  if (!language) {
+    return "project.errorLanguageRequired"
+  }
+  return null
+}
+
 export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: CreateProjectDialogProps) {
   const { t } = useTranslation()
   const [name, setName] = useState("")
@@ -50,12 +70,9 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   }
 
   async function handleCreate() {
-    if (!name.trim() || !path.trim()) {
-      setError(t("project.errorNameRequired"))
-      return
-    }
-    if (!language) {
-      setError(t("project.errorLanguageRequired"))
+    const validationError = validateCreateProjectInput(name, path, language)
+    if (validationError) {
+      setError(t(validationError))
       return
     }
     setCreating(true)

@@ -6,8 +6,9 @@ import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
+import { BASE_FONT_SIZE_PX, useZoomStore } from "@/stores/zoom-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig, loadZoomLevel } from "@/lib/project-store"
 import { loadAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { cleanExpiredAgentSessions, loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
@@ -17,12 +18,18 @@ import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
 import type { WikiProject } from "@/types/wiki"
 
+/** Apply app zoom through the root font size so pointer coordinates stay native. */
+export function applyDocumentZoom(level: number): void {
+  document.documentElement.style.fontSize = `${BASE_FONT_SIZE_PX * level}px`
+}
+
 function App() {
   const project = useWikiStore((s) => s.project)
   const setProject = useWikiStore((s) => s.setProject)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const setActiveView = useWikiStore((s) => s.setActiveView)
+  const zoomLevel = useZoomStore((s) => s.level)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -31,6 +38,10 @@ function App() {
     setupAutoSave()
     startClipWatcher()
   }, [])
+
+  useEffect(() => {
+    applyDocumentZoom(zoomLevel)
+  }, [zoomLevel])
 
   // Dev-only helper for visually testing the update-banner UX.
   // Open dev tools and run:
@@ -242,6 +253,7 @@ function App() {
             token: typeof savedApi.token === "string" ? savedApi.token : "",
           })
         }
+        useZoomStore.getState().setLevel(await loadZoomLevel())
         const savedLang = await loadLanguage()
         if (savedLang) {
           await i18n.changeLanguage(savedLang)
