@@ -226,6 +226,12 @@ const LANGUAGE_KEY = "language"
 export async function saveLanguage(lang: string): Promise<void> {
   const store = await getStore()
   await store.set(LANGUAGE_KEY, lang)
+  await store.save()
+  try {
+    await invoke<string>("set_tray_language", { language: lang })
+  } catch (err) {
+    console.warn("[tray] language live update failed; restart will still apply:", err)
+  }
 }
 
 export async function loadLanguage(): Promise<string | null> {

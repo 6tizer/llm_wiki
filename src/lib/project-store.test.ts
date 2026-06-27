@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: mocks.invoke,
 }))
 
-import { __projectStoreTest, saveCloseBehavior, saveTheme } from "./project-store"
+import { __projectStoreTest, saveCloseBehavior, saveLanguage, saveTheme } from "./project-store"
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -77,5 +77,33 @@ describe("project-store app preference helpers", () => {
     expect(mocks.store.set).toHaveBeenCalledWith("closeBehavior", "quit")
     expect(mocks.invoke).toHaveBeenCalledWith("set_close_behavior", { behavior: "quit" })
     expect(calls).toEqual(["save", "invoke"])
+  })
+
+  it("flushes language before best-effort tray sync", async () => {
+    const calls: string[] = []
+    mocks.store.save.mockImplementation(async () => {
+      calls.push("save")
+    })
+    mocks.invoke.mockImplementation(async () => {
+      calls.push("invoke")
+      return "zh"
+    })
+
+    await saveLanguage("zh-CN")
+
+    expect(mocks.store.set).toHaveBeenCalledWith("language", "zh-CN")
+    expect(mocks.invoke).toHaveBeenCalledWith("set_tray_language", { language: "zh-CN" })
+    expect(calls).toEqual(["save", "invoke"])
+  })
+
+  it("does not fail language saves when tray sync is unavailable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    mocks.invoke.mockRejectedValueOnce(new Error("not tauri"))
+
+    await expect(saveLanguage("en")).resolves.toBeUndefined()
+
+    expect(mocks.store.set).toHaveBeenCalledWith("language", "en")
+    expect(mocks.store.save).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
   })
 })
