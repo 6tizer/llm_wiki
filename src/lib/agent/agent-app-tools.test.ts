@@ -284,6 +284,8 @@ describe("runAgentAppTool ingest parity tools", () => {
       ["winter ammonia"],
       expect.objectContaining({ deepResearchSource: "both" }),
       "/project",
+      undefined,
+      { llmConfig: expect.objectContaining({ model: "gpt-test" }) },
     )
     expect(response.result).toEqual({
       queries: ["winter ammonia"],
@@ -297,6 +299,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const unconfigured = await runAgentAppTool("collect_research_sources", {
       topic: "unconfigured",
     })
+    expect(deepResearchMock.collectResearchSources).not.toHaveBeenCalled()
     expect(unconfigured.result).toEqual({
       queries: ["unconfigured"],
       sourceMode: "web",
@@ -324,6 +327,39 @@ describe("runAgentAppTool ingest parity tools", () => {
       ["fallback"],
       expect.objectContaining({ deepResearchSource: "anytxt" }),
       "/project",
+      undefined,
+      { llmConfig: expect.objectContaining({ model: "gpt-test" }) },
+    )
+  })
+
+  it("passes the current llmConfig to AnyTXT source collection", async () => {
+    deepResearchMock.collectResearchSources.mockResolvedValue({ results: [], errors: [] })
+    const llmConfig = {
+      ...useWikiStore.getState().llmConfig,
+      apiKey: "llm-key",
+      model: "gpt-anytxt",
+    }
+    useWikiStore.setState({
+      llmConfig,
+      searchApiConfig: {
+        provider: "none",
+        apiKey: "",
+        deepResearchSource: "anytxt",
+        anyTxt: { endpoint: "http://127.0.0.1:9920" },
+      },
+    })
+
+    await runAgentAppTool("collect_research_sources", {
+      topic: "local corpus",
+      sourceMode: "anytxt",
+    })
+
+    expect(deepResearchMock.collectResearchSources).toHaveBeenCalledWith(
+      ["local corpus"],
+      expect.objectContaining({ deepResearchSource: "anytxt" }),
+      "/project",
+      undefined,
+      { llmConfig },
     )
   })
 

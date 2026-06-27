@@ -503,6 +503,8 @@ export async function runAgentAppTool(
       queries,
       searchConfig,
       projectPath,
+      undefined,
+      { llmConfig: state.llmConfig },
     )
     return {
       ok: true,
