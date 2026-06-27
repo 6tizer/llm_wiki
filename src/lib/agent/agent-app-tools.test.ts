@@ -3,7 +3,7 @@ import type { FileNode } from "@/types/wiki"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useResearchStore } from "@/stores/research-store"
 import { useReviewStore } from "@/stores/review-store"
-import { runAgentAppTool } from "./agent-app-tools"
+import { AGENT_APP_TOOL_DESCRIPTORS, runAgentAppTool } from "./agent-app-tools"
 
 const fsMock = vi.hoisted(() => ({
   tree: [] as FileNode[],
@@ -128,6 +128,31 @@ vi.mock("@/lib/agent/agent-pipeline", () => ({
 }))
 
 describe("runAgentAppTool ingest parity tools", () => {
+  it("declares every supported app tool in the descriptor table", () => {
+    expect(Object.keys(AGENT_APP_TOOL_DESCRIPTORS).sort()).toEqual([
+      "autofill_properties",
+      "build_answer_context",
+      "caption_source_images",
+      "collect_research_sources",
+      "detect_duplicates",
+      "enrich_wikilinks",
+      "fix_lint_report",
+      "fix_lint_result",
+      "get_agent_task_status",
+      "ingest_source",
+      "merge_duplicate_group",
+      "optimize_research_topic",
+      "run_deep_research",
+      "run_lint",
+      "run_lint_and_report",
+      "run_pipeline",
+      "save_query_page",
+      "sweep_reviews",
+      "test_provider_connection",
+      "wiki_synthesis",
+    ])
+  })
+
   beforeEach(() => {
     fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true }]
     fsMock.canonical = new Map([["/project/raw/sources", "/project/raw/sources"]])
