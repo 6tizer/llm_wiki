@@ -1,10 +1,10 @@
 # Upstream v0.5.x Delta
 
-> 类型：调研入口 | 创建：2026-06-24 | 状态：active
+> 类型：调研入口 | 创建：2026-06-24 | 更新：2026-06-27 | 状态：active
 
 ## 结论
 
-Phase 6 后续实现 PR 不再以 `v0.4.25` 为当前目标；每个 PR 开工前都要重新核对 upstream `v0.5.x` delta，并把发现分流到既有 PR E / H-lite / G / F / I / J / K 或后续计划。
+Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 residual follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
 
 本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
 
@@ -30,7 +30,7 @@ Phase 6 后续实现 PR 不再以 `v0.4.25` 为当前目标；每个 PR 开工�
 - 工具：读写 Wiki MCP tools、app-level tools、permission bridge、resource limits、session resume/fork/continue、多 Agent pipeline。
 - UI：Agent session、permission approval、tool/activity timeline、rewind/resume/compact 等 Phase 7 productization 项。
 
-结论：上游 Chat Agent Router 是可吸收的 Chat/RAG 路由能力，不是 Agent SDK sidecar 的替代品。后续同步应把它分流到 PR G / Phase 7 边界评估，并避免直接覆盖本地 sidecar、permission、session 和 pipeline 设计。
+结论：上游 Chat Agent Router 是可吸收的 Chat/RAG 路由能力，不是 Agent SDK sidecar 的替代品。PR G 核心已完成；未来相关 delta 应分流到 residual Chat Router follow-up、新 tracking issue 或 Phase 7 边界评估，并避免直接覆盖本地 sidecar、permission、session 和 pipeline 设计。
 
 ## Delta Assessment Checklist
 
@@ -39,36 +39,50 @@ Phase 6 后续实现 PR 不再以 `v0.4.25` 为当前目标；每个 PR 开工�
 1. 确认 upstream remote、latest tag、`upstream/main` commit；若已超过 `v0.5.0`，记录新事实。
 2. 查看 `v0.4.26` through latest `v0.5.x` 的 upstream delta，也可用 `v0.4.25..latest` range 抽取 commit/file 变化。
 3. 对照本地 main，标出直接 merge 会覆盖或删除的本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary 或 Mac-only product positioning 差异。
-4. 把 delta 分流到下方 PR 映射；不确定项先放 follow-up sweep。
+4. 把 delta 分流到下方完成映射或当前 follow-up；不确定项先开 tracking issue，不混入无关 PR。
 5. 在对应 PR plan / PR body 记录 delta 结论和未处理项。
 
 ## Routing Rules
 
 | Delta type | Route |
 |------------|-------|
-| Ingest、schema、review create page、source path safety | PR E |
-| Zoom、layout、app visibility、project open/create UX | H-lite |
-| Chat image、multimodal message、chat standalone | PR G |
-| Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G Chat Agent Router alignment + Phase 7 boundary decision |
+| Ingest、schema、review create page、source path safety | PR E completed; residual route #128 or new scoped issue |
+| Zoom、layout、app visibility、project open/create UX | H-lite completed; residual UI polish should get a scoped issue |
+| Chat image、multimodal message、chat standalone | PR G/#134 completed; residual route #135/#136 |
+| Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G completed; sidecar lifecycle remains Phase 7 |
 | OKF-compatible wiki bundle、validator/export/import | OKF roadmap |
-| MinerU / PDF parsing | PR F |
-| Theme、tray、general settings、window close behavior | PR I |
-| Graph rendering/performance | PR J |
-| AnyTXT、source import extras、lint persistence、low-risk misc | PR K |
+| MinerU / PDF parsing | PR F completed; residual route #139 |
+| Theme、tray、general settings、window close behavior | PR I completed; residual route #144 |
+| Graph rendering/performance | PR J completed; residual route new scoped issue if needed |
+| AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; residual route #146/#147 |
 | CI/release/platform target cleanup | `mac-product-baseline` |
 | Agent UX/session/permission/internal RPC | Phase 7 backlog |
 
-## PR Mapping Placeholder
+## Phase 6 Completion Mapping
 
 | PR | v0.5.x delta status | Notes |
 |----|---------------------|-------|
-| PR E | todo before start | Re-check ingest/schema/review delta. |
-| H-lite | todo before start | Re-check zoom/layout/app visibility delta. |
-| PR G | todo before start | Re-check chat image/chat standalone plus upstream Chat Agent Router delta. Decide what is ported into normal Chat and what remains Phase 7 sidecar work. |
-| PR F | todo before start | Re-check MinerU/PDF delta. |
-| PR I | todo before start | Re-check theme/tray/settings delta. |
-| PR J | todo before start | Re-check graph delta. |
-| PR K | todo before start | Re-check remaining low-risk misc delta. |
+| PR E | completed | #129 `d22f401`; residual per-title review create-page classification in #128. |
+| H-lite | completed | #131 `087b135`; future layout polish should be scoped separately. |
+| PR G | completed | #137 `5765200` + #134 `1183710`; residual Chat UI polish in #135/#136. |
+| PR F | completed | #140 `87c7caf`; residual MinerU polish/regression in #139. |
+| PR I | completed | #142 `c343b2a`; residual tray menu localization in #144. |
+| PR J | completed | #145 `c5403f7`; no active graph follow-up at calibration time. |
+| PR K | completed | #148 `0fd1d95`; residual low-risk upstream delta in #146 and llmConfig forwarding evaluation in #147. |
+
+## Current Follow-up Queue
+
+Recommended order after Phase 6 completion:
+
+1. #143 API server review query test flake under parallel Rust tests.
+2. #144 macOS tray menu localization.
+3. #139 MinerU parsing polish and regression coverage.
+4. #147 evaluate `llmConfig` forwarding for `collect_research_sources`.
+5. #146 remaining low-risk upstream delta sweep from PR K.
+6. #135/#136 Chat UI polish for image attachment loading and narrow mode selector overflow.
+7. #128 review missing-page classification follow-up.
+8. #120/#126 security and quality follow-ups.
+9. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
 
 ## Direct Merge Policy
 

@@ -1,6 +1,6 @@
 # Phase 6: upstream sync to nashsu/llm_wiki v0.5.x
 
-> 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-25 | 状态：active
+> 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-27 | 状态：completed / follow-up routing
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 计划索引：[Plans Index](./README.md)
 > Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
@@ -10,7 +10,7 @@
 
 ## 结论
 
-Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍采用按功能手动 port，不直接 merge upstream。
+Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主线已经完成到 #148。后续不再按旧 PR E/H/G/F/I/J/K 顺序开新主线 PR；本文件现在用于记录完成证据、follow-up 路由和后续 implementation PR 的 upstream delta 校准规则。
 
 不能直接 `git merge upstream/main`：上游会覆盖或删除本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary、产品定位和本地 Agent workflow 差异。Phase 6 的原则是吸收 upstream 功能与修复，同时保留本地 Agent 产品线。
 
@@ -28,8 +28,15 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 | PR B：CLI resolver / active project root / connection test isolation | completed |
 | PR C：Embedding + vector safety | completed; #88 closed on 2026-06-23 |
 | PR D：LLM provider / dedup / deep research stability | completed |
-| follow-up sweep | completed |
-| v0.4.26 through latest v0.5.x delta assessment | required before every remaining implementation PR |
+| PR E：Ingest / schema / review-create-page safety | completed; #129 `d22f401` |
+| H-lite：zoom / layout / app visibility | completed; #131 `087b135` |
+| PR G：Chat Agent Router alignment + multimodal chat | completed; #137 `5765200` + #134 `1183710` |
+| PR F：MinerU PDF parsing | completed; #140 `87c7caf` |
+| PR I：theme / tray / general settings | completed; #142 `c343b2a` |
+| PR J：graph rendering / path-aware graph identity | completed; #145 `c5403f7` |
+| PR K：AnyTXT smart search options cleanup | completed; #148 `0fd1d95`; #110 closed |
+| follow-up sweep | completed through #148; residual items tracked as issues |
+| v0.4.26 through latest v0.5.x delta assessment | still required before new implementation PRs that touch upstream-overlapping areas |
 
 历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以开工时最新 `v0.5.x` 为准。
 
@@ -40,12 +47,12 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 1. 确认 upstream remote、latest tag 和 `upstream/main` commit；若 upstream 已变化，记录新的 commit/tag 事实。
 2. 查看 `v0.4.26` through latest `v0.5.x` 的 upstream delta，也可用 `v0.4.25..latest` range 抽取 commit/file 变化。
 3. 标出会触碰本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary 或 Mac-only product positioning 的冲突点。
-4. 按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 分流到 PR E / H-lite / G / F / I / J / K，或记录为 follow-up。
+4. 按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 分流到 residual follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog，或记录为新的 tracking issue。
 5. 在对应 PR plan、PR body 和 reviewer packet 写明 delta 结论。
 
-## Remaining PR Order
+## Completed Phase 6 Order
 
-后续顺序保持：
+Phase 6 主线的实际完成顺序：
 
 1. PR E：Ingest/schema/review-create-page safety
 2. H-lite：zoom/layout/app visibility
@@ -55,7 +62,19 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 6. PR J：图形渲染优化
 7. PR K：AnyTXT、源文件导入、Lint 持久化和低风险杂项
 
-每个剩余 PR 都必须重新核对 upstream `v0.5.x` delta，不得沿用旧 `v0.4.25` 结论。
+这些条目保留为完成记录，不再作为“剩余开发顺序”。新的实现 PR 若触碰相同区域，仍必须重新核对 upstream `v0.5.x` delta，不得沿用旧 `v0.4.25` 结论。
+
+## Current Follow-up Order
+
+截至 2026-06-27，后续开发建议顺序：
+
+1. 计划/进度校准：更新 plans、delta 和本地 handoff，避免旧 PR E/H/G/F/I/J/K 口径继续误导。
+2. 短平快稳定化：#143 API server review query test flake、#144 tray menu localization、#139 MinerU polish、#147 `collect_research_sources` llmConfig forwarding、#146 remaining low-risk upstream delta sweep、#135/#136 Chat UI polish、#128 review missing-page classification。
+3. 安全/质量 backlog：#120 sidecar npm audit high vulnerability、#126 remaining #119 review findings；#119 继续作为 umbrella reference。
+4. OKF：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API exposure。
+5. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
+6. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+7. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
 
 ## Agent Boundary From Upstream v0.5.x
 
@@ -66,9 +85,13 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 
 同步原则：可以 port 上游 Chat Agent Router 的 query understanding、agent mode、tool progress、project file read 和 reasoning fallback；不能把它当成 sidecar 替代品，也不能因此删除或弱化本地 Agent permission/session/pipeline 设计。
 
-## Remaining PR Charters
+## Completed PR Charters
+
+以下 charter 保留为完成记录和 future regression checklist。它们不再表示未开工范围。
 
 ### PR E：Ingest/schema/review-create-page safety
+
+状态：completed by #129 `d22f401`。
 
 目标：先把生成页面、写入路径、review create page 和 subject boundary 相关安全性补齐，再引入 MinerU。
 
@@ -85,6 +108,8 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 
 ### H-lite：zoom/layout/app visibility
 
+状态：completed by #131 `087b135`。
+
 目标：先 port 用户可见但较独立的 zoom、layout 和 app visibility 修复，不把完整主题/托盘塞进同一 PR。
 
 重点：
@@ -97,6 +122,8 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 - App startup visibility 只按当前 Mac target 验收；旧 Windows startup 修复如果仍在 upstream delta 中，作为 legacy reference 分流，不扩大当前产品承诺。
 
 ### PR G：Chat Agent Router alignment + multimodal chat
+
+状态：completed by #137 `5765200` and #134 `1183710`；剩余 UI polish 见 #135/#136。
 
 目标：普通 Chat 对齐 upstream `v0.5.x` Chat Agent Router，并支持图片和 multimodal message；不得破坏 Agent SDK sidecar stream UI。
 
@@ -113,6 +140,8 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 
 ### PR F：MinerU PDF 解析
 
+状态：completed by #140 `87c7caf`；剩余 polish/regression 见 #139。
+
 目标：引入可选 MinerU 云解析，默认 PDF 行为不变。
 
 重点：
@@ -123,6 +152,8 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 - Token 不写仓库、日志、PR 描述或测试快照。
 
 ### PR I：主题、托盘、通用设置
+
+状态：completed by #142 `c343b2a`；tray label localization 见 #144。
 
 目标：引入 theme、tray、close behavior 和 general settings，同时按 Mac-only product baseline 校正平台口径。
 
@@ -135,6 +166,8 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 - 不重新承诺 Linux/Windows active support。
 
 ### PR J：图形渲染优化
+
+状态：completed by #145 `c5403f7`。
 
 目标：对齐 upstream graph performance 和 rendering safety。
 
@@ -149,6 +182,8 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 
 ### PR K：AnyTXT、源文件导入、Lint 持久化和低风险杂项
 
+状态：completed by #148 `0fd1d95` for AnyTXT smart search options cleanup；remaining low-risk upstream delta sweep 见 #146。
+
 目标：收尾 upstream 用户功能和 P2/P3 delta，不污染 P0/P1 稳定性 PR。
 
 重点：
@@ -162,7 +197,7 @@ Phase 6 的当前目标从旧 `v0.4.25` 提升到 upstream `v0.5.x`。后续仍�
 
 ## Phase 7 Boundary
 
-Agent SDK sidecar 的 UX/session/permission/internal RPC 后续不再称为 Phase 6.1；它们进入 [Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)。上游 Chat Agent Router 的普通 Chat 集成先在 PR G 评估，只有 sidecar session/permission/pipeline 相关项进入 Phase 7。#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
+Agent SDK sidecar 的 UX/session/permission/internal RPC 后续不再称为 Phase 6.1；它们进入 [Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)。上游 Chat Agent Router 的普通 Chat 集成核心已由 PR G 完成；未来只处理 residual Chat Router delta、scoped follow-up 或 Phase 7 sidecar 边界问题。#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
 
 ## Mac-only Product Boundary
 
@@ -175,6 +210,7 @@ README 已改为 macOS-first / Mac-only active maintenance，但本 docs PR 不�
 - 本地 Agent sidecar、Agent UI、Agent pipeline 行为不回退。
 - Mac-only product baseline 完成 CI/release/app identity 清理。
 - Phase 7 backlog 有独立入口，不再作为 Phase 6 尾项混入。
+- Follow-up issues #143/#144/#139/#147/#146/#135/#136/#128/#120/#126 清楚承接剩余工作。
 
 ## Validation for Future Implementation PRs
 
