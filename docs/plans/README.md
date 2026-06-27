@@ -34,12 +34,15 @@ Phase 1-5、Phase 3.x、旧 roadmap 和 follow-up 文档保留为历史记录，
 
 ## Current Execution Order
 
-截至 2026-06-27，Phase 6 的主线 port 已完成到 #148。后续执行顺序不再是旧的 PR E/H/G/F/I/J/K，而是：
+截至 2026-06-27，Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #158。后续执行顺序不再是旧的 PR E/H/G/F/I/J/K，也不再是 #143/#144/#139/#147/#146/#155 的旧 follow-up 队列；这些已由 #150/#151/#153/#154/#157/#158 消化、替代或路由到新的残留项。当前顺序是：
 
 1. 计划/进度校准：保持本索引、Phase 6、delta 和 handoff 口径同步。
-2. 短平快 follow-up 稳定化：#143、#144、#139、#147、#146、#135、#136、#128。
-3. 安全/质量 backlog：#120、#126，并继续把 #119 作为 umbrella reference。
-4. OKF 兼容路线：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API。
-5. Claude Agent SDK alignment：Phase 7 前置 PR 7-0。
-6. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-7. Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
+2. #156 review/chat autosave project-path isolation。
+3. #152 MinerU large PDF / parsed side-cache polish。
+4. #135/#136 Chat UI polish：large image loading state + narrow mode-selector overflow affordance。
+5. #128 review missing-page classification follow-up。
+6. 安全/质量 backlog：#120、#126，并继续把 #119 作为 umbrella reference。
+7. OKF 兼容路线：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API。
+8. Claude Agent SDK alignment：Phase 7 前置 PR 7-0。
+9. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+10. Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。

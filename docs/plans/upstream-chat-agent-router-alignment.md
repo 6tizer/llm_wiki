@@ -11,7 +11,7 @@
 
 它不替代本 fork 的 **Claude Agent SDK sidecar**。Sidecar 仍负责可写 Wiki 工具、permission/session/pipeline、resource limit、rewind/resume/continue/fork 和安全边界。
 
-Phase 6 的 PR G 已完成核心 **Chat Agent Router alignment + multimodal chat**：普通 Chat 尽量贴近 upstream `v0.5.x`，同时保留本 fork 的 Agent SDK sidecar 高级能力。剩余 UI polish 已拆到 #135/#136，sidecar lifecycle 和 permission/session/pipeline 继续进入 Phase 7。
+Phase 6 的 PR G 已完成核心 **Chat Agent Router alignment + multimodal chat**：普通 Chat 尽量贴近 upstream `v0.5.x`，同时保留本 fork 的 Agent SDK sidecar 高级能力。剩余 UI polish 已拆到 #135/#136，并在当前 follow-up 队列中排在 #156 和 #152 之后；sidecar lifecycle 和 permission/session/pipeline 继续进入 Phase 7。
 
 ## Verification Anchor
 

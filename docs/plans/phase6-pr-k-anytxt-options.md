@@ -26,4 +26,5 @@ Issue: #110
 
 ## Follow-up
 
-- Decide in a separate issue/PR whether `collect_research_sources` should pass `llmConfig` for AnyTXT query rewrite support.
+- Resolved by #154: `collect_research_sources` now forwards `llmConfig` for AnyTXT query rewrite support.
+- Remaining PR K follow-up after #157: #156 review/chat autosave project-path isolation.
