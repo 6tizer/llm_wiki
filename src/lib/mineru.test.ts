@@ -1,5 +1,5 @@
 import JSZip from "jszip"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockHttpFetch = vi.fn<(url: string, opts?: RequestInit) => Promise<Response>>()
 
@@ -79,6 +79,10 @@ beforeEach(() => {
   fsMocks.writeFileBase64.mockResolvedValue(undefined)
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe("MinerU API helpers", () => {
   it("maps official API error codes to actionable messages", () => {
     expect(__mineruTest.mineruApiErrorMessage("A0202", "bad token")).toContain("invalid")
@@ -97,6 +101,20 @@ describe("MinerU API helpers", () => {
 
     expect(out).toContain("Authorization: Bearer REDACTED")
     expect(out).not.toContain("abc.def-123")
+  })
+
+  it("exposes bounded polling options for regression tests", () => {
+    expect(__mineruTest.MINERU_DEFAULT_POLLING_OPTIONS).toEqual({
+      intervalMs: 3_000,
+      timeoutMs: 300_000,
+    })
+    expect(__mineruTest.normalizeMineruPollingOptions({
+      intervalMs: 0,
+      timeoutMs: -1,
+    })).toEqual({
+      intervalMs: 1,
+      timeoutMs: 1,
+    })
   })
 
   it("prefers full.md from MinerU result zip", async () => {
@@ -356,6 +374,39 @@ describe("parseWithMineru", () => {
 
     await expect(result).rejects.toThrow("cancelled")
     expect(mockHttpFetch).toHaveBeenCalledTimes(3)
+  })
+
+  it("honors a test polling timeout without waiting for the production timeout", async () => {
+    vi.useFakeTimers()
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: { batch_id: "batch-1", file_urls: ["https://upload"] },
+      }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockImplementation(() => Promise.resolve(jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: { batch_id: "batch-1", extract_result: [{ file_name: "doc.pdf", state: "running" }] },
+      })))
+
+    const result = parseWithMineru(
+      mineruConfig(),
+      "/tmp/doc.pdf",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { intervalMs: 10, timeoutMs: 25 },
+    )
+    // Attach the rejection assertion before advancing fake timers so Vitest
+    // does not see the expected timeout as an unhandled rejection.
+    const assertion = expect(result).rejects.toThrow("MinerU parsing timed out after 25 ms")
+    await vi.advanceTimersByTimeAsync(30)
+
+    await assertion
+    expect(mockHttpFetch).toHaveBeenCalledTimes(5)
   })
 })
 

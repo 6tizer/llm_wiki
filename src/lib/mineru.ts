@@ -5,8 +5,8 @@ import { getHttpFetch } from "@/lib/tauri-fetch"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 
 export const MINERU_DEFAULT_API_BASE = "https://mineru.net/api/v4"
-const POLL_INTERVAL_MS = 3_000
-const POLL_TIMEOUT_MS = 300_000
+const MINERU_DEFAULT_POLL_INTERVAL_MS = 3_000
+const MINERU_DEFAULT_POLL_TIMEOUT_MS = 300_000
 const MAX_ACCURATE_PARSE_BYTES = 200 * 1024 * 1024
 const MINERU_IMAGE_EXTS = new Set([
   "png",
@@ -65,6 +65,29 @@ interface UploadUrlResponse {
 export interface MineruAssetOptions {
   projectPath: string
   sourceSummarySlug: string
+}
+
+interface MineruPollingOptions {
+  intervalMs: number
+  timeoutMs: number
+}
+
+const MINERU_DEFAULT_POLLING_OPTIONS: MineruPollingOptions = {
+  intervalMs: MINERU_DEFAULT_POLL_INTERVAL_MS,
+  timeoutMs: MINERU_DEFAULT_POLL_TIMEOUT_MS,
+}
+
+function normalizeMineruPollingOptions(
+  options?: Partial<MineruPollingOptions>,
+): MineruPollingOptions {
+  return {
+    intervalMs: Math.max(1, options?.intervalMs ?? MINERU_DEFAULT_POLLING_OPTIONS.intervalMs),
+    timeoutMs: Math.max(1, options?.timeoutMs ?? MINERU_DEFAULT_POLLING_OPTIONS.timeoutMs),
+  }
+}
+
+function mineruPollingTimeoutLabel(timeoutMs: number): string {
+  return timeoutMs === MINERU_DEFAULT_POLLING_OPTIONS.timeoutMs ? "5 minutes" : `${timeoutMs} ms`
 }
 
 function mineruApiBase(config?: Pick<MineruConfig, "apiBaseUrl">): string {
@@ -416,13 +439,13 @@ async function uploadFileForTask(
   return batchId
 }
 
-function waitForPollInterval(signal?: AbortSignal): Promise<void> {
+function waitForPollInterval(intervalMs: number, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal)
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort)
       resolve()
-    }, POLL_INTERVAL_MS)
+    }, intervalMs)
     const onAbort = () => {
       clearTimeout(timer)
       signal?.removeEventListener("abort", onAbort)
@@ -432,11 +455,17 @@ function waitForPollInterval(signal?: AbortSignal): Promise<void> {
   })
 }
 
-async function pollTask(config: MineruConfig, taskId: string, signal?: AbortSignal): Promise<string> {
+async function pollTask(
+  config: MineruConfig,
+  taskId: string,
+  signal?: AbortSignal,
+  pollingOptions?: Partial<MineruPollingOptions>,
+): Promise<string> {
   const httpFetch = await getHttpFetch()
+  const polling = normalizeMineruPollingOptions(pollingOptions)
   const start = Date.now()
 
-  while (Date.now() - start < POLL_TIMEOUT_MS) {
+  while (Date.now() - start < polling.timeoutMs) {
     throwIfAborted(signal)
     const res = await httpFetch(`${mineruApiBase(config)}/extract/task/${taskId}`, {
       headers: mineruHeaders(config.token),
@@ -451,17 +480,23 @@ async function pollTask(config: MineruConfig, taskId: string, signal?: AbortSign
       throw new Error(`MinerU parsing failed: ${redactMineruSensitiveText(json.data.err_msg ?? "unknown error", config.token)}`)
     }
 
-    await waitForPollInterval(signal)
+    await waitForPollInterval(polling.intervalMs, signal)
   }
 
-  throw new Error("MinerU parsing timed out after 5 minutes")
+  throw new Error(`MinerU parsing timed out after ${mineruPollingTimeoutLabel(polling.timeoutMs)}`)
 }
 
-async function pollBatchTask(config: MineruConfig, batchId: string, signal?: AbortSignal): Promise<string> {
+async function pollBatchTask(
+  config: MineruConfig,
+  batchId: string,
+  signal?: AbortSignal,
+  pollingOptions?: Partial<MineruPollingOptions>,
+): Promise<string> {
   const httpFetch = await getHttpFetch()
+  const polling = normalizeMineruPollingOptions(pollingOptions)
   const start = Date.now()
 
-  while (Date.now() - start < POLL_TIMEOUT_MS) {
+  while (Date.now() - start < polling.timeoutMs) {
     throwIfAborted(signal)
     const res = await httpFetch(`${mineruApiBase(config)}/extract-results/batch/${batchId}`, {
       headers: mineruHeaders(config.token),
@@ -477,10 +512,10 @@ async function pollBatchTask(config: MineruConfig, batchId: string, signal?: Abo
       throw new Error(`MinerU parsing failed: ${redactMineruSensitiveText(result.err_msg ?? "unknown error", config.token)}`)
     }
 
-    await waitForPollInterval(signal)
+    await waitForPollInterval(polling.intervalMs, signal)
   }
 
-  throw new Error("MinerU parsing timed out after 5 minutes")
+  throw new Error(`MinerU parsing timed out after ${mineruPollingTimeoutLabel(polling.timeoutMs)}`)
 }
 
 async function saveMineruZipImages(
@@ -579,6 +614,7 @@ export async function parseWithMineru(
   onProgress?: (msg: string) => void,
   signal?: AbortSignal,
   assetOptions?: MineruAssetOptions,
+  pollingOptions?: Partial<MineruPollingOptions>,
 ): Promise<string> {
   throwIfAborted(signal)
   if (!config.token.trim()) throw new Error("MinerU API token not configured")
@@ -591,7 +627,7 @@ export async function parseWithMineru(
       onProgress?.("Submitting URL to MinerU...")
       const taskId = await submitUrlTask(config, sourceUrl, signal)
       onProgress?.("Waiting for MinerU to finish...")
-      return pollTask(config, taskId, signal)
+      return pollTask(config, taskId, signal, pollingOptions)
     }
 
     onProgress?.("Uploading file to MinerU...")
@@ -605,7 +641,7 @@ export async function parseWithMineru(
     const { base64 } = await readFileAsBase64(sourcePath)
     const batchId = await uploadFileForTask(config, fileName, base64, signal)
     onProgress?.("Waiting for MinerU to finish...")
-    return pollBatchTask(config, batchId, signal)
+    return pollBatchTask(config, batchId, signal, pollingOptions)
   })()
 
   onProgress?.("Downloading parsed result...")
@@ -644,5 +680,8 @@ export const __mineruTest = {
   decodeBase64ToBytes,
   rewriteMineruMarkdownImages,
   convertHtmlTablesToMarkdown,
+  normalizeMineruPollingOptions,
+  pollBatchTask,
   MAX_ACCURATE_PARSE_BYTES,
+  MINERU_DEFAULT_POLLING_OPTIONS,
 }

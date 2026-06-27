@@ -75,6 +75,8 @@ interface IngestSourcePlan {
   content?: string
 }
 
+const MINERU_FALLBACK_LOCAL_PARSER = "local:mineru-fallback"
+
 function safeMineruParsedCacheSegment(segment: string): string {
   const cleaned = segment
     .replace(/[<>:"|?*\x00-\x1f]/g, "_")
@@ -162,7 +164,7 @@ async function parseSourceForIngest(
       detail: `MinerU failed; falling back to local PDF parser: ${message}`,
     })
     const content = await tryReadFile(sourcePath)
-    return { content, parser: "local", cacheContent: content }
+    return { content, parser: MINERU_FALLBACK_LOCAL_PARSER, cacheContent: content }
   }
 }
 

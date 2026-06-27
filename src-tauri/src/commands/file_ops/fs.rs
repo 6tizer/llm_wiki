@@ -25,12 +25,29 @@ fn sandbox_path(
     path: &str,
     mode: SandboxMode,
 ) -> Result<PathBuf, String> {
-    match state.get() {
+    sandbox_path_for_root(state.get(), path, mode)
+}
+
+fn sandbox_path_for_root(
+    root: Option<PathBuf>,
+    path: &str,
+    mode: SandboxMode,
+) -> Result<PathBuf, String> {
+    match root {
+        Some(_) if matches!(mode, SandboxMode::ReadRequiresRootButAllowsExternal)
+            && Path::new(path).is_absolute() =>
+        {
+            Ok(PathBuf::from(path))
+        }
         Some(root) => validate_within_project(&root, path),
         None => match mode {
             // No known project root + write/delete = fail-closed (#119 P0-2).
             SandboxMode::Write => Err(format!(
                 "Cannot write to '{path}': no active project root (no project open). \
+                 Open a project first."
+            )),
+            SandboxMode::ReadRequiresRootButAllowsExternal => Err(format!(
+                "Cannot read '{path}': no active project root (no project open). \
                  Open a project first."
             )),
             // No known project root + read = allow (degrade to legacy).
@@ -42,6 +59,7 @@ fn sandbox_path(
 #[derive(Clone, Copy)]
 enum SandboxMode {
     Read,
+    ReadRequiresRootButAllowsExternal,
     Write,
 }
 
@@ -1013,7 +1031,15 @@ pub async fn write_file_base64(
     base64: String,
     state: State<'_, ProjectRootState>,
 ) -> Result<(), String> {
-    let validated = sandbox_path(&state, &path, SandboxMode::Write)?;
+    write_file_base64_with_root_state(path, base64, &state).await
+}
+
+async fn write_file_base64_with_root_state(
+    path: String,
+    base64: String,
+    state: &ProjectRootState,
+) -> Result<(), String> {
+    let validated = sandbox_path_for_root(state.get(), &path, SandboxMode::Write)?;
     write_file_base64_validated(validated, path, base64).await
 }
 
@@ -1625,7 +1651,18 @@ pub async fn get_file_md5(
     path: String,
     state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
-    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
+    get_file_md5_with_root_state(path, &state).await
+}
+
+async fn get_file_md5_with_root_state(
+    path: String,
+    state: &ProjectRootState,
+) -> Result<String, String> {
+    let validated = sandbox_path_for_root(
+        state.get(),
+        &path,
+        SandboxMode::ReadRequiresRootButAllowsExternal,
+    )?;
     get_file_md5_validated(validated, path).await
 }
 
@@ -1687,6 +1724,20 @@ mod tests {
         ))
     }
 
+    fn tmp_dir(name: &str) -> PathBuf {
+        let path = tmp_path(name);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn test_root_state(project_root: Option<PathBuf>) -> ProjectRootState {
+        let root_state = ProjectRootState::default();
+        if let Some(root) = project_root {
+            root_state.set(root);
+        }
+        root_state
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn write_file_base64_validated_writes_decoded_bytes() {
         let path = tmp_path("write-file-base64").join("nested").join("image.bin");
@@ -1716,6 +1767,101 @@ mod tests {
 
         assert_eq!(hash, "5d41402abc4b2a76b9719d911017c592");
         let _ = fs::remove_file(&path);
+    }
+
+    // Helper-level regression: the Tauri command wrapper delegates to
+    // `write_file_base64_with_root_state`, but these tests avoid building a
+    // full Tauri app just to construct `State<ProjectRootState>`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_file_base64_helper_rejects_path_outside_project_root() {
+        let project_root = tmp_dir("write-file-base64-project");
+        let outside_root = tmp_dir("write-file-base64-outside");
+        let outside_path = outside_root.join("image.bin");
+        let state = test_root_state(Some(project_root.clone()));
+
+        let result = write_file_base64_with_root_state(
+            outside_path.to_string_lossy().to_string(),
+            "aW1hZ2U=".to_string(),
+            &state,
+        )
+        .await;
+
+        assert!(result.is_err(), "{result:?}");
+        let err = result.unwrap_err();
+        assert!(err.contains("escapes the project directory"), "{err}");
+        assert!(!outside_path.exists());
+        let _ = fs::remove_dir_all(project_root);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    // Helper-level regression for scheduled import compatibility: once a
+    // project root exists, MD5 reads keep the legacy external-file behavior.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_file_md5_helper_allows_external_path_when_project_root_is_active() {
+        let project_root = tmp_dir("get-file-md5-project");
+        let outside_root = tmp_dir("get-file-md5-outside");
+        let outside_path = outside_root.join("source.pdf");
+        fs::write(&outside_path, b"hello").unwrap();
+        let state = test_root_state(Some(project_root.clone()));
+
+        let hash = get_file_md5_with_root_state(
+            outside_path.to_string_lossy().to_string(),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(hash, "5d41402abc4b2a76b9719d911017c592");
+        let _ = fs::remove_dir_all(project_root);
+        let _ = fs::remove_dir_all(outside_root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_file_md5_helper_resolves_relative_path_inside_project_root() {
+        let project_root = tmp_dir("get-file-md5-relative-project");
+        fs::create_dir_all(project_root.join("raw/sources")).unwrap();
+        fs::write(project_root.join("raw/sources/source.pdf"), b"hello").unwrap();
+        let state = test_root_state(Some(project_root.clone()));
+
+        let hash = get_file_md5_with_root_state("raw/sources/source.pdf".to_string(), &state)
+            .await
+            .unwrap();
+
+        assert_eq!(hash, "5d41402abc4b2a76b9719d911017c592");
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_file_md5_helper_rejects_relative_traversal() {
+        let project_root = tmp_dir("get-file-md5-traversal-project");
+        let state = test_root_state(Some(project_root.clone()));
+
+        let result = get_file_md5_with_root_state("../outside.pdf".to_string(), &state).await;
+
+        assert!(result.is_err(), "{result:?}");
+        let err = result.unwrap_err();
+        assert!(err.contains("Path traversal is not allowed"), "{err}");
+        let _ = fs::remove_dir_all(project_root);
+    }
+
+    // Helper-level regression for #139: unlike legacy read commands, MD5 must
+    // fail closed before any project root has been established.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn get_file_md5_helper_rejects_when_no_project_root_is_active() {
+        let path = tmp_path("get-file-md5-no-project.txt");
+        fs::write(&path, b"hello").unwrap();
+        let state = test_root_state(None);
+
+        let result = get_file_md5_with_root_state(
+            path.to_string_lossy().to_string(),
+            &state,
+        )
+        .await;
+
+        assert!(result.is_err(), "{result:?}");
+        let err = result.unwrap_err();
+        assert!(err.contains("no active project root"), "{err}");
+        let _ = fs::remove_file(path);
     }
 
     /// Verify read_file does NOT crash the test process on malformed PDFs.

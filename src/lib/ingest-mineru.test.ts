@@ -14,7 +14,12 @@ const mineruMocks = vi.hoisted(() => ({
 }))
 
 const cacheMocks = vi.hoisted(() => ({
-  checkIngestCache: vi.fn<() => Promise<string[] | null>>(),
+  checkIngestCache: vi.fn<(
+    projectPath: string,
+    sourceIdentity: string,
+    content: string,
+    parser?: string,
+  ) => Promise<string[] | null>>(),
   saveIngestCache: vi.fn<() => Promise<void>>(),
 }))
 
@@ -208,13 +213,92 @@ describe("autoIngest MinerU PDF strategy", () => {
       "/project",
       "paper.pdf",
       "local pdfium markdown",
-      "local",
+      "local:mineru-fallback",
     )
     expect(imageMocks.extractAndSaveSourceImages).toHaveBeenCalledWith(
       "/project",
       "/project/raw/sources/paper.pdf",
       "paper",
     )
+  })
+
+  it("saves fallback local parser cache with a MinerU-specific parser marker", async () => {
+    cacheMocks.checkIngestCache.mockResolvedValue(null)
+    mineruMocks.parseWithMineru.mockRejectedValueOnce(new Error("temporary outage"))
+    fsMocks.readFile.mockImplementation(async (path: string) =>
+      path.endsWith("paper.pdf") ? "local pdfium markdown" : "",
+    )
+
+    await expect(
+      autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never),
+    ).resolves.toEqual(["wiki/sources/paper.md"])
+
+    expect(cacheMocks.saveIngestCache).toHaveBeenCalledWith(
+      "/project",
+      "paper.pdf",
+      "local pdfium markdown",
+      ["wiki/sources/paper.md"],
+      "local:mineru-fallback",
+    )
+  })
+
+  it("retries MinerU before using a previous fallback local parser cache", async () => {
+    cacheMocks.checkIngestCache.mockImplementation(async (_project, _source, _content, parser) =>
+      parser === "local:mineru-fallback" ? ["wiki/sources/paper.md"] : null,
+    )
+    mineruMocks.parseWithMineru.mockRejectedValueOnce(new Error("temporary outage"))
+    fsMocks.readFile.mockImplementation(async (path: string) =>
+      path.endsWith("paper.pdf") ? "local pdfium markdown" : "",
+    )
+
+    await expect(
+      autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never),
+    ).resolves.toEqual(["wiki/sources/paper.md"])
+
+    expect(mineruMocks.parseWithMineru).toHaveBeenCalledTimes(1)
+    expect(cacheMocks.checkIngestCache.mock.calls.map((call) => call[3])).toEqual([
+      "mineru:vlm",
+      "local:mineru-fallback",
+    ])
+  })
+
+  it("replaces a previous fallback local parser cache after a successful MinerU retry", async () => {
+    cacheMocks.checkIngestCache.mockImplementation(async (_project, _source, _content, parser) =>
+      parser === "local:mineru-fallback" ? ["wiki/sources/paper.md"] : null,
+    )
+
+    await expect(
+      autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never),
+    ).resolves.toEqual(["wiki/sources/paper.md"])
+
+    expect(mineruMocks.parseWithMineru).toHaveBeenCalledTimes(1)
+    expect(cacheMocks.checkIngestCache.mock.calls.map((call) => call[3])).toEqual([
+      "mineru:vlm",
+      "mineru:vlm",
+    ])
+    expect(cacheMocks.saveIngestCache).toHaveBeenCalledWith(
+      "/project",
+      "paper.pdf",
+      "mineru-source-md5:pdf-md5",
+      ["wiki/sources/paper.md"],
+      "mineru:vlm",
+    )
+  })
+
+  it("treats legacy local fallback cache as a miss before retrying MinerU", async () => {
+    cacheMocks.checkIngestCache.mockImplementation(async (_project, _source, _content, parser) =>
+      parser === "local" ? ["wiki/sources/paper.md"] : null,
+    )
+
+    await expect(
+      autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never),
+    ).resolves.toEqual(["wiki/sources/paper.md"])
+
+    expect(mineruMocks.parseWithMineru).toHaveBeenCalledTimes(1)
+    expect(cacheMocks.checkIngestCache.mock.calls.map((call) => call[3])).toEqual([
+      "mineru:vlm",
+      "mineru:vlm",
+    ])
   })
 
   it("strips MinerU wiki media refs from the LLM prompt when multimodal is disabled", async () => {
