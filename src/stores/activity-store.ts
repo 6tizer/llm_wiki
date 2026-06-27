@@ -2,7 +2,7 @@ import { create } from "zustand"
 
 export interface ActivityItem {
   id: string
-  type: "ingest" | "lint" | "query"
+  type: "ingest" | "lint" | "query" | "autosave"
   title: string
   status: "running" | "done" | "error"
   detail: string
