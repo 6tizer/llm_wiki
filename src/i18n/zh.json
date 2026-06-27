@@ -182,6 +182,7 @@
     "unsupportedImageType": "不支持的图片类型：{{type}}",
     "imageTooLarge": "{{name}} 超过 {{max}} MB。",
     "imageReadFailed": "无法读取图片。",
+    "imageProcessing": "正在处理图片",
     "qaDelete": {
       "title": "删除前提炼成 QA？",
       "description": "「{{title}}」可能包含有价值的 Agent 对话知识。删除这个对话前，要先提炼成 QA 页面吗？",
