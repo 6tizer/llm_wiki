@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { LintItem } from "@/stores/lint-store"
+import type { ReviewItem } from "@/stores/review-store"
+import type { Conversation } from "@/stores/chat-store"
 
 const persistMocks = vi.hoisted(() => ({
   saveReviewItems: vi.fn(async () => undefined),
@@ -24,23 +26,46 @@ function lintItem(id: string): LintItem {
   }
 }
 
+function reviewItem(id: string): ReviewItem {
+  return {
+    id,
+    type: "confirm",
+    title: id,
+    description: "Confirm item",
+    options: [],
+    resolved: false,
+    createdAt: 1,
+  }
+}
+
+function conversation(id: string): Conversation {
+  return {
+    id,
+    title: id,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+}
+
 async function setupFreshAutoSave() {
   vi.resetModules()
-  const [{ setupAutoSave }, { useWikiStore }, { useLintStore }, { useChatStore }] =
+  const [{ setupAutoSave }, { useWikiStore }, { useLintStore }, { useReviewStore }, { useChatStore }] =
     await Promise.all([
       import("./auto-save"),
       import("@/stores/wiki-store"),
       import("@/stores/lint-store"),
+      import("@/stores/review-store"),
       import("@/stores/chat-store"),
     ])
 
   useWikiStore.getState().setProject(null)
   useLintStore.getState().setItems([])
+  useReviewStore.getState().setItems([])
   useChatStore.getState().clearMessages()
   useChatStore.getState().setConversations([])
   useChatStore.getState().setStreaming(false)
   setupAutoSave()
-  return { useWikiStore, useLintStore, useChatStore }
+  return { useWikiStore, useLintStore, useReviewStore, useChatStore }
 }
 
 describe("setupAutoSave", () => {
@@ -91,6 +116,68 @@ describe("setupAutoSave", () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(persistMocks.saveLintItems).not.toHaveBeenCalled()
+  })
+
+  it("writes debounced review items to the project active when the review state changed", async () => {
+    const { useWikiStore, useReviewStore } = await setupFreshAutoSave()
+    const item = reviewItem("review-1")
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([item])
+    useWikiStore.getState().setProject(project("B", "/tmp/b"))
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(persistMocks.saveReviewItems).toHaveBeenCalledTimes(1)
+    expect(persistMocks.saveReviewItems).toHaveBeenCalledWith("/tmp/a", [item])
+  })
+
+  it("keeps pending debounced review saves isolated by project path", async () => {
+    const { useWikiStore, useReviewStore } = await setupFreshAutoSave()
+    const itemA = reviewItem("review-a")
+    const itemB = reviewItem("review-b")
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([itemA])
+    useWikiStore.getState().setProject(project("B", "/tmp/b"))
+    useReviewStore.getState().setItems([itemB])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(persistMocks.saveReviewItems).toHaveBeenCalledTimes(2)
+    expect(persistMocks.saveReviewItems).toHaveBeenCalledWith("/tmp/a", [itemA])
+    expect(persistMocks.saveReviewItems).toHaveBeenCalledWith("/tmp/b", [itemB])
+  })
+
+  it("writes debounced chat history to the project active when the chat state changed", async () => {
+    const { useWikiStore, useChatStore } = await setupFreshAutoSave()
+    const conv = conversation("conv-1")
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useChatStore.getState().setConversations([conv])
+    useWikiStore.getState().setProject(project("B", "/tmp/b"))
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledTimes(1)
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledWith("/tmp/a", [conv], [])
+  })
+
+  it("keeps pending debounced chat saves isolated by project path", async () => {
+    const { useWikiStore, useChatStore } = await setupFreshAutoSave()
+    const convA = conversation("conv-a")
+    const convB = conversation("conv-b")
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useChatStore.getState().setConversations([convA])
+    useWikiStore.getState().setProject(project("B", "/tmp/b"))
+    useChatStore.getState().setConversations([convB])
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledTimes(2)
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledWith("/tmp/a", [convA], [])
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledWith("/tmp/b", [convB], [])
   })
 
   it("skips chat auto-save while streaming", async () => {

@@ -4,20 +4,24 @@ import { useChatStore } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { saveReviewItems, saveLintItems, saveChatHistory } from "./persist"
 
-let reviewTimer: ReturnType<typeof setTimeout> | null = null
+const reviewTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const lintTimers = new Map<string, ReturnType<typeof setTimeout>>()
-let chatTimer: ReturnType<typeof setTimeout> | null = null
+const chatTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export function setupAutoSave(): void {
   // Auto-save review items (debounced 1s)
   useReviewStore.subscribe((state) => {
-    if (reviewTimer) clearTimeout(reviewTimer)
-    reviewTimer = setTimeout(() => {
-      const project = useWikiStore.getState().project
-      if (project) {
-        saveReviewItems(project.path, state.items).catch(() => {})
-      }
+    const projectPath = useWikiStore.getState().project?.path
+    if (!projectPath) return
+
+    const existingTimer = reviewTimers.get(projectPath)
+    if (existingTimer) clearTimeout(existingTimer)
+
+    const timer = setTimeout(() => {
+      reviewTimers.delete(projectPath)
+      saveReviewItems(projectPath, state.items).catch(() => {})
     }, 1000)
+    reviewTimers.set(projectPath, timer)
   })
 
   // Auto-save lint items (debounced 1s)
@@ -38,12 +42,16 @@ export function setupAutoSave(): void {
   // Auto-save chat conversations and messages (debounced 2s, skip during streaming)
   useChatStore.subscribe((state) => {
     if (state.isStreaming) return
-    if (chatTimer) clearTimeout(chatTimer)
-    chatTimer = setTimeout(() => {
-      const project = useWikiStore.getState().project
-      if (project) {
-        saveChatHistory(project.path, state.conversations, state.messages).catch(() => {})
-      }
+    const projectPath = useWikiStore.getState().project?.path
+    if (!projectPath) return
+
+    const existingTimer = chatTimers.get(projectPath)
+    if (existingTimer) clearTimeout(existingTimer)
+
+    const timer = setTimeout(() => {
+      chatTimers.delete(projectPath)
+      saveChatHistory(projectPath, state.conversations, state.messages).catch(() => {})
     }, 2000)
+    chatTimers.set(projectPath, timer)
   })
 }
