@@ -51,10 +51,10 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 | Chat image、multimodal message、chat standalone | PR G/#134 completed; residual route #135/#136 |
 | Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G completed; sidecar lifecycle remains Phase 7 |
 | OKF-compatible wiki bundle、validator/export/import | OKF roadmap |
-| MinerU / PDF parsing | PR F completed; residual route #139 |
-| Theme、tray、general settings、window close behavior | PR I completed; residual route #144 |
-| Graph rendering/performance | PR J completed; residual route new scoped issue if needed |
-| AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; residual route #146/#147 |
+| MinerU / PDF parsing | PR F completed; regression fix #153 completed; residual route #152 |
+| Theme、tray、general settings、window close behavior | PR I completed; tray localization #151 completed |
+| Graph rendering/performance | PR J completed; hover label contrast #158 completed; new residuals need scoped issues |
+| AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; #154/#157 completed; residual route #156 |
 | CI/release/platform target cleanup | `mac-product-baseline` |
 | Agent UX/session/permission/internal RPC | Phase 7 backlog |
 
@@ -65,24 +65,22 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 | PR E | completed | #129 `d22f401`; residual per-title review create-page classification in #128. |
 | H-lite | completed | #131 `087b135`; future layout polish should be scoped separately. |
 | PR G | completed | #137 `5765200` + #134 `1183710`; residual Chat UI polish in #135/#136. |
-| PR F | completed | #140 `87c7caf`; residual MinerU polish/regression in #139. |
-| PR I | completed | #142 `c343b2a`; residual tray menu localization in #144. |
-| PR J | completed | #145 `c5403f7`; no active graph follow-up at calibration time. |
-| PR K | completed | #148 `0fd1d95`; residual low-risk upstream delta in #146 and llmConfig forwarding evaluation in #147. |
+| PR F | completed | #140 `87c7caf`; regression fix #153 merged; residual large PDF / side-cache polish in #152. |
+| PR I | completed | #142 `c343b2a`; tray menu localization completed by #151. |
+| PR J | completed | #145 `c5403f7`; hover label contrast completed by #158. |
+| PR K | completed | #148 `0fd1d95`; llmConfig forwarding completed by #154; lint autosave isolation completed by #157; remaining review/chat autosave isolation in #156. |
 
 ## Current Follow-up Queue
 
-Recommended order after Phase 6 completion:
+Recommended order after #158:
 
-1. #143 API server review query test flake under parallel Rust tests.
-2. #144 macOS tray menu localization.
-3. #139 MinerU parsing polish and regression coverage.
-4. #147 evaluate `llmConfig` forwarding for `collect_research_sources`.
-5. #146 remaining low-risk upstream delta sweep from PR K.
-6. #135/#136 Chat UI polish for image attachment loading and narrow mode selector overflow.
-7. #128 review missing-page classification follow-up.
-8. #120/#126 security and quality follow-ups.
-9. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
+1. Plans/delta/handoff calibration so future PR selection no longer uses the old #143/#144/#139/#147/#146/#155 queue.
+2. #156 review/chat autosave project-path isolation.
+3. #152 MinerU large PDF / parsed side-cache polish.
+4. #135/#136 Chat UI polish for image attachment loading and narrow mode selector overflow.
+5. #128 review missing-page classification follow-up.
+6. #120/#126 security and quality follow-ups.
+7. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
 
 ## Direct Merge Policy
 

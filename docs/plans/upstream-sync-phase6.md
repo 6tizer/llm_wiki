@@ -30,12 +30,12 @@ Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主�
 | PR D：LLM provider / dedup / deep research stability | completed |
 | PR E：Ingest / schema / review-create-page safety | completed; #129 `d22f401` |
 | H-lite：zoom / layout / app visibility | completed; #131 `087b135` |
-| PR G：Chat Agent Router alignment + multimodal chat | completed; #137 `5765200` + #134 `1183710` |
-| PR F：MinerU PDF parsing | completed; #140 `87c7caf` |
-| PR I：theme / tray / general settings | completed; #142 `c343b2a` |
-| PR J：graph rendering / path-aware graph identity | completed; #145 `c5403f7` |
-| PR K：AnyTXT smart search options cleanup | completed; #148 `0fd1d95`; #110 closed |
-| follow-up sweep | completed through #148; residual items tracked as issues |
+| PR G：Chat Agent Router alignment + multimodal chat | completed; #137 `5765200` + #134 `1183710`; residual UI polish tracked in #135/#136 |
+| PR F：MinerU PDF parsing | completed; #140 `87c7caf`; regression fix #153 merged; residual polish tracked in #152 |
+| PR I：theme / tray / general settings | completed; #142 `c343b2a`; tray localization #151 merged |
+| PR J：graph rendering / path-aware graph identity | completed; #145 `c5403f7`; hover label contrast #158 merged |
+| PR K：AnyTXT smart search options cleanup | completed; #148 `0fd1d95`; #110 closed; residual llmConfig/lint follow-ups #154/#157 merged |
+| follow-up sweep | completed through #158; residual items tracked as issues |
 | v0.4.26 through latest v0.5.x delta assessment | still required before new implementation PRs that touch upstream-overlapping areas |
 
 历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以开工时最新 `v0.5.x` 为准。
@@ -68,13 +68,16 @@ Phase 6 主线的实际完成顺序：
 
 截至 2026-06-27，后续开发建议顺序：
 
-1. 计划/进度校准：更新 plans、delta 和本地 handoff，避免旧 PR E/H/G/F/I/J/K 口径继续误导。
-2. 短平快稳定化：#143 API server review query test flake、#144 tray menu localization、#139 MinerU polish、#147 `collect_research_sources` llmConfig forwarding、#146 remaining low-risk upstream delta sweep、#135/#136 Chat UI polish、#128 review missing-page classification。
-3. 安全/质量 backlog：#120 sidecar npm audit high vulnerability、#126 remaining #119 review findings；#119 继续作为 umbrella reference。
-4. OKF：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API exposure。
-5. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
-6. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-7. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
+1. 计划/进度校准：更新 plans、delta 和本地 handoff，避免旧 PR E/H/G/F/I/J/K 与旧 follow-up 队列继续误导。
+2. #156 review/chat autosave 按 project path 隔离。
+3. #152 MinerU large PDF / parsed side-cache polish。
+4. #135/#136 Chat UI polish：large image loading state + narrow mode-selector overflow affordance。
+5. #128 review missing-page classification。
+6. 安全/质量 backlog：#120 sidecar npm audit high vulnerability、#126 remaining #119 review findings；#119 继续作为 umbrella reference。
+7. OKF：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API exposure。
+8. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
+9. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+10. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
 
 ## Agent Boundary From Upstream v0.5.x
 
@@ -140,7 +143,7 @@ Phase 6 主线的实际完成顺序：
 
 ### PR F：MinerU PDF 解析
 
-状态：completed by #140 `87c7caf`；剩余 polish/regression 见 #139。
+状态：completed by #140 `87c7caf`；regression fix #153 已合并；剩余 large PDF / side-cache polish 见 #152。
 
 目标：引入可选 MinerU 云解析，默认 PDF 行为不变。
 
@@ -153,7 +156,7 @@ Phase 6 主线的实际完成顺序：
 
 ### PR I：主题、托盘、通用设置
 
-状态：completed by #142 `c343b2a`；tray label localization 见 #144。
+状态：completed by #142 `c343b2a`；tray label localization completed by #151。
 
 目标：引入 theme、tray、close behavior 和 general settings，同时按 Mac-only product baseline 校正平台口径。
 
@@ -167,7 +170,7 @@ Phase 6 主线的实际完成顺序：
 
 ### PR J：图形渲染优化
 
-状态：completed by #145 `c5403f7`。
+状态：completed by #145 `c5403f7`；hover label contrast follow-up completed by #158。
 
 目标：对齐 upstream graph performance 和 rendering safety。
 
@@ -182,7 +185,7 @@ Phase 6 主线的实际完成顺序：
 
 ### PR K：AnyTXT、源文件导入、Lint 持久化和低风险杂项
 
-状态：completed by #148 `0fd1d95` for AnyTXT smart search options cleanup；remaining low-risk upstream delta sweep 见 #146。
+状态：completed by #148 `0fd1d95` for AnyTXT smart search options cleanup；`collect_research_sources` llmConfig forwarding completed by #154；lint autosave isolation completed by #157；remaining autosave isolation follow-up 见 #156。
 
 目标：收尾 upstream 用户功能和 P2/P3 delta，不污染 P0/P1 稳定性 PR。
 
@@ -210,7 +213,7 @@ README 已改为 macOS-first / Mac-only active maintenance，但本 docs PR 不�
 - 本地 Agent sidecar、Agent UI、Agent pipeline 行为不回退。
 - Mac-only product baseline 完成 CI/release/app identity 清理。
 - Phase 7 backlog 有独立入口，不再作为 Phase 6 尾项混入。
-- Follow-up issues #143/#144/#139/#147/#146/#135/#136/#128/#120/#126 清楚承接剩余工作。
+- Follow-up issues #156/#152/#135/#136/#128/#120/#126 清楚承接剩余工作；#143/#144/#139/#147/#146/#155 已完成、替代或路由。
 
 ## Validation for Future Implementation PRs
 
