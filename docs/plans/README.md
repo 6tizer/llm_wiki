@@ -1,6 +1,6 @@
 # Plans Index
 
-> 类型：计划索引 | 更新：2026-06-27 | owner：LLM Wiki commander / planner
+> 类型：计划索引 | 更新：2026-06-28 | owner：LLM Wiki commander / planner
 
 ## 当前有效计划
 
@@ -34,11 +34,14 @@ Phase 1-5、Phase 3.x、旧 roadmap 和 follow-up 文档保留为历史记录，
 
 ## Current Execution Order
 
-截至 2026-06-27，Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #162。旧 PR E/H/G/F/I/J/K 顺序、旧 #143/#144/#139/#147/#146/#155 队列，以及 #156/#152/#135/#136 四项后续队列都已完成或路由完毕。当前顺序是：
+截至 2026-06-28，Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164。旧 PR E/H/G/F/I/J/K 顺序、旧 #143/#144/#139/#147/#146/#155 队列，以及 #156/#152/#135/#136/#128 后续队列都已完成或路由完毕。当前顺序是：
 
-1. #128 review missing-page classification follow-up。
-2. 安全/质量 backlog：#120、#126，并继续把 #119 作为 umbrella reference。
-3. OKF 兼容路线：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API。
-4. Claude Agent SDK alignment：Phase 7 前置 PR 7-0。
-5. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-6. Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
+1. 安全/质量 backlog：#120 sidecar npm audit high vulnerability。
+2. #126-A local API hardening。
+3. #126-B autosave error surfacing。
+4. #126-C Agent / Ingest maintainability refactor。
+5. #126-D P3 hardening。
+6. OKF 兼容路线：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API。
+7. Claude Agent SDK alignment：Phase 7 前置 PR 7-0。
+8. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+9. Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
