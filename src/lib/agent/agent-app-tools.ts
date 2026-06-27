@@ -49,6 +49,21 @@ export interface AgentAppToolRunOptions {
 
 type ToolArgs = Record<string, unknown>
 
+interface AgentAppToolContext {
+  toolName: string
+  args: ToolArgs
+  options: AgentAppToolRunOptions
+  project: ReturnType<typeof currentProject>
+  state: ReturnType<typeof useWikiStore.getState>
+  projectPath: string
+  budget: AgentAppToolBudget | undefined
+}
+
+interface AgentAppToolDescriptor {
+  name: string
+  handler: (context: AgentAppToolContext) => Promise<AgentAppToolResponse>
+}
+
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter((item) => item.length > 0))].sort()
 }
@@ -427,7 +442,20 @@ export async function runAgentAppTool(
   const state = useWikiStore.getState()
   const projectPath = project.path
   const budget = options.budget
+  const descriptor = AGENT_APP_TOOL_DESCRIPTORS[toolName]
 
+  if (!descriptor) throw new Error(`Unknown app tool: ${toolName}`)
+  return descriptor.handler({ toolName, args, options, project, state, projectPath, budget })
+}
+
+async function runAgentAppToolHandler({
+  toolName,
+  args,
+  project,
+  state,
+  projectPath,
+  budget,
+}: AgentAppToolContext): Promise<AgentAppToolResponse> {
   if (toolName === "build_answer_context") {
     const maxContextSize =
       typeof args.maxContextSize === "number" ? args.maxContextSize : state.llmConfig.maxContextSize
@@ -877,5 +905,31 @@ export async function runAgentAppTool(
     }
   }
 
-  throw new Error(`Unknown app tool: ${toolName}`)
+  // Dispatcher lookup should reject unknown names before reaching the
+  // shared handler. Keep a guard here so descriptor/handler drift fails
+  // loudly during development.
+  throw new Error(`Unregistered app tool handler reached: ${toolName}`)
+}
+
+export const AGENT_APP_TOOL_DESCRIPTORS: Record<string, AgentAppToolDescriptor> = {
+  build_answer_context: { name: "build_answer_context", handler: runAgentAppToolHandler },
+  save_query_page: { name: "save_query_page", handler: runAgentAppToolHandler },
+  run_lint: { name: "run_lint", handler: runAgentAppToolHandler },
+  collect_research_sources: { name: "collect_research_sources", handler: runAgentAppToolHandler },
+  run_deep_research: { name: "run_deep_research", handler: runAgentAppToolHandler },
+  get_agent_task_status: { name: "get_agent_task_status", handler: runAgentAppToolHandler },
+  detect_duplicates: { name: "detect_duplicates", handler: runAgentAppToolHandler },
+  merge_duplicate_group: { name: "merge_duplicate_group", handler: runAgentAppToolHandler },
+  optimize_research_topic: { name: "optimize_research_topic", handler: runAgentAppToolHandler },
+  sweep_reviews: { name: "sweep_reviews", handler: runAgentAppToolHandler },
+  test_provider_connection: { name: "test_provider_connection", handler: runAgentAppToolHandler },
+  ingest_source: { name: "ingest_source", handler: runAgentAppToolHandler },
+  caption_source_images: { name: "caption_source_images", handler: runAgentAppToolHandler },
+  fix_lint_result: { name: "fix_lint_result", handler: runAgentAppToolHandler },
+  run_lint_and_report: { name: "run_lint_and_report", handler: runAgentAppToolHandler },
+  fix_lint_report: { name: "fix_lint_report", handler: runAgentAppToolHandler },
+  enrich_wikilinks: { name: "enrich_wikilinks", handler: runAgentAppToolHandler },
+  autofill_properties: { name: "autofill_properties", handler: runAgentAppToolHandler },
+  run_pipeline: { name: "run_pipeline", handler: runAgentAppToolHandler },
+  wiki_synthesis: { name: "wiki_synthesis", handler: runAgentAppToolHandler },
 }

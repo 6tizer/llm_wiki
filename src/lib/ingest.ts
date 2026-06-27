@@ -63,6 +63,171 @@ function stripMarkdownImageRefs(content: string): string {
     .replace(/!\[[^\]]*]\(((?:[^()]|\([^()]*\))*)\)/g, " ")
 }
 
+interface SourceImageExtraction {
+  savedImages: SavedImage[]
+  markdownImages: SavedImage[]
+}
+
+function mineruMarkdownImageOptions(projectPath: string, sourceParser: string) {
+  return sourceParser.startsWith("mineru:")
+    ? { baseDir: `${projectPath}/wiki`, reuseExistingWikiMedia: true }
+    : undefined
+}
+
+async function extractImagesForSource(
+  projectPath: string,
+  sourcePath: string,
+  sourceContent: string,
+  sourceParser: string,
+  sourceSummarySlug: string,
+): Promise<SourceImageExtraction> {
+  const binaryImages = sourceParser.startsWith("mineru:")
+    ? []
+    : await extractAndSaveSourceImages(projectPath, sourcePath, sourceSummarySlug)
+  const markdownImages = await extractAndSaveMarkdownImages(
+    projectPath,
+    sourcePath,
+    sourceContent,
+    sourceSummarySlug,
+    mineruMarkdownImageOptions(projectPath, sourceParser),
+  )
+
+  return {
+    savedImages: [...binaryImages, ...markdownImages],
+    markdownImages,
+  }
+}
+
+async function runCacheHitImageCascade(args: {
+  projectPath: string
+  sourceIdentity: string
+  sourceSummarySlug: string
+  sourceContent: string
+  savedImages: SavedImage[]
+  llmConfig: LlmConfig
+  activityId: string
+  signal?: AbortSignal
+}): Promise<void> {
+  const { projectPath, sourceIdentity, sourceSummarySlug, sourceContent, savedImages, llmConfig, activityId, signal } = args
+  const activity = useActivityStore.getState()
+  const mmCfg = useWikiStore.getState().multimodalConfig
+
+  if (!mmCfg.enabled) {
+    console.log(
+      `[ingest:caption] cache-hit + disabled — skipping caption + safety-net inject (${savedImages.length} image(s) untouched on disk)`,
+    )
+    return
+  }
+
+  const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
+  if (captionLlm) {
+    try {
+      await captionMarkdownImages(projectPath, appendSavedImageRefsForCaption(sourceContent, savedImages), captionLlm, {
+        signal,
+        shouldCaption: (url) =>
+          isSavedImagePromptUrl(projectPath, sourceSummarySlug, url),
+        urlToAbsPath: (url) => promptImageUrlToAbs(projectPath, url),
+        concurrency: mmCfg.concurrency,
+        onProgress: (done, total) =>
+          activity.updateItem(activityId, {
+            detail: `Captioning images... ${done}/${total}`,
+          }),
+      })
+    } catch (err) {
+      console.warn(
+        `[ingest:caption] cache-hit caption pass failed:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
+  await injectImagesIntoSourceSummary(projectPath, sourceIdentity, sourceSummarySlug, savedImages)
+  await reembedSourceSummary(projectPath, sourceIdentity, sourceSummarySlug)
+}
+
+async function buildImageAwareSourceContent(args: {
+  projectPath: string
+  sourceSummarySlug: string
+  sourceContent: string
+  savedImages: SavedImage[]
+  markdownImages: SavedImage[]
+  multimodalConfig: MultimodalConfig
+  llmConfig: LlmConfig
+  activityId: string
+  fileName: string
+  signal?: AbortSignal
+}): Promise<string> {
+  const {
+    projectPath,
+    sourceSummarySlug,
+    sourceContent,
+    savedImages,
+    markdownImages,
+    multimodalConfig,
+    llmConfig,
+    activityId,
+    fileName,
+    signal,
+  } = args
+  const activity = useActivityStore.getState()
+  let enrichedSourceContent = stripWikiMediaAbsPaths(
+    projectPath,
+    appendSavedImageRefsForCaption(sourceContent, markdownImages),
+  )
+  const captionLlm = resolveCaptionConfig(multimodalConfig, llmConfig)
+
+  if (!multimodalConfig.enabled && savedImages.length > 0) {
+    enrichedSourceContent = stripMarkdownImageRefs(sourceContent)
+    console.log(
+      `[ingest:caption] disabled — stripped image refs from sourceContent (${savedImages.length} image(s) won't appear in wiki pages)`,
+    )
+  } else if (
+    captionLlm &&
+    savedImages.length > 0 &&
+    /!\[\]\(/.test(enrichedSourceContent)
+  ) {
+    activity.updateItem(activityId, { detail: "Captioning images..." })
+    const ourMediaPrefix = `${projectPath}/wiki/media/${sourceSummarySlug}/`
+    try {
+      const result = await captionMarkdownImages(projectPath, enrichedSourceContent, captionLlm, {
+        signal,
+        shouldCaption: (url) => url.startsWith(ourMediaPrefix) || isSavedImagePromptUrl(projectPath, sourceSummarySlug, url),
+        urlToAbsPath: (url) => promptImageUrlToAbs(projectPath, url),
+        concurrency: multimodalConfig.concurrency,
+        onProgress: (done, total) =>
+          activity.updateItem(activityId, {
+            detail: `Captioning images... ${done}/${total}`,
+          }),
+      })
+      enrichedSourceContent = stripWikiMediaAbsPaths(projectPath, result.enrichedMarkdown)
+      console.log(
+        `[ingest:caption] images=${savedImages.length} fresh=${result.freshCaptions} cached=${result.cachedCaptions} failed=${result.failed}`,
+      )
+    } catch (err) {
+      console.warn(
+        `[ingest:caption] pipeline failed for "${fileName}":`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
+  return enrichedSourceContent
+}
+
+async function injectFullPipelineImagesIntoSourceSummary(args: {
+  projectPath: string
+  sourceIdentity: string
+  sourceSummarySlug: string
+  savedImages: SavedImage[]
+  multimodalConfig: MultimodalConfig
+  signal?: AbortSignal
+}): Promise<void> {
+  const { projectPath, sourceIdentity, sourceSummarySlug, savedImages, multimodalConfig, signal } = args
+  if (multimodalConfig.enabled && savedImages.length > 0 && !signal?.aborted) {
+    await injectImagesIntoSourceSummary(projectPath, sourceIdentity, sourceSummarySlug, savedImages)
+  }
+}
+
 interface ParsedIngestSource {
   content: string
   parser: string
@@ -820,20 +985,13 @@ async function autoIngestImpl(
   if (cachedFiles !== null) {
     try {
       console.log(`[ingest:diag] cache-hit branch: starting image extraction for ${sp}`)
-      const mineruMarkdownImageOptions = sourceParser.startsWith("mineru:")
-        ? { baseDir: `${pp}/wiki`, reuseExistingWikiMedia: true }
-        : undefined
-      let savedImages = sourceParser.startsWith("mineru:")
-        ? []
-        : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
-      const markdownImages = await extractAndSaveMarkdownImages(
+      const { savedImages } = await extractImagesForSource(
         pp,
         sp,
         sourceContent,
+        sourceParser,
         sourceSummarySlug,
-        mineruMarkdownImageOptions,
       )
-      savedImages = [...savedImages, ...markdownImages]
       console.log(`[ingest:diag] cache-hit branch: got ${savedImages.length} image(s)`)
       if (savedImages.length > 0) {
         // Caption first (populates the cache), THEN inject — the
@@ -852,42 +1010,22 @@ async function autoIngestImpl(
         // doesn't proactively scrub old wiki content. The user
         // would need to delete the wiki/sources/<slug>.md page
         // to start clean.)
-        const mmCfg = useWikiStore.getState().multimodalConfig
-        if (!mmCfg.enabled) {
-          console.log(
-            `[ingest:caption] cache-hit + disabled — skipping caption + safety-net inject (${savedImages.length} image(s) untouched on disk)`,
-          )
-        } else {
-          const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
-          if (captionLlm) {
-            try {
-              await captionMarkdownImages(pp, appendSavedImageRefsForCaption(sourceContent, savedImages), captionLlm, {
-                signal,
-                shouldCaption: (url) =>
-                  isSavedImagePromptUrl(pp, sourceSummarySlug, url),
-                urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
-                concurrency: mmCfg.concurrency,
-                onProgress: (done, total) =>
-                  activity.updateItem(activityId, {
-                    detail: `Captioning images... ${done}/${total}`,
-                  }),
-              })
-            } catch (err) {
-              console.warn(
-                `[ingest:caption] cache-hit caption pass failed:`,
-                err instanceof Error ? err.message : err,
-              )
-            }
-          }
-          await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
-          // Re-embed the source-summary page so caption text lands
-          // in the search index. Without this step, search by image
-          // content stays empty for files ingested before captioning
-          // was added — the safety-net section was just rewritten
-          // with captions, but the embeddings still reflect the old
-          // empty-alt content.
-          await reembedSourceSummary(pp, sourceIdentity, sourceSummarySlug)
-        }
+        // Re-embed the source-summary page so caption text lands
+        // in the search index. Without this step, search by image
+        // content stays empty for files ingested before captioning
+        // was added — the safety-net section was just rewritten
+        // with captions, but the embeddings still reflect the old
+        // empty-alt content.
+        await runCacheHitImageCascade({
+          projectPath: pp,
+          sourceIdentity,
+          sourceSummarySlug,
+          sourceContent,
+          savedImages,
+          llmConfig,
+          activityId,
+          signal,
+        })
       } else {
         console.log(`[ingest:diag] cache-hit branch: skipping injection (no images returned from extraction)`)
       }
@@ -924,20 +1062,13 @@ async function autoIngestImpl(
   // and returns [] on any error.
   activity.updateItem(activityId, { detail: "Extracting embedded images..." })
   console.log(`[ingest:diag] full-pipeline branch: starting image extraction for ${sp}`)
-  const mineruMarkdownImageOptions = sourceParser.startsWith("mineru:")
-    ? { baseDir: `${pp}/wiki`, reuseExistingWikiMedia: true }
-    : undefined
-  let savedImages = sourceParser.startsWith("mineru:")
-    ? []
-    : await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
-  const markdownImages = await extractAndSaveMarkdownImages(
+  const { savedImages, markdownImages } = await extractImagesForSource(
     pp,
     sp,
     sourceContent,
+    sourceParser,
     sourceSummarySlug,
-    mineruMarkdownImageOptions,
   )
-  savedImages = [...savedImages, ...markdownImages]
   console.log(`[ingest:diag] full-pipeline branch: got ${savedImages.length} image(s)`)
   if (savedImages.length > 0) {
     console.log(
@@ -984,55 +1115,19 @@ async function autoIngestImpl(
   // (which renders read_file output directly) still shows them —
   // that surface is "the source document as-is", separate from
   // "the curated wiki knowledge".
-  let enrichedSourceContent = stripWikiMediaAbsPaths(
-    pp,
-    appendSavedImageRefsForCaption(sourceContent, markdownImages),
-  )
   const mmCfg = useWikiStore.getState().multimodalConfig
-  const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
-  if (!mmCfg.enabled && savedImages.length > 0) {
-    // Strip markdown image references. Preserve a single space where
-    // each ref used to sit so adjacent words do not fuse.
-    enrichedSourceContent = stripMarkdownImageRefs(sourceContent)
-    console.log(
-      `[ingest:caption] disabled — stripped image refs from sourceContent (${savedImages.length} image(s) won't appear in wiki pages)`,
-    )
-  } else if (
-    captionLlm &&
-    savedImages.length > 0 &&
-    /!\[\]\(/.test(enrichedSourceContent)
-  ) {
-    activity.updateItem(activityId, { detail: "Captioning images..." })
-    const ourMediaPrefix = `${pp}/wiki/media/${sourceSummarySlug}/`
-    try {
-      const result = await captionMarkdownImages(pp, enrichedSourceContent, captionLlm, {
-        signal,
-        // Strict filter: only caption images we know we just
-        // extracted into this source's media directory. Skips any
-        // pre-existing markdown image refs the user may have typed
-        // into the source content (e.g. for hand-authored .md
-        // sources).
-        shouldCaption: (url) => url.startsWith(ourMediaPrefix) || isSavedImagePromptUrl(pp, sourceSummarySlug, url),
-        urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
-        concurrency: mmCfg.concurrency,
-        onProgress: (done, total) =>
-          activity.updateItem(activityId, {
-            detail: `Captioning images... ${done}/${total}`,
-          }),
-      })
-      enrichedSourceContent = stripWikiMediaAbsPaths(pp, result.enrichedMarkdown)
-      console.log(
-        `[ingest:caption] images=${savedImages.length} fresh=${result.freshCaptions} cached=${result.cachedCaptions} failed=${result.failed}`,
-      )
-    } catch (err) {
-      console.warn(
-        `[ingest:caption] pipeline failed for "${fileName}":`,
-        err instanceof Error ? err.message : err,
-      )
-      // Fall through with original (empty-alt) source content —
-      // captioning failure must NEVER break ingest.
-    }
-  }
+  const enrichedSourceContent = await buildImageAwareSourceContent({
+    projectPath: pp,
+    sourceSummarySlug,
+    sourceContent,
+    savedImages,
+    markdownImages,
+    multimodalConfig: mmCfg,
+    llmConfig,
+    activityId,
+    fileName,
+    signal,
+  })
 
   const stableContextLength = schema.length + purpose.length + index.length + overview.length
   const sourceBudget = computeIngestSourceBudget(llmConfig.maxContextSize, stableContextLength)
@@ -1267,9 +1362,14 @@ async function autoIngestImpl(
   // the full rationale. With captioning disabled we also don't
   // want the safety-net section to slip image refs into the wiki
   // through the back door.
-  if (mmCfg.enabled && savedImages.length > 0 && !signal?.aborted) {
-    await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
-  }
+  await injectFullPipelineImagesIntoSourceSummary({
+    projectPath: pp,
+    sourceIdentity,
+    sourceSummarySlug,
+    savedImages,
+    multimodalConfig: mmCfg,
+    signal,
+  })
 
   if (writtenPaths.length > 0) {
     try {
