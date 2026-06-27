@@ -14,6 +14,7 @@ import { loadAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { cleanExpiredAgentSessions, loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
+import { normalizeMineruConfig } from "@/lib/mineru-config"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
@@ -235,16 +236,7 @@ function App() {
         }
         const savedMineruConfig = await loadMineruConfig()
         if (savedMineruConfig) {
-          useWikiStore.getState().setMineruConfig({
-            enabled: savedMineruConfig.enabled === true,
-            token: typeof savedMineruConfig.token === "string" ? savedMineruConfig.token : "",
-            modelVersion:
-              savedMineruConfig.modelVersion === "pipeline" ? "pipeline" : "vlm",
-            apiBaseUrl:
-              typeof savedMineruConfig.apiBaseUrl === "string"
-                ? savedMineruConfig.apiBaseUrl
-                : "",
-          })
+          useWikiStore.getState().setMineruConfig(normalizeMineruConfig(savedMineruConfig))
         }
         const savedProxy = await loadProxyConfig()
         if (savedProxy) {

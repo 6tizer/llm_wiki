@@ -47,6 +47,12 @@ import { AgentSection } from "./sections/agent-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
+import {
+  clampMineruPollIntervalMs,
+  clampMineruPollTimeoutMs,
+  MINERU_DEFAULT_POLL_INTERVAL_MS,
+  MINERU_DEFAULT_POLL_TIMEOUT_MS,
+} from "@/lib/mineru-config"
 
 export type CategoryId =
   | "llm"
@@ -202,6 +208,12 @@ export function initialDraft(
     mineruToken: mineru.token,
     mineruModelVersion: mineru.modelVersion,
     mineruApiBaseUrl: mineru.apiBaseUrl ?? "",
+    mineruPollIntervalSeconds: clampMineruPollIntervalMs(
+      mineru.pollIntervalMs ?? MINERU_DEFAULT_POLL_INTERVAL_MS,
+    ) / 1000,
+    mineruPollTimeoutMinutes: clampMineruPollTimeoutMs(
+      mineru.pollTimeoutMs ?? MINERU_DEFAULT_POLL_TIMEOUT_MS,
+    ) / 60000,
     apiEnabled: apiConfig.enabled,
     apiAllowUnauthenticated: apiConfig.allowUnauthenticated,
     apiMcpEnabled: apiConfig.mcpEnabled ?? false,
@@ -222,6 +234,17 @@ export function apiConfigFromDraft(draft: SettingsDraft) {
     allowUnauthenticated: draft.apiAllowUnauthenticated,
     mcpEnabled: draft.apiMcpEnabled,
     token: draft.apiToken.trim(),
+  }
+}
+
+export function mineruConfigFromDraft(draft: SettingsDraft) {
+  return {
+    enabled: draft.mineruEnabled,
+    token: draft.mineruToken.trim(),
+    modelVersion: draft.mineruModelVersion,
+    apiBaseUrl: draft.mineruApiBaseUrl.trim(),
+    pollIntervalMs: clampMineruPollIntervalMs(draft.mineruPollIntervalSeconds * 1000),
+    pollTimeoutMs: clampMineruPollTimeoutMs(draft.mineruPollTimeoutMinutes * 60000),
   }
 }
 
@@ -470,12 +493,7 @@ export function SettingsView() {
       url: draft.proxyUrl.trim(),
       bypassLocal: draft.proxyBypassLocal,
     }
-    const newMineru = {
-      enabled: draft.mineruEnabled,
-      token: draft.mineruToken.trim(),
-      modelVersion: draft.mineruModelVersion,
-      apiBaseUrl: draft.mineruApiBaseUrl.trim(),
-    }
+    const newMineru = mineruConfigFromDraft(draft)
 
     setLlmConfig(newLlm)
     await saveLlmConfig(newLlm)

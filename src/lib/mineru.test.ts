@@ -115,6 +115,20 @@ describe("MinerU API helpers", () => {
       intervalMs: 1,
       timeoutMs: 1,
     })
+    expect(__mineruTest.mineruPollingOptionsFromConfig(mineruConfig({
+      pollIntervalMs: 0,
+      pollTimeoutMs: Number.NaN,
+    }))).toEqual({
+      intervalMs: 500,
+      timeoutMs: 300_000,
+    })
+    expect(__mineruTest.mineruPollingOptionsFromConfig(mineruConfig({
+      pollIntervalMs: 60_000,
+      pollTimeoutMs: 9_999_999,
+    }))).toEqual({
+      intervalMs: 30_000,
+      timeoutMs: 1_800_000,
+    })
   })
 
   it("prefers full.md from MinerU result zip", async () => {
@@ -229,6 +243,26 @@ describe("parseWithMineru", () => {
       controller.signal,
     )).rejects.toThrow("cancelled")
 
+    expect(mockHttpFetch).not.toHaveBeenCalled()
+  })
+
+  it("does not read the local file when aborted before upload", async () => {
+    const controller = new AbortController()
+    fsMocks.getFileSize.mockImplementation(async () => {
+      controller.abort()
+      return 1024
+    })
+
+    await expect(parseWithMineru(
+      mineruConfig(),
+      "/tmp/doc.pdf",
+      undefined,
+      undefined,
+      controller.signal,
+    )).rejects.toThrow("cancelled")
+
+    expect(fsMocks.getFileSize).toHaveBeenCalledTimes(1)
+    expect(fsMocks.readFileAsBase64).not.toHaveBeenCalled()
     expect(mockHttpFetch).not.toHaveBeenCalled()
   })
 
@@ -407,6 +441,39 @@ describe("parseWithMineru", () => {
 
     await assertion
     expect(mockHttpFetch).toHaveBeenCalledTimes(5)
+  })
+
+  it("uses configured polling options for batch polling", async () => {
+    vi.useFakeTimers()
+    mockHttpFetch
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: { batch_id: "batch-1", extract_result: [{ file_name: "doc.pdf", state: "running" }] },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: 0,
+        msg: "ok",
+        data: { batch_id: "batch-1", extract_result: [{ file_name: "doc.pdf", state: "done", full_zip_url: "https://zip" }] },
+      }))
+
+    const result = __mineruTest.pollBatchTask(
+      mineruConfig(),
+      "batch-1",
+      undefined,
+      __mineruTest.mineruPollingOptionsFromConfig(mineruConfig({
+        pollIntervalMs: 500,
+        pollTimeoutMs: 60_000,
+      })),
+    )
+    const assertion = expect(result).resolves.toBe("https://zip")
+
+    await vi.advanceTimersByTimeAsync(499)
+    expect(mockHttpFetch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+
+    await assertion
+    expect(mockHttpFetch).toHaveBeenCalledTimes(2)
   })
 })
 

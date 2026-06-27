@@ -234,6 +234,8 @@ export interface MineruConfig {
 	token: string;
 	modelVersion: MineruModelVersion;
 	apiBaseUrl?: string;
+	pollIntervalMs?: number;
+	pollTimeoutMs?: number;
 }
 
 interface MultimodalConfig {
@@ -471,6 +473,8 @@ export const useWikiStore = create<WikiState>((set) => ({
 		token: "",
 		modelVersion: "vlm",
 		apiBaseUrl: "",
+		pollIntervalMs: 3000,
+		pollTimeoutMs: 300000,
 	},
 
 	// Default `enabled: true` preserves the pre-toggle behavior: anyone

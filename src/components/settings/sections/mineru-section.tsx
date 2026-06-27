@@ -37,6 +37,14 @@ export function MineruSection({ draft, setDraft }: Props) {
     }
   }
 
+  const setNumericDraft = (
+    key: "mineruPollIntervalSeconds" | "mineruPollTimeoutMinutes",
+    value: string,
+  ) => {
+    const parsed = Number.parseFloat(value)
+    setDraft(key, Number.isFinite(parsed) ? parsed : 0)
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -151,6 +159,47 @@ export function MineruSection({ draft, setDraft }: Props) {
             <p className="text-xs text-muted-foreground">
               {t("settings.sections.mineru.apiBaseUrlHint")}
             </p>
+          </div>
+
+          <div className="rounded-md border border-border/70 p-3">
+            <div className="mb-3">
+              <div className="text-sm font-medium">
+                {t("settings.sections.mineru.pollingTitle")}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t("settings.sections.mineru.pollingHint")}
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="mineru-poll-interval">
+                  {t("settings.sections.mineru.pollInterval")}
+                </Label>
+                <Input
+                  id="mineru-poll-interval"
+                  type="number"
+                  min={0.5}
+                  max={30}
+                  step={0.5}
+                  value={draft.mineruPollIntervalSeconds}
+                  onChange={(e) => setNumericDraft("mineruPollIntervalSeconds", e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mineru-poll-timeout">
+                  {t("settings.sections.mineru.pollTimeout")}
+                </Label>
+                <Input
+                  id="mineru-poll-timeout"
+                  type="number"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={draft.mineruPollTimeoutMinutes}
+                  onChange={(e) => setNumericDraft("mineruPollTimeoutMinutes", e.target.value)}
+                />
+              </div>
+            </div>
           </div>
 
           <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
