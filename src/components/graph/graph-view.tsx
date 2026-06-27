@@ -52,6 +52,11 @@ import {
 	type KnowledgeGap,
 	type SurprisingConnection,
 } from "@/lib/graph-insights";
+import {
+	createGraphNodeHoverRenderer,
+	graphThemePalette,
+	type GraphThemePalette,
+} from "@/lib/graph-hover-renderer";
 import { applyGraphSearch } from "@/lib/graph-search";
 import { optimizeResearchTopic } from "@/lib/optimize-research-topic";
 import { normalizePath } from "@/lib/path-utils";
@@ -145,6 +150,26 @@ function mixColor(color1: string, color2: string, ratio: number): string {
 	const g = Math.round(g1 + (g2 - g1) * ratio);
 	const b = Math.round(b1 + (b2 - b1) * ratio);
 	return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+
+function useResolvedDarkMode(): boolean {
+	const [isDark, setIsDark] = useState(() =>
+		document.documentElement.classList.contains("dark"),
+	);
+
+	useEffect(() => {
+		const root = document.documentElement;
+		const update = () => setIsDark(root.classList.contains("dark"));
+		update();
+		const observer = new MutationObserver(update);
+		observer.observe(root, {
+			attributes: true,
+			attributeFilter: ["class", "data-theme"],
+		});
+		return () => observer.disconnect();
+	}, []);
+
+	return isDark;
 }
 
 function graphDensityScale(nodeCount: number): number {
@@ -418,10 +443,12 @@ function GraphRenderSettings({
 	hoverState,
 	highlightedNodes,
 	nodeCount,
+	palette,
 }: {
 	hoverState: HoverState;
 	highlightedNodes: Set<string>;
 	nodeCount: number;
+	palette: GraphThemePalette;
 }) {
 	const sigma = useSigma();
 	const setSettings = useSetSettings();
@@ -430,9 +457,11 @@ function GraphRenderSettings({
 		setSettings({
 			hideEdgesOnMove: true,
 			hideLabelsOnMove: true,
+			labelColor: { color: palette.label },
 			labelDensity: labelDensity(nodeCount),
 			labelRenderedSizeThreshold: labelSizeThreshold(nodeCount),
 			renderEdgeLabels: false,
+			defaultDrawNodeHover: createGraphNodeHoverRenderer(palette),
 			nodeReducer: (node, attrs) => {
 				const result = { ...attrs };
 				const hasHover = !!hoverState;
@@ -455,7 +484,11 @@ function GraphRenderSettings({
 					(hasHover && !isHoverNode && !isHoverNeighbor) ||
 					(hasHighlight && !isHighlighted)
 				) {
-					result.color = mixColor(attrs.color ?? "#94a3b8", "#e2e8f0", 0.75);
+					result.color = mixColor(
+						attrs.color ?? "#94a3b8",
+						palette.mutedNodeMixTarget,
+						0.75,
+					);
 					result.label = "";
 					result.size = (attrs.size ?? BASE_NODE_SIZE) * 0.6;
 				}
@@ -480,17 +513,17 @@ function GraphRenderSettings({
 					return result;
 				}
 				if ((hasHover && !hoverEdge) || (hasHighlight && !highlightedEdge)) {
-					result.color = "#f1f5f9";
+					result.color = palette.dimmedEdge;
 					result.size = 0.3;
 				}
 				if (hoverEdge || highlightedEdge) {
-					result.color = "#1e293b";
+					result.color = palette.activeEdge;
 					result.size = Math.max(2, (attrs.size ?? 1) * 1.5);
 				}
 				return result;
 			},
 		});
-	}, [setSettings, sigma, hoverState, highlightedNodes, nodeCount]);
+	}, [setSettings, sigma, hoverState, highlightedNodes, nodeCount, palette]);
 
 	return null;
 }
@@ -597,6 +630,12 @@ export function GraphView() {
 	const dataVersion = useWikiStore((s) => s.dataVersion);
 	const setSelectedFile = useWikiStore((s) => s.setSelectedFile);
 	const setFileContent = useWikiStore((s) => s.setFileContent);
+	const isDarkMode = useResolvedDarkMode();
+	const graphPalette = useMemo(() => graphThemePalette(isDarkMode), [isDarkMode]);
+	const drawNodeHover = useMemo(
+		() => createGraphNodeHoverRenderer(graphPalette),
+		[graphPalette],
+	);
 
 	const [nodes, setNodes] = useState<GraphNode[]>([]);
 	const [edges, setEdges] = useState<GraphEdge[]>([]);
@@ -1153,11 +1192,12 @@ export function GraphView() {
 										renderEdgeLabels: false,
 										hideEdgesOnMove: true,
 										hideLabelsOnMove: true,
-										defaultEdgeColor: "#cbd5e1",
+										defaultEdgeColor: graphPalette.defaultEdge,
 										defaultNodeColor: "#94a3b8",
 										labelSize: 13,
 										labelWeight: "bold",
-										labelColor: { color: "#1e293b" },
+										labelColor: { color: graphPalette.label },
+										defaultDrawNodeHover: drawNodeHover,
 										labelDensity: labelDensity(searchedGraph.nodes.length),
 										labelRenderedSizeThreshold: labelSizeThreshold(
 											searchedGraph.nodes.length,
@@ -1185,6 +1225,7 @@ export function GraphView() {
 												: highlightedNodes
 										}
 										nodeCount={searchedGraph.nodes.length}
+										palette={graphPalette}
 									/>
 									<ZoomControls />
 								</SigmaContainer>
