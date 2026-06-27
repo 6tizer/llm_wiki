@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react"
+import { StrictMode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
@@ -27,8 +27,23 @@ class MockFileReader {
   }
 }
 
+const deferredFileReaders: DeferredFileReader[] = []
+
+class DeferredFileReader {
+  error: Error | null = null
+  result: string | ArrayBuffer | null = null
+  onerror: (() => void) | null = null
+  onload: (() => void) | null = null
+
+  readAsDataURL(file: Blob): void {
+    this.result = `data:${file.type || "image/png"};base64,${PNG_BASE64}`
+    deferredFileReaders.push(this)
+  }
+}
+
 function renderChatInput(
   props: Partial<React.ComponentProps<typeof ChatInput>> = {},
+  options: { strict?: boolean } = {},
 ): {
   container: HTMLDivElement
   root: Root
@@ -39,16 +54,18 @@ function renderChatInput(
   const root = createRoot(container)
   const onSend = vi.fn()
 
+  const input = (
+    <ChatInput
+      onSend={onSend}
+      onStop={() => undefined}
+      isStreaming={false}
+      showSearchToggles={false}
+      {...props}
+    />
+  )
+
   act(() => {
-    root.render(
-      <ChatInput
-        onSend={onSend}
-        onStop={() => undefined}
-        isStreaming={false}
-        showSearchToggles={false}
-        {...props}
-      />,
-    )
+    root.render(options.strict ? <StrictMode>{input}</StrictMode> : input)
   })
 
   return { container, root, onSend }
@@ -133,6 +150,50 @@ function buttonByTitle(container: HTMLElement, title: string): HTMLButtonElement
   return button
 }
 
+function useDeferredFileReader(): void {
+  deferredFileReaders.length = 0
+  globalThis.FileReader = DeferredFileReader as unknown as typeof FileReader
+}
+
+async function resolveDeferredFileReader(index = 0): Promise<void> {
+  const reader = deferredFileReaders[index]
+  if (!reader) throw new Error(`deferred reader not found: ${index}`)
+  await act(async () => {
+    reader.onload?.()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function modeScroller(container: HTMLElement): HTMLElement {
+  const scroller = container.querySelector<HTMLElement>('[data-testid="chat-mode-scroll"]')
+  if (!scroller) throw new Error("mode scroller not found")
+  return scroller
+}
+
+async function setModeScrollMetrics(
+  scroller: HTMLElement,
+  metrics: { clientWidth: number; scrollWidth: number; scrollLeft: number },
+): Promise<void> {
+  Object.defineProperty(scroller, "clientWidth", {
+    value: metrics.clientWidth,
+    configurable: true,
+  })
+  Object.defineProperty(scroller, "scrollWidth", {
+    value: metrics.scrollWidth,
+    configurable: true,
+  })
+  Object.defineProperty(scroller, "scrollLeft", {
+    value: metrics.scrollLeft,
+    configurable: true,
+  })
+  await act(async () => {
+    scroller.dispatchEvent(new Event("scroll", { bubbles: true }))
+    window.dispatchEvent(new Event("resize"))
+    await Promise.resolve()
+  })
+}
+
 describe("ChatInput image attachments", () => {
   let originalFileReader: typeof FileReader
 
@@ -167,6 +228,109 @@ describe("ChatInput image attachments", () => {
       { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
     )
     expect(container.querySelector("img")).toBeNull()
+
+    act(() => root.unmount())
+  })
+
+  it("shows a processing tile and disables send while an image is still reading", async () => {
+    useDeferredFileReader()
+    const { container, root, onSend } = renderChatInput()
+
+    await typeText(container, "describe this")
+    await chooseFile(container)
+
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("tiny.png")
+    expect(container.querySelector("img")).toBeNull()
+    expect(buttonByTitle(container, "Send message").disabled).toBe(true)
+
+    await clickButton(buttonByTitle(container, "Send message"))
+    expect(onSend).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+  })
+
+  it("replaces the processing tile with a preview and sends after the read completes", async () => {
+    useDeferredFileReader()
+    const { container, root, onSend } = renderChatInput()
+
+    await typeText(container, "describe this")
+    await chooseFile(container)
+    await resolveDeferredFileReader()
+
+    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      `data:image/png;base64,${PNG_BASE64}`,
+    )
+    expect(buttonByTitle(container, "Send message").disabled).toBe(false)
+
+    await clickButton(buttonByTitle(container, "Send message"))
+
+    expect(onSend).toHaveBeenCalledWith(
+      "describe this",
+      [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+    )
+
+    act(() => root.unmount())
+  })
+
+  it("resolves pending images after StrictMode effect replay", async () => {
+    useDeferredFileReader()
+    const { container, root } = renderChatInput({}, { strict: true })
+
+    await chooseFile(container)
+    await resolveDeferredFileReader()
+
+    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      `data:image/png;base64,${PNG_BASE64}`,
+    )
+
+    act(() => root.unmount())
+  })
+
+  it("does not attach a pending image that was removed before read completion", async () => {
+    useDeferredFileReader()
+    const { container, root, onSend } = renderChatInput()
+
+    await chooseFile(container)
+    await clickButton(buttonByTitle(container, "Remove image"))
+    await resolveDeferredFileReader()
+    await typeText(container, "text only")
+    await clickButton(buttonByTitle(container, "Send message"))
+
+    expect(container.querySelector("img")).toBeNull()
+    expect(onSend).toHaveBeenCalledWith(
+      "text only",
+      [],
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+    )
+
+    act(() => root.unmount())
+  })
+
+  it("preserves multi-image selection order when reads finish out of order", async () => {
+    useDeferredFileReader()
+    const { container, root, onSend } = renderChatInput()
+
+    await typeText(container, "compare these")
+    await chooseFiles(container, [
+      imageFile("first.png", "image/png"),
+      imageFile("second.webp", "image/webp"),
+    ])
+
+    await resolveDeferredFileReader(1)
+    await resolveDeferredFileReader(0)
+    await clickButton(buttonByTitle(container, "Send message"))
+
+    expect(onSend).toHaveBeenCalledWith(
+      "compare these",
+      [
+        { mediaType: "image/png", dataBase64: PNG_BASE64 },
+        { mediaType: "image/webp", dataBase64: PNG_BASE64 },
+      ],
+      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+    )
 
     act(() => root.unmount())
   })
@@ -307,6 +471,40 @@ describe("ChatInput image attachments", () => {
       { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
     )
     expect(container.querySelector("img")).toBeNull()
+
+    act(() => root.unmount())
+  })
+
+  it("shows mode selector fades only on overflowing scroll edges", async () => {
+    const { container, root } = renderChatInput({ showSearchToggles: true })
+    const scroller = modeScroller(container)
+
+    await setModeScrollMetrics(scroller, {
+      clientWidth: 120,
+      scrollWidth: 240,
+      scrollLeft: 0,
+    })
+
+    expect(container.querySelector('[data-testid="chat-mode-fade-left"]')).toBeNull()
+    expect(container.querySelector('[data-testid="chat-mode-fade-right"]')).not.toBeNull()
+
+    await setModeScrollMetrics(scroller, {
+      clientWidth: 120,
+      scrollWidth: 240,
+      scrollLeft: 120,
+    })
+
+    expect(container.querySelector('[data-testid="chat-mode-fade-left"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="chat-mode-fade-right"]')).toBeNull()
+
+    await setModeScrollMetrics(scroller, {
+      clientWidth: 240,
+      scrollWidth: 240,
+      scrollLeft: 0,
+    })
+
+    expect(container.querySelector('[data-testid="chat-mode-fade-left"]')).toBeNull()
+    expect(container.querySelector('[data-testid="chat-mode-fade-right"]')).toBeNull()
 
     act(() => root.unmount())
   })

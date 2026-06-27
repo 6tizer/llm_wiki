@@ -182,6 +182,7 @@
     "unsupportedImageType": "Unsupported image type: {{type}}",
     "imageTooLarge": "{{name}} is larger than {{max}} MB.",
     "imageReadFailed": "Could not read image.",
+    "imageProcessing": "Processing image",
     "qaDelete": {
       "title": "Extract QA before deleting?",
       "description": "\"{{title}}\" may contain useful Agent knowledge. Extract it into a QA page before deleting this conversation?",

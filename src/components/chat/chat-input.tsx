@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "react"
-import { FileSearch, Globe2, ImagePlus, Send, Square, X } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, useCallback } from "react"
+import { FileSearch, Globe2, ImagePlus, Loader2, Send, Square, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -35,6 +35,12 @@ interface ChatInputProps {
   showSearchToggles?: boolean
 }
 
+interface ImageAttachment {
+  id: string
+  name: string
+  image?: MessageImage
+}
+
 export function ChatInput({
   onSend,
   onStop,
@@ -46,26 +52,83 @@ export function ChatInput({
 }: ChatInputProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState("")
-  const [images, setImages] = useState<MessageImage[]>([])
+  const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([])
   const [imageError, setImageError] = useState<string | null>(null)
   const [useWebSearch, setUseWebSearch] = useState(false)
   const [useAnyTxtSearch, setUseAnyTxtSearch] = useState(false)
   const [agentMode, setAgentMode] = useState<ChatAgentMode>("standard")
+  const [modeScrollState, setModeScrollState] = useState({ left: false, right: false })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const modeScrollerRef = useRef<HTMLDivElement>(null)
+  const pendingImageIdsRef = useRef(new Set<string>())
+  const imageIdRef = useRef(0)
+  const images = useMemo(
+    () => imageAttachments.flatMap((attachment) => (attachment.image ? [attachment.image] : [])),
+    [imageAttachments],
+  )
+  const hasPendingImages = imageAttachments.some((attachment) => !attachment.image)
+
+  useEffect(() => {
+    return () => {
+      pendingImageIdsRef.current.clear()
+    }
+  }, [])
+
+  const clearImageAttachments = useCallback(() => {
+    pendingImageIdsRef.current.clear()
+    setImageAttachments([])
+  }, [])
 
   useEffect(() => {
     if (!anyTxtAvailable) setUseAnyTxtSearch(false)
   }, [anyTxtAvailable])
 
   useEffect(() => {
-    if (imageInputAvailable || images.length === 0) return
-    setImages([])
+    if (imageInputAvailable || imageAttachments.length === 0) return
+    clearImageAttachments()
     setImageError(null)
-  }, [imageInputAvailable, images.length])
+  }, [clearImageAttachments, imageAttachments.length, imageInputAvailable])
+
+  const updateModeScrollState = useCallback(() => {
+    const el = modeScrollerRef.current
+    if (!el) return
+    const maxScrollLeft = el.scrollWidth - el.clientWidth
+    const hasOverflow = maxScrollLeft > 1
+    setModeScrollState({
+      left: hasOverflow && el.scrollLeft > 1,
+      right: hasOverflow && el.scrollLeft < maxScrollLeft - 1,
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!showSearchToggles) return
+    updateModeScrollState()
+    const el = modeScrollerRef.current
+    if (!el) return
+
+    const handleScroll = () => updateModeScrollState()
+    el.addEventListener("scroll", handleScroll, { passive: true })
+    window.addEventListener("resize", handleScroll)
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(handleScroll)
+    resizeObserver?.observe(el)
+    const raf = requestAnimationFrame(handleScroll)
+
+    return () => {
+      el.removeEventListener("scroll", handleScroll)
+      window.removeEventListener("resize", handleScroll)
+      resizeObserver?.disconnect()
+      cancelAnimationFrame(raf)
+    }
+  }, [showSearchToggles, updateModeScrollState])
+
+  useEffect(() => {
+    updateModeScrollState()
+  }, [agentMode, t, updateModeScrollState])
 
   const addFiles = useCallback(
-    async (files: File[]) => {
+    (files: File[]) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"))
       if (imageFiles.length === 0) return
       if (!imageInputAvailable) {
@@ -74,8 +137,7 @@ export function ChatInput({
       }
 
       let error: string | null = null
-      let remaining = MAX_CHAT_IMAGES_PER_MESSAGE - images.length
-      const accepted: MessageImage[] = []
+      let remaining = MAX_CHAT_IMAGES_PER_MESSAGE - imageAttachments.length
 
       for (const file of imageFiles) {
         if (remaining <= 0) {
@@ -97,20 +159,31 @@ export function ChatInput({
           })
           continue
         }
-        try {
-          accepted.push(await fileToMessageImage(file))
-          remaining -= 1
-        } catch {
-          error = t("chat.imageReadFailed", "Could not read image.")
-        }
-      }
 
-      if (accepted.length > 0) {
-        setImages((prev) => [...prev, ...accepted].slice(0, MAX_CHAT_IMAGES_PER_MESSAGE))
+        const id = `chat-image-${Date.now()}-${imageIdRef.current++}`
+        remaining -= 1
+        pendingImageIdsRef.current.add(id)
+        setImageAttachments((prev) => [...prev, { id, name: file.name || "image" }])
+        void fileToMessageImage(file)
+          .then((image) => {
+            if (!pendingImageIdsRef.current.has(id)) return
+            pendingImageIdsRef.current.delete(id)
+            setImageAttachments((prev) =>
+              prev.map((attachment) =>
+                attachment.id === id ? { ...attachment, image } : attachment,
+              ),
+            )
+          })
+          .catch(() => {
+            if (!pendingImageIdsRef.current.has(id)) return
+            pendingImageIdsRef.current.delete(id)
+            setImageAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
+            setImageError(t("chat.imageReadFailed", "Could not read image."))
+          })
       }
       setImageError(error)
     },
-    [imageInputAvailable, images.length, t],
+    [imageAttachments.length, imageInputAvailable, t],
   )
 
   const handlePaste = useCallback(
@@ -155,8 +228,9 @@ export function ChatInput({
     [addFiles],
   )
 
-  const removeImage = useCallback((index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index))
+  const removeImageAttachment = useCallback((id: string) => {
+    pendingImageIdsRef.current.delete(id)
+    setImageAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
     setImageError(null)
   }, [])
 
@@ -169,19 +243,31 @@ export function ChatInput({
 
   const handleSend = useCallback(() => {
     const trimmed = value.trim()
-    if ((!trimmed && images.length === 0) || isStreaming) return
+    if ((!trimmed && images.length === 0) || hasPendingImages || isStreaming) return
     if (images.length > 0 && !imageInputAvailable) {
       setImageError(t("chat.imageInputUnavailable", "Images are available in Chat mode only."))
       return
     }
     onSend(trimmed, images, { useWebSearch, useAnyTxtSearch, agentMode })
     setValue("")
-    setImages([])
+    clearImageAttachments()
     setImageError(null)
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [agentMode, imageInputAvailable, images, isStreaming, onSend, t, useAnyTxtSearch, useWebSearch, value])
+  }, [
+    agentMode,
+    imageInputAvailable,
+    images,
+    isStreaming,
+    clearImageAttachments,
+    hasPendingImages,
+    onSend,
+    t,
+    useAnyTxtSearch,
+    useWebSearch,
+    value,
+  ])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -222,26 +308,52 @@ export function ChatInput({
   return (
     <div className="border-t bg-background/95 p-3">
       <div className="rounded-lg border border-border/80 bg-card/80 p-2 shadow-sm ring-1 ring-black/5 focus-within:border-ring/60 focus-within:ring-ring/20 dark:ring-white/5">
-        {images.length > 0 && (
+        {imageAttachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">
-            {images.map((image, index) => (
-              <div key={`${image.mediaType}-${index}`} className="group relative h-16 w-16 overflow-hidden rounded-md border border-border/70">
-                <img
-                  src={messageImageToDataUrl(image)}
-                  alt=""
-                  className="h-full w-full object-cover"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeImage(index)}
-                  className="absolute right-0.5 top-0.5 rounded-full bg-background/90 p-0.5 text-muted-foreground opacity-100 shadow-sm transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
-                  title={t("chat.removeImage", "Remove image")}
-                  aria-label={t("chat.removeImage", "Remove image")}
+            {imageAttachments.map((attachment) =>
+              attachment.image ? (
+                <div key={attachment.id} className="group relative h-16 w-16 overflow-hidden rounded-md border border-border/70">
+                  <img
+                    src={messageImageToDataUrl(attachment.image)}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImageAttachment(attachment.id)}
+                    className="absolute right-0.5 top-0.5 rounded-full bg-background/90 p-0.5 text-muted-foreground opacity-100 shadow-sm transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                    title={t("chat.removeImage", "Remove image")}
+                    aria-label={t("chat.removeImage", "Remove image")}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={attachment.id}
+                  role="status"
+                  aria-live="polite"
+                  aria-label={t("chat.imageProcessing", "Processing image")}
+                  className="group relative h-16 w-16 overflow-hidden rounded-md border border-border/70 bg-muted/60"
                 >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-1 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="max-w-full truncate text-[10px] leading-3">
+                      {attachment.name}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeImageAttachment(attachment.id)}
+                    className="absolute right-0.5 top-0.5 rounded-full bg-background/90 p-0.5 text-muted-foreground opacity-100 shadow-sm transition-opacity hover:text-destructive sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                    title={t("chat.removeImage", "Remove image")}
+                    aria-label={t("chat.removeImage", "Remove image")}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ),
+            )}
           </div>
         )}
         {imageError && (
@@ -273,7 +385,11 @@ export function ChatInput({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isStreaming || !imageInputAvailable || images.length >= MAX_CHAT_IMAGES_PER_MESSAGE}
+              disabled={
+                isStreaming ||
+                !imageInputAvailable ||
+                imageAttachments.length >= MAX_CHAT_IMAGES_PER_MESSAGE
+              }
               className={searchToggleClass(false)}
               title={
                 imageInputAvailable
@@ -332,32 +448,48 @@ export function ChatInput({
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <div
-                  className="inline-flex h-7 max-w-full shrink-0 items-center overflow-x-auto rounded-md border border-border/70 bg-muted/30 p-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-                  role="radiogroup"
-                  aria-label={t("chat.agentMode", "Chat mode")}
-                  title={t("chat.agentMode", "Chat mode")}
-                >
-                  {AGENT_MODE_OPTIONS.map((mode) => {
-                    const active = agentMode === mode
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        disabled={isStreaming}
-                        onClick={() => setAgentMode(mode)}
-                        className={`h-6 shrink-0 rounded px-2 text-xs font-medium transition-colors ${
-                          active
-                            ? "bg-background text-foreground shadow-sm"
-                            : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
-                        } disabled:pointer-events-none disabled:opacity-50`}
-                      >
-                        {agentModeLabel(mode)}
-                      </button>
-                    )
-                  })}
+                <div className="relative inline-flex h-7 min-w-0 max-w-full shrink overflow-hidden rounded-md border border-border/70 bg-muted/30">
+                  <div
+                    ref={modeScrollerRef}
+                    data-testid="chat-mode-scroll"
+                    className="flex min-w-0 items-center overflow-x-auto p-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+                    role="radiogroup"
+                    aria-label={t("chat.agentMode", "Chat mode")}
+                    title={t("chat.agentMode", "Chat mode")}
+                  >
+                    {AGENT_MODE_OPTIONS.map((mode) => {
+                      const active = agentMode === mode
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          disabled={isStreaming}
+                          onClick={() => setAgentMode(mode)}
+                          className={`h-6 shrink-0 rounded px-2 text-xs font-medium transition-colors ${
+                            active
+                              ? "bg-background text-foreground shadow-sm"
+                              : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                          } disabled:pointer-events-none disabled:opacity-50`}
+                        >
+                          {agentModeLabel(mode)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {modeScrollState.left && (
+                    <div
+                      data-testid="chat-mode-fade-left"
+                      className="pointer-events-none absolute inset-y-0 left-0 w-4 bg-gradient-to-r from-muted via-muted/80 to-transparent"
+                    />
+                  )}
+                  {modeScrollState.right && (
+                    <div
+                      data-testid="chat-mode-fade-right"
+                      className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-muted via-muted/80 to-transparent"
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -377,7 +509,7 @@ export function ChatInput({
             <Button
               size="sm"
               onClick={handleSend}
-              disabled={!value.trim() && images.length === 0}
+              disabled={hasPendingImages || (!value.trim() && images.length === 0)}
               className="h-8 shrink-0 gap-1.5 rounded-md px-3"
               title={t("chat.sendMessage")}
             >
