@@ -59,6 +59,38 @@ function hasValidTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value)
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isConversation(value: unknown): value is Conversation {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    hasValidTimestamp(value.createdAt) &&
+    hasValidTimestamp(value.updatedAt)
+}
+
+function parseConversationList(value: unknown, source: string): Conversation[] | null {
+  if (!Array.isArray(value)) return null
+
+  const conversations: Conversation[] = []
+  let skipped = 0
+  value.forEach((item, index) => {
+    if (isConversation(item)) {
+      conversations.push(item)
+      return
+    }
+    skipped += 1
+    console.warn(`[persist] skipped malformed conversation at ${source}[${index}]`)
+  })
+
+  if (skipped > 0) {
+    console.warn(`[persist] quarantined ${skipped} malformed conversation(s) from ${source}`)
+  }
+  return conversations
+}
+
 function isExpiredAgentSessionConversation(
   conversation: Conversation,
   cutoff: number,
@@ -107,10 +139,10 @@ export async function cleanExpiredAgentSessions(
     const filePath = `${pp}/.llm-wiki/conversations.json`
     const content = await readFile(filePath)
     const parsed = JSON.parse(content) as unknown
-    if (!Array.isArray(parsed)) {
+    const conversations = parseConversationList(parsed, "conversations.json")
+    if (conversations === null) {
       return { scanned: 0, cleaned: 0 }
     }
-    const conversations = parsed as Conversation[]
     const cleaned = countExpiredAgentSessionRefs(conversations, now)
     if (cleaned > 0) {
       await writeFile(
@@ -164,8 +196,15 @@ export async function loadChatHistory(
   try {
     // Try new format: separate files per conversation
     const convContent = await readFile(`${pp}/.llm-wiki/conversations.json`)
+    const parsedConversations = parseConversationList(
+      JSON.parse(convContent) as unknown,
+      "conversations.json",
+    )
+    if (parsedConversations === null) {
+      throw new Error("conversations.json is not an array")
+    }
     const conversations = cleanExpiredAgentSessionRefs(
-      JSON.parse(convContent) as Conversation[],
+      parsedConversations,
       now,
     )
 
@@ -205,9 +244,13 @@ export async function loadChatHistory(
 
       // Old combined format
       const data = parsed as PersistedChatData
+      const conversations = parseConversationList(
+        data.conversations,
+        "chat-history.json.conversations",
+      ) ?? []
       return {
-        conversations: cleanExpiredAgentSessionRefs(data.conversations, now),
-        messages: data.messages,
+        conversations: cleanExpiredAgentSessionRefs(conversations, now),
+        messages: Array.isArray(data.messages) ? data.messages : [],
       }
     } catch {
       return { conversations: [], messages: [] }
