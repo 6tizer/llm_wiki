@@ -36,6 +36,11 @@ export function getAgentPreflightError(
 /** Classify runtime Agent failures into UI-facing error categories. */
 export function classifyAgentError(message: string): AgentErrorKind {
   const lower = message.toLowerCase()
+  // Permission approval timeouts are denials, not sidecar/runtime timeouts.
+  // Keep this check before the generic timeout bucket.
+  if (lower.includes("permission") && lower.includes("timed out")) {
+    return "failed"
+  }
   if (
     lower.includes("timed out") ||
     lower.includes("timeout")

@@ -48,6 +48,8 @@ describe("agent run state helpers", () => {
     expect(classifyAgentError("Agent sidecar binary missing")).toBe("unavailable")
     expect(classifyAgentError("Failed to spawn agent sidecar: denied")).toBe("unavailable")
     expect(classifyAgentError("Timed out waiting for Agent rewind result")).toBe("timeout")
+    expect(classifyAgentError("Request timeout")).toBe("timeout")
+    expect(classifyAgentError("Permission request timed out: wiki_write")).toBe("failed")
     expect(classifyAgentError("Reached maximum number of turns (10)")).toBe("max_turns_exceeded")
     expect(classifyAgentError("ANTHROPIC_API_KEY is missing")).toBe("missing_api_key")
     expect(classifyAgentError("boom")).toBe("failed")

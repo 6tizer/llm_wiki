@@ -244,6 +244,45 @@ describe("chat persistence — round-trip (new format)", () => {
     })
   })
 
+  it("cleanExpiredAgentSessions skips malformed conversations and cleans valid ones", async () => {
+    const now = Date.UTC(2026, 5, 4)
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/conversations.json`,
+      JSON.stringify([
+        {
+          id: "valid",
+          title: "Valid",
+          createdAt: 0,
+          updatedAt: now - AGENT_SESSION_MAX_AGE_MS - 1,
+          agentSessionId: "expired-session",
+        },
+        {
+          id: 123,
+          title: "Broken",
+          createdAt: 0,
+          updatedAt: 1,
+        },
+      ]),
+    )
+
+    await expect(cleanExpiredAgentSessions(tmp.path, now)).resolves.toEqual({
+      scanned: 1,
+      cleaned: 1,
+    })
+
+    const raw = JSON.parse(
+      await readFileRaw(`${tmp.path}/.llm-wiki/conversations.json`),
+    ) as Conversation[]
+    expect(raw).toEqual([
+      {
+        id: "valid",
+        title: "Valid",
+        createdAt: 0,
+        updatedAt: now - AGENT_SESSION_MAX_AGE_MS - 1,
+      },
+    ])
+  })
+
   it("keeps exact-boundary and invalid-updatedAt session refs", () => {
     const now = Date.UTC(2026, 5, 4)
     const boundary = now - AGENT_SESSION_MAX_AGE_MS
@@ -362,6 +401,26 @@ describe("chat persistence — round-trip (new format)", () => {
     expect(loaded.messages).toHaveLength(1)
   })
 
+  it("quarantines malformed conversations while loading valid ones", async () => {
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/conversations.json`,
+      JSON.stringify([
+        makeConv("valid"),
+        { id: 123, title: "Broken", createdAt: 0, updatedAt: 1 },
+        { id: "missing-title", createdAt: 0, updatedAt: 1 },
+      ]),
+    )
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/chats/valid.json`,
+      JSON.stringify([makeMsg("m1", "valid", "hi")]),
+    )
+
+    const loaded = await loadChatHistory(tmp.path)
+
+    expect(loaded.conversations).toEqual([makeConv("valid")])
+    expect(loaded.messages).toEqual([makeMsg("m1", "valid", "hi")])
+  })
+
   it("preserves Unicode content through round-trip", async () => {
     const convs = [makeConv("c1", "中文对话 🎌")]
     const msgs = [
@@ -414,6 +473,41 @@ describe("chat persistence — legacy format fallback", () => {
     const loaded = await loadChatHistory(tmp.path)
     expect(loaded.conversations).toHaveLength(1)
     expect(loaded.messages).toHaveLength(1)
+  })
+
+  it("skips malformed conversations in combined legacy history", async () => {
+    const old = {
+      conversations: [
+        makeConv("c1"),
+        { id: 123, title: "Broken", createdAt: 0, updatedAt: 1 },
+      ],
+      messages: [makeMsg("m1", "c1")],
+    }
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/chat-history.json`,
+      JSON.stringify(old),
+    )
+
+    const loaded = await loadChatHistory(tmp.path)
+
+    expect(loaded.conversations).toEqual([makeConv("c1")])
+    expect(loaded.messages).toEqual([makeMsg("m1", "c1")])
+  })
+
+  it("returns empty messages when combined legacy messages are malformed", async () => {
+    const old = {
+      conversations: [makeConv("c1")],
+      messages: { id: "not-array" },
+    }
+    await writeFileRaw(
+      `${tmp.path}/.llm-wiki/chat-history.json`,
+      JSON.stringify(old),
+    )
+
+    const loaded = await loadChatHistory(tmp.path)
+
+    expect(loaded.conversations).toEqual([makeConv("c1")])
+    expect(loaded.messages).toEqual([])
   })
 
   it("cleans expired agent session refs when loading combined legacy history", async () => {

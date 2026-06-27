@@ -26,6 +26,22 @@ use crate::api_server;
 
 const SIDECAR_PLACEHOLDER_PREFIX: &[u8] = b"Placeholder for Tauri resource validation.";
 
+fn redact_url_userinfo_for_log(url: &str) -> String {
+    let authority_start = url.find("://").map(|scheme_end| scheme_end + 3).unwrap_or(0);
+    let rest = &url[authority_start..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let Some(userinfo_end) = authority.rfind('@') else {
+        return url.to_string();
+    };
+
+    format!(
+        "{}***@{}",
+        &url[..authority_start],
+        &url[authority_start + userinfo_end + 1..],
+    )
+}
+
 /// Shared state holding running agent sidecar processes keyed by stream id.
 #[derive(Default)]
 pub struct AgentState {
@@ -271,9 +287,10 @@ pub async fn agent_spawn(
     state: State<'_, AgentState>,
     mut args: AgentSpawnArgs,
 ) -> Result<(), String> {
+    let logged_base_url = args.base_url.as_deref().map(redact_url_userinfo_for_log);
     eprintln!(
         "[agent_spawn] stream_id={}, model={:?}, base_url={:?}",
-        args.stream_id, args.model, args.base_url
+        args.stream_id, args.model, logged_base_url
     );
     let sidecar_cmd = find_sidecar_command(&app)?;
 
@@ -647,6 +664,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn redact_url_userinfo_for_log_masks_proxy_credentials() {
+        assert_eq!(
+            redact_url_userinfo_for_log("https://user:token@proxy.example.com/v1"),
+            "https://***@proxy.example.com/v1"
+        );
+        assert_eq!(
+            redact_url_userinfo_for_log("http://token@127.0.0.1:4000"),
+            "http://***@127.0.0.1:4000"
+        );
+        assert_eq!(
+            redact_url_userinfo_for_log("http://user:token@[::1]:4000/v1"),
+            "http://***@[::1]:4000/v1"
+        );
+        assert_eq!(
+            redact_url_userinfo_for_log("https://api.example.com/v1"),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            redact_url_userinfo_for_log("user:token@host"),
+            "***@host"
+        );
+    }
+
     fn args_with_optional_fields_none() -> AgentSpawnArgs {
         AgentSpawnArgs {
             stream_id: "stream-1".to_string(),
@@ -945,7 +986,9 @@ mod tests {
         // max_files_changed_enabled serializes camelCase (rename_all) and
         // forwards into the sidecar request options.
         assert_eq!(
-            options.get("maxFilesChangedEnabled").and_then(Value::as_bool),
+            options
+                .get("maxFilesChangedEnabled")
+                .and_then(Value::as_bool),
             Some(true)
         );
     }
@@ -1038,7 +1081,10 @@ const STDIN_WRITE_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// A full/blocked pipe would otherwise hang the caller forever; the
 /// timeout turns that into a clean error. The size guard rejects
 /// pathological payloads before they hit the pipe.
-async fn write_stdin_capped(stdin: &mut tokio::process::ChildStdin, line: &str) -> std::io::Result<()> {
+async fn write_stdin_capped(
+    stdin: &mut tokio::process::ChildStdin,
+    line: &str,
+) -> std::io::Result<()> {
     let bytes = line.as_bytes();
     if bytes.len() > STDIN_WRITE_MAX_BYTES {
         return Err(std::io::Error::new(
@@ -1056,7 +1102,10 @@ async fn write_stdin_capped(stdin: &mut tokio::process::ChildStdin, line: &str) 
         Ok(Err(e)) => Err(e),
         Err(_) => Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
-            format!("sidecar stdin write timed out after {:?}", STDIN_WRITE_TIMEOUT),
+            format!(
+                "sidecar stdin write timed out after {:?}",
+                STDIN_WRITE_TIMEOUT
+            ),
         )),
     }
 }
