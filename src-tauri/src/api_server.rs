@@ -30,19 +30,25 @@ const MAX_BIND_RETRIES: u32 = 3;
 const APP_STATE_CACHE_TTL: Duration = Duration::from_secs(5);
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 const RATE_LIMIT_MAX_REQUESTS: usize = 120;
+const RATE_LIMIT_MAX_CLIENTS: usize = 256;
 const MAX_IN_FLIGHT_REQUESTS: usize = 64;
 
 /// API status: 0=starting, 1=running, 2=port_conflict, 3=error
 static API_STATUS: AtomicU8 = AtomicU8::new(0);
 static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static APP_STATE_CACHE: OnceLock<Mutex<Option<CachedAppState>>> = OnceLock::new();
-static RATE_LIMIT: OnceLock<Mutex<VecDeque<Instant>>> = OnceLock::new();
+static RATE_LIMIT: OnceLock<Mutex<BTreeMap<String, RateLimitBucket>>> = OnceLock::new();
 static AGENT_INTERNAL_API_TOKENS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct CachedAppState {
     loaded_at: Instant,
     value: Option<Value>,
+}
+
+struct RateLimitBucket {
+    hits: VecDeque<Instant>,
+    last_seen: Instant,
 }
 
 pub fn get_api_status() -> &'static str {
@@ -104,7 +110,13 @@ pub fn start_api_server(app: AppHandle) {
         for request in server.incoming_requests() {
             let method = request.method().clone();
             let url = request.url().to_string();
-            if should_rate_limit(&method, &url) && !allow_request() {
+            let headers = request_headers(&request);
+            if let Some(action) = cors_short_circuit(&method, &headers) {
+                respond_cors_short_circuit(request, action, &headers);
+                continue;
+            }
+            let rate_limit_key = rate_limit_key(request.remote_addr());
+            if should_rate_limit(&method, &url) && !allow_request(&rate_limit_key) {
                 respond_error(request, 429, "Too many requests");
                 continue;
             }
@@ -176,26 +188,16 @@ fn try_acquire_request_slot() -> Option<RequestSlot> {
 fn process_request(app: AppHandle, mut request: tiny_http::Request) {
     let method = request.method().clone();
     let url = request.url().to_string();
-    if method == Method::Options {
-        respond_options(request);
+    let headers = request_headers(&request);
+    if let Some(action) = cors_short_circuit(&method, &headers) {
+        respond_cors_short_circuit(request, action, &headers);
         return;
     }
-
-    let headers: Vec<(String, String)> = request
-        .headers()
-        .iter()
-        .map(|header| {
-            (
-                header.field.as_str().to_ascii_lowercase().to_string(),
-                header.value.as_str().to_string(),
-            )
-        })
-        .collect();
 
     let body = match read_body(&mut request) {
         Ok(body) => body,
         Err(err) => {
-            respond_error(request, 400, &err);
+            respond_error_with_headers(request, 400, &err, &headers);
             return;
         }
     };
@@ -207,12 +209,17 @@ fn process_request(app: AppHandle, mut request: tiny_http::Request) {
         eprintln!("[API Server] request panicked: {payload:?}");
         err(500, "Internal API server error")
     });
-    respond_json(request, response.status, response.body);
+    respond_json(request, response.status, response.body, &headers);
 }
 
 struct ApiResponse {
     status: u16,
     body: Value,
+}
+
+enum CorsShortCircuit {
+    Preflight,
+    Rejected(ApiResponse),
 }
 
 fn ok(body: Value) -> ApiResponse {
@@ -321,21 +328,73 @@ fn should_rate_limit(method: &Method, url: &str) -> bool {
     !(path == "/health" || path == format!("{API_PREFIX}/health"))
 }
 
-fn allow_request() -> bool {
+fn rate_limit_key(remote_addr: Option<&std::net::SocketAddr>) -> String {
+    remote_addr
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn allow_request(client_key: &str) -> bool {
     let now = Instant::now();
-    let window_start = now - RATE_LIMIT_WINDOW;
-    let lock = RATE_LIMIT.get_or_init(|| Mutex::new(VecDeque::new()));
-    let Ok(mut hits) = lock.lock() else {
+    let lock = RATE_LIMIT.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let Ok(mut buckets) = lock.lock() else {
         return false;
     };
+    allow_request_for_client(&mut buckets, client_key, now)
+}
+
+fn allow_request_for_client(
+    buckets: &mut BTreeMap<String, RateLimitBucket>,
+    client_key: &str,
+    now: Instant,
+) -> bool {
+    let window_start = now - RATE_LIMIT_WINDOW;
+    if !buckets.contains_key(client_key) && buckets.len() >= RATE_LIMIT_MAX_CLIENTS {
+        evict_expired_rate_limit_buckets(buckets, window_start);
+        if buckets.len() >= RATE_LIMIT_MAX_CLIENTS {
+            evict_oldest_rate_limit_bucket(buckets);
+        }
+    }
+    let bucket = buckets
+        .entry(client_key.to_string())
+        .or_insert_with(|| RateLimitBucket {
+            hits: VecDeque::new(),
+            last_seen: now,
+        });
+    bucket.last_seen = now;
+    trim_rate_limit_hits(&mut bucket.hits, window_start);
+    if bucket.hits.len() >= RATE_LIMIT_MAX_REQUESTS {
+        return false;
+    }
+    bucket.hits.push_back(now);
+    true
+}
+
+fn trim_rate_limit_hits(hits: &mut VecDeque<Instant>, window_start: Instant) {
     while hits.front().map(|t| *t < window_start).unwrap_or(false) {
         hits.pop_front();
     }
-    if hits.len() >= RATE_LIMIT_MAX_REQUESTS {
-        return false;
-    }
-    hits.push_back(now);
-    true
+}
+
+fn evict_expired_rate_limit_buckets(
+    buckets: &mut BTreeMap<String, RateLimitBucket>,
+    window_start: Instant,
+) {
+    buckets.retain(|_, bucket| {
+        trim_rate_limit_hits(&mut bucket.hits, window_start);
+        !bucket.hits.is_empty() || bucket.last_seen >= window_start
+    });
+}
+
+fn evict_oldest_rate_limit_bucket(buckets: &mut BTreeMap<String, RateLimitBucket>) {
+    let Some(oldest_key) = buckets
+        .iter()
+        .min_by_key(|(_, bucket)| bucket.last_seen)
+        .map(|(key, _)| key.clone())
+    else {
+        return;
+    };
+    buckets.remove(&oldest_key);
 }
 
 fn read_body(request: &mut tiny_http::Request) -> Result<String, String> {
@@ -351,29 +410,61 @@ fn read_body(request: &mut tiny_http::Request) -> Result<String, String> {
 }
 
 fn respond_error(request: tiny_http::Request, status: u16, message: &str) {
-    respond_json(request, status, json!({ "ok": false, "error": message }));
+    let headers = request_headers(&request);
+    respond_error_with_headers(request, status, message, &headers);
 }
 
-fn respond_options(request: tiny_http::Request) {
-    let mut response = Response::empty(StatusCode(204));
-    for header in cors_headers() {
+fn respond_error_with_headers(
+    request: tiny_http::Request,
+    status: u16,
+    message: &str,
+    headers: &[(String, String)],
+) {
+    respond_json(
+        request,
+        status,
+        json!({ "ok": false, "error": message }),
+        headers,
+    );
+}
+
+fn respond_options(request: tiny_http::Request, headers: &[(String, String)]) {
+    let mut response = Response::empty(cors_preflight_status(headers));
+    for header in cors_headers(headers) {
         response.add_header(header);
     }
     response.add_header(Header::from_bytes("Access-Control-Max-Age", "600").unwrap());
     let _ = request.respond(response);
 }
 
-fn respond_json(request: tiny_http::Request, status: u16, body: Value) {
+fn respond_json(
+    request: tiny_http::Request,
+    status: u16,
+    body: Value,
+    headers: &[(String, String)],
+) {
     let mut response = Response::from_string(body.to_string()).with_status_code(StatusCode(status));
-    for header in cors_headers() {
+    for header in cors_headers(headers) {
         response.add_header(header);
     }
     let _ = request.respond(response);
 }
 
-fn cors_headers() -> Vec<Header> {
-    vec![
-        Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
+fn request_headers(request: &tiny_http::Request) -> Vec<(String, String)> {
+    request
+        .headers()
+        .iter()
+        .map(|header| {
+            (
+                header.field.as_str().to_ascii_lowercase().to_string(),
+                header.value.as_str().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn cors_headers(request_headers: &[(String, String)]) -> Vec<Header> {
+    let mut headers = vec![
         Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").unwrap(),
         Header::from_bytes(
             "Access-Control-Allow-Headers",
@@ -381,7 +472,79 @@ fn cors_headers() -> Vec<Header> {
         )
         .unwrap(),
         Header::from_bytes("Content-Type", "application/json").unwrap(),
-    ]
+    ];
+    if let Some(origin) = allowed_cors_origin(request_headers) {
+        headers.push(Header::from_bytes("Access-Control-Allow-Origin", origin).unwrap());
+        headers.push(Header::from_bytes("Vary", "Origin").unwrap());
+    }
+    headers
+}
+
+fn is_rejected_cors_origin(headers: &[(String, String)]) -> bool {
+    request_origin(headers)
+        .map(|origin| !is_allowed_cors_origin(origin))
+        .unwrap_or(false)
+}
+
+fn cors_preflight_status(headers: &[(String, String)]) -> StatusCode {
+    if is_rejected_cors_origin(headers) {
+        StatusCode(403)
+    } else {
+        StatusCode(204)
+    }
+}
+
+fn cors_short_circuit(method: &Method, headers: &[(String, String)]) -> Option<CorsShortCircuit> {
+    if method == &Method::Options {
+        return Some(CorsShortCircuit::Preflight);
+    }
+    cors_actual_request_denial(headers).map(CorsShortCircuit::Rejected)
+}
+
+fn respond_cors_short_circuit(
+    request: tiny_http::Request,
+    action: CorsShortCircuit,
+    headers: &[(String, String)],
+) {
+    match action {
+        CorsShortCircuit::Preflight => respond_options(request, headers),
+        CorsShortCircuit::Rejected(response) => {
+            respond_json(request, response.status, response.body, headers)
+        }
+    }
+}
+
+fn cors_actual_request_denial(headers: &[(String, String)]) -> Option<ApiResponse> {
+    if is_rejected_cors_origin(headers) {
+        Some(err(403, "Origin is not allowed"))
+    } else {
+        None
+    }
+}
+
+fn allowed_cors_origin(headers: &[(String, String)]) -> Option<&str> {
+    request_origin(headers).filter(|origin| is_allowed_cors_origin(origin))
+}
+
+fn request_origin(headers: &[(String, String)]) -> Option<&str> {
+    headers
+        .iter()
+        .find(|(key, _)| key == "origin")
+        .map(|(_, value)| value.as_str())
+}
+
+fn is_allowed_cors_origin(origin: &str) -> bool {
+    origin == "tauri://localhost"
+        || origin == "http://localhost"
+        || origin
+            .strip_prefix("http://localhost:")
+            .map(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
+        || origin == "http://127.0.0.1"
+        || origin
+            .strip_prefix("http://127.0.0.1:")
+            .map(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
 }
 
 fn split_url(url: &str) -> (String, &str) {
@@ -1999,6 +2162,163 @@ mod tests {
             &Method::Post,
             "/api/v1/projects/current/search"
         ));
+    }
+
+    #[test]
+    fn rate_limit_isolated_by_client_key() {
+        let mut buckets = BTreeMap::new();
+        let now = Instant::now();
+
+        for _ in 0..RATE_LIMIT_MAX_REQUESTS {
+            assert!(allow_request_for_client(&mut buckets, "127.0.0.1", now));
+        }
+
+        assert!(!allow_request_for_client(&mut buckets, "127.0.0.1", now));
+        assert!(allow_request_for_client(&mut buckets, "127.0.0.2", now));
+    }
+
+    #[test]
+    fn rate_limit_expires_and_evicts_oldest_client_bucket() {
+        let mut buckets = BTreeMap::new();
+        let now = Instant::now();
+
+        for _ in 0..RATE_LIMIT_MAX_REQUESTS {
+            assert!(allow_request_for_client(&mut buckets, "127.0.0.1", now));
+        }
+        assert!(allow_request_for_client(
+            &mut buckets,
+            "127.0.0.1",
+            now + RATE_LIMIT_WINDOW + Duration::from_millis(1)
+        ));
+        assert_eq!(buckets.get("127.0.0.1").unwrap().hits.len(), 1);
+
+        buckets.clear();
+        for index in 0..RATE_LIMIT_MAX_CLIENTS {
+            assert!(allow_request_for_client(
+                &mut buckets,
+                &format!("client-{index}"),
+                now + Duration::from_millis(index as u64)
+            ));
+        }
+        assert!(allow_request_for_client(
+            &mut buckets,
+            "client-new",
+            now + Duration::from_millis(RATE_LIMIT_MAX_CLIENTS as u64)
+        ));
+        assert_eq!(buckets.len(), RATE_LIMIT_MAX_CLIENTS);
+        assert!(!buckets.contains_key("client-0"));
+        assert!(buckets.contains_key("client-new"));
+    }
+
+    #[test]
+    fn cors_headers_do_not_emit_wildcard_or_origin_without_request_origin() {
+        let headers = cors_headers(&[]);
+
+        assert!(!header_values(&headers, "Access-Control-Allow-Origin")
+            .iter()
+            .any(|value| value == "*"));
+        assert!(header_values(&headers, "Access-Control-Allow-Origin").is_empty());
+    }
+
+    #[test]
+    fn cors_headers_reflect_allowed_local_origins() {
+        let localhost = vec![("origin".to_string(), "http://localhost:5173".to_string())];
+        let loopback = vec![("origin".to_string(), "http://127.0.0.1:1420".to_string())];
+        let tauri = vec![("origin".to_string(), "tauri://localhost".to_string())];
+
+        assert_eq!(
+            header_values(&cors_headers(&localhost), "Access-Control-Allow-Origin"),
+            vec!["http://localhost:5173".to_string()]
+        );
+        assert_eq!(
+            header_values(&cors_headers(&loopback), "Access-Control-Allow-Origin"),
+            vec!["http://127.0.0.1:1420".to_string()]
+        );
+        assert_eq!(
+            header_values(&cors_headers(&tauri), "Access-Control-Allow-Origin"),
+            vec!["tauri://localhost".to_string()]
+        );
+    }
+
+    #[test]
+    fn cors_headers_reject_foreign_origins() {
+        let headers = vec![("origin".to_string(), "https://evil.example".to_string())];
+
+        assert!(is_rejected_cors_origin(&headers));
+        assert_eq!(cors_preflight_status(&headers), StatusCode(403));
+        assert!(header_values(&cors_headers(&headers), "Access-Control-Allow-Origin").is_empty());
+    }
+
+    #[test]
+    fn cors_preflight_allows_no_origin_and_allowed_origins() {
+        let localhost = vec![("origin".to_string(), "http://localhost:5173".to_string())];
+
+        assert_eq!(cors_preflight_status(&[]), StatusCode(204));
+        assert_eq!(cors_preflight_status(&localhost), StatusCode(204));
+        assert_eq!(
+            header_values(&cors_headers(&localhost), "Access-Control-Allow-Origin"),
+            vec!["http://localhost:5173".to_string()]
+        );
+    }
+
+    #[test]
+    fn cors_actual_request_denies_foreign_origin_before_routing() {
+        let headers = vec![("origin".to_string(), "https://evil.example".to_string())];
+        let denial = cors_actual_request_denial(&headers).unwrap();
+
+        assert_eq!(denial.status, 403);
+        assert_eq!(denial.body["error"], "Origin is not allowed");
+        assert!(header_values(&cors_headers(&headers), "Access-Control-Allow-Origin").is_empty());
+    }
+
+    #[test]
+    fn cors_actual_request_allows_no_origin_and_allowed_origins() {
+        let localhost = vec![("origin".to_string(), "http://localhost:5173".to_string())];
+        let loopback = vec![("origin".to_string(), "http://127.0.0.1".to_string())];
+
+        assert!(cors_actual_request_denial(&[]).is_none());
+        assert!(cors_actual_request_denial(&localhost).is_none());
+        assert!(cors_actual_request_denial(&loopback).is_none());
+    }
+
+    #[test]
+    fn cors_short_circuit_selects_preflight_or_rejected_origin_before_rate_limit() {
+        let foreign = vec![("origin".to_string(), "https://evil.example".to_string())];
+        let localhost = vec![("origin".to_string(), "http://localhost:5173".to_string())];
+
+        assert!(matches!(
+            cors_short_circuit(&Method::Options, &foreign),
+            Some(CorsShortCircuit::Preflight)
+        ));
+        assert!(matches!(
+            cors_short_circuit(&Method::Options, &[]),
+            Some(CorsShortCircuit::Preflight)
+        ));
+        assert!(matches!(
+            cors_short_circuit(&Method::Get, &foreign),
+            Some(CorsShortCircuit::Rejected(_))
+        ));
+        assert!(cors_short_circuit(&Method::Get, &localhost).is_none());
+        assert!(cors_short_circuit(&Method::Get, &[]).is_none());
+    }
+
+    #[test]
+    fn cors_headers_reject_malformed_localhost_ports() {
+        let headers = vec![(
+            "origin".to_string(),
+            "http://localhost:not-a-port".to_string(),
+        )];
+
+        assert!(is_rejected_cors_origin(&headers));
+        assert!(header_values(&cors_headers(&headers), "Access-Control-Allow-Origin").is_empty());
+    }
+
+    fn header_values(headers: &[Header], name: &str) -> Vec<String> {
+        headers
+            .iter()
+            .filter(|header| header.field.as_str().to_string().eq_ignore_ascii_case(name))
+            .map(|header| header.value.as_str().to_string())
+            .collect()
     }
 
     #[test]

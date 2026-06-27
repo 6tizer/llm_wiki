@@ -198,7 +198,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
       return t("settings.sections.apiServer.statusDisabled", { defaultValue: "Disabled" })
     }
     if (health?.allowUnauthenticated || draft.apiAllowUnauthenticated) {
-      return t("settings.sections.apiServer.statusOpen", { defaultValue: "Running, no auth" })
+      return t("settings.sections.apiServer.statusOpen", { defaultValue: "Running - open to local processes" })
     }
     if (serverStatus === "running" && health?.authConfigured === false && !draft.apiToken) {
       return t("settings.sections.apiServer.statusNoToken", { defaultValue: "Running, no token" })
