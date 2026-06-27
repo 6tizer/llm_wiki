@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { LintItem } from "@/stores/lint-store"
 import type { ReviewItem } from "@/stores/review-store"
 import type { Conversation } from "@/stores/chat-store"
+import type { ActivityItem } from "@/stores/activity-store"
 
 const persistMocks = vi.hoisted(() => ({
   saveReviewItems: vi.fn(async () => undefined),
@@ -49,13 +50,14 @@ function conversation(id: string): Conversation {
 
 async function setupFreshAutoSave() {
   vi.resetModules()
-  const [{ setupAutoSave }, { useWikiStore }, { useLintStore }, { useReviewStore }, { useChatStore }] =
+  const [{ setupAutoSave }, { useWikiStore }, { useLintStore }, { useReviewStore }, { useChatStore }, { useActivityStore }] =
     await Promise.all([
       import("./auto-save"),
       import("@/stores/wiki-store"),
       import("@/stores/lint-store"),
       import("@/stores/review-store"),
       import("@/stores/chat-store"),
+      import("@/stores/activity-store"),
     ])
 
   useWikiStore.getState().setProject(null)
@@ -64,14 +66,23 @@ async function setupFreshAutoSave() {
   useChatStore.getState().clearMessages()
   useChatStore.getState().setConversations([])
   useChatStore.getState().setStreaming(false)
+  useActivityStore.setState({ items: [] })
   setupAutoSave()
-  return { useWikiStore, useLintStore, useReviewStore, useChatStore }
+  return { useWikiStore, useLintStore, useReviewStore, useChatStore, useActivityStore }
+}
+
+function autoSaveErrors(items: ActivityItem[]): ActivityItem[] {
+  return items.filter((item) => item.type === "autosave" && item.status === "error")
 }
 
 describe("setupAutoSave", () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it("writes debounced lint items to the project active when the lint state changed", async () => {
@@ -204,5 +215,158 @@ describe("setupAutoSave", () => {
 
     expect(persistMocks.saveChatHistory).toHaveBeenCalledTimes(1)
     expect(persistMocks.saveChatHistory).toHaveBeenCalledWith("/tmp/a", [conv], [])
+  })
+
+  it("surfaces review auto-save failures to the activity store", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+    const item = reviewItem("review-fail")
+    persistMocks.saveReviewItems.mockRejectedValueOnce(new Error("EACCES: permission denied"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([item])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(1)
+    expect(errors[0].title).toBe("Review auto-save")
+    expect(errors[0].detail).toMatch(/Failed to auto-save review/i)
+    expect(errors[0].detail).toMatch(/permission denied/i)
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("[auto-save] review save failed"))
+  })
+
+  it("surfaces lint auto-save failures to the activity store", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useLintStore, useActivityStore } = await setupFreshAutoSave()
+    const item = lintItem("lint-fail")
+    persistMocks.saveLintItems.mockRejectedValueOnce(new Error("ENOSPC: no space"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useLintStore.getState().setItems([item])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(1)
+    expect(errors[0].title).toBe("Lint auto-save")
+    expect(errors[0].detail).toMatch(/Failed to auto-save lint/i)
+    expect(errors[0].detail).toMatch(/no space/i)
+  })
+
+  it("surfaces chat auto-save failures to the activity store", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useChatStore, useActivityStore } = await setupFreshAutoSave()
+    const conv = conversation("chat-fail")
+    persistMocks.saveChatHistory.mockRejectedValueOnce(new Error("disk offline"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useChatStore.getState().setConversations([conv])
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(1)
+    expect(errors[0].title).toBe("Chat auto-save")
+    expect(errors[0].detail).toMatch(/Failed to auto-save chat/i)
+    expect(errors[0].detail).toMatch(/disk offline/i)
+  })
+
+  it("does not surface activity errors when auto-save succeeds", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([reviewItem("review-ok")])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(autoSaveErrors(useActivityStore.getState().items)).toHaveLength(0)
+  })
+
+  it("debounces repeated failures for the same project and save kind", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+    persistMocks.saveReviewItems.mockRejectedValue(new Error("EIO"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([reviewItem("review-a")])
+    await vi.advanceTimersByTimeAsync(1000)
+    useReviewStore.getState().setItems([reviewItem("review-b")])
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(persistMocks.saveReviewItems).toHaveBeenCalledTimes(2)
+    expect(autoSaveErrors(useActivityStore.getState().items)).toHaveLength(1)
+  })
+
+  it("keeps failure debounce isolated by save kind", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useLintStore, useActivityStore } = await setupFreshAutoSave()
+    persistMocks.saveReviewItems.mockRejectedValue(new Error("review failed"))
+    persistMocks.saveLintItems.mockRejectedValue(new Error("lint failed"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([reviewItem("review-a")])
+    useLintStore.getState().setItems([lintItem("lint-a")])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(2)
+    expect(errors.map((error) => error.title).sort()).toEqual(["Lint auto-save", "Review auto-save"])
+  })
+
+  it("keeps failure debounce isolated by project path", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+    persistMocks.saveReviewItems.mockRejectedValue(new Error("review failed"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([reviewItem("review-a")])
+    useWikiStore.getState().setProject(project("B", "/tmp/b"))
+    useReviewStore.getState().setItems([reviewItem("review-b")])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(2)
+    expect(errors.every((error) => error.title === "Review auto-save")).toBe(true)
+  })
+
+  it("surfaces the same project and save kind again after the debounce window", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+    persistMocks.saveReviewItems.mockRejectedValue(new Error("review failed"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([reviewItem("review-a")])
+    await vi.advanceTimersByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(5001)
+    useReviewStore.getState().setItems([reviewItem("review-b")])
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(2)
+  })
+
+  it("clears the failure debounce after a successful save", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+    persistMocks.saveReviewItems
+      .mockRejectedValueOnce(new Error("first failure"))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("second failure"))
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useReviewStore.getState().setItems([reviewItem("review-a")])
+    await vi.advanceTimersByTimeAsync(1000)
+    useReviewStore.getState().setItems([reviewItem("review-ok")])
+    await vi.advanceTimersByTimeAsync(1000)
+    useReviewStore.getState().setItems([reviewItem("review-b")])
+    await vi.advanceTimersByTimeAsync(1000)
+
+    const errors = autoSaveErrors(useActivityStore.getState().items)
+    expect(errors).toHaveLength(2)
+    expect(errors.map((error) => error.detail).join("\n")).toContain("second failure")
   })
 })
