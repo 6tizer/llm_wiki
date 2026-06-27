@@ -3,30 +3,46 @@ import type { WikiSchemaRouting } from "@/lib/wiki-schema"
 
 export type ReviewPageType = "entity" | "concept" | "comparison" | "synthesis" | "query"
 
+/** Draft metadata for a wiki page created from a review item. */
 export interface ReviewPageDraft {
   title: string
   pageType: ReviewPageType
   dir: string
 }
 
+interface MissingPageCandidate {
+  title: string
+  pageTypeHint?: ReviewPageType
+}
+
 const ACTION_PREFIX_RE = /^(Create|Save|Add|Missing page|Missing pages|缺失页面|缺少页面|创建|保存|新增)[:：\s-]*/i
 const ENTITY_RE = /\b(entity|entities)\b|实体/i
 const CONCEPT_RE = /\b(concept|concepts)\b|概念/i
+const COMPARISON_RE = /\b(comparison|compare)\b|比较/i
+const SYNTHESIS_RE = /\bsynthesis\b|综合/i
+const QUERY_RE = /\bquery\b|查询/i
+const TYPE_PREFIX_RE = /^(entity|entities|concept|concepts|comparison|compare|synthesis|query|实体|概念|比较|综合|查询)\s*(?:page|pages|页面|页)?\s*[:：]\s*/i
+const TYPE_LABEL_RE = /(entity|entities|concept|concepts|comparison|compare|synthesis|query|实体|概念|比较|综合|查询)\s*(?:page|pages|页面|页)?\s*[:：]/gi
 
+/** Build one or more page drafts from a review item without writing files. */
 export function createReviewPageDrafts(item: ReviewItem, action: string): ReviewPageDraft[] {
   const text = `${item.title}\n${item.description}`
-  const pageType = detectPageType(action, item.type, text)
-  const titles = item.type === "missing-page"
+  const fallbackPageType = detectPageType(action, item.type, text)
+  const candidates = item.type === "missing-page"
     ? extractMissingPageCandidates(text)
-    : [cleanCandidateTitle(item.title) || "Untitled"]
+    : [{ title: cleanCandidateTitle(item.title) || "Untitled" }]
 
-  return titles.map((title) => ({
-    title,
-    pageType,
-    dir: dirForPageType(pageType),
-  }))
+  return candidates.map((candidate) => {
+    const pageType = candidate.pageTypeHint ?? fallbackPageType
+    return {
+      title: candidate.title,
+      pageType,
+      dir: dirForPageType(pageType),
+    }
+  })
 }
 
+/** Resolve a review-created page draft to a schema-routed wiki directory. */
 export function reviewPageDestinationDir(
   draft: ReviewPageDraft,
   routing: WikiSchemaRouting | null | undefined,
@@ -60,48 +76,90 @@ function cleanCandidateTitle(value: string): string {
     .trim()
 }
 
-function splitCandidateList(value: string): string[] {
+function splitCandidateList(value: string, pageTypeHint?: ReviewPageType): MissingPageCandidate[] {
   return value
     .replace(/\band\b/gi, ",")
     .replace(/\s+和\s+/g, ",")
     .split(/[,，、;；\n]+/)
-    .map(cleanCandidateTitle)
-    .filter((title) => title.length > 0)
+    .map((rawTitle) => candidateFromText(rawTitle, pageTypeHint))
+    .filter((candidate): candidate is MissingPageCandidate => candidate !== null)
 }
 
-function extractMissingPageCandidates(text: string): string[] {
-  const candidates: string[] = []
+function extractMissingPageCandidates(text: string): MissingPageCandidate[] {
+  const candidates: MissingPageCandidate[] = []
   const segments = text
     .split(/[\n。]+/)
     .map((s) => s.replace(/\s+/g, " ").trim())
     .filter(Boolean)
 
   for (const segment of segments) {
+    const segmentHint = explicitPageTypeHint(segment) ?? undefined
+    const typedCandidates = extractTypedCandidates(segment, segmentHint)
+    if (typedCandidates.length > 0) {
+      candidates.push(...typedCandidates)
+      continue
+    }
+
     const colonTail = segment.match(/[:：]\s*(.+)$/)?.[1]
-    if (colonTail) candidates.push(...splitCandidateList(colonTail))
+    if (colonTail) candidates.push(...splitCandidateList(colonTail, segmentHint))
 
     const chineseMissing = segment.match(/(?:缺少|缺失|未创建|没有)\s*([^；;]+?)(?:等)?\s*(?:实体|概念)?\s*(?:页面|页)(?:缺失|不存在|未创建)?/i)
-    if (chineseMissing?.[1]) candidates.push(...splitCandidateList(chineseMissing[1]))
+    if (chineseMissing?.[1]) candidates.push(...splitCandidateList(chineseMissing[1], segmentHint))
 
-    const englishMissing = segment.match(/missing\s+(?:entity|entities|concept|concepts|page|pages)?\s*([^.;]+?)(?:\s+pages?|\s+entities?|\s+concepts?)?$/i)
-    if (englishMissing?.[1]) candidates.push(...splitCandidateList(englishMissing[1]))
+    const englishMissing = segment.match(/missing\s+(?:(?:entities|entity|concepts|concept|pages|page)\s+)?([^.;:]+?)(?:\s+(?:pages|page|entities|entity|concepts|concept))?$/i)
+    if (englishMissing?.[1]) candidates.push(...splitCandidateList(englishMissing[1], segmentHint))
   }
 
-  if (candidates.length === 0) candidates.push(cleanCandidateTitle(segments[0] ?? "") || "Untitled")
+  if (candidates.length === 0) {
+    const title = cleanCandidateTitle(segments[0] ?? "") || "Untitled"
+    candidates.push({ title, pageTypeHint: explicitPageTypeHint(segments[0] ?? "") ?? undefined })
+  }
 
-  return Array.from(new Set(candidates))
+  const seen = new Set<string>()
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.title)) return false
+    seen.add(candidate.title)
+    return true
+  })
+}
+
+function extractTypedCandidates(segment: string, segmentHint?: ReviewPageType): MissingPageCandidate[] {
+  const matches = [...segment.matchAll(TYPE_LABEL_RE)]
+  return matches.flatMap((match, index) => {
+    const hint = explicitPageTypeHint(match[1]) ?? segmentHint
+    const start = (match.index ?? 0) + match[0].length
+    const end = matches[index + 1]?.index ?? segment.length
+    return splitCandidateList(segment.slice(start, end), hint)
+  })
+}
+
+function candidateFromText(rawTitle: string, pageTypeHint?: ReviewPageType): MissingPageCandidate | null {
+  const candidateHint = explicitPageTypeHint(rawTitle) ?? pageTypeHint
+  const title = cleanCandidateTitle(rawTitle.replace(TYPE_PREFIX_RE, ""))
+  if (!title) return null
+  return {
+    title,
+    pageTypeHint: candidateHint,
+  }
 }
 
 function detectPageType(action: string, reviewType: ReviewItem["type"], text: string): ReviewPageType {
   const combined = `${action}\n${text}`
-  if (ENTITY_RE.test(combined)) return "entity"
-  if (CONCEPT_RE.test(combined)) return "concept"
-  if (/comparison|compare|比较/i.test(combined)) return "comparison"
-  if (/synthesis|综合/i.test(combined)) return "synthesis"
+  const explicit = explicitPageTypeHint(combined)
+  if (explicit) return explicit
   if (reviewType === "missing-page") return "concept"
   if (reviewType === "contradiction") return "query"
   if (reviewType === "suggestion") return "query"
   return "query"
+}
+
+function explicitPageTypeHint(value: string): ReviewPageType | null {
+  if (ENTITY_RE.test(value)) return "entity"
+  if (CONCEPT_RE.test(value)) return "concept"
+  if (COMPARISON_RE.test(value)) return "comparison"
+  if (SYNTHESIS_RE.test(value)) return "synthesis"
+  if (QUERY_RE.test(value)) return "query"
+  return null
 }
 
 function dirForPageType(pageType: ReviewPageType): string {
