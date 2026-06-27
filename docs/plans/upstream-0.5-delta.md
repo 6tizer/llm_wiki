@@ -4,7 +4,7 @@
 
 ## 结论
 
-Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 residual follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
+Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #162。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 remaining follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
 
 本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
 
@@ -48,13 +48,13 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 |------------|-------|
 | Ingest、schema、review create page、source path safety | PR E completed; residual route #128 or new scoped issue |
 | Zoom、layout、app visibility、project open/create UX | H-lite completed; residual UI polish should get a scoped issue |
-| Chat image、multimodal message、chat standalone | PR G/#134 completed; residual route #135/#136 |
+| Chat image、multimodal message、chat standalone | PR G/#134 completed; UI polish #135/#136 completed by #162 |
 | Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G completed; sidecar lifecycle remains Phase 7 |
 | OKF-compatible wiki bundle、validator/export/import | OKF roadmap |
-| MinerU / PDF parsing | PR F completed; regression fix #153 completed; residual route #152 |
+| MinerU / PDF parsing | PR F completed; regression fix #153 completed; large PDF / side-cache polish #152 completed by #161 |
 | Theme、tray、general settings、window close behavior | PR I completed; tray localization #151 completed |
 | Graph rendering/performance | PR J completed; hover label contrast #158 completed; new residuals need scoped issues |
-| AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; #154/#157 completed; residual route #156 |
+| AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; #154/#157 completed; review/chat autosave isolation #156 completed by #160 |
 | CI/release/platform target cleanup | `mac-product-baseline` |
 | Agent UX/session/permission/internal RPC | Phase 7 backlog |
 
@@ -64,23 +64,26 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 |----|---------------------|-------|
 | PR E | completed | #129 `d22f401`; residual per-title review create-page classification in #128. |
 | H-lite | completed | #131 `087b135`; future layout polish should be scoped separately. |
-| PR G | completed | #137 `5765200` + #134 `1183710`; residual Chat UI polish in #135/#136. |
-| PR F | completed | #140 `87c7caf`; regression fix #153 merged; residual large PDF / side-cache polish in #152. |
+| PR G | completed | #137 `5765200` + #134 `1183710`; Chat UI polish #135/#136 completed by #162 `ac797ee`. |
+| PR F | completed | #140 `87c7caf`; regression fix #153 merged; large PDF / side-cache polish #152 completed by #161 `7d1b044`. |
 | PR I | completed | #142 `c343b2a`; tray menu localization completed by #151. |
 | PR J | completed | #145 `c5403f7`; hover label contrast completed by #158. |
-| PR K | completed | #148 `0fd1d95`; llmConfig forwarding completed by #154; lint autosave isolation completed by #157; remaining review/chat autosave isolation in #156. |
+| PR K | completed | #148 `0fd1d95`; llmConfig forwarding completed by #154; lint autosave isolation completed by #157; review/chat autosave isolation #156 completed by #160 `334c382`. |
 
 ## Current Follow-up Queue
 
-Recommended order after #158:
+Recommended order after #162:
 
-1. Plans/delta/handoff calibration so future PR selection no longer uses the old #143/#144/#139/#147/#146/#155 queue.
-2. #156 review/chat autosave project-path isolation.
-3. #152 MinerU large PDF / parsed side-cache polish.
-4. #135/#136 Chat UI polish for image attachment loading and narrow mode selector overflow.
-5. #128 review missing-page classification follow-up.
-6. #120/#126 security and quality follow-ups.
-7. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
+1. #128 review missing-page classification follow-up.
+2. #120/#126 security and quality follow-ups.
+3. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
+
+Completed follow-up closeout evidence:
+
+- Plans/delta queue calibration completed by #159 `cebfc88`.
+- #156 review/chat autosave project-path isolation completed by #160 `334c382`.
+- #152 MinerU large PDF / parsed side-cache polish completed by #161 `7d1b044`.
+- #135/#136 Chat UI polish completed by #162 `ac797ee`.
 
 ## Direct Merge Policy
 
