@@ -14,6 +14,7 @@ const APP_STATE_FILE_NAME: &str = "app-state.json";
 const LEGACY_BUNDLE_ID: &str = "com.llmwiki.app";
 const LEGACY_PRODUCT_NAME: &str = "LLM Wiki";
 const CLOSE_BEHAVIOR_KEY: &str = "closeBehavior";
+const LANGUAGE_KEY: &str = "language";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloseBehavior {
@@ -49,6 +50,12 @@ impl CloseBehaviorState {
             *current = behavior;
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrayMenuLabels {
+    show: &'static str,
+    quit: &'static str,
 }
 
 #[tauri::command]
@@ -156,6 +163,41 @@ fn read_close_behavior_from_store(store_path: &Path) -> CloseBehavior {
     close_behavior_from_value(parsed.get(CLOSE_BEHAVIOR_KEY))
 }
 
+fn normalize_tray_language(value: Option<&str>) -> &'static str {
+    let Some(value) = value else {
+        return "en";
+    };
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized == "zh" || normalized.starts_with("zh-") {
+        "zh"
+    } else {
+        "en"
+    }
+}
+
+fn tray_menu_labels_for_language(value: Option<&str>) -> TrayMenuLabels {
+    match normalize_tray_language(value) {
+        "zh" => TrayMenuLabels {
+            show: "显示",
+            quit: "退出",
+        },
+        _ => TrayMenuLabels {
+            show: "Show",
+            quit: "Quit",
+        },
+    }
+}
+
+fn read_tray_labels_from_store(store_path: &Path) -> TrayMenuLabels {
+    let Ok(raw) = std::fs::read_to_string(store_path) else {
+        return tray_menu_labels_for_language(None);
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return tray_menu_labels_for_language(None);
+    };
+    tray_menu_labels_for_language(parsed.get(LANGUAGE_KEY).and_then(serde_json::Value::as_str))
+}
+
 #[tauri::command]
 fn set_close_behavior(
     state: tauri::State<'_, CloseBehaviorState>,
@@ -164,6 +206,16 @@ fn set_close_behavior(
     let normalized = close_behavior_from_str(Some(behavior.as_str()));
     state.set(normalized);
     Ok(normalized.as_str().to_string())
+}
+
+#[tauri::command]
+fn set_tray_language(app: tauri::AppHandle, language: String) -> Result<String, String> {
+    let normalized = normalize_tray_language(Some(language.as_str())).to_string();
+    #[cfg(target_os = "macos")]
+    update_macos_tray_language(&app, normalized.as_str()).map_err(|err| err.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    Ok(normalized)
 }
 
 #[cfg(target_os = "macos")]
@@ -176,13 +228,44 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 #[cfg(target_os = "macos")]
-fn setup_macos_tray(app: &mut tauri::App) -> tauri::Result<()> {
+fn build_macos_tray_menu<R, M>(
+    manager: &M,
+    labels: TrayMenuLabels,
+) -> tauri::Result<tauri::menu::Menu<R>>
+where
+    R: tauri::Runtime,
+    M: tauri::Manager<R>,
+{
     use tauri::menu::{Menu, MenuItem};
+
+    let show = MenuItem::with_id(manager, "show", labels.show, true, None::<&str>)?;
+    let quit = MenuItem::with_id(manager, "quit", labels.quit, true, None::<&str>)?;
+    Menu::with_items(manager, &[&show, &quit])
+}
+
+#[cfg(target_os = "macos")]
+fn update_macos_tray_language<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    language: &str,
+) -> tauri::Result<()> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let menu = build_macos_tray_menu(app, tray_menu_labels_for_language(Some(language)))?;
+        tray.set_menu(Some(menu))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_tray(app: &mut tauri::App) -> tauri::Result<()> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let labels = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| read_tray_labels_from_store(&dir.join(APP_STATE_FILE_NAME)))
+        .unwrap_or_else(|| tray_menu_labels_for_language(None));
+    let menu = build_macos_tray_menu(app, labels)?;
 
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("LLM Wiki Agent")
@@ -353,6 +436,7 @@ pub fn run() {
             api_server_reload_config,
             mcp_server_entry_path,
             set_close_behavior,
+            set_tray_language,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,
@@ -552,5 +636,82 @@ mod tests {
         assert_eq!(state.get(), CloseBehavior::Hide);
         state.set(CloseBehavior::Quit);
         assert_eq!(state.get(), CloseBehavior::Quit);
+    }
+
+    #[test]
+    fn tray_language_normalization_accepts_zh_family_only() {
+        assert_eq!(normalize_tray_language(Some("zh")), "zh");
+        assert_eq!(normalize_tray_language(Some("zh-CN")), "zh");
+        assert_eq!(normalize_tray_language(Some("ZH-Hant")), "zh");
+        assert_eq!(normalize_tray_language(Some("en")), "en");
+        assert_eq!(normalize_tray_language(Some("ja")), "en");
+        assert_eq!(normalize_tray_language(Some("")), "en");
+        assert_eq!(normalize_tray_language(None), "en");
+    }
+
+    #[test]
+    fn tray_labels_follow_normalized_language() {
+        assert_eq!(
+            tray_menu_labels_for_language(Some("zh-CN")),
+            TrayMenuLabels {
+                show: "显示",
+                quit: "退出",
+            }
+        );
+        assert_eq!(
+            tray_menu_labels_for_language(Some("en")),
+            TrayMenuLabels {
+                show: "Show",
+                quit: "Quit",
+            }
+        );
+    }
+
+    #[test]
+    fn read_tray_labels_from_store_defaults_to_english_for_missing_or_invalid_store() {
+        let missing = temp_store_path("tray-missing");
+        assert_eq!(
+            read_tray_labels_from_store(&missing),
+            TrayMenuLabels {
+                show: "Show",
+                quit: "Quit",
+            }
+        );
+
+        let invalid_json = temp_store_path("tray-invalid-json");
+        fs::write(&invalid_json, "{").expect("write invalid json store");
+        assert_eq!(
+            read_tray_labels_from_store(&invalid_json),
+            TrayMenuLabels {
+                show: "Show",
+                quit: "Quit",
+            }
+        );
+        let _ = fs::remove_file(invalid_json);
+    }
+
+    #[test]
+    fn read_tray_labels_from_store_uses_persisted_language() {
+        let zh = temp_store_path("tray-zh");
+        fs::write(&zh, r#"{"language":"zh-CN"}"#).expect("write zh store");
+        assert_eq!(
+            read_tray_labels_from_store(&zh),
+            TrayMenuLabels {
+                show: "显示",
+                quit: "退出",
+            }
+        );
+        let _ = fs::remove_file(zh);
+
+        let en = temp_store_path("tray-en");
+        fs::write(&en, r#"{"language":"en"}"#).expect("write en store");
+        assert_eq!(
+            read_tray_labels_from_store(&en),
+            TrayMenuLabels {
+                show: "Show",
+                quit: "Quit",
+            }
+        );
+        let _ = fs::remove_file(en);
     }
 }
