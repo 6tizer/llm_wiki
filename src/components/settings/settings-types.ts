@@ -84,6 +84,8 @@ export interface SettingsDraft {
   mineruToken: string
   mineruModelVersion: MineruModelVersion
   mineruApiBaseUrl: string
+  mineruPollIntervalSeconds: number
+  mineruPollTimeoutMinutes: number
 
   // Local HTTP API server
   apiEnabled: boolean

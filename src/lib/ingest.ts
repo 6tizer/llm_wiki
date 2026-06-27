@@ -90,6 +90,18 @@ function mineruParsedMarkdownCachePath(
   projectPath: string,
   sourceSummarySlug: string,
   parser: string,
+  cacheContent: string,
+): string {
+  const safeSlug = safeMineruParsedCacheSegment(sourceSummarySlug)
+  const safeParser = safeMineruParsedCacheSegment(parser)
+  const safeCacheContent = safeMineruParsedCacheSegment(cacheContent)
+  return `${normalizePath(projectPath)}/.llm-wiki/mineru/${safeSlug}-${safeParser}-${safeCacheContent}.md`
+}
+
+function legacyMineruParsedMarkdownCachePath(
+  projectPath: string,
+  sourceSummarySlug: string,
+  parser: string,
 ): string {
   const safeSlug = safeMineruParsedCacheSegment(sourceSummarySlug)
   const safeParser = safeMineruParsedCacheSegment(parser)
@@ -100,12 +112,17 @@ async function readMineruParsedMarkdownCache(
   projectPath: string,
   sourceSummarySlug: string,
   parser: string,
+  cacheContent: string,
 ): Promise<string | null> {
   if (!parser.startsWith("mineru:")) return null
   try {
-    return await readFile(mineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser))
+    return await readFile(mineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser, cacheContent))
   } catch {
-    return null
+    try {
+      return await readFile(legacyMineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser))
+    } catch {
+      return null
+    }
   }
 }
 
@@ -113,11 +130,12 @@ async function saveMineruParsedMarkdownCache(
   projectPath: string,
   sourceSummarySlug: string,
   parser: string,
+  cacheContent: string,
   content: string,
 ): Promise<void> {
   if (!parser.startsWith("mineru:")) return
   try {
-    await writeFile(mineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser), content)
+    await writeFile(mineruParsedMarkdownCachePath(projectPath, sourceSummarySlug, parser, cacheContent), content)
   } catch (err) {
     console.warn(
       "[MinerU] failed to save parsed Markdown cache:",
@@ -134,6 +152,7 @@ async function parseSourceForIngest(
   projectPath: string,
   sourcePath: string,
   sourceSummarySlug: string,
+  sourceCacheContent: string,
   activityId: string,
   signal?: AbortSignal,
 ): Promise<ParsedIngestSource> {
@@ -154,8 +173,8 @@ async function parseSourceForIngest(
       signal,
       { projectPath, sourceSummarySlug },
     )
-    await saveMineruParsedMarkdownCache(projectPath, sourceSummarySlug, parser, content)
-    return { content, parser, cacheContent: await mineruCacheContent(sourcePath) }
+    await saveMineruParsedMarkdownCache(projectPath, sourceSummarySlug, parser, sourceCacheContent, content)
+    return { content, parser, cacheContent: sourceCacheContent }
   } catch (err) {
     if (signal?.aborted) throw err
     const message = err instanceof Error ? err.message : String(err)
@@ -731,7 +750,12 @@ async function autoIngestImpl(
       cachedFiles === null ? "MISS (parse source)" : `HIT (${cachedFiles.length} cached files)`,
     )
     if (cachedFiles !== null) {
-      const cachedMineruMarkdown = await readMineruParsedMarkdownCache(pp, sourceSummarySlug, sourcePlan.parser)
+      const cachedMineruMarkdown = await readMineruParsedMarkdownCache(
+        pp,
+        sourceSummarySlug,
+        sourcePlan.parser,
+        sourcePlan.cacheContent,
+      )
       if (cachedMineruMarkdown !== null) {
         precheckedCachedFiles = cachedFiles
         sourcePlan = { ...sourcePlan, content: cachedMineruMarkdown }
@@ -755,7 +779,7 @@ async function autoIngestImpl(
   }
 
   const parsedSource = sourcePlan.content === undefined
-    ? await parseSourceForIngest(pp, sp, sourceSummarySlug, activityId, signal)
+    ? await parseSourceForIngest(pp, sp, sourceSummarySlug, sourcePlan.cacheContent, activityId, signal)
     : {
         content: sourcePlan.content,
         parser: sourcePlan.parser,

@@ -3,10 +3,14 @@ import type { MineruConfig } from "@/stores/wiki-store"
 import { createDirectory, getFileSize, readFileAsBase64, writeFileBase64 } from "@/commands/fs"
 import { getHttpFetch } from "@/lib/tauri-fetch"
 import { getFileName, normalizePath } from "@/lib/path-utils"
+import {
+  clampMineruPollIntervalMs,
+  clampMineruPollTimeoutMs,
+  MINERU_DEFAULT_POLL_INTERVAL_MS,
+  MINERU_DEFAULT_POLL_TIMEOUT_MS,
+} from "@/lib/mineru-config"
 
 export const MINERU_DEFAULT_API_BASE = "https://mineru.net/api/v4"
-const MINERU_DEFAULT_POLL_INTERVAL_MS = 3_000
-const MINERU_DEFAULT_POLL_TIMEOUT_MS = 300_000
 const MAX_ACCURATE_PARSE_BYTES = 200 * 1024 * 1024
 const MINERU_IMAGE_EXTS = new Set([
   "png",
@@ -83,6 +87,13 @@ function normalizeMineruPollingOptions(
   return {
     intervalMs: Math.max(1, options?.intervalMs ?? MINERU_DEFAULT_POLLING_OPTIONS.intervalMs),
     timeoutMs: Math.max(1, options?.timeoutMs ?? MINERU_DEFAULT_POLLING_OPTIONS.timeoutMs),
+  }
+}
+
+function mineruPollingOptionsFromConfig(config: MineruConfig): MineruPollingOptions {
+  return {
+    intervalMs: clampMineruPollIntervalMs(config.pollIntervalMs),
+    timeoutMs: clampMineruPollTimeoutMs(config.pollTimeoutMs),
   }
 }
 
@@ -621,13 +632,14 @@ export async function parseWithMineru(
   if (config.modelVersion !== "pipeline" && config.modelVersion !== "vlm") {
     throw new Error("MinerU PDF parsing supports only pipeline or vlm model versions")
   }
+  const effectivePollingOptions = pollingOptions ?? mineruPollingOptionsFromConfig(config)
 
   const zipUrl = await (async () => {
     if (sourceUrl) {
       onProgress?.("Submitting URL to MinerU...")
       const taskId = await submitUrlTask(config, sourceUrl, signal)
       onProgress?.("Waiting for MinerU to finish...")
-      return pollTask(config, taskId, signal, pollingOptions)
+      return pollTask(config, taskId, signal, effectivePollingOptions)
     }
 
     onProgress?.("Uploading file to MinerU...")
@@ -641,7 +653,7 @@ export async function parseWithMineru(
     const { base64 } = await readFileAsBase64(sourcePath)
     const batchId = await uploadFileForTask(config, fileName, base64, signal)
     onProgress?.("Waiting for MinerU to finish...")
-    return pollBatchTask(config, batchId, signal, pollingOptions)
+    return pollBatchTask(config, batchId, signal, effectivePollingOptions)
   })()
 
   onProgress?.("Downloading parsed result...")
@@ -682,6 +694,7 @@ export const __mineruTest = {
   convertHtmlTablesToMarkdown,
   normalizeMineruPollingOptions,
   pollBatchTask,
+  mineruPollingOptionsFromConfig,
   MAX_ACCURATE_PARSE_BYTES,
   MINERU_DEFAULT_POLLING_OPTIONS,
 }

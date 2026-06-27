@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const fsMocks = vi.hoisted(() => ({
   readFile: vi.fn<(path: string) => Promise<string>>(),
-  writeFile: vi.fn<() => Promise<void>>(),
+  writeFile: vi.fn<(path: string, content: string) => Promise<void>>(),
   fileExists: vi.fn<() => Promise<boolean>>(),
   deleteFile: vi.fn<() => Promise<void>>(),
   listDirectory: vi.fn<() => Promise<unknown[]>>(),
@@ -80,6 +80,8 @@ beforeEach(() => {
     token: "mineru-token",
     modelVersion: "vlm",
     apiBaseUrl: "",
+    pollIntervalMs: 3000,
+    pollTimeoutMs: 300000,
   })
   useWikiStore.getState().setMultimodalConfig({
     enabled: false,
@@ -167,7 +169,7 @@ describe("autoIngest MinerU PDF strategy", () => {
 
     expect(mineruMocks.parseWithMineru).toHaveBeenCalledTimes(1)
     expect(fsMocks.writeFile).toHaveBeenCalledWith(
-      "/project/.llm-wiki/mineru/paper-mineru_vlm.md",
+      "/project/.llm-wiki/mineru/paper-mineru_vlm-mineru-source-md5_pdf-md5.md",
       "# MinerU markdown",
     )
     expect(imageMocks.extractAndSaveMarkdownImages).toHaveBeenCalledWith(
@@ -176,6 +178,77 @@ describe("autoIngest MinerU PDF strategy", () => {
       "# MinerU markdown",
       "paper",
       { baseDir: "/project/wiki", reuseExistingWikiMedia: true },
+    )
+  })
+
+  it("reads legacy MinerU parsed markdown cache when the md5-scoped cache is missing", async () => {
+    const cachedMarkdown = "# Legacy MinerU cached markdown"
+    fsMocks.readFile.mockImplementation(async (path: string) => {
+      if (path.endsWith("/paper-mineru_vlm-mineru-source-md5_pdf-md5.md")) {
+        throw new Error("missing new parsed MinerU cache")
+      }
+      if (path.endsWith("/paper-mineru_vlm.md")) return cachedMarkdown
+      return ""
+    })
+
+    await expect(
+      autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never),
+    ).resolves.toEqual(["wiki/sources/paper.md"])
+
+    expect(mineruMocks.parseWithMineru).not.toHaveBeenCalled()
+    expect(imageMocks.extractAndSaveMarkdownImages).toHaveBeenCalledWith(
+      "/project",
+      "/project/raw/sources/paper.pdf",
+      cachedMarkdown,
+      "paper",
+      { baseDir: "/project/wiki", reuseExistingWikiMedia: true },
+    )
+  })
+
+  it("keeps same-slug MinerU parsed markdown caches isolated by source md5", async () => {
+    cacheMocks.checkIngestCache.mockResolvedValue(null)
+    fsMocks.getFileMd5
+      .mockResolvedValueOnce("pdf-md5-a")
+      .mockResolvedValueOnce("pdf-md5-b")
+
+    await autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never)
+    await autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never)
+
+    const mineruCacheWrites = fsMocks.writeFile.mock.calls
+      .map((call) => String(call[0]))
+      .filter((path) => path.includes("/.llm-wiki/mineru/"))
+
+    expect(mineruCacheWrites).toContain(
+      "/project/.llm-wiki/mineru/paper-mineru_vlm-mineru-source-md5_pdf-md5-a.md",
+    )
+    expect(mineruCacheWrites).toContain(
+      "/project/.llm-wiki/mineru/paper-mineru_vlm-mineru-source-md5_pdf-md5-b.md",
+    )
+  })
+
+  it("passes MinerU polling config through the ingest parser config", async () => {
+    cacheMocks.checkIngestCache.mockResolvedValue(null)
+    useWikiStore.getState().setMineruConfig({
+      enabled: true,
+      token: "mineru-token",
+      modelVersion: "vlm",
+      apiBaseUrl: "",
+      pollIntervalMs: 700,
+      pollTimeoutMs: 65000,
+    })
+
+    await autoIngest("/project", "/project/raw/sources/paper.pdf", llmConfig as never)
+
+    expect(mineruMocks.parseWithMineru).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pollIntervalMs: 700,
+        pollTimeoutMs: 65000,
+      }),
+      "/project/raw/sources/paper.pdf",
+      undefined,
+      expect.any(Function),
+      undefined,
+      { projectPath: "/project", sourceSummarySlug: "paper" },
     )
   })
 
