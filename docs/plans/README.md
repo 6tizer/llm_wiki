@@ -1,6 +1,6 @@
 # Plans Index
 
-> 类型：计划索引 | 更新：2026-06-25 | owner：LLM Wiki commander / planner
+> 类型：计划索引 | 更新：2026-06-27 | owner：LLM Wiki commander / planner
 
 ## 当前有效计划
 
@@ -9,12 +9,12 @@
 | Plan | Charter | Status |
 |------|---------|--------|
 | [mac-product-baseline.md](./mac-product-baseline.md) | 已完成基线：把产品、CI、release、app identity 口径收敛到 Mac-only active maintenance。 | completed |
-| [upstream-sync-phase6.md](./upstream-sync-phase6.md) | Phase 6：基于上游 `v0.5.x` 的手动同步路线，保留本地 Agent SDK sidecar/docs/Agent UI 差异。 | active |
-| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | 每个后续实现 PR 前的 v0.5.x delta 调研入口和分流规则，含上游 Chat Agent Router 与本地 Agent SDK sidecar 边界。 | active |
-| [upstream-chat-agent-router-alignment.md](./upstream-chat-agent-router-alignment.md) | 普通 Chat 对齐 upstream `v0.5.x` Chat Agent Router，并把 PR G 升级为 Chat Agent Router alignment + multimodal chat。 | active |
+| [upstream-sync-phase6.md](./upstream-sync-phase6.md) | Phase 6：PR A-K 主线已完成；现在只作为完成证据、follow-up 路由和后续 delta 校准入口。 | completed / routing |
+| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 调研入口；PR E/H/G/F/I/J/K 已完成，后续用于 residual upstream delta 和新实现 PR 分流。 | active |
+| [upstream-chat-agent-router-alignment.md](./upstream-chat-agent-router-alignment.md) | 普通 Chat 对齐 upstream `v0.5.x` Chat Agent Router；PR G 核心已完成，剩余为 UI polish 和 residual delta。 | completed / follow-up |
 | [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Phase 7 前置：sidecar 对齐 Claude Agent SDK latest stable，并评估 SDK schema/permission/sandbox/hooks delta。 | active |
 | [okf-compatibility.md](./okf-compatibility.md) | 把 `<project>/wiki/` 定位为 OKF-compatible knowledge bundle root，规划 validator/export/import/Agent tools。 | active |
-| [security-review-119-fixes.md](./security-review-119-fixes.md) | 修复 issue #119 深度 review 的发现：路径穿越/数据完整性/预算/健壮性，分 4 个 PR 交付。 | active |
+| [security-review-119-fixes.md](./security-review-119-fixes.md) | issue #119 深度 review 的 4 个安全 PR 已完成；剩余 #126/#120 继续作为安全/质量 follow-up。 | follow-up |
 | [agent-sidecar-phase6.1.md](./agent-sidecar-phase6.1.md) | Phase 7 backlog：Agent SDK productization；文件名保留历史编号。 | backlog |
 | [native-architecture.md](./native-architecture.md) | Swift/SwiftUI/iOS/native 架构 ADR 入口；当前不改变 Tauri/Rust/TS 主线。 | ADR backlog |
 | [agent-sidecar-roadmap.md](./agent-sidecar-roadmap.md) | Agent Sidecar 历史总览入口；保留设计背景和已完成阶段，不作为当前执行顺序来源。 | historical |
@@ -31,3 +31,15 @@ Phase 1-5、Phase 3.x、旧 roadmap 和 follow-up 文档保留为历史记录，
 - 完成或废弃的计划保留原文，但要在本索引移出 active 列表或标注为 archive。
 - 不在旧文档里反复改写历史事实；只修会误导当前执行的交叉引用。
 - docs-only roadmap PR 不代表 CI/release 已完成清理；实际 pruning 由 `mac-product-baseline` 实现 PR 处理。
+
+## Current Execution Order
+
+截至 2026-06-27，Phase 6 的主线 port 已完成到 #148。后续执行顺序不再是旧的 PR E/H/G/F/I/J/K，而是：
+
+1. 计划/进度校准：保持本索引、Phase 6、delta 和 handoff 口径同步。
+2. 短平快 follow-up 稳定化：#143、#144、#139、#147、#146、#135、#136、#128。
+3. 安全/质量 backlog：#120、#126，并继续把 #119 作为 umbrella reference。
+4. OKF 兼容路线：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API。
+5. Claude Agent SDK alignment：Phase 7 前置 PR 7-0。
+6. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+7. Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
