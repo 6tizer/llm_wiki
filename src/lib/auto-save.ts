@@ -5,7 +5,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { saveReviewItems, saveLintItems, saveChatHistory } from "./persist"
 
 let reviewTimer: ReturnType<typeof setTimeout> | null = null
-let lintTimer: ReturnType<typeof setTimeout> | null = null
+const lintTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let chatTimer: ReturnType<typeof setTimeout> | null = null
 
 export function setupAutoSave(): void {
@@ -22,13 +22,17 @@ export function setupAutoSave(): void {
 
   // Auto-save lint items (debounced 1s)
   useLintStore.subscribe((state) => {
-    if (lintTimer) clearTimeout(lintTimer)
-    lintTimer = setTimeout(() => {
-      const project = useWikiStore.getState().project
-      if (project) {
-        saveLintItems(project.path, state.items).catch(() => {})
-      }
+    const projectPath = useWikiStore.getState().project?.path
+    if (!projectPath) return
+
+    const existingTimer = lintTimers.get(projectPath)
+    if (existingTimer) clearTimeout(existingTimer)
+
+    const timer = setTimeout(() => {
+      lintTimers.delete(projectPath)
+      saveLintItems(projectPath, state.items).catch(() => {})
     }, 1000)
+    lintTimers.set(projectPath, timer)
   })
 
   // Auto-save chat conversations and messages (debounced 2s, skip during streaming)

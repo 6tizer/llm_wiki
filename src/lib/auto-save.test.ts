@@ -49,7 +49,7 @@ describe("setupAutoSave", () => {
     vi.clearAllMocks()
   })
 
-  it("writes debounced lint items to the current project after switching projects", async () => {
+  it("writes debounced lint items to the project active when the lint state changed", async () => {
     const { useWikiStore, useLintStore } = await setupFreshAutoSave()
     const item = lintItem("lint-1")
 
@@ -60,7 +60,25 @@ describe("setupAutoSave", () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(persistMocks.saveLintItems).toHaveBeenCalledTimes(1)
-    expect(persistMocks.saveLintItems).toHaveBeenCalledWith("/tmp/b", [item])
+    expect(persistMocks.saveLintItems).toHaveBeenCalledWith("/tmp/a", [item])
+  })
+
+  it("keeps pending debounced lint saves isolated by project path", async () => {
+    const { useWikiStore, useLintStore } = await setupFreshAutoSave()
+    const itemA = lintItem("lint-a")
+    const itemB = lintItem("lint-b")
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useLintStore.getState().setItems([itemA])
+    useWikiStore.getState().setProject(project("B", "/tmp/b"))
+    useLintStore.getState().setItems([])
+    useLintStore.getState().setItems([itemB])
+
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(persistMocks.saveLintItems).toHaveBeenCalledTimes(2)
+    expect(persistMocks.saveLintItems).toHaveBeenCalledWith("/tmp/a", [itemA])
+    expect(persistMocks.saveLintItems).toHaveBeenCalledWith("/tmp/b", [itemB])
   })
 
   it("does not write empty lint state while no project is active", async () => {
