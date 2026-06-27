@@ -1,6 +1,6 @@
 # Upstream Chat Agent Router Alignment
 
-> 类型：alignment roadmap | 创建：2026-06-25 | 更新：2026-06-27 | 状态：completed / follow-up
+> 类型：alignment roadmap | 创建：2026-06-25 | 更新：2026-06-27 | 状态：completed
 > 上级：[Phase 6 upstream sync](./upstream-sync-phase6.md)
 > Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
 > 上游基线：`nashsu/llm_wiki` `v0.5.1@cc4b98f`
@@ -11,7 +11,7 @@
 
 它不替代本 fork 的 **Claude Agent SDK sidecar**。Sidecar 仍负责可写 Wiki 工具、permission/session/pipeline、resource limit、rewind/resume/continue/fork 和安全边界。
 
-Phase 6 的 PR G 已完成核心 **Chat Agent Router alignment + multimodal chat**：普通 Chat 尽量贴近 upstream `v0.5.x`，同时保留本 fork 的 Agent SDK sidecar 高级能力。剩余 UI polish 已拆到 #135/#136，并在当前 follow-up 队列中排在 #156 和 #152 之后；sidecar lifecycle 和 permission/session/pipeline 继续进入 Phase 7。
+Phase 6 的 PR G 已完成核心 **Chat Agent Router alignment + multimodal chat**：普通 Chat 尽量贴近 upstream `v0.5.x`，同时保留本 fork 的 Agent SDK sidecar 高级能力。后续 UI polish #135/#136 已由 #162 完成；sidecar lifecycle 和 permission/session/pipeline 继续进入 Phase 7。
 
 ## Verification Anchor
 
@@ -63,4 +63,4 @@ Chat Agent Router 进入普通 Chat 后，不能删除或弱化 sidecar 的权�
 - 普通 Chat 对齐 upstream Chat Agent Router 的核心行为，或明确列出 deferred 项。
 - Agent SDK sidecar 回归通过，permission/session/pipeline 行为不回退。
 - Chat multimodal message 在普通 Chat 可用，不污染 Agent SDK sidecar stream。
-- #135/#136 承接剩余 Chat UI polish；Phase 7 承接 sidecar lifecycle/permission/session/pipeline。
+- #135/#136 Chat UI polish completed by #162；Phase 7 承接 sidecar lifecycle/permission/session/pipeline。
