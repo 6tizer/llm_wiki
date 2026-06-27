@@ -1617,19 +1617,35 @@ fn load_source_watch_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::ops::Deref;
 
-    fn test_project_dir() -> PathBuf {
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+    struct TestProjectDir {
+        path: PathBuf,
+    }
+
+    impl Deref for TestProjectDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    impl Drop for TestProjectDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn test_project_dir() -> TestProjectDir {
         let path = std::env::temp_dir().join(format!(
-            "llm-wiki-api-test-{id}-{}",
+            "llm-wiki-api-test-{}-{}",
+            std::process::id(),
             Uuid::new_v4().simple()
         ));
-        fs::create_dir_all(path.join("wiki")).unwrap();
-        path
+        fs::create_dir(&path).unwrap();
+        fs::create_dir(path.join("wiki")).unwrap();
+        TestProjectDir { path }
     }
 
     #[test]
@@ -1638,7 +1654,6 @@ mod tests {
         let root_str = root.to_string_lossy();
         assert!(safe_join(&root_str, "../secret.md").is_err());
         assert!(safe_join(&root_str, "wiki/../../secret.md").is_err());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1647,7 +1662,6 @@ mod tests {
         let root_str = root.to_string_lossy();
         let joined = safe_join(&root_str, "wiki/index.md").unwrap();
         assert_eq!(joined, root.join("wiki/index.md"));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1713,7 +1727,6 @@ mod tests {
         assert_eq!(reviews.len(), 1);
         assert_eq!(reviews[0].get("id").and_then(Value::as_str), Some("r1"));
         assert!(reviews[0].get("internalSecret").is_none());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1744,7 +1757,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["r1", "r2"]
         );
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1799,7 +1811,6 @@ mod tests {
         assert!(nodes.iter().any(|n| n.id == root_id));
         assert!(nodes.iter().any(|n| n.id == nested_id));
         assert!(edges.is_empty());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1818,7 +1829,6 @@ mod tests {
         assert!(edges
             .iter()
             .any(|edge| edge.source == source && edge.target == target));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1829,14 +1839,14 @@ mod tests {
         fs::write(root.join("wiki/concepts/foo.md"), "type: concept\n# Foo").unwrap();
 
         let (_, edges) = build_graph(root.to_str().unwrap()).unwrap();
-        let source = commands::search::wiki_relative_path_to_vector_page_id("wiki/index.md").unwrap();
+        let source =
+            commands::search::wiki_relative_path_to_vector_page_id("wiki/index.md").unwrap();
         let target =
             commands::search::wiki_relative_path_to_vector_page_id("wiki/concepts/foo.md").unwrap();
 
         assert!(edges
             .iter()
             .any(|edge| edge.source == source && edge.target == target));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1859,7 +1869,6 @@ mod tests {
         let (_, edges) = build_graph(root.to_str().unwrap()).unwrap();
 
         assert!(edges.is_empty());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1893,7 +1902,6 @@ mod tests {
         assert!(edges
             .iter()
             .any(|edge| edge.source == source && edge.target == target));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1916,7 +1924,6 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(target_node.link_count, 0);
         assert!(edges.is_empty());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
