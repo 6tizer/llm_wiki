@@ -1,6 +1,6 @@
 # Phase 6: upstream sync to nashsu/llm_wiki v0.5.x
 
-> 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-27 | 状态：completed / follow-up routing
+> 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-28 | 状态：completed / follow-up routing
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
 > 计划索引：[Plans Index](./README.md)
 > Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
@@ -28,14 +28,14 @@ Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主�
 | PR B：CLI resolver / active project root / connection test isolation | completed |
 | PR C：Embedding + vector safety | completed; #88 closed on 2026-06-23 |
 | PR D：LLM provider / dedup / deep research stability | completed |
-| PR E：Ingest / schema / review-create-page safety | completed; #129 `d22f401` |
+| PR E：Ingest / schema / review-create-page safety | completed; #129 `d22f401`; review missing-page per-title classification #128 completed by #164 |
 | H-lite：zoom / layout / app visibility | completed; #131 `087b135` |
 | PR G：Chat Agent Router alignment + multimodal chat | completed; #137 `5765200` + #134 `1183710`; UI polish #135/#136 completed by #162 |
 | PR F：MinerU PDF parsing | completed; #140 `87c7caf`; regression fix #153 merged; large PDF / side-cache polish #152 completed by #161 |
 | PR I：theme / tray / general settings | completed; #142 `c343b2a`; tray localization #151 merged |
 | PR J：graph rendering / path-aware graph identity | completed; #145 `c5403f7`; hover label contrast #158 merged |
 | PR K：AnyTXT smart search options cleanup | completed; #148 `0fd1d95`; #110 closed; residual llmConfig/lint/review-chat autosave follow-ups #154/#157/#160 merged |
-| follow-up sweep | completed through #162; remaining open items start at #128 |
+| follow-up sweep | completed through #164; remaining open items start at #120/#126 |
 | v0.4.26 through latest v0.5.x delta assessment | still required before new implementation PRs that touch upstream-overlapping areas |
 
 历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以开工时最新 `v0.5.x` 为准。
@@ -66,14 +66,17 @@ Phase 6 主线的实际完成顺序：
 
 ## Current Follow-up Order
 
-截至 2026-06-27，follow-up sweep 已完成到 #162。后续开发建议顺序：
+截至 2026-06-28，follow-up sweep 已完成到 #164。后续开发建议顺序：
 
-1. #128 review missing-page classification。
-2. 安全/质量 backlog：#120 sidecar npm audit high vulnerability、#126 remaining #119 review findings；#119 继续作为 umbrella reference。
-3. OKF：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API exposure。
-4. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
-5. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-6. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
+1. #120 sidecar npm audit high vulnerability。
+2. #126-A local API hardening。
+3. #126-B autosave error surfacing。
+4. #126-C Agent / Ingest maintainability refactor。
+5. #126-D P3 hardening。
+6. OKF：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API exposure。
+7. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
+8. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+9. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
 
 已完成的收口证据：
 
@@ -81,6 +84,7 @@ Phase 6 主线的实际完成顺序：
 - #156 review/chat autosave project-path isolation completed by #160 `334c382`.
 - #152 MinerU large PDF / parsed side-cache polish completed by #161 `7d1b044`.
 - #135/#136 Chat UI polish completed by #162 `ac797ee`.
+- #128 review missing-page per-title classification completed by #164 `b273c85`.
 
 ## Agent Boundary From Upstream v0.5.x
 
@@ -216,7 +220,7 @@ README 已改为 macOS-first / Mac-only active maintenance，但本 docs PR 不�
 - 本地 Agent sidecar、Agent UI、Agent pipeline 行为不回退。
 - Mac-only product baseline 完成 CI/release/app identity 清理。
 - Phase 7 backlog 有独立入口，不再作为 Phase 6 尾项混入。
-- Follow-up issues #156/#152/#135/#136 已完成；#128/#120/#126 清楚承接剩余 open work；#143/#144/#139/#147/#146/#155 已完成、替代或路由。
+- Follow-up issues #156/#152/#135/#136/#128 已完成；#120/#126 清楚承接剩余 open work；#143/#144/#139/#147/#146/#155 已完成、替代或路由。
 
 ## Validation for Future Implementation PRs
 

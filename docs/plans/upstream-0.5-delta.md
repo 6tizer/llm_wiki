@@ -1,10 +1,10 @@
 # Upstream v0.5.x Delta
 
-> 类型：调研入口 | 创建：2026-06-24 | 更新：2026-06-27 | 状态：active
+> 类型：调研入口 | 创建：2026-06-24 | 更新：2026-06-28 | 状态：active
 
 ## 结论
 
-Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #162。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 remaining follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
+Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #164。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 remaining follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
 
 本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
 
@@ -46,7 +46,7 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 
 | Delta type | Route |
 |------------|-------|
-| Ingest、schema、review create page、source path safety | PR E completed; residual route #128 or new scoped issue |
+| Ingest、schema、review create page、source path safety | PR E completed; review missing-page per-title classification #128 completed by #164; new residuals need scoped issues |
 | Zoom、layout、app visibility、project open/create UX | H-lite completed; residual UI polish should get a scoped issue |
 | Chat image、multimodal message、chat standalone | PR G/#134 completed; UI polish #135/#136 completed by #162 |
 | Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G completed; sidecar lifecycle remains Phase 7 |
@@ -62,7 +62,7 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 
 | PR | v0.5.x delta status | Notes |
 |----|---------------------|-------|
-| PR E | completed | #129 `d22f401`; residual per-title review create-page classification in #128. |
+| PR E | completed | #129 `d22f401`; residual per-title review create-page classification #128 completed by #164 `b273c85`. |
 | H-lite | completed | #131 `087b135`; future layout polish should be scoped separately. |
 | PR G | completed | #137 `5765200` + #134 `1183710`; Chat UI polish #135/#136 completed by #162 `ac797ee`. |
 | PR F | completed | #140 `87c7caf`; regression fix #153 merged; large PDF / side-cache polish #152 completed by #161 `7d1b044`. |
@@ -72,10 +72,10 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 
 ## Current Follow-up Queue
 
-Recommended order after #162:
+Recommended order after #164:
 
-1. #128 review missing-page classification follow-up.
-2. #120/#126 security and quality follow-ups.
+1. #120 sidecar npm audit high vulnerability.
+2. #126 security and quality follow-ups split as local API hardening -> autosave error surfacing -> Agent/Ingest maintainability refactor -> P3 hardening.
 3. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
 
 Completed follow-up closeout evidence:
@@ -84,6 +84,7 @@ Completed follow-up closeout evidence:
 - #156 review/chat autosave project-path isolation completed by #160 `334c382`.
 - #152 MinerU large PDF / parsed side-cache polish completed by #161 `7d1b044`.
 - #135/#136 Chat UI polish completed by #162 `ac797ee`.
+- #128 review missing-page per-title classification completed by #164 `b273c85`.
 
 ## Direct Merge Policy
 
