@@ -191,4 +191,18 @@ describe("setupAutoSave", () => {
 
     expect(persistMocks.saveChatHistory).not.toHaveBeenCalled()
   })
+
+  it("keeps a pending chat auto-save scheduled before streaming starts", async () => {
+    const { useWikiStore, useChatStore } = await setupFreshAutoSave()
+    const conv = conversation("conv-before-stream")
+
+    useWikiStore.getState().setProject(project("A", "/tmp/a"))
+    useChatStore.getState().setConversations([conv])
+    useChatStore.getState().setStreaming(true)
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledTimes(1)
+    expect(persistMocks.saveChatHistory).toHaveBeenCalledWith("/tmp/a", [conv], [])
+  })
 })

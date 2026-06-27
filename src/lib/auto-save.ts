@@ -8,50 +8,44 @@ const reviewTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const lintTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const chatTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+function queueProjectAutoSave<Snapshot>(
+  timers: Map<string, ReturnType<typeof setTimeout>>,
+  delayMs: number,
+  snapshot: Snapshot,
+  save: (projectPath: string, snapshot: Snapshot) => Promise<void>
+): void {
+  const projectPath = useWikiStore.getState().project?.path
+  if (!projectPath) return
+
+  const existingTimer = timers.get(projectPath)
+  if (existingTimer) clearTimeout(existingTimer)
+
+  const timer = setTimeout(() => {
+    timers.delete(projectPath)
+    save(projectPath, snapshot).catch(() => {})
+  }, delayMs)
+  timers.set(projectPath, timer)
+}
+
 export function setupAutoSave(): void {
   // Auto-save review items (debounced 1s)
   useReviewStore.subscribe((state) => {
-    const projectPath = useWikiStore.getState().project?.path
-    if (!projectPath) return
-
-    const existingTimer = reviewTimers.get(projectPath)
-    if (existingTimer) clearTimeout(existingTimer)
-
-    const timer = setTimeout(() => {
-      reviewTimers.delete(projectPath)
-      saveReviewItems(projectPath, state.items).catch(() => {})
-    }, 1000)
-    reviewTimers.set(projectPath, timer)
+    queueProjectAutoSave(reviewTimers, 1000, state.items, saveReviewItems)
   })
 
   // Auto-save lint items (debounced 1s)
   useLintStore.subscribe((state) => {
-    const projectPath = useWikiStore.getState().project?.path
-    if (!projectPath) return
-
-    const existingTimer = lintTimers.get(projectPath)
-    if (existingTimer) clearTimeout(existingTimer)
-
-    const timer = setTimeout(() => {
-      lintTimers.delete(projectPath)
-      saveLintItems(projectPath, state.items).catch(() => {})
-    }, 1000)
-    lintTimers.set(projectPath, timer)
+    queueProjectAutoSave(lintTimers, 1000, state.items, saveLintItems)
   })
 
   // Auto-save chat conversations and messages (debounced 2s, skip during streaming)
   useChatStore.subscribe((state) => {
     if (state.isStreaming) return
-    const projectPath = useWikiStore.getState().project?.path
-    if (!projectPath) return
-
-    const existingTimer = chatTimers.get(projectPath)
-    if (existingTimer) clearTimeout(existingTimer)
-
-    const timer = setTimeout(() => {
-      chatTimers.delete(projectPath)
-      saveChatHistory(projectPath, state.conversations, state.messages).catch(() => {})
-    }, 2000)
-    chatTimers.set(projectPath, timer)
+    queueProjectAutoSave(
+      chatTimers,
+      2000,
+      { conversations: state.conversations, messages: state.messages },
+      (projectPath, snapshot) => saveChatHistory(projectPath, snapshot.conversations, snapshot.messages)
+    )
   })
 }
