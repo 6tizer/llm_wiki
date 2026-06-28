@@ -4,7 +4,7 @@
 
 ## 结论
 
-Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 OKF + Knowledge Wiki business-layer stream、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
+Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 也已完成到当前 main/head `248bd27 feat: expose OKF and knowledge workflow tools`。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到并行加速平台架构讨论、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
 
 本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
 
@@ -50,13 +50,13 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 | Zoom、layout、app visibility、project open/create UX | H-lite completed; residual UI polish should get a scoped issue |
 | Chat image、multimodal message、chat standalone | PR G/#134 completed; UI polish #135/#136 completed by #162 |
 | Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G completed; sidecar lifecycle remains Phase 7 |
-| OKF-compatible wiki bundle、validator/export/import | OKF roadmap |
+| OKF-compatible wiki bundle、validator/export/import | OKF/KW completed baseline; new residuals need scoped issues |
 | MinerU / PDF parsing | PR F completed; regression fix #153 completed; large PDF / side-cache polish #152 completed by #161 |
 | Theme、tray、general settings、window close behavior | PR I completed; tray localization #151 completed |
 | Graph rendering/performance | PR J completed; hover label contrast #158 completed; new residuals need scoped issues |
 | AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; #154/#157 completed; review/chat autosave isolation #156 completed by #160 |
 | CI/release/platform target cleanup | `mac-product-baseline` |
-| Agent UX/session/permission/internal RPC | Phase 7 backlog |
+| Agent UX/session/permission/internal RPC | Claude Agent SDK alignment / Phase 7 backlog; current next step is planning, not direct implementation |
 
 ## Phase 6 Completion Mapping
 
@@ -70,13 +70,32 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 | PR J | completed | #145 `c5403f7`; hover label contrast completed by #158. |
 | PR K | completed | #148 `0fd1d95`; llmConfig forwarding completed by #154; lint autosave isolation completed by #157; review/chat autosave isolation #156 completed by #160 `334c382`. |
 
-## Current Follow-up Queue
+## OKF/KW Completed Baseline
 
-Recommended order after #170:
+当前 main/head：`248bd27 feat: expose OKF and knowledge workflow tools`。
 
-1. OKF + Knowledge Wiki business-layer stream: docs closeout -> KW-QA -> OKF-A -> OKF-B -> KW-B1 -> KW-B2 -> KW-C1 -> KW-D -> KW-C2 -> OKF-C.
-2. Claude Agent SDK alignment PR 7-0.
-3. Phase 7 Agent SDK productization.
+| Stream | Status | Evidence |
+|--------|--------|----------|
+| KW-QA | completed | `f9f63c5` |
+| OKF-A：validator/export | completed | `e300cdd` |
+| OKF-B：import/mapping | completed | `67f54f6` |
+| KW-B1：Knowledge Agents config base | completed | `95e4bb9` |
+| KW-B2：Prompt Registry | completed | `8ea2326` |
+| KW-C1：Tag taxonomy schema + bootstrap/growth base | completed | `127fc9e` |
+| KW-D：Multi-dimensional synthesis | completed | `3a01730` |
+| KW-C2：Taxonomy-aware Tag Agent | completed | `ad0b9d5` |
+| OKF-C：Unified Agent tools + MCP/local API exposure | completed | `248bd27` |
+
+## Current Follow-up Routing
+
+Recommended routing after #170 and OKF/KW completion:
+
+1. Parallel acceleration platform architecture discussion: Work Runtime, DB selection, provider profiles, work scheduler, and related planning.
+2. Claude Agent SDK alignment: planning candidate only until a new tracking / plan says otherwise.
+3. Phase 7 Agent SDK productization backlog: keep as backlog, do not auto-start from this queue.
+4. New tracking issue: use for residual upstream delta, OKF/KW enhancements, or platform architecture items that are not yet scoped.
+
+This document does not commit to a concrete concurrent runtime implementation.
 
 Completed follow-up closeout evidence:
 
@@ -90,6 +109,7 @@ Completed follow-up closeout evidence:
 - #126-B autosave error surfacing completed by #168 `6ea9488`.
 - #126-C Agent / Ingest maintainability refactor completed by #169 `de1fbaf`.
 - #126-D P3 hardening completed by #170 `7d3bda5`.
+- OKF/KW stream completed by `f9f63c5`, `e300cdd`, `67f54f6`, `95e4bb9`, `8ea2326`, `127fc9e`, `3a01730`, `ad0b9d5`, `248bd27`.
 
 ## Direct Merge Policy
 

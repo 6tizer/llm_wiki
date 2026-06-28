@@ -10,11 +10,11 @@
 |------|---------|--------|
 | [mac-product-baseline.md](./mac-product-baseline.md) | 已完成基线：把产品、CI、release、app identity 口径收敛到 Mac-only active maintenance。 | completed |
 | [upstream-sync-phase6.md](./upstream-sync-phase6.md) | Phase 6：PR A-K 主线已完成；现在只作为完成证据、follow-up 路由和后续 delta 校准入口。 | completed / routing |
-| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 调研入口；PR E/H/G/F/I/J/K 已完成，后续用于 residual upstream delta 和新实现 PR 分流。 | active |
+| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 调研入口；PR E/H/G/F/I/J/K 和 OKF/KW stream 已完成，后续用于 residual upstream delta 和新实现 PR 分流。 | active |
 | [upstream-chat-agent-router-alignment.md](./upstream-chat-agent-router-alignment.md) | 普通 Chat 对齐 upstream `v0.5.x` Chat Agent Router；PR G 核心和 #135/#136 UI polish follow-up 已完成。 | completed |
-| [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Phase 7 前置：sidecar 对齐 Claude Agent SDK latest stable，并评估 SDK schema/permission/sandbox/hooks delta。 | active |
-| [okf-compatibility.md](./okf-compatibility.md) | 把 `<project>/wiki/` 定位为 OKF-compatible knowledge bundle root，规划 validator/export/import/Agent tools。 | active |
-| [knowledge-wiki-business-layer.md](./knowledge-wiki-business-layer.md) | 把 Knowledge Wiki Skill 定位为 OKF 之上的业务工作流层，规划 QA、Knowledge Agents、prompt registry、tag taxonomy、synthesis 和 Agent/API exposure。 | active |
+| [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Phase 7 前置评估入口；当前不直接进入实现，等待新 tracking / planning 决策。 | candidate |
+| [okf-compatibility.md](./okf-compatibility.md) | 已完成基线：`<project>/wiki/` 作为 OKF-compatible knowledge bundle root，含 validator/export/import/Agent tools 暴露。 | completed |
+| [knowledge-wiki-business-layer.md](./knowledge-wiki-business-layer.md) | 已完成基线：Knowledge Wiki Skill 作为 OKF 之上的业务工作流层，含 QA、Knowledge Agents、prompt registry、tag taxonomy、synthesis 和 Agent/API exposure。 | completed |
 | [security-review-119-fixes.md](./security-review-119-fixes.md) | issue #119 深度 review 的 4 个安全 PR、#120 和 #126-A/B/C/D 后续安全/质量串流均已完成；保留为历史证据。 | completed |
 | [agent-sidecar-phase6.1.md](./agent-sidecar-phase6.1.md) | Phase 7 backlog：Agent SDK productization；文件名保留历史编号。 | backlog |
 | [native-architecture.md](./native-architecture.md) | Swift/SwiftUI/iOS/native 架构 ADR 入口；当前不改变 Tauri/Rust/TS 主线。 | ADR backlog |
@@ -37,18 +37,20 @@ Phase 1-5、Phase 3.x、旧 roadmap 和 follow-up 文档保留为历史记录，
 
 ## Current Execution Order
 
-截至 2026-06-28，Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列也已完成到 #170。旧 PR E/H/G/F/I/J/K 顺序、旧 #143/#144/#139/#147/#146/#155 队列，以及 #156/#152/#135/#136/#128/#120/#126 后续队列都已完成或路由完毕。当前顺序改为 OKF + Knowledge Wiki 业务层串流：
+截至 2026-06-29，当前 main/head 基线为 `248bd27 feat: expose OKF and knowledge workflow tools`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 也已完成，不再作为当前串流队列继续执行。
 
-1. Docs closeout + Knowledge Wiki business-layer calibration（当前 PR）。
-2. KW-QA：QA 去自动化，改为显式手动保存。
-3. OKF-A：validator/export。
-4. OKF-B：import/mapping。
-5. KW-B1：Knowledge Agents 配置基座 + Settings 骨架。
-6. KW-B2：Prompt Registry 重构。
-7. KW-C1：三层标签体系 schema + 自动 bootstrap/growth 基座。
-8. KW-D：Synthesis 多维主题发现 + preview/generate UI。
-9. KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
-10. OKF-C：统一 Agent tools + MCP/local API 暴露。
-11. Claude Agent SDK alignment：Phase 7 前置 PR 7-0。
-12. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-13. Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
+已完成 OKF/KW 基线证据：
+
+1. `f9f63c5` KW-QA：QA manual save baseline。
+2. `e300cdd` OKF-A：validator/export。
+3. `67f54f6` OKF-B：import/mapping。
+4. `95e4bb9` KW-B1：Knowledge Agents 配置基座 + Settings 骨架。
+5. `8ea2326` KW-B2：Prompt Registry。
+6. `127fc9e` KW-C1：三层标签体系 schema + bootstrap/growth 基座。
+7. `3a01730` KW-D：Synthesis 多维主题发现 + preview/generate UI。
+8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
+9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
+
+Next planning candidate：继续围绕并行加速 / Work Runtime / DB 选型 / provider profiles / work scheduler 讨论和规划。当前不直接进入 Phase 7 / Claude Agent SDK alignment 实现，也不继续按旧 OKF/KW 队列执行；如需进入 Claude Agent SDK alignment、Phase 7 backlog 或新平台架构实现，先开新的 tracking / plan 校准。
+
+Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
