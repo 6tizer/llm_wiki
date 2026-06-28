@@ -403,6 +403,7 @@
       "apiServer": "API + MCP",
       "agent": "Agent",
       "knowledgeAgents": "Knowledge Agents",
+      "taxonomy": "标签体系",
       "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
@@ -745,6 +746,45 @@
           "synthesizer": "合成器",
           "tagger": "标签器",
           "qa-saver": "QA 保存器"
+        }
+      },
+      "tagTaxonomy": {
+        "title": "标签体系",
+        "description": "Knowledge Wiki 标签的项目级 sidecar 治理层。预览只读 wiki 页面；应用只写 `.llm-wiki/tag-taxonomy.json`。",
+        "noProject": "请先打开一个项目再管理标签体系。",
+        "loading": "正在加载标签体系...",
+        "loadFailed": "标签体系加载失败。",
+        "actionFailed": "操作失败。请重试。",
+        "configIssue": "标签体系 sidecar 中有无效字段；当前显示规范化后的值。",
+        "futureSchema": "这个标签体系来自更高版本，本版本只读。",
+        "nodes": "节点",
+        "batches": "批次",
+        "updatedAt": "更新时间",
+        "issues": "问题",
+        "running": "运行中...",
+        "actions": {
+          "previewBootstrap": "预览 Bootstrap",
+          "applyBootstrap": "应用 Bootstrap",
+          "previewGrowth": "预览 Growth",
+          "applyGrowth": "应用 Growth",
+          "rollback": "回滚上一批次"
+        },
+        "reportTitle": "{{action}} 报告",
+        "reportActions": {
+          "bootstrap": "Bootstrap",
+          "growth": "Growth",
+          "rollback": "回滚"
+        },
+        "report": {
+          "added": "新增 {{count}}",
+          "removed": "删除 {{count}}",
+          "truncated": "截断 {{count}}",
+          "skipped": "跳过 {{count}}",
+          "pages": "页面 {{count}}",
+          "wrote": "已写入",
+          "preview": "仅预览",
+          "noChanges": "无变化",
+          "notWritten": "未写入"
         }
       },
       "output": {

@@ -403,6 +403,7 @@
       "apiServer": "API + MCP",
       "agent": "Agent",
       "knowledgeAgents": "Knowledge Agents",
+      "taxonomy": "Tag Taxonomy",
       "general": "General",
       "output": "Output",
       "interface": "Interface",
@@ -745,6 +746,45 @@
           "synthesizer": "Synthesizer",
           "tagger": "Tagger",
           "qa-saver": "QA Saver"
+        }
+      },
+      "tagTaxonomy": {
+        "title": "Tag Taxonomy",
+        "description": "Project-level taxonomy sidecar for Knowledge Wiki tags. Preview scans only read wiki pages; apply writes only `.llm-wiki/tag-taxonomy.json`.",
+        "noProject": "Open a project first to manage tag taxonomy.",
+        "loading": "Loading tag taxonomy...",
+        "loadFailed": "Tag taxonomy could not be loaded.",
+        "actionFailed": "Action failed. Please try again.",
+        "configIssue": "The taxonomy sidecar had invalid fields; normalized values are shown.",
+        "futureSchema": "This tag taxonomy is newer than this app supports. It is read-only here.",
+        "nodes": "Nodes",
+        "batches": "Batches",
+        "updatedAt": "Updated",
+        "issues": "Issues",
+        "running": "Running...",
+        "actions": {
+          "previewBootstrap": "Preview Bootstrap",
+          "applyBootstrap": "Apply Bootstrap",
+          "previewGrowth": "Preview Growth",
+          "applyGrowth": "Apply Growth",
+          "rollback": "Rollback Last Batch"
+        },
+        "reportTitle": "{{action}} report",
+        "reportActions": {
+          "bootstrap": "Bootstrap",
+          "growth": "Growth",
+          "rollback": "Rollback"
+        },
+        "report": {
+          "added": "Added {{count}}",
+          "removed": "Removed {{count}}",
+          "truncated": "Truncated {{count}}",
+          "skipped": "Skipped {{count}}",
+          "pages": "Pages {{count}}",
+          "wrote": "Written",
+          "preview": "Preview only",
+          "noChanges": "No changes",
+          "notWritten": "Not written"
         }
       },
       "output": {

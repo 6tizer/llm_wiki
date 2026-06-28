@@ -17,6 +17,7 @@ import {
   Server,
   SlidersHorizontal,
   BrainCircuit,
+  Tags,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -46,6 +47,7 @@ import { MineruSection } from "./sections/mineru-section"
 import { ApiServerSection } from "./sections/api-server-section"
 import { AgentSection } from "./sections/agent-section"
 import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
+import { TagTaxonomySection } from "./sections/tag-taxonomy-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -68,6 +70,7 @@ export type CategoryId =
   | "api-server"
   | "agent"
   | "knowledge-agents"
+  | "taxonomy"
   | "general"
   | "output"
   | "interface"
@@ -104,6 +107,7 @@ const CATEGORIES: Category[] = [
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
   { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
+  { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -141,7 +145,8 @@ export function coerceSettingsCategory(
 export function shouldShowGlobalSettingsSaveBar(activeCategory: CategoryId): boolean {
   return activeCategory !== "about" &&
     activeCategory !== "llm" &&
-    activeCategory !== "knowledge-agents"
+    activeCategory !== "knowledge-agents" &&
+    activeCategory !== "taxonomy"
 }
 
 export function initialDraft(
@@ -651,6 +656,8 @@ export function SettingsView() {
         return <AgentSection draft={draft} setDraft={setDraft} projectReady={!!project} />
       case "knowledge-agents":
         return <KnowledgeAgentsSection project={project} />
+      case "taxonomy":
+        return <TagTaxonomySection project={project} />
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":
