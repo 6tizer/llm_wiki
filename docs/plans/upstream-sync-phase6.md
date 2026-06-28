@@ -10,7 +10,7 @@
 
 ## 结论
 
-Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主线已经完成到 #148。后续不再按旧 PR E/H/G/F/I/J/K 顺序开新主线 PR；本文件现在用于记录完成证据、follow-up 路由和后续 implementation PR 的 upstream delta 校准规则。
+Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主线已经完成到 #148。后续不再按旧 PR E/H/G/F/I/J/K 顺序开新主线 PR；OKF + Knowledge Wiki business-layer stream 也已完成。本文件现在用于记录完成证据、follow-up 路由和后续 implementation PR 的 upstream delta 校准规则。
 
 不能直接 `git merge upstream/main`：上游会覆盖或删除本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary、产品定位和本地 Agent workflow 差异。Phase 6 的原则是吸收 upstream 功能与修复，同时保留本地 Agent 产品线。
 
@@ -36,6 +36,7 @@ Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主�
 | PR J：graph rendering / path-aware graph identity | completed; #145 `c5403f7`; hover label contrast #158 merged |
 | PR K：AnyTXT smart search options cleanup | completed; #148 `0fd1d95`; #110 closed; residual llmConfig/lint/review-chat autosave follow-ups #154/#157/#160 merged |
 | follow-up sweep | completed through #164; #120/#126 safety and quality follow-ups completed through #170 |
+| OKF + Knowledge Wiki business-layer stream | completed through current main/head `248bd27 feat: expose OKF and knowledge workflow tools` |
 | v0.4.26 through latest v0.5.x delta assessment | still required before new implementation PRs that touch upstream-overlapping areas |
 
 历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以开工时最新 `v0.5.x` 为准。
@@ -47,7 +48,7 @@ Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主�
 1. 确认 upstream remote、latest tag 和 `upstream/main` commit；若 upstream 已变化，记录新的 commit/tag 事实。
 2. 查看 `v0.4.26` through latest `v0.5.x` 的 upstream delta，也可用 `v0.4.25..latest` range 抽取 commit/file 变化。
 3. 标出会触碰本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary 或 Mac-only product positioning 的冲突点。
-4. 按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 分流到 residual follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog，或记录为新的 tracking issue。
+4. 按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 分流到 residual follow-up、并行加速平台架构讨论、Claude Agent SDK alignment、Phase 7 backlog，或记录为新的 tracking issue。
 5. 在对应 PR plan、PR body 和 reviewer packet 写明 delta 结论。
 
 ## Completed Phase 6 Order
@@ -64,14 +65,35 @@ Phase 6 主线的实际完成顺序：
 
 这些条目保留为完成记录，不再作为“剩余开发顺序”。新的实现 PR 若触碰相同区域，仍必须重新核对 upstream `v0.5.x` delta，不得沿用旧 `v0.4.25` 结论。
 
-## Current Follow-up Order
+## OKF/KW Completed Baseline
 
-截至 2026-06-28，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。后续开发建议顺序：
+当前 main/head：`248bd27 feat: expose OKF and knowledge workflow tools`。
 
-1. OKF + Knowledge Wiki business-layer stream：docs closeout -> KW-QA -> OKF-A -> OKF-B -> KW-B1 -> KW-B2 -> KW-C1 -> KW-D -> KW-C2 -> OKF-C。
-2. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
-3. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-4. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
+| Stream | Status | Evidence |
+|--------|--------|----------|
+| KW-QA | completed | `f9f63c5` |
+| OKF-A：validator/export | completed | `e300cdd` |
+| OKF-B：import/mapping | completed | `67f54f6` |
+| KW-B1：Knowledge Agents config base | completed | `95e4bb9` |
+| KW-B2：Prompt Registry | completed | `8ea2326` |
+| KW-C1：Tag taxonomy schema + bootstrap/growth base | completed | `127fc9e` |
+| KW-D：Multi-dimensional synthesis | completed | `3a01730` |
+| KW-C2：Taxonomy-aware Tag Agent | completed | `ad0b9d5` |
+| OKF-C：Unified Agent tools + MCP/local API exposure | completed | `248bd27` |
+
+## Current Follow-up Routing
+
+截至 2026-06-29，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170，OKF/KW stream 已完成到 `248bd27`。后续不继续按旧 OKF/KW 队列执行，也不从本文直接进入 Phase 7 / Claude Agent SDK alignment 实现。
+
+后续分流：
+
+1. 并行加速平台架构讨论：Work Runtime、DB 选型、provider profiles、work scheduler，以及相关 plan/tracking。
+2. Claude Agent SDK alignment：保留为候选规划入口，等待新的 tracking / plan 明确范围。
+3. Phase 7 Agent SDK productization：保留 backlog，不从本队列自动启动。
+4. 新 tracking issue：承接 residual upstream delta、OKF/KW 增强或尚未定范围的平台架构项。
+5. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
+
+本文不承诺具体并发 runtime 实现。
 
 已完成的收口证据：
 
@@ -85,6 +107,7 @@ Phase 6 主线的实际完成顺序：
 - #126-B autosave error surfacing completed by #168 `6ea9488`.
 - #126-C Agent / Ingest maintainability refactor completed by #169 `de1fbaf`.
 - #126-D P3 hardening completed by #170 `7d3bda5`.
+- OKF/KW stream completed by `f9f63c5`, `e300cdd`, `67f54f6`, `95e4bb9`, `8ea2326`, `127fc9e`, `3a01730`, `ad0b9d5`, `248bd27`.
 
 ## Agent Boundary From Upstream v0.5.x
 

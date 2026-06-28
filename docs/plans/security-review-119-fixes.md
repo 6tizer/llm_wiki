@@ -8,9 +8,9 @@
 
 issue #119 深度 review 的 4 个安全 PR 已完成合入。后续 #120 sidecar npm audit high vulnerability 和 #126-A/B/C/D 安全/质量串流也已完成到 #170。
 
-历史交付顺序按安全 > 数据完整性 > 功能 > 健壮性串行执行。4 个 #119 PR、#120 和 #126-A/B/C/D 均保留为完成证据，不再作为当前 follow-up queue。新的当前执行顺序以 [Plans Index](./README.md) 的 OKF + Knowledge Wiki business-layer stream 为准。
+历史交付顺序按安全 > 数据完整性 > 功能 > 健壮性串行执行。4 个 #119 PR、#120 和 #126-A/B/C/D 均保留为完成证据，不再作为当前 follow-up queue。当前真实基线是 OKF/KW stream 已完成到 248bd27；后续不再按旧 OKF/KW 队列执行，next 是继续围绕并行加速 / Work Runtime / DB 选型 / provider profiles / work scheduler 讨论和规划。
 
-后续 gate 规则以当前用户批准的 Commander 计划为准；若旧 AGENTS fallback 链或历史计划与本节冲突，本 6-PR 串流按本节执行。Architect 首选 Claude Code，失败 fallback ZCode -> 内部子代理；Tester 首选 Kimi，失败 fallback 内部子代理；Reviewer 必须有 ZCode 外部 review 和内部子代理 review。ZCode 连续两次失败时记录到 PR comment，但不阻塞，改以内审意见作为 merge gate。所有 gate 需要输出 `PASS | BLOCK | WARN` 和 P0/P1/P2/P3/follow-up/non-actionable 分组。
+当时 gate 规则为：以用户批准的 Commander 计划为准；若旧 AGENTS fallback 链或历史计划与本节冲突，则该 6-PR 历史串流按本节执行。Architect 首选 Claude Code，失败 fallback ZCode -> 内部子代理；Tester 首选 Kimi，失败 fallback 内部子代理；Reviewer 必须有 ZCode 外部 review 和内部子代理 review。ZCode 连续两次失败时记录到 PR comment，但不阻塞，改以内审意见作为 merge gate。所有 gate 需要输出 `PASS | BLOCK | WARN` 和 P0/P1/P2/P3/follow-up/non-actionable 分组。当前执行/路由以 [Plans Index](./README.md) 和新的 tracking/plan 为准。
 
 ## PR 划分
 
