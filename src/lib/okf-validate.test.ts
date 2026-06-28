@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { validateOkfBundle } from "./okf-validate"
+import { localTypeForOkfType, validateOkfBundle } from "./okf-validate"
 import type { FileNode } from "@/types/wiki"
 
 const fsMock = vi.hoisted(() => ({
@@ -250,6 +250,18 @@ describe("validateOkfBundle", () => {
 
     expect(result.errors).toEqual([])
     expect(fsMock.readPaths).not.toContain("/project/notes/outside.md")
+  })
+})
+
+describe("localTypeForOkfType", () => {
+  it("maps OKF summary to local source case-insensitively", () => {
+    expect(localTypeForOkfType("summary")).toBe("source")
+    expect(localTypeForOkfType("Summary")).toBe("source")
+  })
+
+  it("passes through non-summary and null types", () => {
+    expect(localTypeForOkfType("method")).toBe("method")
+    expect(localTypeForOkfType(null)).toBeNull()
   })
 })
 

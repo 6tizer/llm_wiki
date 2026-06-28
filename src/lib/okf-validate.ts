@@ -57,6 +57,12 @@ export function okfTypeForLocalType(localType: string | null): string | null {
   return localType.toLowerCase() === "source" ? "summary" : localType
 }
 
+/** Map an OKF-compatible page type back into the local wiki type vocabulary. */
+export function localTypeForOkfType(okfType: string | null): string | null {
+  if (!okfType) return null
+  return okfType.toLowerCase() === "summary" ? "source" : okfType
+}
+
 /** Return true for root structural wiki pages that do not require page frontmatter. */
 export function isStructuralWikiPage(relativePath: string): boolean {
   return STRUCTURAL_WIKI_PAGES.has(normalizeRelativePath(relativePath))

@@ -22,6 +22,12 @@ const WIKI_TYPE_DIRS: Array<{ dir: string; type: string }> = [
   { dir: "methodology", type: "methodology" },
 ]
 
+/** Return the default wiki directory name for a known wiki page type. */
+export function wikiDirectoryForType(type: string): string | null {
+  const match = WIKI_TYPE_DIRS.find((entry) => entry.type.toLowerCase() === type.toLowerCase())
+  return match?.dir ?? null
+}
+
 export function inferWikiTypeFromPath(path: string, fileName?: string): string | null {
   const normalized = path.replace(/\\/g, "/").toLowerCase()
   for (const { dir, type } of WIKI_TYPE_DIRS) {
