@@ -131,12 +131,24 @@ function ensureChangedPaths(context: LlmWikiToolContext): Set<string> {
 	return context.changedPaths;
 }
 
-function appToolBudget(context: LlmWikiToolContext): { maxFilesChanged: number; changedPaths: string[]; maxFilesChangedEnabled?: boolean } {
+function appToolBudget(context: LlmWikiToolContext): { maxFilesChanged: number; maxWriteBytes: number; changedPaths: string[]; maxFilesChangedEnabled?: boolean } {
 	return {
 		maxFilesChanged: normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED),
+		maxWriteBytes: normalizedLimit(context.maxWriteBytes, DEFAULT_MAX_WRITE_BYTES),
 		changedPaths: Array.from(ensureChangedPaths(context)).sort(),
 		maxFilesChangedEnabled: context.maxFilesChangedEnabled === true,
 	};
+}
+
+function isAbsoluteSourceDir(value: string): boolean {
+	const normalized = value.replace(/\\/g, "/");
+	return normalized.startsWith("/")
+		|| /^[A-Za-z]:\//.test(normalized)
+		|| normalized.startsWith("//");
+}
+
+function hasTraversalSegment(value: string): boolean {
+	return value.replace(/\\/g, "/").split("/").some((segment) => segment === "..");
 }
 
 function pathFromObject(value: unknown): string | undefined {
@@ -240,10 +252,12 @@ async function appTool(
 		}
 		for (const changedPath of data.changedPaths ?? []) {
 			changedPaths.add(changedPath);
-			context.onWikiChanged?.({
-				path: changedPath,
-				operation: "update",
-			});
+			if (changedPath.startsWith("wiki/")) {
+				context.onWikiChanged?.({
+					path: changedPath,
+					operation: "update",
+				});
+			}
 		}
 		if (
 			fallbackSavePath &&
@@ -311,9 +325,20 @@ function parseResourceLimit(value: unknown): AgentResourceLimitPayload | undefin
 		throw new Error("resourceLimit must be an object");
 	}
 	const record = value as Record<string, unknown>;
+	// App-level MCP bridge limits are write-budget failures only. SDK turn
+	// limits use the core stream path, so this is narrower than the shared union.
+	type AppToolResourceLimitKind = Extract<
+		AgentResourceLimitPayload["limitKind"],
+		"max_files_changed" | "max_write_bytes"
+	>;
+	const limitKind = record.limitKind;
+	const allowedLimitKinds: readonly AppToolResourceLimitKind[] = [
+		"max_files_changed",
+		"max_write_bytes",
+	];
 	if (
 		record.kind !== "resource_limit" ||
-		record.limitKind !== "max_files_changed" ||
+		!allowedLimitKinds.includes(limitKind as AppToolResourceLimitKind) ||
 		typeof record.message !== "string" ||
 		(record.recovery !== "split_task" && record.recovery !== "settings_agent")
 	) {
@@ -322,7 +347,7 @@ function parseResourceLimit(value: unknown): AgentResourceLimitPayload | undefin
 	const changedPaths = parseChangedPaths(record.changedPaths);
 	return {
 		kind: "resource_limit",
-		limitKind: "max_files_changed",
+		limitKind: limitKind as AppToolResourceLimitKind,
 		...(typeof record.limit === "number" ? { limit: record.limit } : {}),
 		...(typeof record.used === "number" ? { used: record.used } : {}),
 		...(typeof record.attempted === "number" ? { attempted: record.attempted } : {}),
@@ -451,6 +476,35 @@ const duplicateMergeObjectSchema = z.union([
 		dryRun: z.boolean().optional(),
 	}),
 ]);
+
+const taxonomyActionSchema = z.enum(["bootstrap", "growth"]);
+const taxonomyActionObjectSchema = z.object({
+	action: taxonomyActionSchema.describe("Taxonomy operation: bootstrap starts from wiki pages; growth extends the existing sidecar taxonomy."),
+});
+const okfImportObjectSchema = z.object({
+	sourceDir: z.string()
+		.min(1)
+		.refine((value) => value.trim().length > 0, "sourceDir must not be blank")
+		.refine((value) => !value.includes("\0"), "sourceDir must not contain NUL bytes")
+		.refine(isAbsoluteSourceDir, "sourceDir must be an absolute path")
+		.refine((value) => !hasTraversalSegment(value), "sourceDir must not contain path traversal")
+		.describe("sourceDir must be an absolute OKF-compatible source project directory. The target is always the active LLM Wiki project."),
+	apply: z.boolean().optional().describe("Defaults to false preview mode. Set true to write planned pages after the app-level write budget passes."),
+}).strict();
+const synthesisPreviewObjectSchema = z.object({
+	dimension: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
+	targetTag: z.string().min(1).optional(),
+	targetTags: z.array(z.string().min(1)).max(8).optional(),
+	minClusterSize: z.number().int().positive().max(50).optional(),
+	maxCandidates: z.number().int().positive().max(50).optional(),
+});
+const wikiSynthesisObjectSchema = z.object({
+	dimension: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
+	targetTag: z.string().optional(),
+	targetTags: z.array(z.string()).optional(),
+	minClusterSize: z.number().optional(),
+	maxCandidates: z.number().optional(),
+});
 
 function appMcpTool<Schema extends z.ZodTypeAny>(
 	name: string,
@@ -836,12 +890,83 @@ export function createLlmWikiTools(
 		),
 
 		tool(
+			"okf_validate",
+			"Validate the active LLM Wiki project as an OKF-compatible knowledge bundle. Read-only.",
+			{},
+			async (args) => safe(async () => appTool(context, "okf_validate", args)),
+		),
+
+		tool(
+			"okf_export",
+			"Build an in-memory OKF export bundle and report for the active project. Read-only; does not accept outputDir or write files.",
+			{},
+			async (args) => safe(async () => appTool(context, "okf_export", args)),
+		),
+
+		appMcpTool(
+			"okf_import",
+			"Preview an OKF import into the active project by default. Set apply=true to write the previewed pages after write tools and app budget allow it.",
+			okfImportObjectSchema,
+			async (args) =>
+				safe(async () =>
+					appTool(context, "okf_import", args, {
+						requiresWrite: args.apply === true,
+						includeTaskId: args.apply === true,
+					}),
+				),
+		),
+
+		appMcpTool(
+			"taxonomy_preview",
+			"Preview tag taxonomy bootstrap or growth against the active project. Read-only; never writes the sidecar taxonomy file.",
+			taxonomyActionObjectSchema,
+			async (args) => safe(async () => appTool(context, "taxonomy_preview", args)),
+		),
+
+		appMcpTool(
+			"taxonomy_apply",
+			"Apply tag taxonomy bootstrap or growth to .llm-wiki/tag-taxonomy.json. Requires write tools and counts the sidecar path in the app write budget.",
+			taxonomyActionObjectSchema,
+			async (args) =>
+				safe(async () =>
+					appTool(context, "taxonomy_apply", args, {
+						requiresWrite: true,
+						includeTaskId: true,
+					}),
+				),
+		),
+
+		tool(
+			"taxonomy_rollback",
+			"Rollback the most recent tag taxonomy bootstrap/growth batch in .llm-wiki/tag-taxonomy.json. Requires write tools and never edits wiki pages.",
+			{},
+			async (args) =>
+				safe(async () =>
+					appTool(context, "taxonomy_rollback", args, {
+						requiresWrite: true,
+						includeTaskId: true,
+					}),
+				),
+		),
+
+		appMcpTool(
+			"synthesis_preview",
+			"Discover deterministic synthesis candidates from existing wiki tags. Read-only; does not call LLM/search and does not create synthesis pages.",
+			synthesisPreviewObjectSchema,
+			async (args) => safe(async () => appTool(context, "synthesis_preview", args)),
+		),
+
+		tool(
+			"get_knowledge_agents_config",
+			"Return the active project's Knowledge Agents config with parse issues/conflict status. Read-only; config writes remain UI-only.",
+			{},
+			async (args) => safe(async () => appTool(context, "get_knowledge_agents_config", args)),
+		),
+
+		appMcpTool(
 			"wiki_synthesis",
 			"Discover thematic clusters by tag analysis, supplement with external web search (EXA.AI etc.), and generate a cross-article synthesis report via LLM. Saves as a synthesis page in wiki.",
-			{
-				targetTag: z.string().optional(),
-				minClusterSize: z.number().optional(),
-			},
+			wikiSynthesisObjectSchema,
 			async (args) =>
 				safe(async () =>
 					appTool(context, "wiki_synthesis", args, { requiresWrite: true }),
@@ -953,7 +1078,7 @@ export function createLlmWikiMcpServer(context: LlmWikiToolContext) {
 		name: "llm_wiki",
 		version: "0.1.0",
 		instructions:
-			"Use these tools to read, search, inspect, and update the active LLM Wiki project. Write tools may only modify wiki Markdown pages.",
+			"Use these tools to read, search, inspect, and update the active LLM Wiki project. Write tools are gated by LLM Wiki permissions and resource limits.",
 		tools: createLlmWikiTools(context),
 	});
 }

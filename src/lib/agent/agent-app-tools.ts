@@ -13,9 +13,20 @@ import { mergeDuplicateGroup, type DuplicateGroup, type MergeResult } from "@/li
 import { optimizeResearchTopic } from "@/lib/optimize-research-topic"
 import { sweepResolvedReviews } from "@/lib/sweep-reviews"
 import { executePipeline, BUILTIN_PIPELINES } from "@/lib/agent/agent-pipeline"
-import { runWikiSynthesis } from "@/lib/wiki-synthesis"
+import { discoverSynthesisCandidates, runWikiSynthesis } from "@/lib/wiki-synthesis"
 import { runAutofill } from "@/lib/agent/agent-autofill"
+import { loadKnowledgeAgentsConfig } from "@/lib/agent/knowledge-agents-config"
+import {
+  applyTagTaxonomyBootstrap,
+  applyTagTaxonomyGrowth,
+  previewTagTaxonomyBootstrap,
+  previewTagTaxonomyGrowth,
+  rollbackLastTagTaxonomyBatch,
+} from "@/lib/agent/tag-taxonomy"
 import { testLlmConnection } from "@/lib/connection-tests"
+import { buildOkfExportBundle } from "@/lib/okf-export"
+import { importOkfBundle, previewOkfImport } from "@/lib/okf-import"
+import { validateOkfBundle } from "@/lib/okf-validate"
 import { isAbsolutePath, normalizePath } from "@/lib/path-utils"
 import { hasConfiguredDeepResearchSources, resolveSearchConfig } from "@/lib/web-search"
 import { useResearchStore } from "@/stores/research-store"
@@ -127,6 +138,42 @@ function preflightBudget(
   )
 }
 
+function normalizedOptionalLimit(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined
+  return Math.max(0, Math.floor(value))
+}
+
+function preflightWriteBytes(
+  toolName: string,
+  budget: AgentAppToolBudget | undefined,
+  pages: Array<{ action: string; targetRelativePath: string; content?: string }>,
+): AgentAppToolResourceLimitResponse | undefined {
+  const maxWriteBytes = normalizedOptionalLimit(budget?.maxWriteBytes)
+  if (maxWriteBytes === undefined) return undefined
+
+  for (const page of pages) {
+    if (page.action !== "write") continue
+    const bytes = new TextEncoder().encode(page.content ?? "").length
+    if (bytes <= maxWriteBytes) continue
+    const message = `Write exceeds maxWriteBytes (${bytes} > ${maxWriteBytes})`
+    return {
+      ok: false,
+      result: { ok: false, error: message },
+      resourceLimit: {
+        kind: "resource_limit",
+        limitKind: "max_write_bytes",
+        limit: maxWriteBytes,
+        bytes,
+        path: page.targetRelativePath,
+        toolName,
+        message,
+        recovery: "settings_agent",
+      },
+    }
+  }
+  return undefined
+}
+
 function preflightUnknownWriteBudget(
   toolName: string,
   budget: AgentAppToolBudget | undefined,
@@ -193,6 +240,17 @@ function stringArg(args: ToolArgs, key: string): string {
   return value
 }
 
+function sourceDirArg(args: ToolArgs): string {
+  const sourceDir = stringArg(args, "sourceDir").trim()
+  const normalized = normalizePath(sourceDir)
+  if (sourceDir.includes("\0")) throw new Error("sourceDir must not contain NUL bytes")
+  if (!isAbsolutePath(sourceDir)) throw new Error("sourceDir must be an absolute path")
+  if (normalized.split("/").some((segment) => segment === "..")) {
+    throw new Error("sourceDir must not contain path traversal")
+  }
+  return sourceDir
+}
+
 function optionalStringArg(args: ToolArgs, key: string): string | undefined {
   const value = args[key]
   if (value === undefined) return undefined
@@ -215,6 +273,47 @@ function optionalNonEmptyStringArray(args: ToolArgs, key: string): string[] | un
   if (!values) return undefined
   const clean = values.map((item) => item.trim()).filter(Boolean)
   return clean.length > 0 ? clean : undefined
+}
+
+function taxonomyActionArg(args: ToolArgs): "bootstrap" | "growth" {
+  const action = args.action
+  if (action === "bootstrap" || action === "growth") return action
+  throw new Error("action must be bootstrap or growth")
+}
+
+function optionalNumberArg(args: ToolArgs, key: string): number | undefined {
+  const value = args[key]
+  if (value === undefined) return undefined
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${key} must be a number`)
+  return value
+}
+
+function optionalSynthesisDimension(args: ToolArgs): 1 | 2 | 3 | 4 | undefined {
+  const dimension = optionalNumberArg(args, "dimension")
+  if (dimension === undefined) return undefined
+  if (dimension === 1 || dimension === 2 || dimension === 3 || dimension === 4) return dimension
+  throw new Error("dimension must be 1, 2, 3, or 4")
+}
+
+function synthesisDiscoveryOptions(args: ToolArgs) {
+  const options: {
+    dimension?: 1 | 2 | 3 | 4
+    targetTag?: string
+    targetTags?: string[]
+    minClusterSize?: number
+    maxCandidates?: number
+  } = {}
+  const dimension = optionalSynthesisDimension(args)
+  const targetTag = optionalStringArg(args, "targetTag")
+  const targetTags = optionalNonEmptyStringArray(args, "targetTags")
+  const minClusterSize = optionalNumberArg(args, "minClusterSize")
+  const maxCandidates = optionalNumberArg(args, "maxCandidates")
+  if (dimension !== undefined) options.dimension = dimension
+  if (targetTag !== undefined) options.targetTag = targetTag
+  if (targetTags !== undefined) options.targetTags = targetTags
+  if (minClusterSize !== undefined) options.minClusterSize = minClusterSize
+  if (maxCandidates !== undefined) options.maxCandidates = maxCandidates
+  return options
 }
 
 function searchQueriesArg(args: ToolArgs): string[] {
@@ -858,6 +957,95 @@ async function runAgentAppToolHandler({
     }
   }
 
+  if (toolName === "okf_validate") {
+    return { ok: true, result: await validateOkfBundle(projectPath) }
+  }
+
+  if (toolName === "okf_export") {
+    return { ok: true, result: await buildOkfExportBundle(projectPath) }
+  }
+
+  if (toolName === "okf_import") {
+    const sourceDir = sourceDirArg(args)
+    const apply = args.apply === true
+    const preview = await previewOkfImport(sourceDir, projectPath)
+    if (!apply) return { ok: true, result: preview, wikiChanged: [] }
+
+    const plannedPaths = preview.pages
+      .filter((page) => page.action === "write")
+      .map((page) => page.targetRelativePath)
+    const blocked = preflightBudget(toolName, budget, plannedPaths)
+    if (blocked) return blocked
+    const bytesBlocked = preflightWriteBytes(toolName, budget, preview.pages)
+    if (bytesBlocked) return bytesBlocked
+
+    const result = await importOkfBundle(sourceDir, projectPath, { apply: true })
+    state.setFileTree(await listDirectory(projectPath))
+    useWikiStore.getState().bumpDataVersion()
+    const writtenPaths = result.pages
+      .filter((page) => page.action === "write")
+      .map((page) => page.targetRelativePath)
+    return {
+      ok: true,
+      result,
+      wikiChanged: writtenPaths.map((path) => ({ path, operation: "create" as const })),
+    }
+  }
+
+  if (toolName === "taxonomy_preview") {
+    const action = taxonomyActionArg(args)
+    const result = action === "bootstrap"
+      ? await previewTagTaxonomyBootstrap(projectPath)
+      : await previewTagTaxonomyGrowth(projectPath)
+    return { ok: true, result }
+  }
+
+  if (toolName === "taxonomy_apply") {
+    const sidecarPath = ".llm-wiki/tag-taxonomy.json"
+    const blocked = preflightBudget(toolName, budget, [sidecarPath])
+    if (blocked) return blocked
+    const action = taxonomyActionArg(args)
+    const result = action === "bootstrap"
+      ? await applyTagTaxonomyBootstrap(projectPath)
+      : await applyTagTaxonomyGrowth(projectPath)
+    if (result.wrote) {
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+    }
+    return {
+      ok: true,
+      result,
+      changedPaths: result.wrote ? [sidecarPath] : [],
+    }
+  }
+
+  if (toolName === "taxonomy_rollback") {
+    const sidecarPath = ".llm-wiki/tag-taxonomy.json"
+    const blocked = preflightBudget(toolName, budget, [sidecarPath])
+    if (blocked) return blocked
+    const result = await rollbackLastTagTaxonomyBatch(projectPath)
+    if (result.wrote) {
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+    }
+    return {
+      ok: true,
+      result,
+      changedPaths: result.wrote && result.removed > 0 ? [sidecarPath] : [],
+    }
+  }
+
+  if (toolName === "synthesis_preview") {
+    return {
+      ok: true,
+      result: await discoverSynthesisCandidates(projectPath, synthesisDiscoveryOptions(args)),
+    }
+  }
+
+  if (toolName === "get_knowledge_agents_config") {
+    return { ok: true, result: await loadKnowledgeAgentsConfig(projectPath) }
+  }
+
   if (toolName === "run_pipeline") {
     const pipelineName = stringArg(args, "pipeline")
     const schema = BUILTIN_PIPELINES[pipelineName]
@@ -865,6 +1053,7 @@ async function runAgentAppToolHandler({
     const pipelineBudget = budget
       ? {
           maxFilesChanged: budget.maxFilesChanged,
+          maxWriteBytes: budget.maxWriteBytes,
           changedPaths: [...budget.changedPaths],
           maxFilesChangedEnabled: budget.maxFilesChangedEnabled,
         }
@@ -956,6 +1145,14 @@ export const AGENT_APP_TOOL_DESCRIPTORS: Record<string, AgentAppToolDescriptor> 
   fix_lint_report: { name: "fix_lint_report", handler: runAgentAppToolHandler },
   enrich_wikilinks: { name: "enrich_wikilinks", handler: runAgentAppToolHandler },
   autofill_properties: { name: "autofill_properties", handler: runAgentAppToolHandler },
+  okf_validate: { name: "okf_validate", handler: runAgentAppToolHandler },
+  okf_export: { name: "okf_export", handler: runAgentAppToolHandler },
+  okf_import: { name: "okf_import", handler: runAgentAppToolHandler },
+  taxonomy_preview: { name: "taxonomy_preview", handler: runAgentAppToolHandler },
+  taxonomy_apply: { name: "taxonomy_apply", handler: runAgentAppToolHandler },
+  taxonomy_rollback: { name: "taxonomy_rollback", handler: runAgentAppToolHandler },
+  synthesis_preview: { name: "synthesis_preview", handler: runAgentAppToolHandler },
+  get_knowledge_agents_config: { name: "get_knowledge_agents_config", handler: runAgentAppToolHandler },
   run_pipeline: { name: "run_pipeline", handler: runAgentAppToolHandler },
   wiki_synthesis: { name: "wiki_synthesis", handler: runAgentAppToolHandler },
 }

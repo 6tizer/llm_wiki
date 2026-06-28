@@ -56,6 +56,12 @@ const autofillMock = vi.hoisted(() => ({
 }))
 
 const wikiSynthesisMock = vi.hoisted(() => ({
+  discoverSynthesisCandidates: vi.fn(async (): Promise<Record<string, unknown>> => ({
+    dimension: 1,
+    minClusterSize: 3,
+    candidates: [] as Array<Record<string, unknown>>,
+    totalCandidates: 0,
+  })),
   runWikiSynthesis: vi.fn(async () => ({
     ok: true,
     topic: "test",
@@ -63,6 +69,45 @@ const wikiSynthesisMock = vi.hoisted(() => ({
     synthesisPath: "wiki/synthesis/test-synthesis.md",
     externalSources: 0,
   } as Awaited<ReturnType<typeof import("@/lib/wiki-synthesis").runWikiSynthesis>>)),
+}))
+
+const okfValidateMock = vi.hoisted(() => ({
+  validateOkfBundle: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true, issues: [] as Array<Record<string, unknown>>, summary: { totalPages: 0 } })),
+}))
+
+const okfExportMock = vi.hoisted(() => ({
+  buildOkfExportBundle: vi.fn(async (): Promise<Record<string, unknown>> => ({ files: [] as Array<Record<string, unknown>>, report: { issues: [] as Array<Record<string, unknown>> } })),
+}))
+
+const okfImportMock = vi.hoisted(() => ({
+  previewOkfImport: vi.fn(async () => ({
+    applied: false,
+    pages: [] as Array<{ targetRelativePath: string; action: "write" | "skip"; content?: string }>,
+    issues: [] as Array<Record<string, unknown>>,
+    summary: { totalPages: 0, writeCount: 0, skippedCount: 0, issueCount: 0 },
+  })),
+  importOkfBundle: vi.fn(async () => ({
+    applied: true,
+    pages: [] as Array<{ targetRelativePath: string; action: "write" | "skip"; content?: string }>,
+    issues: [] as Array<Record<string, unknown>>,
+    summary: { totalPages: 0, writeCount: 0, skippedCount: 0, issueCount: 0 },
+  })),
+}))
+
+const tagTaxonomyMock = vi.hoisted(() => ({
+  previewTagTaxonomyBootstrap: vi.fn(async () => ({ action: "bootstrap", dryRun: true, wrote: false, removed: 0 })),
+  applyTagTaxonomyBootstrap: vi.fn(async () => ({ action: "bootstrap", dryRun: false, wrote: true, removed: 0 })),
+  previewTagTaxonomyGrowth: vi.fn(async () => ({ action: "growth", dryRun: true, wrote: false, removed: 0 })),
+  applyTagTaxonomyGrowth: vi.fn(async () => ({ action: "growth", dryRun: false, wrote: true, removed: 0 })),
+  rollbackLastTagTaxonomyBatch: vi.fn(async () => ({ action: "rollback", dryRun: false, wrote: true, removed: 1 })),
+}))
+
+const knowledgeAgentsConfigMock = vi.hoisted(() => ({
+  loadKnowledgeAgentsConfig: vi.fn(async () => ({
+    config: { schemaVersion: 1, updatedAt: "1970-01-01T00:00:00.000Z", agents: [] },
+    issues: [],
+    conflict: false,
+  })),
 }))
 
 const pipelineMock = vi.hoisted(() => ({
@@ -126,7 +171,33 @@ vi.mock("@/lib/agent/agent-autofill", () => ({
 }))
 
 vi.mock("@/lib/wiki-synthesis", () => ({
+  discoverSynthesisCandidates: wikiSynthesisMock.discoverSynthesisCandidates,
   runWikiSynthesis: wikiSynthesisMock.runWikiSynthesis,
+}))
+
+vi.mock("@/lib/okf-validate", () => ({
+  validateOkfBundle: okfValidateMock.validateOkfBundle,
+}))
+
+vi.mock("@/lib/okf-export", () => ({
+  buildOkfExportBundle: okfExportMock.buildOkfExportBundle,
+}))
+
+vi.mock("@/lib/okf-import", () => ({
+  previewOkfImport: okfImportMock.previewOkfImport,
+  importOkfBundle: okfImportMock.importOkfBundle,
+}))
+
+vi.mock("@/lib/agent/tag-taxonomy", () => ({
+  previewTagTaxonomyBootstrap: tagTaxonomyMock.previewTagTaxonomyBootstrap,
+  applyTagTaxonomyBootstrap: tagTaxonomyMock.applyTagTaxonomyBootstrap,
+  previewTagTaxonomyGrowth: tagTaxonomyMock.previewTagTaxonomyGrowth,
+  applyTagTaxonomyGrowth: tagTaxonomyMock.applyTagTaxonomyGrowth,
+  rollbackLastTagTaxonomyBatch: tagTaxonomyMock.rollbackLastTagTaxonomyBatch,
+}))
+
+vi.mock("@/lib/agent/knowledge-agents-config", () => ({
+  loadKnowledgeAgentsConfig: knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig,
 }))
 
 vi.mock("@/lib/agent/agent-pipeline", () => ({
@@ -146,8 +217,12 @@ describe("runAgentAppTool ingest parity tools", () => {
       "fix_lint_report",
       "fix_lint_result",
       "get_agent_task_status",
+      "get_knowledge_agents_config",
       "ingest_source",
       "merge_duplicate_group",
+      "okf_export",
+      "okf_import",
+      "okf_validate",
       "optimize_research_topic",
       "run_deep_research",
       "run_lint",
@@ -155,6 +230,10 @@ describe("runAgentAppTool ingest parity tools", () => {
       "run_pipeline",
       "save_query_page",
       "sweep_reviews",
+      "synthesis_preview",
+      "taxonomy_apply",
+      "taxonomy_preview",
+      "taxonomy_rollback",
       "test_provider_connection",
       "wiki_synthesis",
     ])
@@ -170,6 +249,42 @@ describe("runAgentAppTool ingest parity tools", () => {
     ingestMock.autoIngest.mockReset()
     autofillMock.runAutofill.mockClear()
     autofillMock.runAutofill.mockResolvedValue({ pagesScanned: 0, statusPromoted: 0, tagsAssigned: 0, details: [] })
+    okfValidateMock.validateOkfBundle.mockClear()
+    okfValidateMock.validateOkfBundle.mockResolvedValue({ ok: true, issues: [] as Array<Record<string, unknown>>, summary: { totalPages: 0 } })
+    okfExportMock.buildOkfExportBundle.mockClear()
+    okfExportMock.buildOkfExportBundle.mockResolvedValue({ files: [] as Array<Record<string, unknown>>, report: { issues: [] as Array<Record<string, unknown>> } })
+    okfImportMock.previewOkfImport.mockClear()
+    okfImportMock.previewOkfImport.mockResolvedValue({
+      applied: false,
+      pages: [] as Array<{ targetRelativePath: string; action: "write" | "skip"; content?: string }>,
+      issues: [] as Array<Record<string, unknown>>,
+      summary: { totalPages: 0, writeCount: 0, skippedCount: 0, issueCount: 0 },
+    })
+    okfImportMock.importOkfBundle.mockClear()
+    okfImportMock.importOkfBundle.mockResolvedValue({
+      applied: true,
+      pages: [] as Array<{ targetRelativePath: string; action: "write" | "skip"; content?: string }>,
+      issues: [] as Array<Record<string, unknown>>,
+      summary: { totalPages: 0, writeCount: 0, skippedCount: 0, issueCount: 0 },
+    })
+    tagTaxonomyMock.previewTagTaxonomyBootstrap.mockClear()
+    tagTaxonomyMock.previewTagTaxonomyBootstrap.mockResolvedValue({ action: "bootstrap", dryRun: true, wrote: false, removed: 0 })
+    tagTaxonomyMock.applyTagTaxonomyBootstrap.mockClear()
+    tagTaxonomyMock.applyTagTaxonomyBootstrap.mockResolvedValue({ action: "bootstrap", dryRun: false, wrote: true, removed: 0 })
+    tagTaxonomyMock.previewTagTaxonomyGrowth.mockClear()
+    tagTaxonomyMock.previewTagTaxonomyGrowth.mockResolvedValue({ action: "growth", dryRun: true, wrote: false, removed: 0 })
+    tagTaxonomyMock.applyTagTaxonomyGrowth.mockClear()
+    tagTaxonomyMock.applyTagTaxonomyGrowth.mockResolvedValue({ action: "growth", dryRun: false, wrote: true, removed: 0 })
+    tagTaxonomyMock.rollbackLastTagTaxonomyBatch.mockClear()
+    tagTaxonomyMock.rollbackLastTagTaxonomyBatch.mockResolvedValue({ action: "rollback", dryRun: false, wrote: true, removed: 1 })
+    wikiSynthesisMock.discoverSynthesisCandidates.mockClear()
+    wikiSynthesisMock.discoverSynthesisCandidates.mockResolvedValue({ dimension: 1, minClusterSize: 3, candidates: [] as Array<Record<string, unknown>>, totalCandidates: 0 })
+    knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig.mockClear()
+    knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig.mockResolvedValue({
+      config: { schemaVersion: 1, updatedAt: "1970-01-01T00:00:00.000Z", agents: [] },
+      issues: [],
+      conflict: false,
+    })
     wikiSynthesisMock.runWikiSynthesis.mockClear()
     wikiSynthesisMock.runWikiSynthesis.mockResolvedValue({ ok: true, topic: "test", clusterSize: 3, synthesisPath: "wiki/synthesis/test-synthesis.md", externalSources: 0 })
     pipelineMock.executePipeline.mockClear()
@@ -858,6 +973,232 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.wikiChanged).toEqual([])
   })
 
+  it("runs okf_validate and okf_export as read-only app tools", async () => {
+    okfValidateMock.validateOkfBundle.mockResolvedValueOnce({ ok: false, issues: [{ code: "missing_type" }], summary: { totalPages: 1 } })
+    okfExportMock.buildOkfExportBundle.mockResolvedValueOnce({ files: [{ path: "wiki/index.md" }], report: { issues: [] } })
+
+    const validation = await runAgentAppTool("okf_validate", {})
+    const bundle = await runAgentAppTool("okf_export", {})
+
+    expect(validation.result).toEqual({ ok: false, issues: [{ code: "missing_type" }], summary: { totalPages: 1 } })
+    expect(bundle.result).toEqual({ files: [{ path: "wiki/index.md" }], report: { issues: [] } })
+    expect(okfValidateMock.validateOkfBundle).toHaveBeenCalledWith("/project")
+    expect(okfExportMock.buildOkfExportBundle).toHaveBeenCalledWith("/project")
+  })
+
+  it("previews okf_import by default without writing", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [{ targetRelativePath: "wiki/entities/a.md", action: "write" }],
+      issues: [],
+      summary: { totalPages: 1, writeCount: 1, skippedCount: 0, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool("okf_import", { sourceDir: "/source" })
+
+    expect(response.ok).toBe(true)
+    expect(okfImportMock.previewOkfImport).toHaveBeenCalledWith("/source", "/project")
+    expect(okfImportMock.importOkfBundle).not.toHaveBeenCalled()
+    expect(response.wikiChanged).toEqual([])
+  })
+
+  it("applies okf_import only after preview budget passes", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [
+        { targetRelativePath: "wiki/entities/a.md", action: "write" },
+        { targetRelativePath: "wiki/entities/b.md", action: "skip" },
+      ],
+      issues: [],
+      summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+    })
+    okfImportMock.importOkfBundle.mockResolvedValueOnce({
+      applied: true,
+      pages: [
+        { targetRelativePath: "wiki/entities/a.md", action: "write" },
+        { targetRelativePath: "wiki/entities/b.md", action: "skip" },
+      ],
+      issues: [],
+      summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool(
+      "okf_import",
+      { sourceDir: "/source", apply: true },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source", "/project", { apply: true })
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/entities/a.md", operation: "create" },
+    ])
+  })
+
+  it("blocks okf_import apply before writing when preview exceeds budget", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [
+        { targetRelativePath: "wiki/entities/a.md", action: "write" },
+        { targetRelativePath: "wiki/entities/b.md", action: "write" },
+      ],
+      issues: [],
+      summary: { totalPages: 2, writeCount: 2, skippedCount: 0, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool(
+      "okf_import",
+      { sourceDir: "/source", apply: true },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.changedPaths).toEqual([
+      "wiki/entities/a.md",
+      "wiki/entities/b.md",
+    ])
+    expect(okfImportMock.importOkfBundle).not.toHaveBeenCalled()
+  })
+
+  it("blocks okf_import apply before writing when preview content exceeds maxWriteBytes", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [
+        { targetRelativePath: "wiki/entities/a.md", action: "write", content: "hello world" },
+      ],
+      issues: [],
+      summary: { totalPages: 1, writeCount: 1, skippedCount: 0, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool(
+      "okf_import",
+      { sourceDir: "/source", apply: true },
+      { budget: { maxFilesChanged: 1, maxWriteBytes: 5, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.limitKind).toBe("max_write_bytes")
+    expect(response.resourceLimit.path).toBe("wiki/entities/a.md")
+    expect(response.resourceLimit.bytes).toBe(11)
+    expect(okfImportMock.importOkfBundle).not.toHaveBeenCalled()
+  })
+
+  it("rejects invalid okf_import sourceDir", async () => {
+    await expect(runAgentAppTool("okf_import", { sourceDir: " " })).rejects.toThrow("Missing sourceDir")
+    await expect(runAgentAppTool("okf_import", { sourceDir: "source" })).rejects.toThrow("absolute path")
+    await expect(runAgentAppTool("okf_import", { sourceDir: "/tmp/../source" })).rejects.toThrow("path traversal")
+    await expect(runAgentAppTool("okf_import", { sourceDir: "/tmp/source\0bad" })).rejects.toThrow("NUL")
+    expect(okfImportMock.previewOkfImport).not.toHaveBeenCalled()
+  })
+
+  it("previews taxonomy bootstrap and growth without writing", async () => {
+    const bootstrap = await runAgentAppTool("taxonomy_preview", { action: "bootstrap" })
+    const growth = await runAgentAppTool("taxonomy_preview", { action: "growth" })
+
+    expect(bootstrap.result).toEqual({ action: "bootstrap", dryRun: true, wrote: false, removed: 0 })
+    expect(growth.result).toEqual({ action: "growth", dryRun: true, wrote: false, removed: 0 })
+    expect(tagTaxonomyMock.previewTagTaxonomyBootstrap).toHaveBeenCalledWith("/project")
+    expect(tagTaxonomyMock.previewTagTaxonomyGrowth).toHaveBeenCalledWith("/project")
+  })
+
+  it("applies taxonomy changes with sidecar changedPaths only", async () => {
+    const response = await runAgentAppTool(
+      "taxonomy_apply",
+      { action: "growth" },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(tagTaxonomyMock.applyTagTaxonomyGrowth).toHaveBeenCalledWith("/project")
+    expect(response.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
+    expect(response.wikiChanged).toBeUndefined()
+  })
+
+  it("blocks taxonomy_apply before sidecar write when budget is exhausted", async () => {
+    const response = await runAgentAppTool(
+      "taxonomy_apply",
+      { action: "bootstrap" },
+      { budget: { maxFilesChanged: 1, changedPaths: [".llm-wiki/tag-taxonomy.json"] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(tagTaxonomyMock.applyTagTaxonomyBootstrap).toHaveBeenCalled()
+  })
+
+  it("blocks taxonomy_apply before sidecar write when budget would grow", async () => {
+    const response = await runAgentAppTool(
+      "taxonomy_apply",
+      { action: "bootstrap" },
+      { budget: { maxFilesChanged: 1, changedPaths: ["wiki/existing.md"] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.changedPaths).toEqual([
+      ".llm-wiki/tag-taxonomy.json",
+      "wiki/existing.md",
+    ])
+    expect(tagTaxonomyMock.applyTagTaxonomyBootstrap).not.toHaveBeenCalled()
+  })
+
+  it("rolls back taxonomy batches and reports sidecar path only when removed", async () => {
+    const response = await runAgentAppTool(
+      "taxonomy_rollback",
+      {},
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(tagTaxonomyMock.rollbackLastTagTaxonomyBatch).toHaveBeenCalledWith("/project")
+    expect(response.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
+    expect(response.wikiChanged).toBeUndefined()
+  })
+
+  it("keeps taxonomy_rollback changedPaths empty when no nodes were removed", async () => {
+    tagTaxonomyMock.rollbackLastTagTaxonomyBatch.mockResolvedValueOnce({ action: "rollback", dryRun: false, wrote: true, removed: 0 })
+
+    const response = await runAgentAppTool("taxonomy_rollback", {})
+
+    expect(response.ok).toBe(true)
+    expect(response.changedPaths).toEqual([])
+  })
+
+  it("previews synthesis candidates without calling generation", async () => {
+    wikiSynthesisMock.discoverSynthesisCandidates.mockResolvedValueOnce({ candidates: [{ slug: "ai" }], totalCandidates: 1 })
+
+    const response = await runAgentAppTool("synthesis_preview", {
+      dimension: 2,
+      targetTag: "ai",
+      targetTags: ["ai", "systems"],
+      minClusterSize: 4,
+      maxCandidates: 8,
+    })
+
+    expect(response.result).toEqual({ candidates: [{ slug: "ai" }], totalCandidates: 1 })
+    expect(wikiSynthesisMock.discoverSynthesisCandidates).toHaveBeenCalledWith("/project", {
+      dimension: 2,
+      targetTag: "ai",
+      targetTags: ["ai", "systems"],
+      minClusterSize: 4,
+      maxCandidates: 8,
+    })
+    expect(wikiSynthesisMock.runWikiSynthesis).not.toHaveBeenCalled()
+  })
+
+  it("loads knowledge agents config read-only", async () => {
+    const response = await runAgentAppTool("get_knowledge_agents_config", {})
+
+    expect(response.ok).toBe(true)
+    expect(knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig).toHaveBeenCalledWith("/project")
+    expect(response.result).toEqual({
+      config: { schemaVersion: 1, updatedAt: "1970-01-01T00:00:00.000Z", agents: [] },
+      issues: [],
+      conflict: false,
+    })
+  })
+
   it("passes multi-dimensional synthesis options to wiki_synthesis", async () => {
     const response = await runAgentAppTool("wiki_synthesis", {
       dimension: 2,
@@ -901,6 +1242,162 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.resourceLimit.attempted).toBe(2)
     expect(response.resourceLimit.changedPaths).toEqual(["wiki/existing.md"])
     expect(wikiSynthesisMock.runWikiSynthesis).not.toHaveBeenCalled()
+  })
+
+  it("exposes OKF validate/export as read-only app tools", async () => {
+    okfValidateMock.validateOkfBundle.mockResolvedValueOnce({ ok: true, errors: [], warnings: [], pages: [] })
+    okfExportMock.buildOkfExportBundle.mockResolvedValueOnce({
+      files: [{ relativePath: "wiki/entities/topic.md", content: "content" }],
+      report: { validation: { ok: true, errors: [], warnings: [], pages: [] }, typeMappings: [] },
+    })
+
+    const validate = await runAgentAppTool("okf_validate", {})
+    const exported = await runAgentAppTool("okf_export", {})
+
+    expect(okfValidateMock.validateOkfBundle).toHaveBeenCalledWith("/project")
+    expect(okfExportMock.buildOkfExportBundle).toHaveBeenCalledWith("/project")
+    expect(validate.result).toEqual({ ok: true, errors: [], warnings: [], pages: [] })
+    expect(exported.result).toEqual({
+      files: [{ relativePath: "wiki/entities/topic.md", content: "content" }],
+      report: { validation: { ok: true, errors: [], warnings: [], pages: [] }, typeMappings: [] },
+    })
+    expect(validate.wikiChanged).toBeUndefined()
+    expect(exported.wikiChanged).toBeUndefined()
+  })
+
+  it("previews OKF import by default without writing", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [{ action: "write", targetRelativePath: "wiki/entities/topic.md" }],
+      issues: [],
+      summary: { totalPages: 1, writeCount: 1, skippedCount: 0, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool("okf_import", { sourceDir: "/source-okf" })
+
+    expect(okfImportMock.previewOkfImport).toHaveBeenCalledWith("/source-okf", "/project")
+    expect(okfImportMock.importOkfBundle).not.toHaveBeenCalled()
+    expect(response.wikiChanged).toEqual([])
+    expect(response.result).toMatchObject({ applied: false, summary: { writeCount: 1 } })
+  })
+
+  it("blocks OKF import apply before writing when planned pages exceed budget", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [
+        { action: "write", targetRelativePath: "wiki/entities/a.md" },
+        { action: "write", targetRelativePath: "wiki/entities/b.md" },
+        { action: "skip", targetRelativePath: "wiki/entities/c.md" },
+      ],
+      issues: [],
+      summary: { totalPages: 3, writeCount: 2, skippedCount: 1, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool(
+      "okf_import",
+      { sourceDir: "/source-okf", apply: true },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.changedPaths).toEqual([
+      "wiki/entities/a.md",
+      "wiki/entities/b.md",
+    ])
+    expect(okfImportMock.importOkfBundle).not.toHaveBeenCalled()
+  })
+
+  it("applies OKF import through the existing importer and reports wiki page changes", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [{ action: "write", targetRelativePath: "wiki/entities/topic.md" }],
+      issues: [],
+      summary: { totalPages: 1, writeCount: 1, skippedCount: 0, issueCount: 0 },
+    })
+    okfImportMock.importOkfBundle.mockResolvedValueOnce({
+      applied: true,
+      pages: [
+        { action: "write", targetRelativePath: "wiki/entities/topic.md" },
+        { action: "skip", targetRelativePath: "wiki/entities/same.md" },
+      ],
+      issues: [],
+      summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+    })
+
+    const response = await runAgentAppTool(
+      "okf_import",
+      { sourceDir: "/source-okf", apply: true },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source-okf", "/project", { apply: true })
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/entities/topic.md", operation: "create" },
+    ])
+    expect(useWikiStore.getState().fileTree).toEqual(fsMock.tree)
+    expect(useWikiStore.getState().dataVersion).toBe(1)
+  })
+
+  it("previews and applies taxonomy sidecar changes without wikiChanged", async () => {
+    const preview = await runAgentAppTool("taxonomy_preview", { action: "growth" })
+    const apply = await runAgentAppTool(
+      "taxonomy_apply",
+      { action: "bootstrap" },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+    const rollback = await runAgentAppTool(
+      "taxonomy_rollback",
+      {},
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(tagTaxonomyMock.previewTagTaxonomyGrowth).toHaveBeenCalledWith("/project")
+    expect(preview.result).toMatchObject({ action: "growth", dryRun: true })
+    expect(tagTaxonomyMock.applyTagTaxonomyBootstrap).toHaveBeenCalledWith("/project")
+    expect(apply.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
+    expect(apply.wikiChanged).toBeUndefined()
+    expect(tagTaxonomyMock.rollbackLastTagTaxonomyBatch).toHaveBeenCalledWith("/project")
+    expect(rollback.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
+    expect(rollback.wikiChanged).toBeUndefined()
+  })
+
+  it("blocks taxonomy sidecar writes through the app budget", async () => {
+    const response = await runAgentAppTool(
+      "taxonomy_apply",
+      { action: "growth" },
+      { budget: { maxFilesChanged: 0, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
+    expect(tagTaxonomyMock.applyTagTaxonomyGrowth).not.toHaveBeenCalled()
+  })
+
+  it("exposes synthesis_preview and Knowledge Agents config as read-only app tools", async () => {
+    const synthesis = await runAgentAppTool("synthesis_preview", {
+      dimension: 3,
+      targetTags: ["ai", "infra"],
+      minClusterSize: 4,
+      maxCandidates: 9,
+    })
+    const config = await runAgentAppTool("get_knowledge_agents_config", {})
+
+    expect(wikiSynthesisMock.discoverSynthesisCandidates).toHaveBeenCalledWith("/project", {
+      dimension: 3,
+      targetTags: ["ai", "infra"],
+      minClusterSize: 4,
+      maxCandidates: 9,
+    })
+    expect(synthesis.result).toMatchObject({ candidates: [], totalCandidates: 0 })
+    expect(knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig).toHaveBeenCalledWith("/project")
+    expect(config.result).toMatchObject({ conflict: false, issues: [] })
+  })
+
+  it("rejects invalid unified exposure arguments", async () => {
+    await expect(runAgentAppTool("taxonomy_preview", { action: "delete" })).rejects.toThrow(/bootstrap or growth/)
+    await expect(runAgentAppTool("synthesis_preview", { dimension: 5 })).rejects.toThrow(/dimension/)
   })
 
   it("blocks duplicate merge before executeMerge when preview exceeds budget", async () => {
@@ -998,6 +1495,50 @@ describe("runAgentAppTool ingest parity tools", () => {
       "wiki/entities/topic.md",
       "wiki/sources/source.md",
     ])
+  })
+
+  it("shares maxWriteBytes budget across pipeline steps", async () => {
+    okfImportMock.previewOkfImport.mockResolvedValueOnce({
+      applied: false,
+      pages: [
+        { action: "write", targetRelativePath: "wiki/entities/topic.md", content: "hello world" },
+      ],
+      issues: [],
+      summary: { totalPages: 1, writeCount: 1, skippedCount: 0, issueCount: 0 },
+    })
+    pipelineMock.executePipeline.mockImplementationOnce(async (
+      _schema: unknown,
+      runner?: (toolName: string, args: Record<string, unknown>) => Promise<{
+        ok: boolean
+        changedPaths?: string[]
+        wikiChanged?: Array<{ path: string; operation: "create" | "update" | "delete" }>
+        resourceLimit?: unknown
+      }>,
+    ) => {
+      if (!runner) throw new Error("missing runner")
+      const step = await runner("okf_import", { sourceDir: "/source-okf", apply: true })
+      return {
+        pipelineName: "full-ingest",
+        ok: false,
+        steps: [],
+        totalDurationMs: 0,
+        changedPaths: step.changedPaths ?? [],
+        wikiChanged: step.wikiChanged ?? [],
+        resourceLimit: step.resourceLimit,
+      }
+    })
+
+    const response = await runAgentAppTool(
+      "run_pipeline",
+      { pipeline: "full-ingest" },
+      { budget: { maxFilesChanged: 2, maxWriteBytes: 5, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.limitKind).toBe("max_write_bytes")
+    expect(response.resourceLimit.path).toBe("wiki/entities/topic.md")
+    expect(okfImportMock.importOkfBundle).not.toHaveBeenCalled()
   })
 
   it("tests provider connection and redacts configured secrets", async () => {
