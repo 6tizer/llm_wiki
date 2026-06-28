@@ -4,9 +4,14 @@ import { runAutofill } from "./agent-autofill"
 const fsMock = vi.hoisted(() => ({
   files: new Map<string, string>(),
   tree: [] as unknown[],
+  fileExists: vi.fn(async (path: string) => path === "/project/.llm-wiki/tag-taxonomy.json" && fsMock.files.has(path)),
+  writeFileAtomic: vi.fn(async (path: string, content: string) => {
+    fsMock.files.set(path, content)
+  }),
 }))
 
 vi.mock("@/commands/fs", () => ({
+  fileExists: fsMock.fileExists,
   readFile: vi.fn(async (path: string) => {
     const value = fsMock.files.get(path)
     if (value === undefined) throw new Error(`missing file: ${path}`)
@@ -16,6 +21,7 @@ vi.mock("@/commands/fs", () => ({
   writeFile: vi.fn(async (path: string, content: string) => {
     fsMock.files.set(path, content)
   }),
+  writeFileAtomic: fsMock.writeFileAtomic,
 }))
 
 vi.mock("@/lib/frontmatter", () => ({
@@ -47,6 +53,7 @@ describe("runAutofill", () => {
     fsMock.files.clear()
     fsMock.tree = []
     vi.clearAllMocks()
+    fsMock.fileExists.mockImplementation(async (path: string) => path === "/project/.llm-wiki/tag-taxonomy.json" && fsMock.files.has(path))
   })
 
   it("returns empty result when wiki directory is empty", async () => {
@@ -224,4 +231,264 @@ Some content.
     const result = await runAutofill("/project")
     expect(result.pagesScanned).toBe(0)
   })
+
+  it("previews taxonomy-aware high-confidence tags without writing on dry-run", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "transformer.md", path: "/project/wiki/transformer.md", is_dir: false }] }]
+    const original = `---
+type: concept
+title: Transformer
+tags: []
+---
+
+# Transformer
+`
+    fsMock.files.set("/project/wiki/transformer.md", original)
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", JSON.stringify(taxonomyFixture()))
+
+    const result = await runAutofill("/project", {
+      dryRun: true,
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+
+    expect(result.tagsAssigned).toBe(1)
+    expect(result.details[0]).toMatchObject({
+      relativePath: "wiki/transformer.md",
+      action: "tags",
+      to: "Artificial Intelligence",
+    })
+    expect(result.taxonomy?.reports[0]?.suggestions[0]?.band).toBe("high")
+    expect(fsMock.files.get("/project/wiki/transformer.md")).toBe(original)
+  })
+
+  it("defaults direct taxonomy-aware runs to effective dry-run without auto-write", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "transformer.md", path: "/project/wiki/transformer.md", is_dir: false }] }]
+    const original = `---
+type: concept
+title: Transformer
+created: 2026-01-01
+tags: []
+status: Draft
+---
+
+# Transformer
+
+## Definition
+
+A neural architecture.
+
+## Key Points
+
+- Used by [[Attention]]
+`
+    fsMock.files.set("/project/wiki/transformer.md", original)
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", JSON.stringify(taxonomyFixture()))
+
+    const result = await runAutofill("/project", { taxonomyAware: true })
+
+    expect(result.taxonomy?.dryRun).toBe(true)
+    expect(result.taxonomy?.reports[0]?.suggestions[0]?.label).toBe("Artificial Intelligence")
+    expect(result.statusPromoted).toBe(1)
+    expect(result.details[0]).toMatchObject({
+      relativePath: "wiki/transformer.md",
+      action: "status",
+      to: "Under Review",
+    })
+    expect(fsMock.files.get("/project/wiki/transformer.md")).toBe(original)
+  })
+
+  it("auto-writes high-confidence taxonomy labels when explicitly enabled", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "transformer.md", path: "/project/wiki/transformer.md", is_dir: false }] }]
+    fsMock.files.set("/project/wiki/transformer.md", `---
+type: concept
+title: Transformer
+tags: []
+---
+
+# Transformer
+`)
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", JSON.stringify(taxonomyFixture()))
+
+    const result = await runAutofill("/project", {
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+
+    expect(result.tagsAssigned).toBe(1)
+    expect(fsMock.files.get("/project/wiki/transformer.md")).toContain('tags: ["Artificial Intelligence"]')
+  })
+
+  it("dedupes taxonomy labels against existing original tag text by slug", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "transformer.md", path: "/project/wiki/transformer.md", is_dir: false }] }]
+    const original = `---
+type: concept
+title: Transformer
+tags: [ai]
+---
+
+# Transformer
+`
+    fsMock.files.set("/project/wiki/transformer.md", original)
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", JSON.stringify(taxonomyFixture()))
+
+    const result = await runAutofill("/project", {
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+
+    expect(result.tagsAssigned).toBe(0)
+    expect(fsMock.files.get("/project/wiki/transformer.md")).toBe(original)
+  })
+
+  it("does not duplicate taxonomy labels on repeated auto-write runs", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "transformer.md", path: "/project/wiki/transformer.md", is_dir: false }] }]
+    const original = `---
+type: concept
+title: Transformer
+tags: ["Artificial Intelligence"]
+---
+
+# Transformer
+`
+    fsMock.files.set("/project/wiki/transformer.md", original)
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", JSON.stringify(taxonomyFixture()))
+
+    const result = await runAutofill("/project", {
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+
+    expect(result.tagsAssigned).toBe(0)
+    const content = fsMock.files.get("/project/wiki/transformer.md") ?? ""
+    expect(content).toBe(original)
+    expect(content.match(/Artificial Intelligence/g)).toHaveLength(1)
+  })
+
+  it("keeps low-confidence taxonomy matches out of writes and returns a proposal", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "quantum-pump.md", path: "/project/wiki/quantum-pump.md", is_dir: false }] }]
+    const original = `---
+type: concept
+title: Quantum Pump
+tags: []
+---
+
+# Quantum Pump
+`
+    fsMock.files.set("/project/wiki/quantum-pump.md", original)
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", JSON.stringify({
+      ...taxonomyFixture(),
+      tree: [{ ...taxonomyFixture().tree[0], children: [] }],
+    }))
+
+    const result = await runAutofill("/project", {
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+
+    expect(result.tagsAssigned).toBe(0)
+    expect(result.taxonomy?.reports[0]?.band).toBe("low")
+    expect(result.taxonomy?.proposalCount).toBeGreaterThan(0)
+    expect(fsMock.files.get("/project/wiki/quantum-pump.md")).toBe(original)
+    expect(fsMock.writeFileAtomic).not.toHaveBeenCalled()
+  })
+
+  it("falls back to heuristic tag writes when taxonomy is missing", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "entity.md", path: "/project/wiki/entity.md", is_dir: false }] }]
+    fsMock.files.set("/project/wiki/entity.md", `---
+type: entity
+title: GPT-4
+tags: []
+---
+
+# GPT-4
+
+## Definition
+
+Large model.
+`)
+
+    const result = await runAutofill("/project", {
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+
+    expect(result.taxonomy?.fallback).toBe(true)
+    expect(result.tagsAssigned).toBe(1)
+    expect(fsMock.files.get("/project/wiki/entity.md")).toContain('tags: ["gpt"]')
+  })
+
+  it("keeps taxonomy-aware missing-taxonomy fallback dry-run unless auto-write is enabled", async () => {
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children: [{ name: "entity.md", path: "/project/wiki/entity.md", is_dir: false }] }]
+    const original = `---
+type: entity
+title: GPT-4
+tags: []
+---
+
+# GPT-4
+
+## Definition
+
+Large model.
+`
+    fsMock.files.set("/project/wiki/entity.md", original)
+
+    const result = await runAutofill("/project", { taxonomyAware: true })
+
+    expect(result.taxonomy?.fallback).toBe(true)
+    expect(result.taxonomy?.dryRun).toBe(true)
+    expect(result.tagsAssigned).toBe(1)
+    expect(result.details[0]).toMatchObject({
+      relativePath: "wiki/entity.md",
+      action: "tags",
+      to: "gpt",
+    })
+    expect(fsMock.files.get("/project/wiki/entity.md")).toBe(original)
+  })
 })
+
+function taxonomyFixture() {
+  return {
+    schemaVersion: 1,
+    updatedAt: 1,
+    safety: {
+      maxL1: 12,
+      maxL2PerL1: 12,
+      maxL3PerL2: 16,
+      maxTotalNodes: 500,
+      maxNewNodesPerRun: 60,
+      allowNewL1ByDefault: false,
+    },
+    tree: [{
+      slug: "concept",
+      label: "Concept",
+      level: 1,
+      evidence: [],
+      confidence: 0.7,
+      createdBy: "bootstrap",
+      updatedAt: 1,
+      batchId: "seed",
+      children: [{
+        slug: "ai",
+        label: "Artificial Intelligence",
+        level: 2,
+        evidence: [],
+        confidence: 0.8,
+        createdBy: "bootstrap",
+        updatedAt: 1,
+        batchId: "seed",
+        children: [{
+          slug: "transformer",
+          label: "Transformer",
+          level: 3,
+          evidence: ["wiki/transformer.md"],
+          confidence: 0.9,
+          createdBy: "bootstrap",
+          updatedAt: 1,
+          batchId: "seed",
+        }],
+      }],
+    }],
+    changeLog: [],
+  }
+}

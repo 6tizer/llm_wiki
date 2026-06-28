@@ -4,6 +4,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useResearchStore } from "@/stores/research-store"
 import { useReviewStore } from "@/stores/review-store"
 import { AGENT_APP_TOOL_DESCRIPTORS, runAgentAppTool } from "./agent-app-tools"
+import type { AutofillResult } from "./agent-autofill"
 
 const fsMock = vi.hoisted(() => ({
   tree: [] as FileNode[],
@@ -46,12 +47,12 @@ const connectionTestsMock = vi.hoisted(() => ({
 }))
 
 const autofillMock = vi.hoisted(() => ({
-  runAutofill: vi.fn(async (_projectPath?: string, _options?: { dryRun?: boolean }) => ({
+  runAutofill: vi.fn(async (_projectPath?: string, _options?: { dryRun?: boolean; taxonomyAware?: boolean; autoWriteHighConfidence?: boolean }) => ({
     pagesScanned: 0,
     statusPromoted: 0,
     tagsAssigned: 0,
     details: [] as Array<{ path: string; relativePath: string; action: "status" | "tags"; from: string; to: string }>,
-  })),
+  } as AutofillResult)),
 }))
 
 const wikiSynthesisMock = vi.hoisted(() => ({
@@ -236,6 +237,7 @@ describe("runAgentAppTool ingest parity tools", () => {
       { path: "wiki/sources/source.md", operation: "update" },
       { path: "wiki/entities/topic.md", operation: "update" },
     ])
+    expect(autofillMock.runAutofill).toHaveBeenCalledWith("/project")
     expect(useWikiStore.getState().fileTree).toEqual(fsMock.tree)
     expect(useWikiStore.getState().dataVersion).toBe(1)
   })
@@ -736,6 +738,124 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.resourceLimit.attempted).toBe(2)
     expect(autofillMock.runAutofill).toHaveBeenCalledTimes(1)
     expect(autofillMock.runAutofill).toHaveBeenCalledWith("/project", { dryRun: true })
+  })
+
+  it("passes taxonomy-aware autofill options through the budget preview/apply path", async () => {
+    autofillMock.runAutofill.mockImplementation(async (_projectPath?: string, options?: { dryRun?: boolean; taxonomyAware?: boolean; autoWriteHighConfidence?: boolean }) => ({
+      pagesScanned: 1,
+      statusPromoted: 0,
+      tagsAssigned: options?.dryRun ? 0 : 1,
+      details: [
+        { path: "entities/topic", relativePath: "wiki/entities/topic.md", action: "tags" as const, from: "(empty)", to: "Artificial Intelligence" },
+      ],
+      taxonomy: {
+        enabled: true,
+        fallback: false,
+        dryRun: options?.dryRun === true,
+        autoWriteHighConfidence: options?.autoWriteHighConfidence === true,
+        reports: [],
+        proposalCount: 0,
+        issues: [],
+      },
+    }))
+
+    const response = await runAgentAppTool(
+      "autofill_properties",
+      { taxonomyAware: true, autoWriteHighConfidence: true },
+      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(autofillMock.runAutofill).toHaveBeenNthCalledWith(1, "/project", {
+      dryRun: true,
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+    expect(autofillMock.runAutofill).toHaveBeenNthCalledWith(2, "/project", {
+      dryRun: false,
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/entities/topic.md", operation: "update" },
+    ])
+  })
+
+  it("blocks taxonomy-aware autofill auto-write before apply when preview exceeds budget", async () => {
+    autofillMock.runAutofill.mockResolvedValue({
+      pagesScanned: 1,
+      statusPromoted: 0,
+      tagsAssigned: 1,
+      details: [
+        { path: "entities/topic", relativePath: "wiki/entities/topic.md", action: "tags", from: "(empty)", to: "Artificial Intelligence" },
+      ],
+      taxonomy: {
+        enabled: true,
+        fallback: false,
+        dryRun: true,
+        autoWriteHighConfidence: true,
+        reports: [],
+        proposalCount: 0,
+        issues: [],
+      },
+    })
+
+    const response = await runAgentAppTool(
+      "autofill_properties",
+      { taxonomyAware: true, autoWriteHighConfidence: true },
+      { budget: { maxFilesChanged: 0, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.attempted).toBe(1)
+    expect(response.resourceLimit.path).toBe("wiki/entities/topic.md")
+    expect(response.resourceLimit.changedPaths).toEqual(["wiki/entities/topic.md"])
+    expect(autofillMock.runAutofill).toHaveBeenCalledTimes(1)
+    expect(autofillMock.runAutofill).toHaveBeenCalledWith("/project", {
+      dryRun: true,
+      taxonomyAware: true,
+      autoWriteHighConfidence: true,
+    })
+  })
+
+  it("keeps taxonomy-aware autofill preview-only when high-confidence writes are not enabled", async () => {
+    autofillMock.runAutofill.mockResolvedValue({
+      pagesScanned: 1,
+      statusPromoted: 1,
+      tagsAssigned: 0,
+      details: [
+        { path: "entities/topic", relativePath: "wiki/entities/topic.md", action: "status", from: "Draft", to: "Reviewed" },
+      ],
+      taxonomy: {
+        enabled: true,
+        fallback: false,
+        dryRun: true,
+        autoWriteHighConfidence: false,
+        reports: [],
+        proposalCount: 1,
+        issues: [],
+      },
+    })
+
+    const response = await runAgentAppTool(
+      "autofill_properties",
+      { taxonomyAware: true },
+      { budget: { maxFilesChanged: 0, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(autofillMock.runAutofill).toHaveBeenNthCalledWith(1, "/project", {
+      dryRun: true,
+      taxonomyAware: true,
+      autoWriteHighConfidence: false,
+    })
+    expect(autofillMock.runAutofill).toHaveBeenNthCalledWith(2, "/project", {
+      dryRun: true,
+      taxonomyAware: true,
+      autoWriteHighConfidence: false,
+    })
+    expect(response.wikiChanged).toEqual([])
   })
 
   it("passes multi-dimensional synthesis options to wiki_synthesis", async () => {

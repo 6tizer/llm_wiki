@@ -498,6 +498,56 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 	assert.match(resultText(result), /wiki\/queries\/saved.md/);
 });
 
+test("autofill_properties passes taxonomy-aware options through bridge", async () => {
+	const bridgeCalls: Array<{
+		streamId: string;
+		toolName: string;
+		args: Record<string, unknown>;
+		budget?: {
+			maxFilesChanged: number;
+			changedPaths: string[];
+			maxFilesChangedEnabled?: boolean;
+		};
+	}> = [];
+	const autofill = toolByName("autofill_properties", {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		maxFilesChanged: 5,
+		appToolBridge: {
+			async callTool(streamId, toolName, args, budget) {
+				bridgeCalls.push({ streamId, toolName, args, budget });
+				return {
+					ok: true,
+					result: {
+						pagesScanned: 1,
+						statusPromoted: 0,
+						tagsAssigned: 0,
+						details: [],
+						taxonomy: { enabled: true, fallback: false, reports: [] },
+					},
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const result = await autofill.handler({
+		taxonomyAware: true,
+		autoWriteHighConfidence: true,
+	}, {});
+
+	assert.equal(result.isError, undefined);
+	assert.equal(bridgeCalls.length, 1);
+	assert.deepEqual(bridgeCalls[0]?.args, {
+		taxonomyAware: true,
+		autoWriteHighConfidence: true,
+	});
+	assert.equal(bridgeCalls[0]?.streamId, "stream-1");
+	assert.equal(bridgeCalls[0]?.toolName, "autofill_properties");
+});
+
 test("app-level tool resource limits are emitted and returned as tool errors", async () => {
 	const sent: Array<{ type: string; data: unknown }> = [];
 	const changedPaths = new Set<string>(["wiki/index.md"]);
@@ -877,6 +927,21 @@ test("cross-field app tool schemas reject missing seeds", () => {
 		}).success,
 		true,
 	);
+});
+
+test("autofill_properties schema exposes taxonomy-aware options", () => {
+	const found = toolByName("autofill_properties", {});
+	const shape = found.inputSchema as Record<string, z.ZodTypeAny>;
+	const parsed = z.object(shape).safeParse({
+		taxonomyAware: true,
+		autoWriteHighConfidence: true,
+	});
+	const taxonomySchema = z.toJSONSchema(shape.taxonomyAware) as Record<string, unknown>;
+	const writeSchema = z.toJSONSchema(shape.autoWriteHighConfidence) as Record<string, unknown>;
+
+	assert.equal(parsed.success, true);
+	assert.equal(taxonomySchema.type, "boolean");
+	assert.equal(writeSchema.type, "boolean");
 });
 
 test("cross-field app tool JSON schemas expose union requirements", () => {

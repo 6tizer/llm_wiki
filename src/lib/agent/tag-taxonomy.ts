@@ -117,6 +117,56 @@ export interface TagTaxonomyOperationReport {
   details: TagTaxonomyReportDetail[]
 }
 
+export type TagTaxonomyMatchBand = "high" | "medium" | "low"
+
+export interface TagTaxonomyPageInput {
+  relativePath: string
+  title: string
+  type: string
+  tags: string[]
+  body?: string
+  wikilinks?: string[]
+  candidateTags?: string[]
+}
+
+export interface TagTaxonomySuggestion {
+  label: string
+  slug: string
+  path: string
+  confidence: number
+  band: TagTaxonomyMatchBand
+  evidence: string[]
+}
+
+export interface TagTaxonomyGrowthProposalNode {
+  slug: string
+  label: string
+  level: TagTaxonomyLevel
+  parentPath?: string
+  confidence: number
+  evidence: string[]
+}
+
+export interface TagTaxonomyGrowthProposal {
+  nodes: TagTaxonomyGrowthProposalNode[]
+  truncated: boolean
+  skipped: number
+  details: TagTaxonomyReportDetail[]
+}
+
+export interface TagTaxonomyPageReport {
+  relativePath: string
+  title: string
+  type: string
+  existingTags: string[]
+  suggestions: TagTaxonomySuggestion[]
+  matchedSlugs: string[]
+  confidence: number
+  band: TagTaxonomyMatchBand
+  evidence: string[]
+  growthProposal: TagTaxonomyGrowthProposal
+}
+
 export interface TagTaxonomyRunOptions {
   dryRun?: boolean
   now?: () => number
@@ -143,6 +193,8 @@ interface Candidate {
 const DEFAULT_UPDATED_AT = 0
 const UNCATEGORIZED_SLUG = "uncategorized"
 const UNTAGGED_SLUG = "untagged"
+const TAXONOMY_HIGH_CONFIDENCE = 0.7
+const TAXONOMY_MEDIUM_CONFIDENCE = 0.4
 
 function defaultNow(): number {
   return Date.now()
@@ -232,6 +284,25 @@ function labelFromSlug(slug: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")
+}
+
+function confidenceBand(confidence: number): TagTaxonomyMatchBand {
+  if (confidence >= TAXONOMY_HIGH_CONFIDENCE) return "high"
+  if (confidence >= TAXONOMY_MEDIUM_CONFIDENCE) return "medium"
+  return "low"
+}
+
+function roundConfidence(value: number): number {
+  return Math.max(0, Math.min(1, Math.round(value * 100) / 100))
+}
+
+function normalizeMatchText(value: string): string {
+  return ` ${slugify(value, "").replace(/-/g, " ")} `
+}
+
+function textHasToken(text: string, value: string): boolean {
+  const token = normalizeMatchText(value).trim()
+  return token.length > 0 && text.includes(` ${token} `)
 }
 
 function frontmatterString(value: FrontmatterValue | undefined): string {
@@ -417,6 +488,153 @@ export async function saveTagTaxonomy(
   })
   await writeFileAtomic(tagTaxonomyPath(projectPath), `${JSON.stringify(normalized.taxonomy, null, 2)}\n`)
   return { ...normalized, conflict: false, saved: true }
+}
+
+/**
+ * Builds deterministic, read-only taxonomy tag suggestions for one page.
+ *
+ * Suggestions use human-readable taxonomy labels for frontmatter writes. Slugs
+ * are returned only for matching and de-duplication.
+ */
+export function buildTagTaxonomyPageReport(
+  taxonomy: TagTaxonomyRoot,
+  page: TagTaxonomyPageInput,
+): TagTaxonomyPageReport {
+  const existingTags = normalizeStringArray(page.tags)
+  const evidence = new Set<string>([
+    page.relativePath,
+    `title:${page.title}`,
+    `type:${page.type}`,
+  ])
+  const text = normalizeMatchText([
+    page.title,
+    page.type,
+    existingTags.join(" "),
+    page.body ?? "",
+    ...(page.wikilinks ?? []),
+  ].join(" "))
+  const pageTypeSlug = slugify(page.type, UNCATEGORIZED_SLUG)
+  const existingTagSlugs = new Set(existingTags.map((tag) => slugify(tag, UNTAGGED_SLUG)))
+  const suggestions: TagTaxonomySuggestion[] = []
+
+  for (const l1 of taxonomy.tree) {
+    const l1MatchesType = l1.slug === pageTypeSlug || textHasToken(text, l1.label)
+    for (const l2 of l1.children ?? []) {
+      const localEvidence: string[] = []
+      let score = 0
+
+      if (l1MatchesType) {
+        score += 0.2
+        localEvidence.push(`type:${l1.label}`)
+      }
+      if (existingTagSlugs.has(l2.slug)) {
+        score += 0.55
+        localEvidence.push(`tag:${l2.label}`)
+      }
+      if (textHasToken(text, l2.label) || textHasToken(text, l2.slug)) {
+        score += 0.35
+        localEvidence.push(`text:${l2.label}`)
+      }
+
+      for (const child of l2.children ?? []) {
+        const titleSlug = slugify(page.title, "page")
+        const linkSlugs = new Set((page.wikilinks ?? []).map((link) => slugify(link, "link")))
+        if (child.slug === titleSlug) {
+          score += 0.55
+          localEvidence.push(`title:${child.label}`)
+        } else if (linkSlugs.has(child.slug)) {
+          score += 0.3
+          localEvidence.push(`wikilink:${child.label}`)
+        } else if (textHasToken(text, child.label) || textHasToken(text, child.slug)) {
+          score += 0.25
+          localEvidence.push(`text:${child.label}`)
+        }
+      }
+
+      const confidence = roundConfidence(score)
+      if (confidence < TAXONOMY_MEDIUM_CONFIDENCE) continue
+      const path = nodePath(l1.slug, l2.slug)
+      for (const item of localEvidence) evidence.add(item)
+      suggestions.push({
+        label: l2.label,
+        slug: l2.slug,
+        path,
+        confidence,
+        band: confidenceBand(confidence),
+        evidence: [...new Set(localEvidence)].sort(),
+      })
+    }
+  }
+
+  suggestions.sort((a, b) =>
+    b.confidence - a.confidence ||
+    a.path.localeCompare(b.path),
+  )
+  const confidence = suggestions[0]?.confidence ?? 0
+  const proposal = buildTagTaxonomyGrowthProposal(taxonomy, page, suggestions)
+
+  return {
+    relativePath: page.relativePath,
+    title: page.title,
+    type: page.type,
+    existingTags,
+    suggestions,
+    matchedSlugs: suggestions.map((item) => item.path),
+    confidence,
+    band: confidenceBand(confidence),
+    evidence: [...evidence].sort(),
+    growthProposal: proposal,
+  }
+}
+
+function buildTagTaxonomyGrowthProposal(
+  taxonomy: TagTaxonomyRoot,
+  page: TagTaxonomyPageInput,
+  suggestions: readonly TagTaxonomySuggestion[],
+): TagTaxonomyGrowthProposal {
+  const details: TagTaxonomyReportDetail[] = []
+  const nodes: TagTaxonomyGrowthProposalNode[] = []
+  const pageTypeSlug = slugify(page.type, UNCATEGORIZED_SLUG)
+  const parent = taxonomy.tree.find((node) => node.slug === pageTypeSlug)
+  const matchedSuggestionSlugs = new Set(suggestions.map((item) => item.slug))
+  const existingL2Slugs = new Set((parent?.children ?? []).map((node) => node.slug))
+  const candidates = normalizeStringArray([...(page.candidateTags ?? []), ...page.tags])
+  const maxByRun = taxonomy.safety.maxNewNodesPerRun
+  const maxByTotal = Math.max(0, taxonomy.safety.maxTotalNodes - countNodes(taxonomy.tree))
+  const maxByL2 = parent ? Math.max(0, taxonomy.safety.maxL2PerL1 - (parent.children ?? []).length) : 0
+  const limit = Math.max(0, Math.min(maxByRun, maxByTotal, maxByL2))
+  let skipped = 0
+  let truncated = false
+
+  if (!parent && candidates.length > 0) {
+    skipped += candidates.length
+    details.push(detail("growth_parent_missing", `No L1 taxonomy node matches page type ${page.type}.`, page.relativePath))
+  }
+
+  for (const label of candidates) {
+    const slug = slugify(label, UNTAGGED_SLUG)
+    if (!parent || existingL2Slugs.has(slug) || matchedSuggestionSlugs.has(slug)) continue
+    if (nodes.length >= limit) {
+      skipped += 1
+      truncated = true
+      details.push(detail("growth_cap", `Skipped ${slug} because a proposal safety cap was reached.`, page.relativePath))
+      continue
+    }
+    nodes.push({
+      slug,
+      label,
+      level: 2,
+      parentPath: parent.slug,
+      confidence: 0.35,
+      evidence: [
+        page.relativePath,
+        `title:${page.title}`,
+        `type:${page.type}`,
+      ].sort(),
+    })
+  }
+
+  return { nodes, truncated, skipped, details }
 }
 
 /** Previews a deterministic taxonomy bootstrap without writing files. */
