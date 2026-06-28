@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest"
+// @vitest-environment jsdom
+
+import { act, createElement } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import "@/i18n"
+import { useWikiStore } from "@/stores/wiki-store"
 
 import {
   coerceSettingsCategory,
@@ -7,8 +13,67 @@ import {
   initialDraft,
   mineruConfigFromDraft,
   persistAppPreferences,
+  SettingsView,
   shouldShowGlobalSettingsSaveBar,
 } from "./settings-view"
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async () => ""),
+}))
+
+vi.mock("@/lib/project-store", () => ({
+  loadCloseBehavior: vi.fn(async () => "hide"),
+  loadSourceWatchConfig: vi.fn(async () => undefined),
+  loadTheme: vi.fn(async () => "system"),
+  saveLanguage: vi.fn(async () => undefined),
+}))
+
+vi.mock("./sections/synthesis-section", () => ({
+  SynthesisSection: ({ project }: { project?: { path: string } | null }) =>
+    `Mock Synthesis Section:${project?.path ?? "no-project"}`,
+}))
+
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true
+
+function renderSettingsView(): { container: HTMLDivElement; root: Root } {
+  const container = document.createElement("div")
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  act(() => {
+    root.render(createElement(SettingsView))
+  })
+
+  return { container, root }
+}
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+async function click(element: Element): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function unmount(root: Root): void {
+  act(() => {
+    root.unmount()
+  })
+}
+
+beforeEach(() => {
+  useWikiStore.setState({
+    project: { id: "p1", name: "Project", path: "/project" },
+  })
+})
 
 describe("settings platform categories", () => {
   it("detects mac-like runtimes from browser navigator signals", () => {
@@ -30,8 +95,28 @@ describe("settings platform categories", () => {
     expect(coerceSettingsCategory("general", nonMacCategories)).toBe("llm")
     expect(coerceSettingsCategory("knowledge-agents", nonMacCategories)).toBe("knowledge-agents")
     expect(coerceSettingsCategory("taxonomy", nonMacCategories)).toBe("taxonomy")
+    expect(coerceSettingsCategory("synthesis", nonMacCategories)).toBe("synthesis")
     expect(nonMacCategories.some((category) => category.id === "knowledge-agents")).toBe(true)
     expect(nonMacCategories.some((category) => category.id === "taxonomy")).toBe(true)
+    expect(nonMacCategories.some((category) => category.id === "synthesis")).toBe(true)
+  })
+})
+
+describe("SettingsView category rendering", () => {
+  it("renders SynthesisSection after clicking the synthesis sidebar category", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    const synthesisButton = [...container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Synthesis"))
+    if (!synthesisButton) throw new Error("synthesis category button not found")
+
+    await click(synthesisButton)
+    await flush()
+
+    expect(container.textContent).toContain("Mock Synthesis Section:/project")
+
+    unmount(root)
   })
 })
 
@@ -84,6 +169,10 @@ describe("settings global Save bar visibility", () => {
 
   it("hides for Tag Taxonomy because it persists inline", () => {
     expect(shouldShowGlobalSettingsSaveBar("taxonomy")).toBe(false)
+  })
+
+  it("hides for Synthesis because generation persists inline", () => {
+    expect(shouldShowGlobalSettingsSaveBar("synthesis")).toBe(false)
   })
 
   it("shows for shared draft categories", () => {
@@ -186,6 +275,7 @@ describe("settings MinerU polling draft", () => {
 
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("knowledge"))).toBe(false)
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("taxonomy"))).toBe(false)
+    expect(Object.keys(draft).some((key) => key.toLowerCase().includes("synthesis"))).toBe(false)
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("agent") && key !== "agentMaxTurns" && key !== "agentMaxFilesChanged" && key !== "agentMaxWriteKiB")).toBe(false)
   })
 

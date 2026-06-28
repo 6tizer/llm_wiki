@@ -55,7 +55,13 @@ const autofillMock = vi.hoisted(() => ({
 }))
 
 const wikiSynthesisMock = vi.hoisted(() => ({
-  runWikiSynthesis: vi.fn(async () => ({ ok: true, topic: "test", clusterSize: 3, synthesisPath: "wiki/synthesis/test-synthesis.md", externalSources: 0 })),
+  runWikiSynthesis: vi.fn(async () => ({
+    ok: true,
+    topic: "test",
+    clusterSize: 3,
+    synthesisPath: "wiki/synthesis/test-synthesis.md",
+    externalSources: 0,
+  } as Awaited<ReturnType<typeof import("@/lib/wiki-synthesis").runWikiSynthesis>>)),
 }))
 
 const pipelineMock = vi.hoisted(() => ({
@@ -730,6 +736,51 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.resourceLimit.attempted).toBe(2)
     expect(autofillMock.runAutofill).toHaveBeenCalledTimes(1)
     expect(autofillMock.runAutofill).toHaveBeenCalledWith("/project", { dryRun: true })
+  })
+
+  it("passes multi-dimensional synthesis options to wiki_synthesis", async () => {
+    const response = await runAgentAppTool("wiki_synthesis", {
+      dimension: 2,
+      targetTags: ["ai", "systems"],
+      targetTag: "ai",
+      minClusterSize: 4,
+      maxCandidates: 12,
+    })
+
+    expect(response.ok).toBe(true)
+    expect(wikiSynthesisMock.runWikiSynthesis).toHaveBeenCalledWith(
+      "/project",
+      expect.objectContaining({ model: "gpt-test" }),
+      expect.objectContaining({ provider: "none" }),
+      {
+        dimension: 2,
+        targetTag: "ai",
+        targetTags: ["ai", "systems"],
+        minClusterSize: 4,
+        maxCandidates: 12,
+      },
+    )
+  })
+
+  it("throws wiki_synthesis errors returned by runWikiSynthesis", async () => {
+    wikiSynthesisMock.runWikiSynthesis.mockResolvedValueOnce({ ok: false, error: "synthesis failed" })
+
+    await expect(runAgentAppTool("wiki_synthesis", {})).rejects.toThrow("synthesis failed")
+  })
+
+  it("blocks wiki_synthesis before calling runWikiSynthesis when unknown-write budget is full", async () => {
+    const response = await runAgentAppTool(
+      "wiki_synthesis",
+      {},
+      { budget: { maxFilesChanged: 1, changedPaths: ["wiki/existing.md"] } },
+    )
+
+    expect(response.ok).toBe(false)
+    if (response.ok) throw new Error("expected resource limit")
+    expect(response.resourceLimit.toolName).toBe("wiki_synthesis")
+    expect(response.resourceLimit.attempted).toBe(2)
+    expect(response.resourceLimit.changedPaths).toEqual(["wiki/existing.md"])
+    expect(wikiSynthesisMock.runWikiSynthesis).not.toHaveBeenCalled()
   })
 
   it("blocks duplicate merge before executeMerge when preview exceeds budget", async () => {

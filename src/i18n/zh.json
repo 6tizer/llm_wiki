@@ -404,6 +404,7 @@
       "agent": "Agent",
       "knowledgeAgents": "Knowledge Agents",
       "taxonomy": "标签体系",
+      "synthesis": "综合",
       "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
@@ -785,6 +786,36 @@
           "preview": "仅预览",
           "noChanges": "无变化",
           "notWritten": "未写入"
+        }
+      },
+      "synthesis": {
+        "title": "综合",
+        "description": "预览只读取 wiki 页面。生成会在 synthesis frontmatter 校验通过后，把选中的候选写入 `wiki/synthesis`。",
+        "noProject": "请先打开一个项目再发现综合主题。",
+        "dimension": "维度",
+        "minClusterSize": "最少页面",
+        "maxCandidates": "最多候选",
+        "preview": "预览",
+        "generate": "生成",
+        "previewFailed": "预览失败。请重试。",
+        "generateFailed": "生成失败。请重试。",
+        "pages": "页面",
+        "candidates": "候选",
+        "returned": "返回",
+        "truncated": "截断",
+        "candidateMeta": "{{count}} 个页面 · {{pages}}",
+        "generated": "已生成 {{path}}",
+        "emptyDowngrade": "当前维度没有候选。可尝试 {{dimension}}。",
+        "dimensions": {
+          "1": "单标签",
+          "2": "双标签",
+          "3": "三标签",
+          "4": "四标签"
+        },
+        "emptyReasons": {
+          "no_pages": "没有 concept/entity 页面。",
+          "not_enough_tagged_pages": "有足够标签数的页面不足。",
+          "no_cluster_meets_minimum": "没有簇达到最少页面数。"
         }
       },
       "output": {

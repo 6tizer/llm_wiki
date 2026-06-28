@@ -890,8 +890,19 @@ async function runAgentAppToolHandler({
     const blocked = preflightUnknownWriteBudget(toolName, budget)
     if (blocked) return blocked
     const targetTag = typeof args.targetTag === "string" ? args.targetTag : undefined
-    const minClusterSize = typeof args.minClusterSize === "number" ? args.minClusterSize : 3
-    const result = await runWikiSynthesis(projectPath, state.llmConfig, state.searchApiConfig, targetTag, minClusterSize)
+    const targetTags = Array.isArray(args.targetTags)
+      ? args.targetTags.filter((tag): tag is string => typeof tag === "string")
+      : undefined
+    const dimension = typeof args.dimension === "number" ? args.dimension : undefined
+    const minClusterSize = typeof args.minClusterSize === "number" ? args.minClusterSize : undefined
+    const maxCandidates = typeof args.maxCandidates === "number" ? args.maxCandidates : undefined
+    const result = await runWikiSynthesis(projectPath, state.llmConfig, state.searchApiConfig, {
+      dimension: dimension === 1 || dimension === 2 || dimension === 3 || dimension === 4 ? dimension : undefined,
+      targetTag,
+      targetTags,
+      minClusterSize,
+      maxCandidates,
+    })
     if (!result.ok) throw new Error(result.error)
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
