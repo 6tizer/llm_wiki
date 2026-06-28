@@ -7,7 +7,7 @@
 
 Google OKF 是知识包格式，不是 MCP 协议，也不是 Agent runtime 协议。LLM Wiki 的 `<project>/wiki/` 可以明确定位为 **OKF-compatible knowledge bundle root**：继续保留本地 Wiki 工作流，同时让后续 validator、export、import、Agent tools 和本地 API 可以按 OKF 语义对外交换。
 
-OKF 兼容不改变近期 Tauri/Rust/TypeScript 主线，也不替代 Claude Agent SDK sidecar、MCP tools 或 local HTTP API。
+OKF 兼容不改变近期 Tauri/Rust/TypeScript 主线，也不替代 Claude Agent SDK sidecar、MCP tools 或 local HTTP API。Knowledge Wiki Skill 业务能力属于 OKF 之上的 workflow layer，详见 [Knowledge Wiki Business Layer](./knowledge-wiki-business-layer.md)。
 
 ## Verification Anchor
 
@@ -69,6 +69,22 @@ OKF import/export 需要提供标准 Markdown link 兼容：
 - Agent tools 支持验证、导出、导入草案和 mapping 预览。
 - MCP/local API 暴露 OKF validator/export/import 能力。
 - 权限边界沿用现有 Agent 写入策略和 local API token。
+- 与 Knowledge Wiki business-layer exposure 合并排期：只有 OKF-A/B、Knowledge Agents config、prompt registry、tag taxonomy、multi-dimensional synthesis 和 manual QA 保存稳定后，才统一暴露 Agent tools 与 MCP/local API。
+
+## Current Execution Position
+
+截至 2026-06-28，OKF 不再作为孤立的 A/B/C 三连 PR 直接接 Phase 7。新的串流顺序是：
+
+1. Docs closeout + Knowledge Wiki business-layer calibration。
+2. KW-QA：QA 去自动化，改为显式手动保存。
+3. OKF-A：validator/export。
+4. OKF-B：import/mapping。
+5. KW-B1：Knowledge Agents 配置基座 + Settings 骨架。
+6. KW-B2：Prompt Registry 重构。
+7. KW-C1：三层标签体系 schema + 自动 bootstrap/growth 基座。
+8. KW-D：Synthesis 多维主题发现 + preview/generate UI。
+9. KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
+10. OKF-C：统一 Agent tools + MCP/local API 暴露。
 
 ## Non-goals
 
