@@ -1,7 +1,7 @@
 # Agent Sidecar — 基于 Claude Agent SDK 的智能代理系统
 
 > 类型：总规划 | 创建：2026-05-27 | 更新：2026-06-27 | 状态：历史总规划
-> 当前入口：[Plans Index](./README.md)、[Phase 6 upstream sync](./upstream-sync-phase6.md)、[Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)
+> 当前入口：[Plans Index](../README.md)、[Phase 6 upstream sync](./upstream-sync-phase6.md)、[Phase 7 Agent SDK productization](../agent-sidecar-phase6.1.md)
 
 > 历史状态提示：本文保留 Phase 1-5/6 的设计背景和已完成证据，但不再作为当前执行顺序的唯一来源。旧 Phase 5/6 状态若与 `docs/plans/README.md`、`upstream-sync-phase6.md` 或 `agent-sidecar-phase6.1.md` 冲突，以当前计划索引为准。
 

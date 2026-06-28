@@ -16,7 +16,7 @@ Phase 5 已经把 Agent Sidecar 主链路推进到可用状态，但 UI 验收�
 
 Phase 6 会同步上游大量 Chat、Settings、Ingest、MCP 和 Rust 后端改动。上面这些问题如果不先修，会在同步期间继续污染测试项目，资源限制和测试失败也会变成后续大 PR 的噪音。
 
-**结论**：Phase 5.1 只修安全边界和会写坏数据的问题。Agent 体验类大改放到 [Phase 7 backlog](./agent-sidecar-phase6.1.md)。
+**结论**：Phase 5.1 只修安全边界和会写坏数据的问题。Agent 体验类大改放到 [Phase 7 backlog](../agent-sidecar-phase6.1.md)。
 
 ---
 

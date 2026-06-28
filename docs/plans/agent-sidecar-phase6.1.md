@@ -2,30 +2,33 @@
 
 > 类型：Phase backlog | 创建：2026-06-12 | 更新：2026-06-25 | 状态：backlog
 > 文件名说明：保留 `agent-sidecar-phase6.1.md` 作为历史兼容路径；当前定位是 Phase 7。
-> 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
-> 前置：[Phase 6 upstream sync](./upstream-sync-phase6.md)、[Mac Product Baseline](./mac-product-baseline.md)
+> 上级：[Agent Sidecar 总规划](./archive/agent-sidecar-roadmap.md)
+> 前置：[Phase 6 upstream sync](./archive/upstream-sync-phase6.md)、[Mac Product Baseline](./archive/mac-product-baseline.md)
 > SDK 对齐：[Claude Agent SDK Alignment](./claude-agent-sdk-alignment.md)
 
 ## 结论
 
-本文件不再表示 Phase 6 的尾项，而是 Phase 7 backlog：Agent SDK productization。等 Phase 6 upstream `v0.5.x` P0/P1 同步和 Mac-only baseline 稳定后，先做 Claude Agent SDK alignment，再集中处理 Agent SDK sidecar 的 UX、session continuity、permission entry、QA fixture 和内部 RPC 评估。
+本文件不再表示 Phase 6 的尾项，而是 Phase 7 backlog：Agent SDK productization。当前执行入口已迁移到 [SPEC-7 Unified Agentic Chat](./spec-7-unified-agentic-chat.md) 和 GitHub umbrella [#190](https://github.com/6tizer/llm_wiki/issues/190)。等 SPEC-1/2/3/4 的 shell/core、runtime、commit、profile 边界稳定后，再进入 Claude Agent SDK alignment 和 Unified Agentic Chat 实现。
 
-术语边界：upstream `v0.5.x` 的 Agent 是普通 Chat 内的 **Chat Agent Router**，负责 query understanding、只读工具路由和 tool progress。Phase 7 的 Agent 是本 fork 的 **Agent SDK sidecar**，负责 Claude Agent SDK runtime、写入能力、permission/session/resource-limit/pipeline 产品化。Chat Agent Router 的 port 与 UI 融合优先在 Phase 6 PR G 评估；只有 sidecar 生命周期和权限相关问题进入本文件。
+术语边界：upstream `v0.5.x` 的 Agent 是普通 Chat 内的 **Chat Agent Router**，负责 query understanding、只读工具路由和 tool progress。Phase 7 的 Agent 是本 fork 的 **Agent SDK sidecar**，负责 Claude Agent SDK runtime、写入能力、permission/session/resource-limit/pipeline 产品化。Chat Agent Router 的历史 port 证据已归档；后续若触碰 upstream-overlapping chat/agent area，按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 重新复核，不从旧 Phase 6 PR G 继续执行。
 
-#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
+#3 和 #65 已 superseded by #190，不再作为 active Phase 7 issue。内部 Rust-to-sidecar RPC 只能在 Work Runtime / tool boundary 重新规划后再评估。
 
 ## Scope
+
+当前执行拆分以 [SPEC-7 Unified Agentic Chat](./spec-7-unified-agentic-chat.md) 为准。本文件下方 PR 7-* 仅保留为历史 backlog mapping，不再作为 active PR split 维护。
 
 | Issue | 标题 | Phase 7 处理方式 |
 |-------|------|------------------|
 | [#60](https://github.com/6tizer/llm_wiki/issues/60) | Agent rewind fails after stream completion because retained Query transport is closed | Rewind lifecycle |
-| [#65](https://github.com/6tizer/llm_wiki/issues/65) | Clarify Ingest/提取 mode vs Agent session summary behavior | Product copy / mode semantics |
 | [#66](https://github.com/6tizer/llm_wiki/issues/66) | Handle Agent compact/resume summaries as session state, not normal assistant replies | Session state model |
 | [#67](https://github.com/6tizer/llm_wiki/issues/67) | Agent resume can ignore corrective user input and execute its own previous pending question | Resume intent protection |
 | [#68](https://github.com/6tizer/llm_wiki/issues/68) | Add Notion AI-style Agent activity timeline for intermediate replies, tool calls, and progress | Activity timeline |
 | [#84](https://github.com/6tizer/llm_wiki/issues/84) | Agent 权限设置入口不明确，需要支持对话框和 Settings 双入口 | Permission entry |
 | [#86](https://github.com/6tizer/llm_wiki/issues/86) | Phase 5 Agent 场景需要可重复的 UI 验收入口或 QA fixture | QA fixture |
-| [#3](https://github.com/6tizer/llm_wiki/issues/3) | Explore internal RPC channel for embedded Agent wiki tools | Evaluation only by default |
+| [#190](https://github.com/6tizer/llm_wiki/issues/190) | Unified Agentic Chat control surface | Umbrella |
+
+Superseded：#3、#65。二者只作为 #190 的历史背景，不再拆独立实现 PR。
 
 ## Preconditions
 
@@ -77,19 +80,19 @@ Work items：
 - Active stream rewind 可用。
 - Done/error/stop 后隐藏或禁用 rewind，避免 `ProcessTransport is not ready for writing` 成为用户可触发路径。
 
-## PR 7-C：Agent permission entry and Ingest wording
+## PR 7-C：Agent permission entry
 
-目标：把 Agent 权限和 Ingest mode 的产品语义讲清楚。
+目标：把 Agent 权限入口产品化，并接入 Unified Agentic Chat。
 
 Work items：
 
 - #84 Agent 输入区顶部权限区域可操作。
 - #84 Settings > Agent 提供完整权限配置，并说明作用范围。
-- #65 调整中文 `提取` 等文案，区分 source ingest/extraction 和 Agent session summary。
+- 不继续修补旧 Chat / Agent / Ingest 三入口文案；旧模式语义由 #190 的统一入口替代。
 
-## PR 7-D：Internal RPC evaluation
+## PR 7-D：Tool boundary evaluation
 
-目标：重新评估 #3 是否需要实现。默认只产出架构结论，不直接开工。
+目标：在 Work Runtime / Markdown commit layer / Agent tool boundary 稳定后，重新评估是否需要内部 RPC。默认只产出架构结论，不直接开工。
 
 Evaluation questions：
 

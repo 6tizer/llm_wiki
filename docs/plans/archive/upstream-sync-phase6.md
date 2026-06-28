@@ -2,10 +2,10 @@
 
 > 类型：Phase 实施计划 | 创建：2026-06-05 | 更新：2026-06-28 | 状态：completed / follow-up routing
 > 上级：[Agent Sidecar 总规划](./agent-sidecar-roadmap.md)
-> 计划索引：[Plans Index](./README.md)
-> Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
+> 计划索引：[Plans Index](../README.md)
+> Delta 入口：[Upstream v0.5.x Delta](../upstream-0.5-delta.md)
 > Chat 对齐：[Upstream Chat Agent Router Alignment](./upstream-chat-agent-router-alignment.md)
-> 后续：[Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)
+> 后续：[Phase 7 Agent SDK productization](../agent-sidecar-phase6.1.md)
 > 上游基线：`nashsu/llm_wiki` tag `v0.5.0@997db74`；截至 2026-06-24 已看到 `v0.5.1@cc4b98f`
 
 ## 结论
@@ -48,7 +48,7 @@ Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主�
 1. 确认 upstream remote、latest tag 和 `upstream/main` commit；若 upstream 已变化，记录新的 commit/tag 事实。
 2. 查看 `v0.4.26` through latest `v0.5.x` 的 upstream delta，也可用 `v0.4.25..latest` range 抽取 commit/file 变化。
 3. 标出会触碰本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary 或 Mac-only product positioning 的冲突点。
-4. 按 [upstream-0.5-delta.md](./upstream-0.5-delta.md) 分流到 residual follow-up、并行加速平台架构讨论、Claude Agent SDK alignment、Phase 7 backlog，或记录为新的 tracking issue。
+4. 按 [upstream-0.5-delta.md](../upstream-0.5-delta.md) 分流到 residual follow-up、并行加速平台架构讨论、Claude Agent SDK alignment、Phase 7 backlog，或记录为新的 tracking issue。
 5. 在对应 PR plan、PR body 和 reviewer packet 写明 delta 结论。
 
 ## Completed Phase 6 Order
@@ -230,7 +230,7 @@ Phase 6 主线的实际完成顺序：
 
 ## Phase 7 Boundary
 
-Agent SDK sidecar 的 UX/session/permission/internal RPC 后续不再称为 Phase 6.1；它们进入 [Phase 7 Agent SDK productization](./agent-sidecar-phase6.1.md)。上游 Chat Agent Router 的普通 Chat 集成核心已由 PR G 完成；未来只处理 residual Chat Router delta、scoped follow-up 或 Phase 7 sidecar 边界问题。#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
+Agent SDK sidecar 的 UX/session/permission/internal RPC 后续不再称为 Phase 6.1；它们进入 [Phase 7 Agent SDK productization](../agent-sidecar-phase6.1.md)。上游 Chat Agent Router 的普通 Chat 集成核心已由 PR G 完成；未来只处理 residual Chat Router delta、scoped follow-up 或 Phase 7 sidecar 边界问题。#3 仍是内部 Rust-to-sidecar RPC 评估项，不默认实现。
 
 ## Mac-only Product Boundary
 
