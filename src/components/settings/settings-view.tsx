@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
   BrainCircuit,
   Tags,
+  GitMerge,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -48,6 +49,7 @@ import { ApiServerSection } from "./sections/api-server-section"
 import { AgentSection } from "./sections/agent-section"
 import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
 import { TagTaxonomySection } from "./sections/tag-taxonomy-section"
+import { SynthesisSection } from "./sections/synthesis-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -71,6 +73,7 @@ export type CategoryId =
   | "agent"
   | "knowledge-agents"
   | "taxonomy"
+  | "synthesis"
   | "general"
   | "output"
   | "interface"
@@ -108,6 +111,7 @@ const CATEGORIES: Category[] = [
   { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
   { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
+  { id: "synthesis", labelKey: "settings.categories.synthesis", icon: GitMerge },
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -146,7 +150,8 @@ export function shouldShowGlobalSettingsSaveBar(activeCategory: CategoryId): boo
   return activeCategory !== "about" &&
     activeCategory !== "llm" &&
     activeCategory !== "knowledge-agents" &&
-    activeCategory !== "taxonomy"
+    activeCategory !== "taxonomy" &&
+    activeCategory !== "synthesis"
 }
 
 export function initialDraft(
@@ -658,6 +663,8 @@ export function SettingsView() {
         return <KnowledgeAgentsSection project={project} />
       case "taxonomy":
         return <TagTaxonomySection project={project} />
+      case "synthesis":
+        return <SynthesisSection project={project} />
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":

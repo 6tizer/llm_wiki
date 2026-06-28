@@ -404,6 +404,7 @@
       "agent": "Agent",
       "knowledgeAgents": "Knowledge Agents",
       "taxonomy": "Tag Taxonomy",
+      "synthesis": "Synthesis",
       "general": "General",
       "output": "Output",
       "interface": "Interface",
@@ -785,6 +786,36 @@
           "preview": "Preview only",
           "noChanges": "No changes",
           "notWritten": "Not written"
+        }
+      },
+      "synthesis": {
+        "title": "Synthesis",
+        "description": "Preview only reads wiki pages. Generate writes a selected candidate to `wiki/synthesis` after synthesis frontmatter validation.",
+        "noProject": "Open a project first to discover synthesis topics.",
+        "dimension": "Dimension",
+        "minClusterSize": "Min pages",
+        "maxCandidates": "Max candidates",
+        "preview": "Preview",
+        "generate": "Generate",
+        "previewFailed": "Preview failed. Please try again.",
+        "generateFailed": "Generate failed. Please try again.",
+        "pages": "Pages",
+        "candidates": "Candidates",
+        "returned": "Returned",
+        "truncated": "Truncated",
+        "candidateMeta": "{{count}} pages · {{pages}}",
+        "generated": "Generated {{path}}",
+        "emptyDowngrade": "No candidate at this dimension. Try {{dimension}}.",
+        "dimensions": {
+          "1": "Single",
+          "2": "Dual",
+          "3": "Triple",
+          "4": "Quad"
+        },
+        "emptyReasons": {
+          "no_pages": "No concept/entity pages found.",
+          "not_enough_tagged_pages": "Not enough pages have this many tags.",
+          "no_cluster_meets_minimum": "No cluster meets the minimum page count."
         }
       },
       "output": {
