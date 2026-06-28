@@ -35,7 +35,7 @@ Phase 6 的目标从旧 `v0.4.25` 提升到 upstream `v0.5.x` 后，PR A-K 主�
 | PR I：theme / tray / general settings | completed; #142 `c343b2a`; tray localization #151 merged |
 | PR J：graph rendering / path-aware graph identity | completed; #145 `c5403f7`; hover label contrast #158 merged |
 | PR K：AnyTXT smart search options cleanup | completed; #148 `0fd1d95`; #110 closed; residual llmConfig/lint/review-chat autosave follow-ups #154/#157/#160 merged |
-| follow-up sweep | completed through #164; remaining open items start at #120/#126 |
+| follow-up sweep | completed through #164; #120/#126 safety and quality follow-ups completed through #170 |
 | v0.4.26 through latest v0.5.x delta assessment | still required before new implementation PRs that touch upstream-overlapping areas |
 
 历史计划曾以 upstream `v0.4.25` 为目标；这只保留为 archive context。当前执行、PR body、review packet 和后续分流都以开工时最新 `v0.5.x` 为准。
@@ -66,17 +66,12 @@ Phase 6 主线的实际完成顺序：
 
 ## Current Follow-up Order
 
-截至 2026-06-28，follow-up sweep 已完成到 #164。后续开发建议顺序：
+截至 2026-06-28，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。后续开发建议顺序：
 
-1. #120 sidecar npm audit high vulnerability。
-2. #126-A local API hardening。
-3. #126-B autosave error surfacing。
-4. #126-C Agent / Ingest maintainability refactor。
-5. #126-D P3 hardening。
-6. OKF：OKF-A validator/export -> OKF-B import/mapping -> OKF-C UI + Agent tools + MCP/local API exposure。
-7. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
-8. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
-9. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
+1. OKF + Knowledge Wiki business-layer stream：docs closeout -> KW-QA -> OKF-A -> OKF-B -> KW-B1 -> KW-B2 -> KW-C1 -> KW-D -> KW-C2 -> OKF-C。
+2. Claude Agent SDK alignment：Phase 7 前置 PR 7-0，先重新核对 npm dist-tags。
+3. Phase 7 Agent SDK productization：#60、#65、#66、#67、#68、#84、#86、#3。
+4. Native Swift/SwiftUI/iOS：仍为远期 ADR，不进入近期实现。
 
 已完成的收口证据：
 
@@ -85,6 +80,11 @@ Phase 6 主线的实际完成顺序：
 - #152 MinerU large PDF / parsed side-cache polish completed by #161 `7d1b044`.
 - #135/#136 Chat UI polish completed by #162 `ac797ee`.
 - #128 review missing-page per-title classification completed by #164 `b273c85`.
+- #120 sidecar npm audit high vulnerability completed by Hono lockfile update commits `eb8c702` / `4c9aa5c`.
+- #126-A local API hardening completed by #167 `85cf4da`.
+- #126-B autosave error surfacing completed by #168 `6ea9488`.
+- #126-C Agent / Ingest maintainability refactor completed by #169 `de1fbaf`.
+- #126-D P3 hardening completed by #170 `7d3bda5`.
 
 ## Agent Boundary From Upstream v0.5.x
 
@@ -220,7 +220,7 @@ README 已改为 macOS-first / Mac-only active maintenance，但本 docs PR 不�
 - 本地 Agent sidecar、Agent UI、Agent pipeline 行为不回退。
 - Mac-only product baseline 完成 CI/release/app identity 清理。
 - Phase 7 backlog 有独立入口，不再作为 Phase 6 尾项混入。
-- Follow-up issues #156/#152/#135/#136/#128 已完成；#120/#126 清楚承接剩余 open work；#143/#144/#139/#147/#146/#155 已完成、替代或路由。
+- Follow-up issues #156/#152/#135/#136/#128 已完成；#120/#126 系列已完成到 #170；#143/#144/#139/#147/#146/#155 已完成、替代或路由。
 
 ## Validation for Future Implementation PRs
 

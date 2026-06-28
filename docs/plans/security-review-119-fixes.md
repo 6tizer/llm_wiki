@@ -1,14 +1,14 @@
 # Security Review #119 Fixes
 
-> 类型：实现 PR 计划 | 创建：2026-06-25 | 更新：2026-06-28 | 状态：completed / follow-up
+> 类型：实现 PR 计划 | 创建：2026-06-25 | 更新：2026-06-28 | 状态：completed / historical
 > 计划索引：[Plans Index](./README.md)
 > 关联 issue：[#119 Security & quality review](https://github.com/6tizer/llm_wiki/issues/119)
 
 ## 结论
 
-issue #119 深度 review 的 4 个安全 PR 已完成合入。剩余不适合塞进这 4 个 PR 的项目继续由 #126 和 #120 承接。
+issue #119 深度 review 的 4 个安全 PR 已完成合入。后续 #120 sidecar npm audit high vulnerability 和 #126-A/B/C/D 安全/质量串流也已完成到 #170。
 
-历史交付顺序按安全 > 数据完整性 > 功能 > 健壮性串行执行。4 个 PR 已完成合入；后续 #120/#126 按新的 6-PR 串流继续：Docs 状态校准 -> #120 -> #126-A local API hardening -> #126-B autosave error surfacing -> #126-C Agent/Ingest maintainability refactor -> #126-D P3 hardening。
+历史交付顺序按安全 > 数据完整性 > 功能 > 健壮性串行执行。4 个 #119 PR、#120 和 #126-A/B/C/D 均保留为完成证据，不再作为当前 follow-up queue。新的当前执行顺序以 [Plans Index](./README.md) 的 OKF + Knowledge Wiki business-layer stream 为准。
 
 后续 gate 规则以当前用户批准的 Commander 计划为准；若旧 AGENTS fallback 链或历史计划与本节冲突，本 6-PR 串流按本节执行。Architect 首选 Claude Code，失败 fallback ZCode -> 内部子代理；Tester 首选 Kimi，失败 fallback 内部子代理；Reviewer 必须有 ZCode 外部 review 和内部子代理 review。ZCode 连续两次失败时记录到 PR comment，但不阻塞，改以内审意见作为 merge gate。所有 gate 需要输出 `PASS | BLOCK | WARN` 和 P0/P1/P2/P3/follow-up/non-actionable 分组。
 
@@ -21,13 +21,13 @@ issue #119 深度 review 的 4 个安全 PR 已完成合入。剩余不适合塞
 | PR3 | `codex/agent-budget-preflight` | P0-3 + P1-7 | PR1 | MEDIUM |
 | PR4 | `codex/agent-robustness` | P1-2 + P1-5 + P1-6 + P2-6 | 无 | LOW-MEDIUM; merged by #125 |
 
-## Current Follow-up
+## Completed Follow-up Evidence
 
-- #120：sidecar npm audit high vulnerability。
-- #126-A：local API hardening，覆盖 P1-4、P2-1、P2-3 的保留无 token 本地 API 前提下的 CORS、per-client rate limit 和 Settings/文档警示。
-- #126-B：autosave error surfacing，覆盖 P2-7。
-- #126-C：Agent / Ingest maintainability refactor，覆盖 P2-8、P2-9。
-- #126-D：P3 hardening，覆盖 P3-4、P3-5、P3-6，以及前序 PR comment-routed 且适合统一处理的 P3。
+- #120：sidecar npm audit high vulnerability completed by Hono lockfile update commits `eb8c702` / `4c9aa5c`.
+- #126-A：local API hardening completed by #167 `85cf4da`.
+- #126-B：autosave error surfacing completed by #168 `6ea9488`.
+- #126-C：Agent / Ingest maintainability refactor completed by #169 `de1fbaf`.
+- #126-D：P3 hardening completed by #170 `7d3bda5`.
 - #119：保留 umbrella reference，用于追踪安全/质量 review 背景。
 
 ## Gate 架构

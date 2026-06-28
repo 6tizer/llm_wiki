@@ -4,7 +4,7 @@
 
 ## 结论
 
-Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #164。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 remaining follow-up、OKF、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
+Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到 OKF + Knowledge Wiki business-layer stream、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
 
 本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
 
@@ -72,11 +72,11 @@ Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E /
 
 ## Current Follow-up Queue
 
-Recommended order after #164:
+Recommended order after #170:
 
-1. #120 sidecar npm audit high vulnerability.
-2. #126 security and quality follow-ups split as local API hardening -> autosave error surfacing -> Agent/Ingest maintainability refactor -> P3 hardening.
-3. OKF-A/B/C, then Claude Agent SDK alignment PR 7-0, then Phase 7 Agent SDK productization.
+1. OKF + Knowledge Wiki business-layer stream: docs closeout -> KW-QA -> OKF-A -> OKF-B -> KW-B1 -> KW-B2 -> KW-C1 -> KW-D -> KW-C2 -> OKF-C.
+2. Claude Agent SDK alignment PR 7-0.
+3. Phase 7 Agent SDK productization.
 
 Completed follow-up closeout evidence:
 
@@ -85,6 +85,11 @@ Completed follow-up closeout evidence:
 - #152 MinerU large PDF / parsed side-cache polish completed by #161 `7d1b044`.
 - #135/#136 Chat UI polish completed by #162 `ac797ee`.
 - #128 review missing-page per-title classification completed by #164 `b273c85`.
+- #120 sidecar npm audit high vulnerability completed by Hono lockfile update commits `eb8c702` / `4c9aa5c`.
+- #126-A local API hardening completed by #167 `85cf4da`.
+- #126-B autosave error surfacing completed by #168 `6ea9488`.
+- #126-C Agent / Ingest maintainability refactor completed by #169 `de1fbaf`.
+- #126-D P3 hardening completed by #170 `7d3bda5`.
 
 ## Direct Merge Policy
 
