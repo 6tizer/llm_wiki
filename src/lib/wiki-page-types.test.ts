@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { GENERATION_WIKI_TYPES, inferWikiTypeFromPath, wikiTypeLabel } from "./wiki-page-types"
+import {
+  GENERATION_WIKI_TYPES,
+  inferWikiTypeFromPath,
+  wikiDirectoryForType,
+  wikiTypeLabel,
+} from "./wiki-page-types"
 
 describe("inferWikiTypeFromPath", () => {
   it("recognizes core wiki directories", () => {
@@ -25,6 +30,19 @@ describe("inferWikiTypeFromPath", () => {
   it("uses custom wiki subdirectories as dynamic types", () => {
     expect(inferWikiTypeFromPath("/project/wiki/people/ada-lovelace.md")).toBe("people")
     expect(inferWikiTypeFromPath("/project/wiki/technologies/vector-db.md")).toBe("technologies")
+  })
+})
+
+describe("wikiDirectoryForType", () => {
+  it("returns default directories for known wiki types", () => {
+    expect(wikiDirectoryForType("source")).toBe("sources")
+    expect(wikiDirectoryForType("entity")).toBe("entities")
+    expect(wikiDirectoryForType("methodology")).toBe("methodology")
+  })
+
+  it("matches types case-insensitively and returns null for unknown types", () => {
+    expect(wikiDirectoryForType("Source")).toBe("sources")
+    expect(wikiDirectoryForType("unknown")).toBeNull()
   })
 })
 

@@ -63,3 +63,55 @@ export interface OkfExportBundle {
   files: OkfExportedFile[]
   report: OkfExportReport
 }
+
+export type OkfImportIssueCode =
+  | "source_wiki_missing"
+  | "invalid_source_path"
+  | "invalid_target_path"
+  | "read_failed"
+  | "missing_type"
+  | "missing_title"
+
+export interface OkfImportIssue {
+  severity: OkfValidationSeverity
+  code: OkfImportIssueCode
+  path: string
+  message: string
+}
+
+export type OkfImportRoutingStrategy = "schema" | "default" | "root"
+
+export type OkfImportPlanAction = "write" | "skip"
+
+export interface OkfImportPlanPage {
+  sourceRelativePath: string
+  targetRelativePath: string
+  targetDirectory: string
+  title: string | null
+  okfType: string
+  localType: string
+  content: string
+  action: OkfImportPlanAction
+  routingStrategy: OkfImportRoutingStrategy
+  renamed: boolean
+  conflict: boolean
+  reason?: "identical"
+}
+
+export interface OkfImportSummary {
+  totalPages: number
+  writeCount: number
+  skippedCount: number
+  issueCount: number
+}
+
+export interface OkfImportPlan {
+  applied: boolean
+  pages: OkfImportPlanPage[]
+  issues: OkfImportIssue[]
+  summary: OkfImportSummary
+}
+
+export interface OkfImportOptions {
+  apply?: boolean
+}
