@@ -1,17 +1,9 @@
 /**
- * QA Hook Agent (Phase 3.65-E — Issue #34, refined by #37)
+ * QA Saver Agent.
  *
- * Automatically extracts key insights from agent conversations and saves
- * them as QA pages in the wiki.
- *
- * Trigger mechanism (Issue #37 — dirty flag + delayed flush):
- *   1. onDone → markConversationDirty(convId) — just marks, no LLM call
- *   2. activeConversationId changes → flush old conversation QA
- *   3. beforeunload → persist pending set to localStorage
- *   4. App startup → loadPendingQa() + flush stale entries
- *
- * Data flow per conversation:
- *   mark dirty → flush → shouldExtractQa → dedup → LLM → validate → writeFile
+ * Explicitly extracts reusable knowledge from a user-selected conversation
+ * and saves it as a QA page in the wiki. This module does not track dirty
+ * conversations or run automatic startup/switch flushes.
  */
 
 import {
@@ -41,22 +33,17 @@ export interface QaHookResult {
 	error?: string;
 }
 
-/** Source of a QA flush, used to tune extraction without changing queue behavior. */
-export type QaHookTrigger = "auto" | "delete";
+/** Source of an explicit QA save, used to tune extraction. */
+export type QaHookTrigger = "manual" | "delete";
 
-/** Optional controls for a single QA flush. */
-export interface QaHookFlushOptions {
-	/** Describes why QA extraction is running; defaults to the delayed auto hook. */
+/** Optional controls for a single explicit QA save. */
+export interface QaSaveOptions {
+	/** Describes why QA extraction is running; defaults to a manual save. */
 	trigger?: QaHookTrigger;
 }
 
-// ── Pending Queue (dirty flag) ───────────────────────────────────────────────
-
-const pendingQa = new Set<string>();
 const STORAGE_KEY = "llm-wiki:pendingQa";
 const RETRY_STORAGE_KEY = "llm-wiki:pendingQaRetryCounts";
-const MAX_QA_FLUSH_ATTEMPTS = 3;
-const qaRetryCounts = new Map<string, number>();
 
 function removeStorageItem(key: string, emptyValue: string): void {
 	if (typeof localStorage.removeItem === "function") {
@@ -66,186 +53,14 @@ function removeStorageItem(key: string, emptyValue: string): void {
 	localStorage.setItem(key, emptyValue);
 }
 
-/** Mark a conversation as needing QA extraction (called on each onDone). */
-export function markConversationDirty(convId: string): void {
-	pendingQa.add(convId);
-	qaRetryCounts.delete(convId);
-	persistPendingQa();
-}
-
-/** Remove a conversation from the pending queue (e.g. when deleted). */
-export function unmarkConversation(convId: string): void {
-	pendingQa.delete(convId);
-	qaRetryCounts.delete(convId);
-	persistPendingQa();
-}
-
-/** Check if a conversation has pending QA. */
-export function isConversationPending(convId: string): boolean {
-	return pendingQa.has(convId);
-}
-
-/** Get all pending conversation IDs (for testing). */
-export function getPendingQaIds(): string[] {
-	return [...pendingQa];
-}
-
-/** Persist pending set to localStorage. */
-function persistPendingQa(): void {
-	try {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify([...pendingQa]));
-		if (qaRetryCounts.size === 0) {
-			removeStorageItem(RETRY_STORAGE_KEY, "{}");
-		} else {
-			localStorage.setItem(
-				RETRY_STORAGE_KEY,
-				JSON.stringify(Object.fromEntries(qaRetryCounts)),
-			);
-		}
-	} catch {
-		// localStorage unavailable (SSR, private browsing edge case)
-	}
-}
-
-/**
- * Load pending QA set from localStorage on app startup.
- * Returns the loaded conversation IDs for the caller to decide what to do.
- */
-export function loadPendingQa(): string[] {
-	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return [];
-		const ids = JSON.parse(raw) as string[];
-		for (const id of ids) {
-			pendingQa.add(id);
-		}
-		const rawRetryCounts = localStorage.getItem(RETRY_STORAGE_KEY);
-		const retryCounts = rawRetryCounts ? JSON.parse(rawRetryCounts) : {};
-		const parsedRetryCounts =
-			retryCounts && typeof retryCounts === "object" && !Array.isArray(retryCounts)
-				? retryCounts as Record<string, unknown>
-				: {};
-		for (const id of ids) {
-			const count = parsedRetryCounts[id];
-			if (typeof count === "number" && Number.isInteger(count) && count > 0) {
-				qaRetryCounts.set(id, Math.min(count, MAX_QA_FLUSH_ATTEMPTS));
-			}
-		}
-		return ids;
-	} catch {
-		return [];
-	}
-}
-
-/** Clear localStorage after all pending QAs are flushed. */
-function clearPersistedPendingQa(): void {
+/** Clear legacy pending-QA queue keys from older automatic QA builds. */
+export function cleanupLegacyPendingQaStorage(): void {
 	try {
 		removeStorageItem(STORAGE_KEY, "[]");
 		removeStorageItem(RETRY_STORAGE_KEY, "{}");
 	} catch {
-		// ignore
+		// localStorage unavailable (SSR, private browsing edge case)
 	}
-}
-
-function clearPendingConversation(convId: string): void {
-	pendingQa.delete(convId);
-	qaRetryCounts.delete(convId);
-	persistPendingQa();
-	if (pendingQa.size === 0) {
-		clearPersistedPendingQa();
-	}
-}
-
-function recordQaFailure(convId: string): void {
-	const attempts = (qaRetryCounts.get(convId) ?? 0) + 1;
-	if (attempts >= MAX_QA_FLUSH_ATTEMPTS) {
-		clearPendingConversation(convId);
-		return;
-	}
-	qaRetryCounts.set(convId, attempts);
-	persistPendingQa();
-}
-
-// ── Flush (actual QA extraction) ─────────────────────────────────────────────
-
-/**
- * Flush a single conversation: run QA extraction and remove from pending.
- * Designed to be called fire-and-forget.
- */
-export async function flushQaForConversation(
-	convId: string,
-	messages: DisplayMessage[],
-	projectPath: string,
-	llmConfig: LlmConfig,
-	searchConfig: SearchApiConfig,
-	options: QaHookFlushOptions = {},
-): Promise<QaHookResult> {
-	// Only process if actually pending
-	if (!pendingQa.has(convId)) {
-		return { ok: true, skipped: true, skipReason: "not-pending" };
-	}
-
-	// Get messages for this specific conversation
-	const convMessages = messages.filter((m) => m.conversationId === convId);
-	if (convMessages.length === 0) {
-		clearPendingConversation(convId);
-		return { ok: true, skipped: true, skipReason: "no-messages" };
-	}
-
-	try {
-		const result = await runQaExtraction(
-			projectPath,
-			llmConfig,
-			searchConfig,
-			convMessages,
-			options.trigger ?? "auto",
-		);
-		// P1-7: only clear the pending flag on SUCCESS. Previously this
-		// lived in `finally`, so a thrown runQaExtraction marked the
-		// conversation clean and the QA page was silently lost (no retry).
-		// Move the clear here so a failure can retry until the cap below.
-		clearPendingConversation(convId);
-		return result;
-	} catch (err) {
-		// On transient failures, leave the conversation pending so it retries.
-		// Persistent failures are capped so startup/switch hooks cannot retry
-		// the same broken extraction forever.
-		recordQaFailure(convId);
-		throw err;
-	}
-}
-
-/**
- * Flush all pending conversations. Called on app startup for stale entries.
- * Returns results for each flushed conversation.
- */
-export async function flushAllPendingQa(
-	messages: DisplayMessage[],
-	projectPath: string,
-	llmConfig: LlmConfig,
-	searchConfig: SearchApiConfig,
-): Promise<QaHookResult[]> {
-	const results: QaHookResult[] = [];
-	const ids = [...pendingQa];
-	for (const convId of ids) {
-		try {
-			const r = await flushQaForConversation(
-				convId,
-				messages,
-				projectPath,
-				llmConfig,
-				searchConfig,
-			);
-			results.push(r);
-		} catch (err) {
-			// Capture per-conversation errors so one failure doesn't block others
-			results.push({
-				ok: false,
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-	return results;
 }
 
 // ── Skip Logic ───────────────────────────────────────────────────────────────
@@ -294,7 +109,7 @@ function startsWithMarkdownFence(content: string): boolean {
 /** Decide whether a conversation is worth extracting a QA from. */
 export function shouldExtractQa(
 	messages: DisplayMessage[],
-	options: QaHookFlushOptions = {},
+	options: QaSaveOptions = {},
 ): {
 	extract: boolean;
 	reason?: string;
@@ -316,7 +131,7 @@ export function shouldExtractQa(
 	}
 
 	if (
-		(options.trigger ?? "auto") === "delete" &&
+		(options.trigger ?? "manual") === "delete" &&
 		isDeleteOnlyConversation(userMsgs, assistantMsgs)
 	) {
 		return { extract: false, reason: "delete-only" };
@@ -535,15 +350,16 @@ Rules:
 
 /**
  * Run the QA extraction on a set of messages.
- * This is the internal implementation — callers should use flushQaForConversation.
+ * Explicit save entrypoint for user-requested QA page creation.
  */
-async function runQaExtraction(
+export async function saveQaForConversation(
 	projectPath: string,
 	llmConfig: LlmConfig,
 	searchConfig: SearchApiConfig,
 	messages: DisplayMessage[],
-	trigger: QaHookTrigger,
+	options: QaSaveOptions = {},
 ): Promise<QaHookResult> {
+	const trigger = options.trigger ?? "manual";
 	// Step 1: Check skip conditions
 	const { extract, reason } = shouldExtractQa(messages, { trigger });
 	if (!extract) {

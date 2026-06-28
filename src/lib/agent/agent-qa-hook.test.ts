@@ -1,15 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DisplayMessage } from "@/stores/chat-store";
 import {
-	flushAllPendingQa,
-	flushQaForConversation,
-	getPendingQaIds,
-	isConversationPending,
 	isDuplicateQa,
-	markConversationDirty,
+	cleanupLegacyPendingQaStorage,
+	saveQaForConversation,
 	shouldExtractQa,
 	stripOuterMarkdownFence,
-	unmarkConversation,
 } from "./agent-qa-hook";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -136,7 +132,7 @@ describe("shouldExtractQa", () => {
 		expect(result.reason).toBe("delete-only");
 	});
 
-	it("does not apply delete-only skip to ordinary auto QA eligibility", () => {
+	it("does not apply delete-only skip to ordinary manual QA eligibility", () => {
 		const messages = [
 			msg("user", "删除 wiki/entities/old-page.md"),
 			msg(
@@ -205,38 +201,39 @@ describe("stripOuterMarkdownFence", () => {
 	});
 });
 
-// ── Dirty flag ───────────────────────────────────────────────────────────────
+// ── Legacy automatic QA queue cleanup ───────────────────────────────────────
 
-describe("dirty flag management", () => {
-	beforeEach(() => {
-		for (const id of getPendingQaIds()) {
-			unmarkConversation(id);
-		}
-	});
+describe("cleanupLegacyPendingQaStorage", () => {
+	function stubLocalStorage() {
+		const storage = new Map<string, string>();
+		vi.stubGlobal("localStorage", {
+			getItem: vi.fn((key: string) => storage.get(key) ?? null),
+			removeItem: vi.fn((key: string) => {
+				storage.delete(key);
+			}),
+			setItem: vi.fn((key: string, value: string) => {
+				storage.set(key, value);
+			}),
+		});
+	}
 
-	it("marks conversation dirty", () => {
-		markConversationDirty("conv-1");
-		expect(isConversationPending("conv-1")).toBe(true);
-		expect(isConversationPending("conv-2")).toBe(false);
-	});
-
-	it("unmarks conversation", () => {
-		markConversationDirty("conv-1");
-		unmarkConversation("conv-1");
-		expect(isConversationPending("conv-1")).toBe(false);
-	});
-
-	it("tracks multiple pending conversations", () => {
-		markConversationDirty("conv-1");
-		markConversationDirty("conv-2");
-		expect(getPendingQaIds()).toEqual(
-			expect.arrayContaining(["conv-1", "conv-2"]),
+	it("clears old pending QA localStorage keys", () => {
+		stubLocalStorage();
+		localStorage.setItem("llm-wiki:pendingQa", JSON.stringify(["conv-1"]));
+		localStorage.setItem(
+			"llm-wiki:pendingQaRetryCounts",
+			JSON.stringify({ "conv-1": 2 }),
 		);
+
+		cleanupLegacyPendingQaStorage();
+
+		expect(localStorage.getItem("llm-wiki:pendingQa")).toBeNull();
+		expect(localStorage.getItem("llm-wiki:pendingQaRetryCounts")).toBeNull();
 	});
 
-	it("unmark on non-existent id is a no-op", () => {
-		unmarkConversation("nonexistent");
-		expect(isConversationPending("nonexistent")).toBe(false);
+	it("does not throw when legacy keys are absent", () => {
+		stubLocalStorage();
+		expect(() => cleanupLegacyPendingQaStorage()).not.toThrow();
 	});
 });
 
@@ -328,15 +325,12 @@ vi.mock("@/lib/output-language", () => ({
 	),
 }));
 
-// ── flushQaForConversation tests ─────────────────────────────────────────────
+// ── saveQaForConversation tests ─────────────────────────────────────────────
 
-describe("flushQaForConversation", () => {
+describe("saveQaForConversation", () => {
 	beforeEach(() => {
 		fsMock.files.clear();
 		vi.clearAllMocks();
-		for (const id of getPendingQaIds()) {
-			unmarkConversation(id);
-		}
 		listDirectoryMock.mockImplementation(async () => {
 			throw new Error("no qa dir");
 		});
@@ -348,42 +342,23 @@ describe("flushQaForConversation", () => {
 		});
 	});
 
-	it("skips if conversation is not pending", async () => {
+	it("saves QA explicitly without pending state", async () => {
 		const messages = [
 			msg("user", "What is RAG?"),
 			msg("assistant", longAnswer),
 		];
-		const result = await flushQaForConversation(
-			"conv-1",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
-		);
-		expect(result.skipped).toBe(true);
-		expect(result.skipReason).toBe("not-pending");
-	});
-
-	it("extracts QA and removes from pending", async () => {
-		markConversationDirty("conv-1");
-		const messages = [
-			msg("user", "What is RAG?"),
-			msg("assistant", longAnswer),
-		];
-		const result = await flushQaForConversation(
-			"conv-1",
 			messages,
-			"/project",
-			{ model: "test" } as never,
-			{ provider: "none" } as never,
 		);
 		expect(result.ok).toBe(true);
 		expect(result.saved).toBe(true);
-		expect(isConversationPending("conv-1")).toBe(false);
+		expect(fsMock.files.has("/project/wiki/qa/what-is-rag.md")).toBe(true);
 	});
 
 	it("saves fenced markdown QA as clean frontmatter-first markdown", async () => {
-		markConversationDirty("conv-fenced");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onToken(
 				"```markdown\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa, ai]\ncreated: 2026-05-31\n---\n\n# Q: What is RAG?\n\n## A: RAG is retrieval augmented generation.\n```",
@@ -394,12 +369,11 @@ describe("flushQaForConversation", () => {
 			msg("user", "What is RAG?", "conv-fenced"),
 			msg("assistant", longAnswer, "conv-fenced"),
 		];
-		const result = await flushQaForConversation(
-			"conv-fenced",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		expect(result.ok).toBe(true);
@@ -410,7 +384,6 @@ describe("flushQaForConversation", () => {
 	});
 
 	it("skips fenced SKIP responses without writing a file", async () => {
-		markConversationDirty("conv-fenced-skip");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onToken("```\nSKIP\n```");
 			h.onDone();
@@ -419,12 +392,11 @@ describe("flushQaForConversation", () => {
 			msg("user", "What is RAG?", "conv-fenced-skip"),
 			msg("assistant", longAnswer, "conv-fenced-skip"),
 		];
-		const result = await flushQaForConversation(
-			"conv-fenced-skip",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		expect(result.ok).toBe(true);
@@ -434,7 +406,6 @@ describe("flushQaForConversation", () => {
 	});
 
 	it("rejects recovered frontmatter that is not at the start of the saved file", async () => {
-		markConversationDirty("conv-prefixed");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onToken(
 				"Here is the QA page:\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\n---\n\n# Q: What is RAG?",
@@ -445,12 +416,12 @@ describe("flushQaForConversation", () => {
 			msg("user", "What is RAG?", "conv-prefixed"),
 			msg("assistant", longAnswer, "conv-prefixed"),
 		];
-		const result = await flushQaForConversation(
-			"conv-prefixed",
-			messages,
+
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		expect(result.ok).toBe(false);
@@ -459,7 +430,6 @@ describe("flushQaForConversation", () => {
 	});
 
 	it("reports a specific error when a fenced QA has trailing content", async () => {
-		markConversationDirty("conv-fenced-trailing");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onToken(
 				"```markdown\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\n---\n\n# Q: What is RAG?\n```\nHope this helps!",
@@ -470,12 +440,11 @@ describe("flushQaForConversation", () => {
 			msg("user", "What is RAG?", "conv-fenced-trailing"),
 			msg("assistant", longAnswer, "conv-fenced-trailing"),
 		];
-		const result = await flushQaForConversation(
-			"conv-fenced-trailing",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		expect(result.ok).toBe(false);
@@ -486,7 +455,6 @@ describe("flushQaForConversation", () => {
 	});
 
 	it("rejects non-QA frontmatter without writing a file", async () => {
-		markConversationDirty("conv-non-qa");
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onToken(
 				"---\ntype: entity\ntitle: What is RAG?\ntags: [qa]\n---\n\n# What is RAG?",
@@ -497,31 +465,28 @@ describe("flushQaForConversation", () => {
 			msg("user", "What is RAG?", "conv-non-qa"),
 			msg("assistant", longAnswer, "conv-non-qa"),
 		];
-		const result = await flushQaForConversation(
-			"conv-non-qa",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		expect(result.ok).toBe(false);
 		expect([...fsMock.files.keys()].some((path) => path.includes("/wiki/qa/"))).toBe(false);
 	});
 
-	it("keeps auto-trigger prompt free of delete-only instructions", async () => {
-		markConversationDirty("conv-auto");
+	it("keeps manual-save prompt free of delete-only instructions", async () => {
 		const messages = [
-			msg("user", "What is RAG?", "conv-auto"),
-			msg("assistant", longAnswer, "conv-auto"),
+			msg("user", "What is RAG?", "conv-manual"),
+			msg("assistant", longAnswer, "conv-manual"),
 		];
 
-		await flushQaForConversation(
-			"conv-auto",
-			messages,
+		await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		const llmMessages = streamChatMock.mock.calls[0]?.[1] as Array<{
@@ -533,18 +498,16 @@ describe("flushQaForConversation", () => {
 	});
 
 	it("adds recency and delete-intent guidance for delete-triggered extraction", async () => {
-		markConversationDirty("conv-delete");
 		const messages = [
 			msg("user", "What causes duplicate QA pages?", "conv-delete"),
 			msg("assistant", longAnswer, "conv-delete"),
 		];
 
-		const result = await flushQaForConversation(
-			"conv-delete",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 			{ trigger: "delete" },
 		);
 
@@ -558,45 +521,17 @@ describe("flushQaForConversation", () => {
 		expect(llmMessages[0].content).toContain("conversation cleanup");
 	});
 
-	it("filters messages by conversationId", async () => {
-		markConversationDirty("conv-1");
-		const messages = [
-			msg("user", "Hello", "conv-2"),
-			msg("assistant", "Hi there!", "conv-2"),
-			msg("user", "What is RAG?", "conv-1"),
-			msg("assistant", longAnswer, "conv-1"),
-		];
-		const result = await flushQaForConversation(
-			"conv-1",
-			messages,
-			"/project",
-			{ model: "test" } as never,
-			{ provider: "none" } as never,
-		);
-		expect(result.ok).toBe(true);
-		expect(result.saved).toBe(true);
-	});
-
-	it("skips when no messages for conversation", async () => {
-		markConversationDirty("conv-empty");
-		const result = await flushQaForConversation(
-			"conv-empty",
-			[],
-			"/project",
-			{ model: "test" } as never,
-			{ provider: "none" } as never,
-		);
-		expect(result.skipped).toBe(true);
-		expect(result.skipReason).toBe("no-messages");
-		expect(isConversationPending("conv-empty")).toBe(false);
-	});
-
-	it("keeps pending on error so the conversation retries before the cap (P1-7)", async () => {
-		// P1-7: flushQaForConversation previously cleared the pending flag
-		// in a `finally` block, so a failed extraction silently dropped the
-		// QA page and the conversation was never retried. The clear now
-		// happens only on success, so an error leaves it pending.
-		markConversationDirty("conv-err");
+	it("throws extraction errors without persisting retry state", async () => {
+		const storage = new Map<string, string>();
+		vi.stubGlobal("localStorage", {
+			getItem: vi.fn((key: string) => storage.get(key) ?? null),
+			removeItem: vi.fn((key: string) => {
+				storage.delete(key);
+			}),
+			setItem: vi.fn((key: string, value: string) => {
+				storage.set(key, value);
+			}),
+		});
 		streamChatMock.mockImplementation(async (_c, _m, h) => {
 			h.onError?.(new Error("LLM error"));
 		});
@@ -605,54 +540,18 @@ describe("flushQaForConversation", () => {
 			msg("assistant", longAnswer, "conv-err"),
 		];
 		await expect(
-			flushQaForConversation(
-				"conv-err",
-				messages,
+			saveQaForConversation(
 				"/project",
 				{ model: "test" } as never,
 				{ provider: "none" } as never,
+				messages,
 			),
 		).rejects.toThrow("LLM error");
-		// Still pending → will be retried on the next flush cycle.
-		expect(isConversationPending("conv-err")).toBe(true);
-	});
-
-	it("clears pending after repeated QA extraction errors hit the retry cap", async () => {
-		markConversationDirty("conv-dead-letter");
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
-			h.onError?.(new Error("LLM error"));
-		});
-		const messages = [
-			msg("user", "What is RAG?", "conv-dead-letter"),
-			msg("assistant", longAnswer, "conv-dead-letter"),
-		];
-
-		for (let attempt = 1; attempt <= 3; attempt++) {
-			await expect(
-				flushQaForConversation(
-					"conv-dead-letter",
-					messages,
-					"/project",
-					{ model: "test" } as never,
-					{ provider: "none" } as never,
-				),
-			).rejects.toThrow("LLM error");
-			expect(isConversationPending("conv-dead-letter")).toBe(attempt < 3);
-		}
-
-		const skipped = await flushQaForConversation(
-			"conv-dead-letter",
-			messages,
-			"/project",
-			{ model: "test" } as never,
-			{ provider: "none" } as never,
-		);
-		expect(skipped.skipReason).toBe("not-pending");
-		expect(streamChatMock).toHaveBeenCalledTimes(3);
+		expect(localStorage.getItem("llm-wiki:pendingQa")).toBeNull();
+		expect(localStorage.getItem("llm-wiki:pendingQaRetryCounts")).toBeNull();
 	});
 
 	it("skips when existing QA has matching title (dedup)", async () => {
-		markConversationDirty("conv-dedup");
 		listDirectoryMock.mockResolvedValueOnce([
 			{
 				name: "existing.md",
@@ -668,21 +567,18 @@ describe("flushQaForConversation", () => {
 			msg("user", "What is RAG?", "conv-dedup"),
 			msg("assistant", longAnswer, "conv-dedup"),
 		];
-		const result = await flushQaForConversation(
-			"conv-dedup",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 		expect(result.ok).toBe(true);
 		expect(result.skipped).toBe(true);
 		expect(result.skipReason).toBe("duplicate");
-		expect(isConversationPending("conv-dedup")).toBe(false);
 	});
 
 	it("skips near-duplicate Chinese operational topics before calling the LLM", async () => {
-		markConversationDirty("conv-near-dedup");
 		listDirectoryMock.mockResolvedValueOnce([
 			{
 				name: "existing.md",
@@ -703,96 +599,17 @@ describe("flushQaForConversation", () => {
 			msg("assistant", longAnswer, "conv-near-dedup"),
 		];
 
-		const result = await flushQaForConversation(
-			"conv-near-dedup",
-			messages,
+		const result = await saveQaForConversation(
 			"/project",
 			{ model: "test" } as never,
 			{ provider: "none" } as never,
+			messages,
 		);
 
 		expect(result.ok).toBe(true);
 		expect(result.skipped).toBe(true);
 		expect(result.skipReason).toBe("duplicate");
 		expect(streamChatMock).not.toHaveBeenCalled();
-	});
-});
-
-// ── flushAllPendingQa ────────────────────────────────────────────────────────
-
-describe("flushAllPendingQa", () => {
-	beforeEach(() => {
-		fsMock.files.clear();
-		vi.clearAllMocks();
-		for (const id of getPendingQaIds()) {
-			unmarkConversation(id);
-		}
-		listDirectoryMock.mockImplementation(async () => {
-			throw new Error("no qa dir");
-		});
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
-			h.onToken(
-				"---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\ncreated: 2026-05-31\n---\n\n# Q: What is RAG?\n\n## A: answer\n\n## Key Insights\n\n- Insight 1\n",
-			);
-			h.onDone();
-		});
-	});
-
-	it("flushes all pending conversations", async () => {
-		markConversationDirty("conv-a");
-		markConversationDirty("conv-b");
-		const messages = [
-			msg("user", "What is RAG?", "conv-a"),
-			msg("assistant", longAnswer, "conv-a"),
-			msg("user", "Explain transformers", "conv-b"),
-			msg("assistant", longAnswer, "conv-b"),
-		];
-		const results = await flushAllPendingQa(
-			messages,
-			"/project",
-			{ model: "test" } as never,
-			{ provider: "none" } as never,
-		);
-		expect(results).toHaveLength(2);
-		expect(getPendingQaIds()).toHaveLength(0);
-	});
-
-	it("handles mixed results: success + error + skip", async () => {
-		markConversationDirty("conv-ok");
-		markConversationDirty("conv-err");
-		markConversationDirty("conv-skip");
-		const messages = [
-			msg("user", "What is RAG?", "conv-ok"),
-			msg("assistant", longAnswer, "conv-ok"),
-			msg("user", "hi", "conv-skip"),
-			msg("assistant", "Hello!", "conv-skip"),
-			msg("user", "What is RAG?", "conv-err"),
-			msg("assistant", longAnswer, "conv-err"),
-		];
-		let callCount = 0;
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
-			callCount++;
-			if (callCount === 2) {
-				h.onError?.(new Error("LLM error"));
-				return;
-			}
-			h.onToken(
-				"---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\ncreated: 2026-05-31\n---\n\n# Q: What is RAG?\n\n## A: answer\n\n## Key Insights\n\n- Insight 1\n",
-			);
-			h.onDone();
-		});
-
-		const results = await flushAllPendingQa(
-			messages,
-			"/project",
-			{ model: "test" } as never,
-			{ provider: "none" } as never,
-		);
-		expect(results).toHaveLength(3);
-		// P1-7: success and skip clear pending; error leaves it pending
-		// for retry. Previously the `finally` block cleared all three.
-		const pending = getPendingQaIds();
-		expect(pending).toEqual(["conv-err"]);
 	});
 });
 

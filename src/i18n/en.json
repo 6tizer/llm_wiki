@@ -183,6 +183,16 @@
     "imageTooLarge": "{{name}} is larger than {{max}} MB.",
     "imageReadFailed": "Could not read image.",
     "imageProcessing": "Processing image",
+    "qaSave": {
+      "button": "Save QA",
+      "saving": "Saving QA...",
+      "saved": "QA saved",
+      "skipped": "No QA saved",
+      "saveInProgress": "QA save is already in progress.",
+      "failed": "QA save failed.",
+      "noProject": "Open a project before saving QA.",
+      "noConversation": "Start a conversation before saving QA."
+    },
     "qaDelete": {
       "title": "Extract QA before deleting?",
       "description": "\"{{title}}\" may contain useful Agent knowledge. Extract it into a QA page before deleting this conversation?",
@@ -190,6 +200,7 @@
       "extracting": "Extracting QA...",
       "deleteWithoutQa": "Delete Without QA",
       "cancel": "Cancel",
+      "saveInProgress": "QA save is already in progress.",
       "failed": "QA extraction failed.",
       "failedWithError": "QA extraction failed: {{error}}"
     }
