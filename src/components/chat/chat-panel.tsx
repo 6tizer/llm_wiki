@@ -28,13 +28,9 @@ import {
 } from "@/components/ui/dialog";
 import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue";
 import {
-	flushAllPendingQa,
-	flushQaForConversation,
-	isConversationPending,
-	loadPendingQa,
-	markConversationDirty,
+	cleanupLegacyPendingQaStorage,
+	saveQaForConversation,
 	shouldExtractQa,
-	unmarkConversation,
 } from "@/lib/agent/agent-qa-hook";
 import {
 	type AgentErrorKind,
@@ -90,14 +86,13 @@ function formatDate(timestamp: number): string {
 
 export function shouldPromptForQaBeforeConversationDelete(
 	conversationMessages: DisplayMessage[],
-	options: { hasProject: boolean; isPending: boolean },
+	options: { hasProject: boolean },
 ): boolean {
 	if (!options.hasProject) return false;
 	if (!shouldExtractQa(conversationMessages, { trigger: "delete" }).extract) {
 		return false;
 	}
 	return (
-		options.isPending ||
 		conversationMessages.some(
 			(message) =>
 				message.mode === "agent" ||
@@ -106,6 +101,18 @@ export function shouldPromptForQaBeforeConversationDelete(
 				Boolean(message.toolCalls?.length),
 		)
 	);
+}
+
+const qaSaveInFlightConversationIds = new Set<string>();
+
+function beginQaSaveForConversation(conversationId: string): boolean {
+	if (qaSaveInFlightConversationIds.has(conversationId)) return false;
+	qaSaveInFlightConversationIds.add(conversationId);
+	return true;
+}
+
+function finishQaSaveForConversation(conversationId: string): void {
+	qaSaveInFlightConversationIds.delete(conversationId);
 }
 
 async function refreshAgentFileTree(projectPath?: string): Promise<void> {
@@ -200,7 +207,6 @@ function ConversationSidebar() {
 		return getConversationMessages(convId).length;
 	}
 	function deleteConversationFiles(convId: string): void {
-		unmarkConversation(convId);
 		deleteConversation(convId);
 		const proj = useWikiStore.getState().project;
 		if (proj) {
@@ -214,7 +220,6 @@ function ConversationSidebar() {
 			convMessages,
 			{
 				hasProject: Boolean(s.project),
-				isPending: isConversationPending(convId),
 			},
 		);
 		if (!shouldPrompt) {
@@ -236,16 +241,18 @@ function ConversationSidebar() {
 		const msgs = useChatStore
 			.getState()
 			.messages.filter((m) => m.conversationId === convId);
+		if (!beginQaSaveForConversation(convId)) {
+			setQaDeleteError(t("chat.qaDelete.saveInProgress"));
+			return;
+		}
 		setQaDeleteBusy(true);
 		setQaDeleteError(null);
 		try {
-			markConversationDirty(convId);
-			const result = await flushQaForConversation(
-				convId,
-				msgs,
+			const result = await saveQaForConversation(
 				s.project.path,
 				s.llmConfig,
 				s.searchApiConfig,
+				msgs,
 				{ trigger: "delete" },
 			);
 			if (!result.ok) {
@@ -257,6 +264,7 @@ function ConversationSidebar() {
 		} catch (err) {
 			setQaDeleteError(err instanceof Error ? err.message : String(err));
 		} finally {
+			finishQaSaveForConversation(convId);
 			setQaDeleteBusy(false);
 		}
 	}
@@ -301,19 +309,6 @@ function ConversationSidebar() {
 										: "hover:bg-accent text-foreground"
 								}`}
 								onClick={() => {
-									const prevId = useChatStore.getState().activeConversationId;
-									if (prevId && prevId !== conv.id) {
-										const msgs = useChatStore.getState().messages;
-										const s = useWikiStore.getState();
-										if (s.project)
-											flushQaForConversation(
-												prevId,
-												msgs,
-												s.project.path,
-												s.llmConfig,
-												s.searchApiConfig,
-											).catch(() => {});
-									}
 									setActiveConversation(conv.id);
 								}}
 								onContextMenu={(event) => {
@@ -505,6 +500,11 @@ export function ChatPanel() {
 	const bottomRef = useRef<HTMLDivElement>(null);
 	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle");
 	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
+	const [manualQaBusy, setManualQaBusy] = useState(false);
+	const [manualQaStatus, setManualQaStatus] = useState<{
+		kind: "success" | "error" | "skipped";
+		message: string;
+	} | null>(null);
 	// Auto-scroll to bottom when messages change or streaming content updates
 	useEffect(() => {
 		const container = scrollContainerRef.current;
@@ -513,23 +513,9 @@ export function ChatPanel() {
 		}
 	}, [activeMessages, streamingContent]);
 
-	// Startup: flush any QA pending from last session
+	// Startup: clear legacy automatic QA queue keys from older builds.
 	useEffect(() => {
-		const pendingIds = loadPendingQa();
-		if (pendingIds.length > 0) {
-			const msgs = useChatStore.getState().messages;
-			const s = useWikiStore.getState();
-			if (s.project && msgs.length > 0) {
-				flushAllPendingQa(
-					msgs,
-					s.project.path,
-					s.llmConfig,
-					s.searchApiConfig,
-				).catch((err: unknown) =>
-					console.warn("[QA Hook] startup flush failed:", err),
-				);
-			}
-		}
+		cleanupLegacyPendingQaStorage();
 	}, []);
 
 	const handleAgentSend = useCallback(
@@ -656,9 +642,6 @@ export function ChatPanel() {
 							const stats = agentResultToStats(result);
 							const finalContent =
 								accumulated || (sawSessionCompact ? "" : result?.result || "");
-							if (!controller.signal.aborted) {
-								markConversationDirty(convId);
-							}
 							finishAgentMessage(finalContent, stats);
 						},
 						onError: (err) => {
@@ -758,6 +741,71 @@ export function ChatPanel() {
 		],
 	);
 
+	const handleManualSaveQa = useCallback(async () => {
+		if (!project) {
+			setManualQaStatus({
+				kind: "error",
+				message: t("chat.qaSave.noProject"),
+			});
+			return;
+		}
+		const convId = useChatStore.getState().activeConversationId;
+		if (!convId) {
+			setManualQaStatus({
+				kind: "error",
+				message: t("chat.qaSave.noConversation"),
+			});
+			return;
+		}
+		const msgs = useChatStore
+			.getState()
+			.messages.filter((m) => m.conversationId === convId);
+		if (!beginQaSaveForConversation(convId)) {
+			setManualQaStatus({
+				kind: "skipped",
+				message: t("chat.qaSave.saveInProgress"),
+			});
+			return;
+		}
+		setManualQaBusy(true);
+		setManualQaStatus(null);
+		try {
+			const result = await saveQaForConversation(
+				project.path,
+				llmConfig,
+				searchApiConfig,
+				msgs,
+				{ trigger: "manual" },
+			);
+			if (!result.ok) {
+				setManualQaStatus({
+					kind: "error",
+					message: result.error || t("chat.qaSave.failed"),
+				});
+				return;
+			}
+			if (result.skipped) {
+				setManualQaStatus({
+					kind: "skipped",
+					message: t("chat.qaSave.skipped"),
+				});
+				return;
+			}
+			setManualQaStatus({
+				kind: "success",
+				message: t("chat.qaSave.saved"),
+			});
+		} catch (err) {
+			setManualQaStatus({
+				kind: "error",
+				message: err instanceof Error ? err.message : String(err),
+			});
+		} finally {
+			finishQaSaveForConversation(convId);
+			setManualQaBusy(false);
+		}
+	}, [llmConfig, project, searchApiConfig, t]);
+
 	const handleSend = useCallback(
 		async (
 			text: string,
@@ -768,6 +816,11 @@ export function ChatPanel() {
 				agentMode: "standard",
 			},
 		) => {
+			if (text.trim() === "/save-qa") {
+				await handleManualSaveQa();
+				return;
+			}
+			setManualQaStatus(null);
 			if (mode === "agent") {
 				await handleAgentSend(text);
 				return;
@@ -865,7 +918,6 @@ export function ChatPanel() {
 				}
 				closeReasoning();
 				finalizeStream(accumulated, agentResult.references, convId, agentResult.steps);
-				if (convId) markConversationDirty(convId);
 				setChatAgentEvents([]);
 				abortRef.current = null;
 			} catch (err) {
@@ -883,6 +935,7 @@ export function ChatPanel() {
 		[
 			mode,
 			handleAgentSend,
+			handleManualSaveQa,
 			llmConfig,
 			searchApiConfig,
 			project,
@@ -1077,6 +1130,39 @@ export function ChatPanel() {
 						<div className="flex items-center gap-2">
 							<Loader2 className="h-3.5 w-3.5 animate-spin" />
 							<span>{t(agentStatusKey)}</span>
+						</div>
+					</div>
+				)}
+				{activeConversationId && mode !== "ingest" && (
+					<div className="border-t bg-muted/10 px-3 py-2">
+						<div className="flex flex-wrap items-center gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => void handleManualSaveQa()}
+								disabled={!project || manualQaBusy || isStreaming}
+								className="gap-2"
+							>
+								{manualQaBusy ? (
+									<Loader2 className="h-3.5 w-3.5 animate-spin" />
+								) : (
+									<BookOpen className="h-3.5 w-3.5" />
+								)}
+								{manualQaBusy ? t("chat.qaSave.saving") : t("chat.qaSave.button")}
+							</Button>
+							{manualQaStatus && (
+								<span
+									className={`text-xs ${
+										manualQaStatus.kind === "error"
+											? "text-destructive"
+											: manualQaStatus.kind === "success"
+												? "text-emerald-600"
+												: "text-muted-foreground"
+									}`}
+								>
+									{manualQaStatus.message}
+								</span>
+							)}
 						</div>
 					</div>
 				)}

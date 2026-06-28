@@ -183,6 +183,16 @@
     "imageTooLarge": "{{name}} 超过 {{max}} MB。",
     "imageReadFailed": "无法读取图片。",
     "imageProcessing": "正在处理图片",
+    "qaSave": {
+      "button": "保存 QA",
+      "saving": "正在保存 QA...",
+      "saved": "QA 已保存",
+      "skipped": "未保存 QA",
+      "saveInProgress": "QA 正在保存，请稍后再试。",
+      "failed": "QA 保存失败。",
+      "noProject": "请先打开项目再保存 QA。",
+      "noConversation": "请先开始对话再保存 QA。"
+    },
     "qaDelete": {
       "title": "删除前提炼成 QA？",
       "description": "「{{title}}」可能包含有价值的 Agent 对话知识。删除这个对话前，要先提炼成 QA 页面吗？",
@@ -190,6 +200,7 @@
       "extracting": "正在提炼 QA...",
       "deleteWithoutQa": "直接删除",
       "cancel": "取消",
+      "saveInProgress": "QA 正在保存，请稍后再试。",
       "failed": "QA 提炼失败。",
       "failedWithError": "QA 提炼失败：{{error}}"
     }
