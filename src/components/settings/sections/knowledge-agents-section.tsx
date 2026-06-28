@@ -10,6 +10,7 @@ import {
   loadKnowledgeAgentsConfig,
   saveKnowledgeAgentsConfig,
 } from "@/lib/agent/knowledge-agents-config"
+import { GUIDANCE_MAX_LENGTH, isPromptCapableAgent } from "@/lib/agent/prompt-registry"
 import type { WikiProject } from "@/types/wiki"
 
 interface Props {
@@ -98,7 +99,10 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
   const configWarning = warningText(t, state.issues, state.conflict)
   const alertMessage = conflictMessage || (state.conflict ? configWarning : saveErrorMessage || configWarning)
 
-  function patchAgent(id: typeof KNOWLEDGE_AGENT_IDS[number], patch: Partial<{ enabled: boolean; autoRun: boolean }>) {
+  function patchAgent(
+    id: typeof KNOWLEDGE_AGENT_IDS[number],
+    patch: Partial<{ enabled: boolean; autoRun: boolean; guidance: string }>,
+  ) {
     setSaved(false)
     setConflictMessage("")
     setSaveErrorMessage("")
@@ -197,13 +201,29 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
             <div
               key={id}
               data-testid={`knowledge-agent-row-${id}`}
-              className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-md border border-border/70 px-3 py-2"
+              className="grid grid-cols-[1fr_auto_auto] items-start gap-3 rounded-md border border-border/70 px-3 py-2"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">
                   {t(`settings.sections.knowledgeAgents.agents.${id}`)}
                 </div>
                 <div className="text-xs text-muted-foreground">{id}</div>
+                {isPromptCapableAgent(id) && (
+                  <label className="mt-3 block text-xs text-muted-foreground">
+                    <span className="mb-1 block">
+                      {t("settings.sections.knowledgeAgents.guidance")}
+                    </span>
+                    <textarea
+                      data-testid={`knowledge-agent-guidance-${id}`}
+                      value={agent.guidance}
+                      disabled={disabled}
+                      maxLength={GUIDANCE_MAX_LENGTH}
+                      onChange={(event) => patchAgent(id, { guidance: event.target.value })}
+                      placeholder={t("settings.sections.knowledgeAgents.guidancePlaceholder")}
+                      className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </label>
+                )}
               </div>
 
               <label className="flex items-center gap-2 text-xs text-muted-foreground">

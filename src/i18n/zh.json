@@ -731,6 +731,8 @@
         "loading": "正在加载 Knowledge Agents...",
         "enabled": "启用",
         "autoRun": "自动运行",
+        "guidance": "指导语",
+        "guidancePlaceholder": "当前项目的 prompt 指导语",
         "saving": "保存中...",
         "configIssue": "配置中有无效字段；保存前会先显示默认值。",
         "futureSchema": "这个 Knowledge Agents 配置来自更高版本，本版本只读。",
