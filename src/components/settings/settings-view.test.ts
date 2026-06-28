@@ -29,7 +29,9 @@ describe("settings platform categories", () => {
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
     expect(coerceSettingsCategory("general", nonMacCategories)).toBe("llm")
     expect(coerceSettingsCategory("knowledge-agents", nonMacCategories)).toBe("knowledge-agents")
+    expect(coerceSettingsCategory("taxonomy", nonMacCategories)).toBe("taxonomy")
     expect(nonMacCategories.some((category) => category.id === "knowledge-agents")).toBe(true)
+    expect(nonMacCategories.some((category) => category.id === "taxonomy")).toBe(true)
   })
 })
 
@@ -78,6 +80,10 @@ describe("settings app preference save flow", () => {
 describe("settings global Save bar visibility", () => {
   it("hides for Knowledge Agents because it persists inline", () => {
     expect(shouldShowGlobalSettingsSaveBar("knowledge-agents")).toBe(false)
+  })
+
+  it("hides for Tag Taxonomy because it persists inline", () => {
+    expect(shouldShowGlobalSettingsSaveBar("taxonomy")).toBe(false)
   })
 
   it("shows for shared draft categories", () => {
@@ -179,6 +185,7 @@ describe("settings MinerU polling draft", () => {
     const draft = draftWithMineru({ enabled: false, token: "", modelVersion: "vlm" })
 
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("knowledge"))).toBe(false)
+    expect(Object.keys(draft).some((key) => key.toLowerCase().includes("taxonomy"))).toBe(false)
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("agent") && key !== "agentMaxTurns" && key !== "agentMaxFilesChanged" && key !== "agentMaxWriteKiB")).toBe(false)
   })
 
