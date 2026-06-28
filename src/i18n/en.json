@@ -731,6 +731,8 @@
         "loading": "Loading Knowledge Agents...",
         "enabled": "Enabled",
         "autoRun": "Auto-run",
+        "guidance": "Guidance",
+        "guidancePlaceholder": "Project-specific prompt guidance",
         "saving": "Saving...",
         "configIssue": "The config had invalid fields; defaults are shown until saved.",
         "futureSchema": "This Knowledge Agents config is newer than this app supports. It is read-only here.",

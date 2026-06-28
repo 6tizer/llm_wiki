@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { GUIDANCE_MAX_LENGTH } from "./prompt-registry"
 import {
   KNOWLEDGE_AGENT_IDS,
   defaultKnowledgeAgentsConfig,
@@ -49,7 +50,7 @@ describe("knowledge agents config", () => {
   it("treats future schemaVersion as a conflict and save refuses to overwrite it", async () => {
     fsMocks.fileExists.mockResolvedValue(true)
     fsMocks.readFile.mockResolvedValue(JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       updatedAt: 10,
       agents: {},
     }))
@@ -83,6 +84,37 @@ describe("knowledge agents config", () => {
     ])
   })
 
+  it("migrates v1 files to v2 and defaults guidance to empty text", () => {
+    const normalized = normalizeKnowledgeAgentsConfig({
+      schemaVersion: 1,
+      updatedAt: 10,
+      agents: Object.fromEntries(KNOWLEDGE_AGENT_IDS.map((id) => [
+        id,
+        { enabled: true, autoRun: false },
+      ])),
+    })
+
+    expect(normalized.conflict).toBe(false)
+    expect(normalized.config.schemaVersion).toBe(2)
+    expect(normalized.config.agents.compiler).toEqual({ enabled: true, autoRun: false, guidance: "" })
+    expect(normalized.issues.some((item) => item.code === "invalid_guidance")).toBe(false)
+  })
+
+  it("roundtrips v2 guidance fields", async () => {
+    const config = defaultKnowledgeAgentsConfig(10)
+    config.agents.synthesizer.guidance = "Prefer concise synthesis."
+
+    fsMocks.fileExists.mockResolvedValue(true)
+    fsMocks.readFile.mockResolvedValue(JSON.stringify(config))
+
+    const loaded = await loadKnowledgeAgentsConfig("/project")
+    expect(loaded.config.schemaVersion).toBe(2)
+    expect(loaded.config.agents.synthesizer.guidance).toBe("Prefer concise synthesis.")
+
+    const saved = await saveKnowledgeAgentsConfig("/project", loaded.config, { now: () => 11 })
+    expect(saved.config.agents.synthesizer.guidance).toBe("Prefer concise synthesis.")
+  })
+
   it("falls back to deterministic updatedAt when updatedAt is invalid", () => {
     const normalized = normalizeKnowledgeAgentsConfig({
       schemaVersion: 1,
@@ -104,8 +136,8 @@ describe("knowledge agents config", () => {
     })
 
     expect(Object.keys(normalized.config.agents).sort()).toEqual([...KNOWLEDGE_AGENT_IDS].sort())
-    expect(normalized.config.agents.compiler).toEqual({ enabled: true, autoRun: true })
-    expect(normalized.config.agents.linter).toEqual({ enabled: false, autoRun: false })
+    expect(normalized.config.agents.compiler).toEqual({ enabled: true, autoRun: true, guidance: "" })
+    expect(normalized.config.agents.linter).toEqual({ enabled: false, autoRun: false, guidance: "" })
     expect(normalized.issues.some((item) => item.code === "missing_agent")).toBe(true)
   })
 
@@ -119,21 +151,51 @@ describe("knowledge agents config", () => {
       ])),
     })
 
-    expect(normalized.config.agents.compiler).toEqual({ enabled: false, autoRun: false })
+    expect(normalized.config.agents.compiler).toEqual({ enabled: false, autoRun: false, guidance: "" })
     expect(normalized.issues.some((item) => item.code === "invalid_enabled")).toBe(true)
     expect(normalized.issues.some((item) => item.code === "invalid_auto_run")).toBe(true)
   })
 
   it("requires enabled and autoRun booleans and defaults missing fields to false", () => {
     const normalized = normalizeKnowledgeAgentsConfig({
-      schemaVersion: 1,
+      schemaVersion: 2,
       updatedAt: 1,
       agents: Object.fromEntries(KNOWLEDGE_AGENT_IDS.map((id) => [id, {}])),
     })
 
-    expect(normalized.config.agents.compiler).toEqual({ enabled: false, autoRun: false })
+    expect(normalized.config.agents.compiler).toEqual({ enabled: false, autoRun: false, guidance: "" })
     expect(normalized.issues.filter((item) => item.code === "invalid_enabled")).toHaveLength(KNOWLEDGE_AGENT_IDS.length)
     expect(normalized.issues.filter((item) => item.code === "invalid_auto_run")).toHaveLength(KNOWLEDGE_AGENT_IDS.length)
+    expect(normalized.issues.filter((item) => item.code === "invalid_guidance")).toHaveLength(KNOWLEDGE_AGENT_IDS.length)
+  })
+
+  it("falls back and clamps guidance while discarding locked runtime and unknown agent fields", async () => {
+    const longGuidance = "x".repeat(GUIDANCE_MAX_LENGTH + 10)
+    const normalized = normalizeKnowledgeAgentsConfig({
+      schemaVersion: 2,
+      updatedAt: 1,
+      agents: Object.fromEntries(KNOWLEDGE_AGENT_IDS.map((id) => [
+        id,
+        {
+          enabled: true,
+          autoRun: false,
+          guidance: id === "compiler" ? longGuidance : 42,
+          locked: "must not persist",
+          runtimeInjected: "must not persist",
+          unknown: "must not persist",
+        },
+      ])),
+    })
+
+    expect(normalized.config.agents.compiler.guidance).toHaveLength(GUIDANCE_MAX_LENGTH)
+    expect(normalized.config.agents.linter.guidance).toBe("")
+    expect(normalized.issues.some((item) => item.code === "invalid_guidance")).toBe(true)
+
+    await saveKnowledgeAgentsConfig("/project", normalized.config, { now: () => 456 })
+    const content = fsMocks.writeFileAtomic.mock.calls[0]?.[1] ?? ""
+    expect(content).not.toContain("locked")
+    expect(content).not.toContain("runtimeInjected")
+    expect(content).not.toContain("unknown")
   })
 
   it("drops unknown agent ids and save does not preserve them", async () => {
@@ -153,7 +215,7 @@ describe("knowledge agents config", () => {
       ...normalized.config,
       agents: {
         ...normalized.config.agents,
-        rogue: { enabled: true, autoRun: true },
+        rogue: { enabled: true, autoRun: true, guidance: "" },
       } as never,
     }, { now: () => 456 })
 

@@ -49,6 +49,15 @@ function click(element: Element): Promise<void> {
   })
 }
 
+function input(element: HTMLTextAreaElement, value: string): Promise<void> {
+  return act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
+    setter?.call(element, value)
+    element.dispatchEvent(new Event("input", { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
 function unmount(root: Root): void {
   act(() => {
     root.unmount()
@@ -82,13 +91,15 @@ describe("KnowledgeAgentsSection", () => {
     expect([...container.querySelectorAll("[data-testid^='knowledge-agent-row-']")].map((row) => row.textContent)).toEqual(
       expect.arrayContaining(KNOWLEDGE_AGENT_IDS.map((id) => expect.stringContaining(id))),
     )
+    expect(container.querySelectorAll("[data-testid^='knowledge-agent-guidance-']")).toHaveLength(5)
+    expect(container.querySelector("[data-testid='knowledge-agent-guidance-tagger']")).toBeNull()
 
     unmount(root)
   })
 
-  it("loads a valid persisted config with checked compiler toggles", async () => {
+  it("loads a valid persisted config with checked compiler toggles and guidance", async () => {
     const config = defaultKnowledgeAgentsConfig(10)
-    config.agents.compiler = { enabled: true, autoRun: true }
+    config.agents.compiler = { enabled: true, autoRun: true, guidance: "Prefer concept-first output." }
     fsMocks.fileExists.mockResolvedValue(true)
     fsMocks.readFile.mockResolvedValue(JSON.stringify(config))
 
@@ -99,6 +110,7 @@ describe("KnowledgeAgentsSection", () => {
 
     expect(container.querySelector<HTMLInputElement>("[data-testid='knowledge-agent-enabled-compiler']")?.checked).toBe(true)
     expect(container.querySelector<HTMLInputElement>("[data-testid='knowledge-agent-auto-run-compiler']")?.checked).toBe(true)
+    expect(container.querySelector<HTMLTextAreaElement>("[data-testid='knowledge-agent-guidance-compiler']")?.value).toBe("Prefer concept-first output.")
 
     unmount(root)
   })
@@ -113,6 +125,7 @@ describe("KnowledgeAgentsSection", () => {
     expect(container.textContent).toContain("Loading")
     expect(container.querySelector<HTMLInputElement>("[data-testid='knowledge-agent-enabled-compiler']")?.disabled).toBe(true)
     expect(container.querySelector<HTMLInputElement>("[data-testid='knowledge-agent-auto-run-compiler']")?.disabled).toBe(true)
+    expect(container.querySelector<HTMLTextAreaElement>("[data-testid='knowledge-agent-guidance-compiler']")?.disabled).toBe(true)
 
     unmount(root)
   })
@@ -132,6 +145,10 @@ describe("KnowledgeAgentsSection", () => {
     if (!autoRun) throw new Error("compiler auto-run checkbox not found")
     await click(autoRun)
 
+    const guidance = container.querySelector<HTMLTextAreaElement>("[data-testid='knowledge-agent-guidance-compiler']")
+    if (!guidance) throw new Error("compiler guidance textarea not found")
+    await input(guidance, "Focus on stable wiki links.")
+
     const save = container.querySelector<HTMLButtonElement>("[data-testid='knowledge-agents-save']")
     if (!save) throw new Error("save button not found")
     await click(save)
@@ -145,6 +162,7 @@ describe("KnowledgeAgentsSection", () => {
     expect(parsed.updatedAt).toBe(987)
     expect(parsed.agents.compiler.enabled).toBe(true)
     expect(parsed.agents.compiler.autoRun).toBe(true)
+    expect(parsed.agents.compiler.guidance).toBe("Focus on stable wiki links.")
 
     unmount(root)
   })
@@ -168,6 +186,15 @@ describe("KnowledgeAgentsSection", () => {
 
     expect(container.textContent).toContain("Save failed")
     expect(save.disabled).toBe(false)
+
+    const guidance = container.querySelector<HTMLTextAreaElement>("[data-testid='knowledge-agent-guidance-compiler']")
+    if (!guidance) throw new Error("compiler guidance textarea not found")
+    await input(guidance, "Recover after failed save.")
+    await click(save)
+
+    expect(fsMocks.writeFileAtomic).toHaveBeenCalledTimes(2)
+    const content = fsMocks.writeFileAtomic.mock.calls[1]?.[1] ?? ""
+    expect(JSON.parse(content).agents.compiler.guidance).toBe("Recover after failed save.")
 
     unmount(root)
   })
@@ -214,7 +241,7 @@ describe("KnowledgeAgentsSection", () => {
   it("renders future schema conflicts as read-only and does not write", async () => {
     fsMocks.fileExists.mockResolvedValue(true)
     fsMocks.readFile.mockResolvedValue(JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       updatedAt: 10,
       agents: {},
     }))

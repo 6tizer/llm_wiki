@@ -1,7 +1,8 @@
 import { fileExists, readFile, writeFileAtomic } from "@/commands/fs"
+import { clampAgentGuidance } from "@/lib/agent/prompt-registry"
 import { normalizePath } from "@/lib/path-utils"
 
-export const KNOWLEDGE_AGENTS_SCHEMA_VERSION = 1
+export const KNOWLEDGE_AGENTS_SCHEMA_VERSION = 2
 
 export const KNOWLEDGE_AGENT_IDS = [
   "compiler",
@@ -17,6 +18,7 @@ export type KnowledgeAgentId = typeof KNOWLEDGE_AGENT_IDS[number]
 export interface KnowledgeAgentSettings {
   enabled: boolean
   autoRun: boolean
+  guidance: string
 }
 
 export type KnowledgeAgentsById = Record<KnowledgeAgentId, KnowledgeAgentSettings>
@@ -39,6 +41,7 @@ export interface KnowledgeAgentsConfigIssue {
     | "invalid_agent"
     | "invalid_enabled"
     | "invalid_auto_run"
+    | "invalid_guidance"
     | "unknown_agent"
     | "stale_updated_at"
   path?: string
@@ -88,7 +91,7 @@ function isValidUpdatedAt(value: unknown): value is number {
 }
 
 function defaultAgentSettings(): KnowledgeAgentSettings {
-  return { enabled: false, autoRun: false }
+  return { enabled: false, autoRun: false, guidance: "" }
 }
 
 /** Returns the frozen default Knowledge Agents config for a project. */
@@ -149,8 +152,9 @@ export function normalizeKnowledgeAgentsConfig(
     }
   }
 
-  if (schemaVersion !== KNOWLEDGE_AGENTS_SCHEMA_VERSION) {
-    issues.push(issue("invalid_schema_version", "Knowledge Agents config schemaVersion must be 1.", "schemaVersion"))
+  const canMigrateV1 = schemaVersion === 1
+  if (schemaVersion !== KNOWLEDGE_AGENTS_SCHEMA_VERSION && !canMigrateV1) {
+    issues.push(issue("invalid_schema_version", "Knowledge Agents config schemaVersion must be 2.", "schemaVersion"))
     return { config: fallback, issues, conflict: false }
   }
 
@@ -201,7 +205,14 @@ export function normalizeKnowledgeAgentsConfig(
       issues.push(issue("invalid_auto_run", `Knowledge Agent "${id}" autoRun must be boolean.`, `agents.${id}.autoRun`))
     }
 
-    agents[id] = { enabled, autoRun }
+    let guidance = ""
+    if (typeof agentRaw.guidance === "string") {
+      guidance = clampAgentGuidance(agentRaw.guidance)
+    } else if (!canMigrateV1) {
+      issues.push(issue("invalid_guidance", `Knowledge Agent "${id}" guidance must be a string.`, `agents.${id}.guidance`))
+    }
+
+    agents[id] = { enabled, autoRun, guidance }
   }
 
   return {

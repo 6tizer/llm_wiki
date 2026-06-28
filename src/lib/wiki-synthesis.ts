@@ -13,6 +13,7 @@ import { streamChat } from "@/lib/llm-client"
 import { webSearch, type WebSearchResult } from "@/lib/web-search"
 import { flattenMdFiles } from "@/lib/wiki-utils"
 import { buildLanguageDirective } from "@/lib/output-language"
+import { composeAgentPrompt } from "@/lib/agent/prompt-registry"
 import type { FileNode } from "@/types/wiki"
 import type { LlmConfig, SearchApiConfig } from "@/stores/wiki-store"
 
@@ -106,11 +107,12 @@ function discoverClusters(pages: ClusterPage[], minSize = 3): TagCluster[] {
 }
 
 /** Build a synthesis prompt from cluster pages + external search results. */
-function buildSynthesisPrompt(
+export function buildSynthesisPrompt(
   cluster: TagCluster,
   externalResults: WebSearchResult[],
   wikiIndex: string,
   languageHint: string,
+  guidance?: string,
 ): string {
   const pageSummaries = cluster.pages
     .map((p) => {
@@ -126,18 +128,18 @@ function buildSynthesisPrompt(
         .join("\n")}`
     : ""
 
-  return `You are a knowledge synthesis expert. Analyze the following cluster of wiki pages about "${cluster.tag}" and produce a comprehensive synthesis report.
+  return composeAgentPrompt({
+    lockedPrelude: `You are a knowledge synthesis expert. Analyze the cluster of wiki pages about "${cluster.tag}" and produce a comprehensive synthesis report.
 
-${languageHint}
-
-## Wiki Pages in This Cluster (${cluster.pages.length} pages)
+${languageHint}`,
+    runtimeInjected: `## Wiki Pages in This Cluster (${cluster.pages.length} pages)
 
 ${pageSummaries}
 ${externalSection}
 
-${wikiIndex ? `\n## Current Wiki Index\n\n${wikiIndex}\n` : ""}
-
-## Your Task
+${wikiIndex ? `\n## Current Wiki Index\n\n${wikiIndex}\n` : ""}`,
+    guidance,
+    lockedOutputContract: `## Locked Output Contract
 
 Produce a synthesis report with this structure:
 
@@ -147,9 +149,7 @@ Produce a synthesis report with this structure:
 4. **Source List**: Reference each wiki page using [[wikilink]] syntax
 5. **Action Recommendations**: Suggested next steps or areas for further research
 
-Write the report as a wiki page with YAML frontmatter. Use this format:
-
-\`\`\`
+Write the report as a wiki page with YAML frontmatter. The first bytes of your response must be:
 ---
 type: synthesis
 title: "Synthesis: [your title]"
@@ -173,9 +173,10 @@ created: ${new Date().toISOString().slice(0, 10)}
 
 ## Action Recommendations
 [recommendations]
-\`\`\`
 
-Output ONLY the wiki page content, nothing else.`
+Do not wrap the response in Markdown code fences.
+Output ONLY the wiki page content, nothing else.`,
+  })
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
