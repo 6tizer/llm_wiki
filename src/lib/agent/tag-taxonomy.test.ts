@@ -4,6 +4,7 @@ import {
   DEFAULT_TAG_TAXONOMY_SAFETY,
   applyTagTaxonomyBootstrap,
   applyTagTaxonomyGrowth,
+  buildTagTaxonomyPageReport,
   defaultTagTaxonomy,
   isTagTaxonomyStale,
   loadTagTaxonomy,
@@ -145,6 +146,104 @@ describe("tag taxonomy config", () => {
     expect(isTagTaxonomyStale(1, 2)).toBe(true)
     expect(isTagTaxonomyStale(undefined, 1)).toBe(true)
     expect(isTagTaxonomyStale(1, Number.NaN)).toBe(true)
+  })
+})
+
+describe("taxonomy-aware tag matching", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("matches taxonomy nodes with labels, slugs, confidence, and evidence", () => {
+    const taxonomy = defaultTagTaxonomy(1)
+    taxonomy.tree.push({
+      slug: "concept",
+      label: "Concept",
+      level: 1,
+      evidence: [],
+      confidence: 0.7,
+      createdBy: "bootstrap",
+      updatedAt: 1,
+      batchId: "seed",
+      children: [{
+        slug: "ai",
+        label: "Artificial Intelligence",
+        level: 2,
+        evidence: [],
+        confidence: 0.8,
+        createdBy: "bootstrap",
+        updatedAt: 1,
+        batchId: "seed",
+        children: [{
+          slug: "transformer",
+          label: "Transformer",
+          level: 3,
+          evidence: ["wiki/transformer.md"],
+          confidence: 0.9,
+          createdBy: "bootstrap",
+          updatedAt: 1,
+          batchId: "seed",
+        }],
+      }],
+    })
+
+    const report = buildTagTaxonomyPageReport(taxonomy, {
+      relativePath: "wiki/transformer.md",
+      title: "Transformer",
+      type: "concept",
+      tags: [],
+      body: "A neural architecture.",
+      candidateTags: ["transformer"],
+    })
+
+    expect(report.suggestions[0]).toMatchObject({
+      label: "Artificial Intelligence",
+      slug: "ai",
+      path: "concept/ai",
+      confidence: 0.75,
+      band: "high",
+    })
+    expect(report.matchedSlugs).toEqual(["concept/ai"])
+    expect(report.evidence).toEqual(expect.arrayContaining([
+      "title:Transformer",
+      "type:Concept",
+    ]))
+  })
+
+  it("returns low-confidence bounded growth proposals without writing sidecars", () => {
+    const taxonomy = defaultTagTaxonomy(1)
+    taxonomy.tree.push({
+      slug: "concept",
+      label: "Concept",
+      level: 1,
+      evidence: [],
+      confidence: 0.7,
+      createdBy: "bootstrap",
+      updatedAt: 1,
+      batchId: "seed",
+      children: [],
+    })
+
+    const report = buildTagTaxonomyPageReport(taxonomy, {
+      relativePath: "wiki/quantum-pump.md",
+      title: "Quantum Pump",
+      type: "concept",
+      tags: [],
+      body: "Specialized notes.",
+      candidateTags: ["quantum"],
+    })
+
+    expect(report.band).toBe("low")
+    expect(report.suggestions).toEqual([])
+    expect(report.growthProposal.nodes).toEqual([{
+      slug: "quantum",
+      label: "quantum",
+      level: 2,
+      parentPath: "concept",
+      confidence: 0.35,
+      evidence: ["title:Quantum Pump", "type:concept", "wiki/quantum-pump.md"],
+    }])
+    expect(fsMocks.writeFileAtomic).not.toHaveBeenCalled()
   })
 })
 

@@ -828,14 +828,29 @@ async function runAgentAppToolHandler({
   }
 
   if (toolName === "autofill_properties") {
-    const preview = await runAutofill(projectPath, { dryRun: true })
-    const plannedPaths = uniqueStrings(preview.details.map((detail) => detail.relativePath))
+    const taxonomyAware = args.taxonomyAware === true
+    const autoWriteHighConfidence = args.autoWriteHighConfidence === true
+    const previewOptions = taxonomyAware
+      ? { dryRun: true, taxonomyAware, autoWriteHighConfidence }
+      : { dryRun: true }
+    const preview = await runAutofill(projectPath, previewOptions)
+    const plannedPaths = taxonomyAware && !autoWriteHighConfidence
+      ? []
+      : uniqueStrings(preview.details.map((detail) => detail.relativePath))
     const blocked = preflightBudget(toolName, budget, plannedPaths)
     if (blocked) return blocked
-    const result = await runAutofill(projectPath)
+    const result = taxonomyAware
+      ? await runAutofill(projectPath, {
+          dryRun: !autoWriteHighConfidence,
+          taxonomyAware,
+          autoWriteHighConfidence,
+        })
+      : await runAutofill(projectPath)
     state.setFileTree(await listDirectory(projectPath))
     useWikiStore.getState().bumpDataVersion()
-    const wikiChanged = wikiChangedFromPaths(result.details.map((detail) => detail.relativePath))
+    const wikiChanged = taxonomyAware && !autoWriteHighConfidence
+      ? []
+      : wikiChangedFromPaths(result.details.map((detail) => detail.relativePath))
     return {
       ok: true,
       result,

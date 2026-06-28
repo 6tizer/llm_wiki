@@ -824,8 +824,11 @@ export function createLlmWikiTools(
 
 		tool(
 			"autofill_properties",
-			"Scan wiki concept/entity pages and automatically fill missing Status and Tags frontmatter fields. Status promotion: Draft + 7 days + content complete → Under Review; referenced by ≥2 summaries → Reviewed. Tags: empty → extract 1-3 keywords from title and headings.",
-			{},
+			"Scan wiki concept/entity pages and fill missing Status and Tags frontmatter fields. Default behavior preserves the existing heuristic autofill: status promotion plus heuristic tags for empty tags. With taxonomyAware=true, return taxonomy suggestions/reports in preview mode by default; only autoWriteHighConfidence=true writes high-confidence taxonomy label tags.",
+			{
+				taxonomyAware: z.boolean().optional(),
+				autoWriteHighConfidence: z.boolean().optional(),
+			},
 			async (args) =>
 				safe(async () =>
 					appTool(context, "autofill_properties", args, { requiresWrite: true }),

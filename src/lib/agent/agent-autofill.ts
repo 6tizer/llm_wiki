@@ -17,12 +17,33 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { getRelativePath, normalizePath } from "@/lib/path-utils"
 import type { FileNode } from "@/types/wiki"
 import { flattenMdFiles } from "@/lib/wiki-utils"
+import {
+  buildTagTaxonomyPageReport,
+  loadTagTaxonomy,
+  type TagTaxonomyPageReport,
+  type TagTaxonomySuggestion,
+} from "./tag-taxonomy"
 
 export interface AutofillResult {
   pagesScanned: number
   statusPromoted: number
   tagsAssigned: number
   details: Array<{ path: string; relativePath: string; action: "status" | "tags"; from: string; to: string }>
+  taxonomy?: {
+    enabled: boolean
+    fallback: boolean
+    dryRun: boolean
+    autoWriteHighConfidence: boolean
+    reports: TagTaxonomyPageReport[]
+    proposalCount: number
+    issues: Array<{ code: string; path?: string; message: string }>
+  }
+}
+
+export interface AutofillOptions {
+  dryRun?: boolean
+  taxonomyAware?: boolean
+  autoWriteHighConfidence?: boolean
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -259,6 +280,48 @@ function formatYamlValue(val: string | string[]): string {
   return String(val)
 }
 
+function frontmatterTags(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) return value.map((item) => item.trim()).filter(Boolean)
+  if (typeof value === "string") return value.trim() ? [value.trim()] : []
+  return []
+}
+
+function mergeTaxonomyTags(existing: string[], additions: TagTaxonomySuggestion[]): string[] {
+  const bySlug = new Map<string, string>()
+  const seen = new Set<string>()
+  const keysFor = (tag: string, taxonomySlug?: string): string[] => [
+    slugForDedupe(tag),
+    ...(taxonomySlug ? [taxonomySlug] : []),
+  ].filter(Boolean)
+
+  for (const tag of existing) {
+    const clean = tag.trim()
+    if (!clean) continue
+    const key = slugForDedupe(clean)
+    bySlug.set(key, clean)
+    for (const seenKey of keysFor(clean)) seen.add(seenKey)
+  }
+  for (const tag of additions) {
+    const clean = tag.label.trim()
+    if (!clean) continue
+    const keys = keysFor(clean, tag.slug)
+    if (keys.some((key) => seen.has(key))) continue
+    bySlug.set(tag.slug, clean)
+    for (const seenKey of keys) seen.add(seenKey)
+  }
+  return [...bySlug.values()]
+}
+
+function slugForDedupe(value: string): string {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
 // ── public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -268,10 +331,15 @@ function formatYamlValue(val: string | string[]): string {
  * 2. Promotes status where criteria are met
  * 3. Assigns tags to pages with empty tags
  *
- * Returns a result summary. With dryRun, reports the same planned changes without writing files.
- * Does NOT call LLM — pure heuristic.
+ * Returns a result summary. By default this preserves the existing heuristic
+ * autofill behavior. With taxonomyAware, it adds a deterministic read-only
+ * taxonomy matcher/report; taxonomy label writes require
+ * autoWriteHighConfidence=true.
  */
-export async function runAutofill(projectPath: string, options: { dryRun?: boolean } = {}): Promise<AutofillResult> {
+export async function runAutofill(projectPath: string, options: AutofillOptions = {}): Promise<AutofillResult> {
+  const effectiveDryRun =
+    options.dryRun === true ||
+    (options.taxonomyAware === true && options.autoWriteHighConfidence !== true)
   const result: AutofillResult = {
     pagesScanned: 0,
     statusPromoted: 0,
@@ -283,6 +351,41 @@ export async function runAutofill(projectPath: string, options: { dryRun?: boole
   result.pagesScanned = pages.length
 
   if (pages.length === 0) return result
+
+  let taxonomyReports: TagTaxonomyPageReport[] = []
+  let taxonomyFallback = true
+  if (options.taxonomyAware) {
+    const loaded = await loadTagTaxonomy(projectPath)
+    taxonomyFallback = loaded.conflict || loaded.taxonomy.tree.length === 0
+    result.taxonomy = {
+      enabled: !taxonomyFallback,
+      fallback: taxonomyFallback,
+      dryRun: effectiveDryRun,
+      autoWriteHighConfidence: options.autoWriteHighConfidence === true,
+      reports: taxonomyReports,
+      proposalCount: 0,
+      issues: loaded.issues,
+    }
+    if (!taxonomyFallback) {
+      taxonomyReports = pages.map((page) => {
+        const title = String(page.frontmatter.title || page.slug.split("/").pop() || "")
+        return buildTagTaxonomyPageReport(loaded.taxonomy, {
+          relativePath: `wiki/${page.slug}.md`,
+          title,
+          type: page.type,
+          tags: frontmatterTags(page.frontmatter.tags),
+          body: page.body,
+          wikilinks: extractWikilinks(page.body),
+          candidateTags: extractTagsFromContent(title, page.body),
+        })
+      })
+      result.taxonomy.reports = taxonomyReports
+      result.taxonomy.proposalCount = taxonomyReports.reduce(
+        (sum, report) => sum + report.growthProposal.nodes.length,
+        0,
+      )
+    }
+  }
 
   // Phase 1: Count summary references for all concept/entity slugs
   const targetSlugs = new Set(pages.map((p) => p.slug.toLowerCase()))
@@ -303,7 +406,7 @@ export async function runAutofill(projectPath: string, options: { dryRun?: boole
       // Rule 1: Referenced by ≥2 summaries → Reviewed (highest priority)
       if (refCount >= 2) {
         try {
-          if (!options.dryRun) await updateFrontmatterField(page.path, "status", "Reviewed")
+          if (!effectiveDryRun) await updateFrontmatterField(page.path, "status", "Reviewed")
           result.statusPromoted++
           result.details.push({
             path: page.slug,
@@ -321,7 +424,7 @@ export async function runAutofill(projectPath: string, options: { dryRun?: boole
       // Rule 2: Draft ≥7 days + content complete → Under Review
       if (created && daysSince(created) >= 7 && isContentComplete(page.body)) {
         try {
-          if (!options.dryRun) await updateFrontmatterField(page.path, "status", "Under Review")
+          if (!effectiveDryRun) await updateFrontmatterField(page.path, "status", "Under Review")
           result.statusPromoted++
           result.details.push({
             path: page.slug,
@@ -337,12 +440,38 @@ export async function runAutofill(projectPath: string, options: { dryRun?: boole
     }
 
     // ── Tag assignment ──
-    if (!hasTags) {
+    if (options.taxonomyAware && !taxonomyFallback) {
+      const taxonomyReport = taxonomyReports.find((item) => item.relativePath === `wiki/${page.slug}.md`)
+      const highConfidenceSuggestions = taxonomyReport?.suggestions
+        .filter((suggestion) => suggestion.band === "high") ?? []
+      const currentTags = frontmatterTags(page.frontmatter.tags)
+      const mergedTags = mergeTaxonomyTags(currentTags, highConfidenceSuggestions)
+      const shouldWriteTaxonomyTags =
+        options.autoWriteHighConfidence === true &&
+        highConfidenceSuggestions.length > 0 &&
+        mergedTags.length > currentTags.length
+
+      if (shouldWriteTaxonomyTags) {
+        try {
+          if (!effectiveDryRun) await updateFrontmatterField(page.path, "tags", mergedTags)
+          result.tagsAssigned++
+          result.details.push({
+            path: page.slug,
+            relativePath: `wiki/${page.slug}.md`,
+            action: "tags",
+            from: currentTags.length > 0 ? currentTags.join(", ") : "(empty)",
+            to: mergedTags.join(", "),
+          })
+        } catch (err) {
+          console.warn(`[autofill] failed to assign taxonomy tags for ${page.slug}:`, err)
+        }
+      }
+    } else if (!hasTags) {
       const title = String(page.frontmatter.title || page.slug.split("/").pop() || "")
       const extractedTags = extractTagsFromContent(title, page.body)
       if (extractedTags.length > 0) {
         try {
-          if (!options.dryRun) await updateFrontmatterField(page.path, "tags", extractedTags)
+          if (!effectiveDryRun) await updateFrontmatterField(page.path, "tags", extractedTags)
           result.tagsAssigned++
           result.details.push({
             path: page.slug,
