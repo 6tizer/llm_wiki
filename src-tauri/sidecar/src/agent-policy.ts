@@ -24,6 +24,11 @@ export const READ_WIKI_TOOLS = [
 	"mcp__llm_wiki__merge_duplicate_group",
 	"mcp__llm_wiki__optimize_research_topic",
 	"mcp__llm_wiki__test_provider_connection",
+	"mcp__llm_wiki__okf_validate",
+	"mcp__llm_wiki__okf_export",
+	"mcp__llm_wiki__taxonomy_preview",
+	"mcp__llm_wiki__synthesis_preview",
+	"mcp__llm_wiki__get_knowledge_agents_config",
 ] as const;
 
 export const WRITE_WIKI_TOOLS = [
@@ -42,6 +47,9 @@ export const WRITE_WIKI_TOOLS = [
 	"mcp__llm_wiki__run_pipeline",
 	"mcp__llm_wiki__autofill_properties",
 	"mcp__llm_wiki__sweep_reviews",
+	"mcp__llm_wiki__okf_import",
+	"mcp__llm_wiki__taxonomy_apply",
+	"mcp__llm_wiki__taxonomy_rollback",
 ] as const;
 
 const WIKI_TOOL_NAMES = new Set<string>([
@@ -143,6 +151,14 @@ export function previewToolInput(input: unknown): Record<string, unknown> {
 		"canonicalSlug",
 		"gapTitle",
 		"gapType",
+		"sourceDir",
+		"apply",
+		"action",
+		"dimension",
+		"targetTag",
+		"targetTags",
+		"minClusterSize",
+		"maxCandidates",
 	]) {
 		if (source[key] !== undefined) preview[key] = source[key];
 	}

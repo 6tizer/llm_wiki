@@ -448,6 +448,7 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 		args: Record<string, unknown>;
 		budget?: {
 			maxFilesChanged: number;
+			maxWriteBytes?: number;
 			changedPaths: string[];
 			maxFilesChangedEnabled?: boolean;
 		};
@@ -456,6 +457,7 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 	const save = toolByName("save_query_page", {
 		streamId: "stream-1",
 		maxFilesChanged: 3,
+		maxWriteBytes: 1024,
 		changedPaths: new Set(["wiki/index.md"]),
 		emitAgentEvent: (type, data) => sent.push({ type, data }),
 		onWikiChanged: (payload) => changed.push(payload),
@@ -484,6 +486,7 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 			args: { content: "Saved answer", title: "Saved" },
 			budget: {
 				maxFilesChanged: 3,
+				maxWriteBytes: 1024,
 				changedPaths: ["wiki/index.md"],
 				maxFilesChangedEnabled: false,
 			},
@@ -604,6 +607,116 @@ test("app-level tool resource limits are emitted and returned as tool errors", a
 		message: "Write would exceed maxFilesChanged (1)",
 		recovery: "split_task",
 	});
+
+	const save = toolByName("save_query_page", {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		emitAgentEvent: (type, data) => sent.push({ type, data }),
+		appToolBridge: {
+			async callTool() {
+				return {
+					ok: false,
+					result: { ok: false, error: "Write exceeds maxWriteBytes (15 > 10)" },
+					resourceLimit: {
+						kind: "resource_limit",
+						limitKind: "max_write_bytes",
+						limit: 10,
+						used: 8,
+						attempted: 15,
+						changedPaths: ["wiki/index.md"],
+						path: "wiki/queries/large.md",
+						bytes: 15,
+						toolName: "save_query_page",
+						message: "Write exceeds maxWriteBytes (15 > 10)",
+						recovery: "settings_agent",
+					},
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const writeResult = await save.handler({
+		content: "small",
+		title: "Large",
+	}, {});
+
+	assert.equal(writeResult.isError, true);
+	assert.equal(writeResult.structuredContent?.kind, "max_write_bytes");
+	assert.equal(writeResult.structuredContent?.limit, 10);
+	assert.equal(writeResult.structuredContent?.used, 8);
+	assert.equal(writeResult.structuredContent?.attempted, 15);
+	assert.deepEqual(writeResult.structuredContent?.changedPaths, ["wiki/index.md"]);
+	assert.equal(writeResult.structuredContent?.path, "wiki/queries/large.md");
+	assert.equal(writeResult.structuredContent?.bytes, 15);
+	assert.equal(writeResult.structuredContent?.error, "Write exceeds maxWriteBytes (15 > 10)");
+	assert.deepEqual(writeResult.structuredContent?.resourceLimit, {
+		kind: "resource_limit",
+		limitKind: "max_write_bytes",
+		limit: 10,
+		used: 8,
+		attempted: 15,
+		changedPaths: ["wiki/index.md"],
+		path: "wiki/queries/large.md",
+		bytes: 15,
+		toolName: "save_query_page",
+		message: "Write exceeds maxWriteBytes (15 > 10)",
+		recovery: "settings_agent",
+	});
+	assert.deepEqual(sent.at(-1)?.data, {
+		kind: "resource_limit",
+		limitKind: "max_write_bytes",
+		limit: 10,
+		used: 8,
+		attempted: 15,
+		changedPaths: ["wiki/index.md"],
+		path: "wiki/queries/large.md",
+		bytes: 15,
+		toolName: "save_query_page",
+		message: "Write exceeds maxWriteBytes (15 > 10)",
+		recovery: "settings_agent",
+	});
+});
+
+test("app-level tool rejects unsupported resource limit kinds from bridge", async () => {
+	const sent: Array<{ type: string; data: unknown }> = [];
+	const save = toolByName("save_query_page", {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		emitAgentEvent: (type, data) => sent.push({ type, data }),
+		appToolBridge: {
+			async callTool() {
+				return {
+					ok: false,
+					result: { ok: false, error: "The agent exceeded max turns" },
+					resourceLimit: {
+						kind: "resource_limit",
+						limitKind: "max_turns_exceeded",
+						message: "The agent exceeded max turns",
+						recovery: "split_task",
+					},
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const result = await save.handler({ content: "Saved answer", title: "Saved" }, {});
+
+	assert.equal(result.isError, true);
+	assert.equal(result.structuredContent?.error, "resourceLimit is invalid");
+	assert.match(resultText(result), /resourceLimit is invalid/);
+	const lastEvent = sent.at(-1);
+	const lastEventData = lastEvent?.data as Record<string, unknown> | undefined;
+	assert.equal(lastEvent?.type, "agent_task_error");
+	assert.equal(typeof lastEventData?.taskId, "string");
+	assert.equal(lastEventData?.toolName, "save_query_page");
+	assert.equal(lastEventData?.error, "resourceLimit is invalid");
+	assert.equal(sent.some((event) => event.type === "agent_action_required"), false);
 });
 
 test("app-level batch writes register changed paths before later writes are blocked", async () => {
@@ -944,6 +1057,36 @@ test("autofill_properties schema exposes taxonomy-aware options", () => {
 	assert.equal(writeSchema.type, "boolean");
 });
 
+test("OKF, taxonomy, synthesis, and Knowledge Agents schemas are exposed", () => {
+	assert.ok(toolByName("okf_validate", {}));
+	assert.ok(toolByName("okf_export", {}));
+	assert.ok(toolByName("taxonomy_rollback", {}));
+	assert.ok(toolByName("get_knowledge_agents_config", {}));
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: "/source" }).success, true);
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: "" }).success, false);
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: " " }).success, false);
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: "source" }).success, false);
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: "/tmp/../source" }).success, false);
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: "/tmp/source\0bad" }).success, false);
+	assert.equal(inputSchemaResult("okf_import", { sourceDir: "/source", outputDir: "/tmp/out" }).success, false);
+	assert.equal(inputSchemaResult("taxonomy_preview", { action: "bootstrap" }).success, true);
+	assert.equal(inputSchemaResult("taxonomy_apply", { action: "growth" }).success, true);
+	assert.equal(inputSchemaResult("taxonomy_apply", { action: "delete" }).success, false);
+	assert.equal(inputSchemaResult("synthesis_preview", { dimension: 2, targetTags: ["ai"] }).success, true);
+	assert.equal(inputSchemaResult("synthesis_preview", { dimension: 5 }).success, false);
+	assert.equal(inputSchemaResult("wiki_synthesis", { dimension: 4, targetTag: "ai", targetTags: ["ai", "systems"], minClusterSize: 3, maxCandidates: 8 }).success, true);
+	assert.equal(inputSchemaResult("wiki_synthesis", { dimension: 5 }).success, false);
+
+	const okfImportSchema = jsonSchemaForTool("okf_import");
+	const wikiSynthesisSchema = jsonSchemaForTool("wiki_synthesis");
+	assert.match(JSON.stringify(okfImportSchema), /sourceDir/);
+	assert.match(JSON.stringify(okfImportSchema), /absolute OKF-compatible source project directory/);
+	assert.doesNotMatch(JSON.stringify(okfImportSchema), /outputDir/);
+	assert.match(JSON.stringify(wikiSynthesisSchema), /dimension/);
+	assert.match(JSON.stringify(wikiSynthesisSchema), /targetTags/);
+	assert.match(JSON.stringify(wikiSynthesisSchema), /maxCandidates/);
+});
+
 test("cross-field app tool JSON schemas expose union requirements", () => {
 	const collectSchema = jsonSchemaForTool("collect_research_sources");
 	const runResearchSchema = jsonSchemaForTool("run_deep_research");
@@ -1046,6 +1189,115 @@ test("read-side app tools are allowed without write tools", async () => {
 		"merge_duplicate_group",
 		"optimize_research_topic",
 		"test_provider_connection",
+	]);
+});
+
+test("new read-side app tools and okf_import preview pass through bridge without write tools", async () => {
+	const bridgeCalls: Array<{ toolName: string; args: Record<string, unknown>; budget?: unknown }> = [];
+	const context = {
+		streamId: "stream-1",
+		enableWriteTools: false,
+		appToolBridge: {
+			async callTool(_streamId: string, toolName: string, args: Record<string, unknown>, budget?: unknown) {
+				bridgeCalls.push({ toolName, args, budget });
+				return { ok: true, result: { toolName } };
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	};
+
+	const results = await Promise.all([
+		toolByName("okf_validate", context).handler({}, {}),
+		toolByName("okf_export", context).handler({}, {}),
+		toolByName("okf_import", context).handler({ sourceDir: "/source" }, {}),
+		toolByName("taxonomy_preview", context).handler({ action: "bootstrap" }, {}),
+		toolByName("synthesis_preview", context).handler({ dimension: 2, targetTags: ["ai"] }, {}),
+		toolByName("get_knowledge_agents_config", context).handler({}, {}),
+	]);
+
+	for (const result of results) assert.equal(result.isError, undefined);
+	assert.deepEqual(bridgeCalls, [
+		{ toolName: "okf_validate", args: {}, budget: undefined },
+		{ toolName: "okf_export", args: {}, budget: undefined },
+		{ toolName: "okf_import", args: { sourceDir: "/source" }, budget: undefined },
+		{ toolName: "taxonomy_preview", args: { action: "bootstrap" }, budget: undefined },
+		{ toolName: "synthesis_preview", args: { dimension: 2, targetTags: ["ai"] }, budget: undefined },
+		{ toolName: "get_knowledge_agents_config", args: {}, budget: undefined },
+	]);
+});
+
+test("new write-side app tools require write tools and pass budget when enabled", async () => {
+	const disabledContext = {
+		streamId: "stream-1",
+		enableWriteTools: false,
+		appToolBridge: {
+			async callTool() {
+				throw new Error("should not call bridge");
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	};
+	const okfApplyDisabled = await toolByName("okf_import", disabledContext)
+		.handler({ sourceDir: "/source", apply: true }, {});
+	const taxonomyApplyDisabled = await toolByName("taxonomy_apply", disabledContext)
+		.handler({ action: "bootstrap" }, {});
+	const taxonomyRollbackDisabled = await toolByName("taxonomy_rollback", disabledContext)
+		.handler({}, {});
+
+	assert.equal(okfApplyDisabled.isError, true);
+	assert.equal(taxonomyApplyDisabled.isError, true);
+	assert.equal(taxonomyRollbackDisabled.isError, true);
+	assert.match(resultText(okfApplyDisabled), /disabled/);
+	assert.match(resultText(taxonomyApplyDisabled), /disabled/);
+	assert.match(resultText(taxonomyRollbackDisabled), /disabled/);
+
+	const bridgeCalls: Array<{ toolName: string; args: Record<string, unknown>; budget?: unknown }> = [];
+	const changed: WikiChangedPayload[] = [];
+	const enabledContext = {
+		streamId: "stream-1",
+		enableWriteTools: true,
+		maxFilesChanged: 2,
+		maxWriteBytes: 4096,
+		changedPaths: new Set<string>(["wiki/index.md"]),
+		onWikiChanged: (payload: WikiChangedPayload) => changed.push(payload),
+		appToolBridge: {
+			async callTool(_streamId: string, toolName: string, args: Record<string, unknown>, budget?: unknown) {
+				bridgeCalls.push({ toolName, args, budget });
+				return {
+					ok: true,
+					result: { wrote: true },
+					changedPaths: [".llm-wiki/tag-taxonomy.json"],
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	};
+	const taxonomyApply = await toolByName("taxonomy_apply", enabledContext)
+		.handler({ action: "growth" }, {});
+
+	assert.equal(taxonomyApply.isError, undefined);
+	assert.deepEqual(bridgeCalls, [
+		{
+			toolName: "taxonomy_apply",
+			args: { action: "growth" },
+			budget: {
+				maxFilesChanged: 2,
+				maxWriteBytes: 4096,
+				changedPaths: ["wiki/index.md"],
+				maxFilesChangedEnabled: false,
+			},
+		},
+	]);
+	assert.deepEqual(changed, []);
+	assert.deepEqual(Array.from(enabledContext.changedPaths).sort(), [
+		".llm-wiki/tag-taxonomy.json",
+		"wiki/index.md",
 	]);
 });
 

@@ -232,6 +232,8 @@ export interface AgentAppToolRequestPayload {
 export interface AgentAppToolBudget {
 	/** Maximum distinct wiki files the app tool may add to the run. */
 	maxFilesChanged: number;
+	/** Maximum UTF-8 bytes allowed for a single app-tool write. */
+	maxWriteBytes?: number;
 	/** Distinct wiki-relative paths already changed in the current Agent run. */
 	changedPaths: string[];
 	/** Plumbing-only toggle threaded from the resource config for future

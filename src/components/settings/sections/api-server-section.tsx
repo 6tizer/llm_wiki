@@ -53,6 +53,18 @@ export const API_ENDPOINTS: Array<{ method: "GET" | "POST"; path: string; noteKe
   { method: "POST", path: "/api/v1/projects/{id}/chat", noteKey: "endpointChatNote" },
 ]
 
+/** MCP tool catalogue shown in Settings for discoverability only. */
+export const MCP_TOOL_CATALOG: Array<{ name: string; mode: "read" | "write"; noteKey: string }> = [
+  { name: "okf_validate", mode: "read", noteKey: "mcpToolOkfValidateNote" },
+  { name: "okf_export", mode: "read", noteKey: "mcpToolOkfExportNote" },
+  { name: "okf_import", mode: "write", noteKey: "mcpToolOkfImportNote" },
+  { name: "taxonomy_preview", mode: "read", noteKey: "mcpToolTaxonomyPreviewNote" },
+  { name: "taxonomy_apply", mode: "write", noteKey: "mcpToolTaxonomyApplyNote" },
+  { name: "taxonomy_rollback", mode: "write", noteKey: "mcpToolTaxonomyRollbackNote" },
+  { name: "synthesis_preview", mode: "read", noteKey: "mcpToolSynthesisPreviewNote" },
+  { name: "get_knowledge_agents_config", mode: "read", noteKey: "mcpToolKnowledgeAgentsConfigNote" },
+]
+
 const MCP_TOKEN_ENV_PLACEHOLDER = "<set-this-in-your-mcp-client-env>"
 
 export function buildMcpClientConfig(
@@ -524,6 +536,41 @@ export function ApiServerSection({ draft, setDraft }: Props) {
         </div>
       </div>
 
+      <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-4">
+        <h3 className="text-sm font-semibold">
+          {t("settings.sections.apiServer.mcpTools", { defaultValue: "MCP tools" })}
+        </h3>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t("settings.sections.apiServer.mcpToolsHint", {
+            defaultValue:
+              "Agent clients call these through the bundled MCP server. Write tools still require the Agent write gate.",
+          })}
+        </p>
+        <div className="space-y-1 text-xs">
+          {MCP_TOOL_CATALOG.map((tool) => {
+            const note = t(`settings.sections.apiServer.${tool.noteKey}`, {
+              defaultValue: "",
+            })
+            const modeClass =
+              tool.mode === "read"
+                ? "bg-blue-500/10 text-blue-700 dark:text-blue-400"
+                : "bg-amber-500/10 text-amber-800 dark:text-amber-300"
+            return (
+              <div
+                key={tool.name}
+                className="flex flex-wrap items-baseline gap-2 rounded border border-border/40 bg-background/50 px-2 py-1"
+              >
+                <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold ${modeClass}`}>
+                  {tool.mode.toUpperCase()}
+                </span>
+                <span className="font-mono">{tool.name}</span>
+                {note && <span className="text-muted-foreground">— {note}</span>}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
       {/* MCP */}
       <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
         <label className="flex items-start gap-3">
@@ -591,6 +638,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
                 : sampleMcpConfig}
           </pre>
         </div>
+
       </div>
     </div>
   )

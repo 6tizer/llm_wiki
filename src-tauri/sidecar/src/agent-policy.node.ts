@@ -67,6 +67,11 @@ test("allowed Wiki tools follow write mode", () => {
 			"mcp__llm_wiki__merge_duplicate_group",
 			"mcp__llm_wiki__optimize_research_topic",
 			"mcp__llm_wiki__test_provider_connection",
+			"mcp__llm_wiki__okf_validate",
+			"mcp__llm_wiki__okf_export",
+			"mcp__llm_wiki__taxonomy_preview",
+			"mcp__llm_wiki__synthesis_preview",
+			"mcp__llm_wiki__get_knowledge_agents_config",
 		],
 	);
 	assert.ok(
@@ -87,6 +92,21 @@ test("allowed Wiki tools follow write mode", () => {
 	assert.ok(
 		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
 			"mcp__llm_wiki__sweep_reviews",
+		),
+	);
+	assert.ok(
+		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
+			"mcp__llm_wiki__okf_import",
+		),
+	);
+	assert.ok(
+		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
+			"mcp__llm_wiki__taxonomy_apply",
+		),
+	);
+	assert.ok(
+		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
+			"mcp__llm_wiki__taxonomy_rollback",
 		),
 	);
 });
@@ -123,6 +143,13 @@ test("wiki tool preflight denies non-wiki and disabled write tools", () => {
 	assert.deepEqual(
 		shouldAllowWikiTool({
 			toolName: "mcp__llm_wiki__sweep_reviews",
+			enableWriteTools: false,
+		}),
+		{ allowed: false, reason: "Wiki write tools are disabled" },
+	);
+	assert.deepEqual(
+		shouldAllowWikiTool({
+			toolName: "mcp__llm_wiki__okf_import",
 			enableWriteTools: false,
 		}),
 		{ allowed: false, reason: "Wiki write tools are disabled" },

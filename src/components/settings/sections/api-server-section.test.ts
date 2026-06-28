@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { apiConfigFromDraft, initialDraft } from "../settings-view"
-import { API_ENDPOINTS, buildMcpClientConfig, hasUnsavedApiConfig } from "./api-server-section"
+import { API_ENDPOINTS, MCP_TOOL_CATALOG, buildMcpClientConfig, hasUnsavedApiConfig } from "./api-server-section"
 
 const llm = {
   provider: "openai",
@@ -96,6 +96,20 @@ describe("API server endpoint documentation", () => {
       path: "/api/v1/projects/{id}/reviews",
       noteKey: "endpointReviewsNote",
     })
+  })
+
+  it("lists OKF and Knowledge Wiki MCP tools", () => {
+    expect(MCP_TOOL_CATALOG).toEqual([
+      { name: "okf_validate", mode: "read", noteKey: "mcpToolOkfValidateNote" },
+      { name: "okf_export", mode: "read", noteKey: "mcpToolOkfExportNote" },
+      { name: "okf_import", mode: "write", noteKey: "mcpToolOkfImportNote" },
+      { name: "taxonomy_preview", mode: "read", noteKey: "mcpToolTaxonomyPreviewNote" },
+      { name: "taxonomy_apply", mode: "write", noteKey: "mcpToolTaxonomyApplyNote" },
+      { name: "taxonomy_rollback", mode: "write", noteKey: "mcpToolTaxonomyRollbackNote" },
+      { name: "synthesis_preview", mode: "read", noteKey: "mcpToolSynthesisPreviewNote" },
+      { name: "get_knowledge_agents_config", mode: "read", noteKey: "mcpToolKnowledgeAgentsConfigNote" },
+    ])
+    expect(API_ENDPOINTS.map((endpoint) => endpoint.path)).not.toContain("/api/v1/projects/{id}/okf/export")
   })
 })
 
