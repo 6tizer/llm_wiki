@@ -16,6 +16,7 @@ import {
   FolderSync,
   Server,
   SlidersHorizontal,
+  BrainCircuit,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -44,6 +45,7 @@ import { SourceWatchSection } from "./sections/source-watch-section"
 import { MineruSection } from "./sections/mineru-section"
 import { ApiServerSection } from "./sections/api-server-section"
 import { AgentSection } from "./sections/agent-section"
+import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -65,6 +67,7 @@ export type CategoryId =
   | "mineru"
   | "api-server"
   | "agent"
+  | "knowledge-agents"
   | "general"
   | "output"
   | "interface"
@@ -100,6 +103,7 @@ const CATEGORIES: Category[] = [
   { id: "mineru", labelKey: "settings.categories.mineru", icon: FileText },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
   { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
+  { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -131,6 +135,13 @@ export function coerceSettingsCategory(
   return categories.some((category) => category.id === active)
     ? active
     : categories[0]?.id ?? "llm"
+}
+
+/** Returns whether the shared Settings draft Save bar should be shown. */
+export function shouldShowGlobalSettingsSaveBar(activeCategory: CategoryId): boolean {
+  return activeCategory !== "about" &&
+    activeCategory !== "llm" &&
+    activeCategory !== "knowledge-agents"
 }
 
 export function initialDraft(
@@ -638,6 +649,8 @@ export function SettingsView() {
         return <ApiServerSection draft={draft} setDraft={setDraft} />
       case "agent":
         return <AgentSection draft={draft} setDraft={setDraft} projectReady={!!project} />
+      case "knowledge-agents":
+        return <KnowledgeAgentsSection project={project} />
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":
@@ -651,7 +664,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [activeCategory, draft, setDraft])
+  }, [activeCategory, draft, project, setDraft])
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
@@ -710,10 +723,8 @@ export function SettingsView() {
           <div className="mx-auto max-w-2xl">{body}</div>
         </div>
 
-        {/* Global Save bar hidden for sections that persist inline:
-            - "llm" saves per-row on every edit (independent per-preset state)
-            - "about" has no draft-bound fields */}
-        {activeCategory !== "about" && activeCategory !== "llm" && (
+        {/* Global Save bar hidden for sections that persist inline or have no draft fields. */}
+        {shouldShowGlobalSettingsSaveBar(activeCategory) && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">

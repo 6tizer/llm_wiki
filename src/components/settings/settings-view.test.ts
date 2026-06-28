@@ -7,6 +7,7 @@ import {
   initialDraft,
   mineruConfigFromDraft,
   persistAppPreferences,
+  shouldShowGlobalSettingsSaveBar,
 } from "./settings-view"
 
 describe("settings platform categories", () => {
@@ -27,6 +28,8 @@ describe("settings platform categories", () => {
     const nonMacCategories = getSettingsCategories(false)
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
     expect(coerceSettingsCategory("general", nonMacCategories)).toBe("llm")
+    expect(coerceSettingsCategory("knowledge-agents", nonMacCategories)).toBe("knowledge-agents")
+    expect(nonMacCategories.some((category) => category.id === "knowledge-agents")).toBe(true)
   })
 })
 
@@ -69,6 +72,17 @@ describe("settings app preference save flow", () => {
       "setSavedCloseBehavior:quit",
     ])
     expect(saved).toEqual({ theme: "dark", closeBehavior: "quit" })
+  })
+})
+
+describe("settings global Save bar visibility", () => {
+  it("hides for Knowledge Agents because it persists inline", () => {
+    expect(shouldShowGlobalSettingsSaveBar("knowledge-agents")).toBe(false)
+  })
+
+  it("shows for shared draft categories", () => {
+    expect(shouldShowGlobalSettingsSaveBar("interface")).toBe(true)
+    expect(shouldShowGlobalSettingsSaveBar("agent")).toBe(true)
   })
 })
 
@@ -161,6 +175,13 @@ function draftWithMineru(mineru: {
 }
 
 describe("settings MinerU polling draft", () => {
+  it("does not put Knowledge Agents fields into the shared SettingsDraft", () => {
+    const draft = draftWithMineru({ enabled: false, token: "", modelVersion: "vlm" })
+
+    expect(Object.keys(draft).some((key) => key.toLowerCase().includes("knowledge"))).toBe(false)
+    expect(Object.keys(draft).some((key) => key.toLowerCase().includes("agent") && key !== "agentMaxTurns" && key !== "agentMaxFilesChanged" && key !== "agentMaxWriteKiB")).toBe(false)
+  })
+
   it("hydrates MinerU polling fields from config and falls back for legacy configs", () => {
     expect(draftWithMineru({
       enabled: true,

@@ -402,6 +402,7 @@
       "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
       "agent": "Agent",
+      "knowledgeAgents": "Knowledge Agents",
       "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
@@ -722,6 +723,27 @@
         "maxFilesChangedHint": "单次 Agent 运行最多可修改的不同 wiki 文件数量。",
         "maxWriteKiB": "单次写入大小上限（KiB）",
         "maxWriteKiBHint": "单次写入操作允许的最大文件大小。"
+      },
+      "knowledgeAgents": {
+        "title": "Knowledge Agents",
+        "description": "当前项目 Knowledge Wiki 工作流 Agent 的开关。",
+        "noProject": "请先打开一个项目再编辑 Knowledge Agents。",
+        "loading": "正在加载 Knowledge Agents...",
+        "enabled": "启用",
+        "autoRun": "自动运行",
+        "saving": "保存中...",
+        "configIssue": "配置中有无效字段；保存前会先显示默认值。",
+        "futureSchema": "这个 Knowledge Agents 配置来自更高版本，本版本只读。",
+        "staleConflict": "Knowledge Agents 配置已被磁盘上的新版本修改。请重新打开设置后再保存。",
+        "saveFailed": "保存失败。请重试。",
+        "agents": {
+          "compiler": "编译器",
+          "linter": "检查器",
+          "fixer": "修复器",
+          "synthesizer": "合成器",
+          "tagger": "标签器",
+          "qa-saver": "QA 保存器"
+        }
       },
       "output": {
         "title": "输出偏好",

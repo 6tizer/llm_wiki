@@ -402,6 +402,7 @@
       "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
       "agent": "Agent",
+      "knowledgeAgents": "Knowledge Agents",
       "general": "General",
       "output": "Output",
       "interface": "Interface",
@@ -722,6 +723,27 @@
         "maxFilesChangedHint": "Maximum distinct wiki files the Agent may change in one run.",
         "maxWriteKiB": "Max write size (KiB)",
         "maxWriteKiBHint": "Maximum size of a single write operation."
+      },
+      "knowledgeAgents": {
+        "title": "Knowledge Agents",
+        "description": "Project-level switches for the Knowledge Wiki workflow agents.",
+        "noProject": "Open a project first to edit Knowledge Agents.",
+        "loading": "Loading Knowledge Agents...",
+        "enabled": "Enabled",
+        "autoRun": "Auto-run",
+        "saving": "Saving...",
+        "configIssue": "The config had invalid fields; defaults are shown until saved.",
+        "futureSchema": "This Knowledge Agents config is newer than this app supports. It is read-only here.",
+        "staleConflict": "Knowledge Agents config changed on disk. Reload Settings before saving.",
+        "saveFailed": "Save failed. Please try again.",
+        "agents": {
+          "compiler": "Compiler",
+          "linter": "Linter",
+          "fixer": "Fixer",
+          "synthesizer": "Synthesizer",
+          "tagger": "Tagger",
+          "qa-saver": "QA Saver"
+        }
       },
       "output": {
         "title": "Output Preferences",
