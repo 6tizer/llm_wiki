@@ -1,7 +1,15 @@
 import { describe, it, expect } from "vitest"
-import { transformWikilinks } from "./wikilink-transform"
+import { transformWikilinks, WIKILINK_RE } from "./wikilink-transform"
 
 describe("transformWikilinks", () => {
+  it("exports the wikilink parser regex for shared validation", () => {
+    const regex = new RegExp(WIKILINK_RE.source, "g")
+    const match = regex.exec("[[Page|Label]]")
+
+    expect(match?.[1]).toBe("Page")
+    expect(match?.[2]).toBe("Label")
+  })
+
   it("returns input unchanged when there are no wikilinks", () => {
     expect(transformWikilinks("just plain text")).toBe("just plain text")
     expect(transformWikilinks("# Heading\n\nparagraph")).toBe("# Heading\n\nparagraph")

@@ -17,25 +17,66 @@
 export function transformWikilinks(body: string): string {
   if (!body.includes("[[")) return body
 
-  // Split on triple-backtick fences. The capturing group keeps
-  // the fence content in the output. Odd indices are inside a
-  // fence and must pass through untouched.
-  const parts = body.split(/(```[\s\S]*?```)/g)
-  return parts
-    .map((part, idx) => (idx % 2 === 1 ? part : transformOutsideCode(part)))
+  return splitMarkdownCodeAware(body)
+    .map((part) => (part.kind === "code" ? part.text : replaceWikilinks(part.text)))
     .join("")
 }
 
-const WIKILINK_RE = /\[\[([^\]|\n]+)(?:\|([^\]\n]*))?\]\]/g
+/** Shared parser for well-formed Obsidian-style `[[target]]` and `[[target|alias]]` links. */
+export const WIKILINK_RE = /\[\[([^\]|\n]+)(?:\|([^\]\n]*))?\]\]/g
 
-function transformOutsideCode(text: string): string {
-  if (!text.includes("[[")) return text
+export interface MarkdownCodeAwareSegment {
+  kind: "text" | "code"
+  text: string
+  start: number
+  end: number
+}
 
-  // Split on inline-code spans so backticked content is preserved.
-  const parts = text.split(/(`[^`\n]+`)/g)
-  return parts
-    .map((part, idx) => (idx % 2 === 1 ? part : replaceWikilinks(part)))
-    .join("")
+/**
+ * Split markdown with the same code-skipping semantics used by `transformWikilinks`.
+ */
+export function splitMarkdownCodeAware(body: string): MarkdownCodeAwareSegment[] {
+  const segments: MarkdownCodeAwareSegment[] = []
+  const fenceRe = /```[\s\S]*?```/g
+  let cursor = 0
+  let match: RegExpExecArray | null
+
+  while ((match = fenceRe.exec(body)) !== null) {
+    pushInlineCodeAwareSegments(body.slice(cursor, match.index), cursor, segments)
+    pushSegment("code", match[0], match.index, segments)
+    cursor = match.index + match[0].length
+  }
+
+  pushInlineCodeAwareSegments(body.slice(cursor), cursor, segments)
+  return segments
+}
+
+function pushInlineCodeAwareSegments(
+  text: string,
+  start: number,
+  segments: MarkdownCodeAwareSegment[],
+): void {
+  const inlineRe = /`[^`\n]+`/g
+  let cursor = 0
+  let match: RegExpExecArray | null
+
+  while ((match = inlineRe.exec(text)) !== null) {
+    pushSegment("text", text.slice(cursor, match.index), start + cursor, segments)
+    pushSegment("code", match[0], start + match.index, segments)
+    cursor = match.index + match[0].length
+  }
+
+  pushSegment("text", text.slice(cursor), start + cursor, segments)
+}
+
+function pushSegment(
+  kind: MarkdownCodeAwareSegment["kind"],
+  text: string,
+  start: number,
+  segments: MarkdownCodeAwareSegment[],
+): void {
+  if (!text) return
+  segments.push({ kind, text, start, end: start + text.length })
 }
 
 function replaceWikilinks(text: string): string {
