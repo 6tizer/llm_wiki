@@ -83,6 +83,11 @@ PR2 expands this into static enforcement:
 - the boundary checker stays test-only and is not exported from the runtime contract index;
 - old coupled modules can still exist, but new core modules must stay clean.
 
+PR3 records an additive bootstrap boundary inventory for current `src/App.tsx`
+side effects. The inventory is a migration map only: it must not change the
+frozen command/event families, and it must not move `handleProjectOpened`
+behavior before a dedicated runtime bootstrap extraction PR.
+
 ## Consequences
 
 - SPEC-2 can design runtime schema and state machine against frozen family names without coupling to React/Tauri.
