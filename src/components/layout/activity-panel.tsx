@@ -24,6 +24,11 @@ import {
   type FileChangeTask,
 } from "@/commands/file-sync"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
+import {
+  RuntimeJobsSection,
+  useRuntimeJobsState,
+  type RuntimeJobsSummary,
+} from "./runtime-jobs-section"
 
 const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
   sources: BookOpen,
@@ -51,6 +56,23 @@ const WIKI_TYPE_ICON_KEYS: Record<string, keyof typeof FILE_TYPE_ICONS> = {
   overview: "overview",
 }
 
+export function getRuntimeStatusText(summary: RuntimeJobsSummary): string | null {
+  if (summary.error) return "Runtime failed"
+  if (summary.failed > 0) {
+    return `Runtime: ${summary.failed} failed`
+  }
+  if (summary.active > 0) {
+    return `Runtime: ${summary.active} active`
+  }
+  if (summary.paused + summary.retryWait > 0) {
+    return `Runtime: ${summary.paused + summary.retryWait} waiting`
+  }
+  if (summary.visible) {
+    return `Runtime: ${summary.total} jobs`
+  }
+  return null
+}
+
 function getFileTypeInfo(path: string): { icon: typeof FileText; type: string } {
   const inferred = inferWikiTypeFromPath(path)
   if (inferred) {
@@ -74,6 +96,7 @@ export function ActivityPanel() {
   const fileSyncTasks = useFileSyncStore((s) => s.tasks)
   const setFileSyncTasks = useFileSyncStore((s) => s.setTasks)
   const fileSyncError = useFileSyncStore((s) => s.lastError)
+  const runtimeJobs = useRuntimeJobsState()
   const [expanded, setExpanded] = useState(false)
   const [queueTasks, setQueueTasks] = useState<IngestTask[]>([])
   const prevRunningRef = useRef(0)
@@ -95,6 +118,7 @@ export function ActivityPanel() {
   const fileSyncPending = fileSyncTasks.filter((t) => t.status === "pending").length
   const fileSyncProcessing = fileSyncTasks.filter((t) => t.status === "processing").length
   const fileSyncFailed = fileSyncTasks.filter((t) => t.status === "failed").length
+  const hasRuntime = runtimeJobs.summary.visible
 
   // All hooks must be before any conditional return.
   // retryTask / cancelTask / cancelAllTasks all operate on the currently
@@ -168,47 +192,64 @@ export function ActivityPanel() {
     if (runningCount > 0 && prevRunningRef.current === 0) {
       setExpanded(true)
     }
-    if ((hasQueue || hasFileSync) && !expanded) {
+    if ((hasQueue || hasFileSync || hasRuntime) && !expanded) {
       setExpanded(true)
     }
     prevRunningRef.current = runningCount
-  }, [runningCount, hasQueue, hasFileSync, expanded])
+  }, [runningCount, hasQueue, hasFileSync, hasRuntime, expanded])
 
-  if (!hasItems && !hasQueue && !hasFileSync) return null
+  if (!hasItems && !hasQueue && !hasFileSync && !hasRuntime) return null
 
   const latestItem = items[0]
+  const runtimeStatusText = getRuntimeStatusText(runtimeJobs.summary)
 
   // Build status text
   let statusText = ""
+  let statusKind: "active" | "error" | "done" = "done"
   if (queueSummary.processing > 0 || queueSummary.pending > 0) {
     const done = queueSummary.completed + queueSummary.failed
     statusText = `Queue: ${done}/${queueSummary.total}`
     if (queueSummary.failed > 0) statusText += ` (${queueSummary.failed} failed)`
-  } else if (runningCount > 0) {
-    statusText = `Processing: ${latestItem?.title ?? "..."}`
+    statusKind = "active"
   } else if (queueSummary.failed > 0) {
     statusText = `${queueSummary.failed} failed task${queueSummary.failed > 1 ? "s" : ""}`
+    statusKind = "error"
   } else if (fileSyncProcessing > 0 || fileSyncPending > 0) {
     statusText = `File sync: ${fileSyncProcessing + fileSyncPending} pending`
+    statusKind = "active"
   } else if (fileSyncFailed > 0) {
     statusText = `File sync: ${fileSyncFailed} failed`
+    statusKind = "error"
   } else if (fileSyncError) {
     statusText = "File sync failed"
+    statusKind = "error"
+  } else if (runtimeStatusText) {
+    statusText = runtimeStatusText
+    statusKind = runtimeJobs.summary.error || runtimeJobs.summary.failed > 0
+      ? "error"
+      : runtimeJobs.summary.active > 0
+        ? "active"
+        : "done"
+  } else if (runningCount > 0) {
+    statusText = `Processing: ${latestItem?.title ?? "..."}`
+    statusKind = "active"
   } else {
     statusText = `Done: ${latestItem?.title ?? "All tasks complete"}`
   }
 
-  const isActive = runningCount > 0 || queueSummary.processing > 0 || queueSummary.pending > 0 || fileSyncProcessing > 0 || fileSyncPending > 0
+  const isActive = statusKind === "active"
+  const hasError = statusKind === "error"
 
   return (
     <div className="border-t bg-muted/30">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent/50"
+        data-testid="activity-panel-toggle"
       >
         {isActive ? (
           <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-        ) : queueSummary.failed > 0 || fileSyncFailed > 0 || fileSyncError ? (
+        ) : hasError ? (
           <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
         ) : (
           <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
@@ -248,6 +289,8 @@ export function ActivityPanel() {
               ))}
             </div>
           )}
+
+          <RuntimeJobsSection state={runtimeJobs} />
 
           {/* Queue progress bar */}
           {hasQueue && (queueSummary.processing > 0 || queueSummary.pending > 0) && (

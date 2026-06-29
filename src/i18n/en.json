@@ -51,6 +51,26 @@
       "failed": "Failed"
     }
   },
+  "runtimeJobs": {
+    "title": "Runtime Jobs",
+    "summary": "{{running}} running / {{queued}} queued / {{paused}} paused / {{failed}} failed",
+    "empty": "No runtime jobs",
+    "attempt": "attempt {{attempt}}/{{maxAttempts}}",
+    "state": {
+      "queued": "Queued",
+      "running": "Running",
+      "paused": "Paused",
+      "retry-wait": "Retry wait",
+      "failed": "Failed",
+      "completed": "Completed",
+      "cancelled": "Cancelled"
+    },
+    "actions": {
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancel": "Cancel"
+    }
+  },
   "project": {
     "createTitle": "Create New Wiki Project",
     "name": "Project Name",

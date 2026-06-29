@@ -51,6 +51,26 @@
       "failed": "失败"
     }
   },
+  "runtimeJobs": {
+    "title": "Runtime 任务",
+    "summary": "{{running}} 个运行中 / {{queued}} 个排队中 / {{paused}} 个暂停 / {{failed}} 个失败",
+    "empty": "暂无 runtime 任务",
+    "attempt": "第 {{attempt}}/{{maxAttempts}} 次",
+    "state": {
+      "queued": "排队中",
+      "running": "运行中",
+      "paused": "已暂停",
+      "retry-wait": "等待重试",
+      "failed": "失败",
+      "completed": "已完成",
+      "cancelled": "已取消"
+    },
+    "actions": {
+      "pause": "暂停",
+      "resume": "恢复",
+      "cancel": "取消"
+    }
+  },
   "project": {
     "createTitle": "新建 Wiki 项目",
     "name": "项目名称",

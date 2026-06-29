@@ -151,6 +151,20 @@ pub struct RuntimeJobCancelRequest {
     job_id: String,
 }
 
+/// Request payload for pausing a queued or running runtime job.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeJobPauseRequest {
+    job_id: String,
+}
+
+/// Request payload for resuming a paused runtime job.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeJobResumeRequest {
+    job_id: String,
+}
+
 /// Snapshot of one runtime job row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -560,6 +574,34 @@ pub fn runtime_job_cancel(
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
         runtime_job_cancel_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// Pause a queued or running runtime job.
+#[tauri::command]
+pub fn runtime_job_pause(
+    request: RuntimeJobPauseRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeJobRecord, String> {
+    run_guarded("runtime_job_pause", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_job_pause_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// Resume a paused runtime job back to the queued state.
+#[tauri::command]
+pub fn runtime_job_resume(
+    request: RuntimeJobResumeRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeJobRecord, String> {
+    run_guarded("runtime_job_resume", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_job_resume_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -1571,6 +1613,79 @@ fn runtime_job_cancel_for_project(
             params![request.job_id, CANCELLED_LEASE_STATUS, now],
         )
         .map_err(|err| format!("job-cancel-lease-failed: {err}"))?;
+        let job = read_job_tx(&tx, &request.job_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(job)
+    })
+}
+
+fn runtime_job_pause_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeJobPauseRequest,
+    now: i64,
+) -> Result<RuntimeJobRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    with_runtime_writer(|| {
+        let mut connection = open_job_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let job = read_job_tx(&tx, &request.job_id)?;
+        if !matches!(job.state.as_str(), "queued" | "running") {
+            return Err(format!(
+                "invalid-transition: pause is not allowed from '{}'",
+                job.state
+            ));
+        }
+        tx.execute(
+            "UPDATE runtime_jobs
+             SET state = 'paused',
+                 updated_at_ms = ?2
+             WHERE job_id = ?1",
+            params![request.job_id, now],
+        )
+        .map_err(|err| format!("job-pause-failed: {err}"))?;
+        if job.state == "running" {
+            tx.execute(
+                "UPDATE runtime_job_leases
+                 SET status = ?2,
+                     released_at_ms = ?3
+                 WHERE job_id = ?1 AND status = 'active'",
+                params![request.job_id, CANCELLED_LEASE_STATUS, now],
+            )
+            .map_err(|err| format!("job-pause-lease-failed: {err}"))?;
+        }
+        let job = read_job_tx(&tx, &request.job_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(job)
+    })
+}
+
+fn runtime_job_resume_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeJobResumeRequest,
+    now: i64,
+) -> Result<RuntimeJobRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    with_runtime_writer(|| {
+        let mut connection = open_job_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let job = read_job_tx(&tx, &request.job_id)?;
+        if job.state != "paused" {
+            return Err(format!(
+                "invalid-transition: resume is not allowed from '{}'",
+                job.state
+            ));
+        }
+        tx.execute(
+            "UPDATE runtime_jobs
+             SET state = 'queued',
+                 queued_at_ms = ?2,
+                 updated_at_ms = ?2
+             WHERE job_id = ?1",
+            params![request.job_id, now],
+        )
+        .map_err(|err| format!("job-resume-failed: {err}"))?;
         let job = read_job_tx(&tx, &request.job_id)?;
         tx.commit().map_err(tx_err)?;
         Ok(job)
@@ -3735,6 +3850,18 @@ mod tests {
         }
     }
 
+    fn pause_request(job_id: &str) -> RuntimeJobPauseRequest {
+        RuntimeJobPauseRequest {
+            job_id: job_id.to_string(),
+        }
+    }
+
+    fn resume_request(job_id: &str) -> RuntimeJobResumeRequest {
+        RuntimeJobResumeRequest {
+            job_id: job_id.to_string(),
+        }
+    }
+
     fn commit_claim_request(path: &str, claim_id: &str) -> RuntimeCommitBudgetClaimRequest {
         RuntimeCommitBudgetClaimRequest {
             affected_path: path.to_string(),
@@ -3924,6 +4051,23 @@ mod tests {
     }
 
     #[test]
+    fn job_pause_resume_request_shapes_reject_unknown_fields() {
+        let pause = serde_json::from_value::<RuntimeJobPauseRequest>(serde_json::json!({
+            "jobId": "job-1",
+            "root": "/tmp/project"
+        }))
+        .expect_err("pause request rejects root");
+        assert!(pause.to_string().contains("unknown field"));
+
+        let resume = serde_json::from_value::<RuntimeJobResumeRequest>(serde_json::json!({
+            "jobId": "job-1",
+            "dbPath": "/tmp/runtime.db"
+        }))
+        .expect_err("resume request rejects dbPath");
+        assert!(resume.to_string().contains("unknown field"));
+    }
+
+    #[test]
     fn disabled_job_create_does_not_touch_disk() {
         let project = temp_project("disabled-job-create");
         fs::create_dir_all(&project).expect("create temp project");
@@ -3951,6 +4095,38 @@ mod tests {
         assert!(list.jobs.is_empty());
         assert_eq!(fs::read(&db_path).expect("read damaged db"), b"not sqlite");
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn disabled_job_pause_resume_do_not_open_damaged_runtime_db() {
+        let project = temp_project("disabled-job-pause-resume");
+        let runtime_dir = project.join(RUNTIME_DIR);
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        let db_path = runtime_dir.join(RUNTIME_DB_FILE);
+        fs::write(&db_path, b"not sqlite").expect("write damaged db");
+
+        let pause_error =
+            runtime_job_pause_for_project(Some(&project), false, pause_request("job-1"), 100)
+                .expect_err("disabled pause should fail before DB open");
+        let resume_error =
+            runtime_job_resume_for_project(Some(&project), false, resume_request("job-1"), 100)
+                .expect_err("disabled resume should fail before DB open");
+
+        assert!(pause_error.starts_with("runtime-disabled"));
+        assert!(resume_error.starts_with("runtime-disabled"));
+        assert_eq!(fs::read(&db_path).expect("read damaged db"), b"not sqlite");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn enabled_job_pause_resume_without_project_returns_no_project() {
+        let pause_error = runtime_job_pause_for_project(None, true, pause_request("job-1"), 100)
+            .expect_err("pause without project should fail");
+        let resume_error = runtime_job_resume_for_project(None, true, resume_request("job-1"), 100)
+            .expect_err("resume without project should fail");
+
+        assert!(pause_error.starts_with("no-project"));
+        assert!(resume_error.starts_with("no-project"));
     }
 
     #[test]
@@ -6337,6 +6513,207 @@ mod tests {
         assert_eq!(cancelled.state, "cancelled");
         let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
         assert_eq!(list.leases[0].status, CANCELLED_LEASE_STATUS);
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn queued_job_can_pause_and_resume() {
+        let project = temp_project("job-pause-resume-queued");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+
+        let paused =
+            runtime_job_pause_for_project(Some(&project), true, pause_request("job-1"), 150)
+                .expect("pause queued job");
+        assert_eq!(paused.state, "paused");
+        assert_eq!(paused.updated_at_ms, 150);
+
+        let claim_error = runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-a", "lease-paused"),
+            175,
+        )
+        .expect_err("paused job is not claimable");
+        assert!(claim_error.starts_with("no-queued-job"));
+
+        let resumed =
+            runtime_job_resume_for_project(Some(&project), true, resume_request("job-1"), 200)
+                .expect("resume paused job");
+        assert_eq!(resumed.state, "queued");
+        assert_eq!(resumed.queued_at_ms, Some(200));
+
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(list.jobs[0].state, "queued");
+        assert!(list.leases.is_empty());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn running_pause_invalidates_old_lease_results() {
+        let project = temp_project("job-pause-running");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+        runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-a", "lease-1"),
+            200,
+        )
+        .expect("claim job");
+
+        let paused =
+            runtime_job_pause_for_project(Some(&project), true, pause_request("job-1"), 300)
+                .expect("pause running job");
+        assert_eq!(paused.state, "paused");
+
+        for result in [
+            runtime_job_heartbeat_for_project(
+                Some(&project),
+                true,
+                lease_request("job-1", "lease-1"),
+                400,
+            )
+            .map(|_| ()),
+            runtime_job_complete_for_project(
+                Some(&project),
+                true,
+                lease_request("job-1", "lease-1"),
+                400,
+            )
+            .map(|_| ()),
+            runtime_job_fail_for_project(
+                Some(&project),
+                true,
+                RuntimeJobFailRequest {
+                    job_id: "job-1".to_string(),
+                    lease_id: "lease-1".to_string(),
+                    error: None,
+                    retry_after_ms: None,
+                },
+                400,
+            )
+            .map(|_| ()),
+        ] {
+            let error = result.expect_err("old lease result should be ignored");
+            assert!(error.contains("invalid-transition") || error.contains("inactive-lease"));
+        }
+
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(list.jobs[0].state, "paused");
+        assert_eq!(list.leases[0].status, CANCELLED_LEASE_STATUS);
+        assert_eq!(list.leases[0].released_at_ms, Some(300));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn pause_and_resume_reject_invalid_states() {
+        let project = temp_project("job-pause-resume-invalid");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-completed"), 100)
+            .expect("create completed job");
+        runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-a", "lease-completed"),
+            120,
+        )
+        .expect("claim completed job");
+        runtime_job_complete_for_project(
+            Some(&project),
+            true,
+            lease_request("job-completed", "lease-completed"),
+            140,
+        )
+        .expect("complete job");
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-cancelled"), 200)
+            .expect("create cancelled job");
+        runtime_job_cancel_for_project(
+            Some(&project),
+            true,
+            RuntimeJobCancelRequest {
+                job_id: "job-cancelled".to_string(),
+            },
+            220,
+        )
+        .expect("cancel job");
+
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_max_attempts("job-failed", 1),
+            300,
+        )
+        .expect("create failed job");
+        runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-a", "lease-failed"),
+            320,
+        )
+        .expect("claim failed job");
+        runtime_job_fail_for_project(
+            Some(&project),
+            true,
+            RuntimeJobFailRequest {
+                job_id: "job-failed".to_string(),
+                lease_id: "lease-failed".to_string(),
+                error: None,
+                retry_after_ms: None,
+            },
+            340,
+        )
+        .expect("fail job");
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-retry-wait"), 400)
+            .expect("create retry wait job");
+        runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-a", "lease-retry-wait"),
+            420,
+        )
+        .expect("claim retry wait job");
+        runtime_job_fail_for_project(
+            Some(&project),
+            true,
+            RuntimeJobFailRequest {
+                job_id: "job-retry-wait".to_string(),
+                lease_id: "lease-retry-wait".to_string(),
+                error: None,
+                retry_after_ms: Some(900),
+            },
+            440,
+        )
+        .expect("move to retry wait");
+
+        for job_id in [
+            "job-completed",
+            "job-cancelled",
+            "job-failed",
+            "job-retry-wait",
+        ] {
+            let pause_error =
+                runtime_job_pause_for_project(Some(&project), true, pause_request(job_id), 500)
+                    .expect_err("pause rejects invalid state");
+            let resume_error =
+                runtime_job_resume_for_project(Some(&project), true, resume_request(job_id), 500)
+                    .expect_err("resume rejects non-paused state");
+            assert!(pause_error.starts_with("invalid-transition"));
+            assert!(resume_error.starts_with("invalid-transition"));
+        }
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-queued"), 600)
+            .expect("create queued job");
+        let resume_queued =
+            runtime_job_resume_for_project(Some(&project), true, resume_request("job-queued"), 650)
+                .expect_err("resume rejects queued job");
+        assert!(resume_queued.starts_with("invalid-transition"));
 
         let _ = fs::remove_dir_all(project);
     }
