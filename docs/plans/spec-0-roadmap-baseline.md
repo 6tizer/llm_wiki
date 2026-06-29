@@ -41,10 +41,11 @@
 
 ## PR Gate 结论统一摘要
 
-- Architect：Claude Code headless via CC Switch Pioneer / `claude-opus-4-8` 返回无关 handoff 状态，记为 incomplete；fallback ZCode Architect focused re-review 为 WARN，无 unresolved P0/P1/P2，P3 已同 PR 清理。
-- External Reviewer：ZCode focused re-review PASS，无 P0/P1/P2/P3。
-- Internal Reviewer：focused re-review PASS，无 P0/P1/P2/P3。
-- 本 docs PR 的 gate 是 PR-level gate；SPEC-1 到 SPEC-9 共享该 gate 结论。后续 implementation PR 必须重新按对应 SPEC 跑 impact、focused tests、detect 和 external/internal review，不能复用本 docs PR 的 gate 作为代码验收。
+- Architect：Claude ACP via CC Switch Pioneer / `claude-opus-4-8` 初审 WARN、focused recheck PASS；初审 P1/P3 已同 PR 清理，拒绝的写文件尝试记为 contract violation。
+- Tester：Kimi 初审 WARN、focused recheck PASS；被拒绝的 `Write` / `ExitPlanMode` / `AskUserQuestion` 记为 WARN，不当作 PASS，实际 P1/P2/P3 已同 PR 清理。
+- External Reviewer：ZCode 初审 PASS with P3、focused recheck PASS；P3 已同 PR 清理。
+- Internal Reviewer：WARN with P3 only；P3 已同 PR 清理，无 unresolved P0/P1/P2。
+- #192 docs PR 的 gate 是 PR-level gate；SPEC-1 到 SPEC-9 共享该 gate 结论。后续 implementation PR 必须重新按对应 SPEC 跑 impact、focused tests、detect 和 external/internal review，不能复用本 docs PR 的 gate 作为代码验收。
 
 ## Non-goals / Follow-up
 

@@ -49,7 +49,7 @@
 
 ## Current Execution Order
 
-截至 2026-06-29，当前 main/head 基线为 `248bd27 feat: expose OKF and knowledge workflow tools`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 也已完成，并已归档，不再作为当前串流队列继续执行。
+截至 2026-06-29，当前 main/head 基线为 `b6497e2 docs: add staged roadmap specs`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
 
 已完成 OKF/KW 基线证据：
 
@@ -63,7 +63,7 @@
 8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
 9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
 
-Next execution sequence：先完成阶段 SPEC 的审查定稿，再按 SPEC 拆实现 PR。实现阶段顺序以 SPEC-1 PR1（shell/core boundary ADR + runtime command/event inventory）为第一硬门槛；SPEC-2 runtime DB/job API 必须在这个边界内落地。SPEC-2 PR1（runtime schema + state-machine ADR）合并前，SPEC-3/4 只能做独立调研或草案，不能做依赖 runtime schema 的集成实现。允许的 parallel preparation 仅限 docs、ADR、接口草案和只读调研；任何触碰 shared runtime types/schema、持久化 runtime state 或 core API implementation 的代码 PR 必须等待对应 gate 合并。SPEC-2 PR1 合并后，再推进 SPEC-3/4 integration PR，随后进入 SPEC-5/6。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by SPEC-2 job ledger。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
+Next execution sequence：从 SPEC-1 PR1（shell/core boundary ADR + runtime command/event inventory）开始实现，这是第一硬门槛；SPEC-2 runtime DB/job API 必须在这个边界内落地。SPEC-2 PR1（runtime schema + state-machine ADR）合并前，SPEC-3/4 只能做独立调研或草案，不能做依赖 runtime schema 的集成实现。允许的 parallel preparation 仅限 docs、ADR、接口草案和只读调研；任何触碰 shared runtime types/schema、持久化 runtime state 或 core API implementation 的代码 PR 必须等待对应 gate 合并。SPEC-2 PR1 合并后，再推进 SPEC-3/4 integration PR，随后进入 SPEC-5/6。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by SPEC-2 job ledger。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
 
 当前不直接进入 Phase 7 / Claude Agent SDK alignment 实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR。
 
