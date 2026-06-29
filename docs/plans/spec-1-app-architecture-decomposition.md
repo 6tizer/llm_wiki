@@ -74,8 +74,8 @@ Strangler migration priority:
 | --- | --- | --- | --- |
 | PR1 | [`SPEC-1/pr1-boundary-adr-plan.md`](./SPEC-1/pr1-boundary-adr-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
 | PR2 | [`SPEC-1/pr2-boundary-enforcement-plan.md`](./SPEC-1/pr2-boundary-enforcement-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
-| PR3 | [`SPEC-1/pr3-bootstrap-boundary-plan.md`](./SPEC-1/pr3-bootstrap-boundary-plan.md) | active implementation | Architect PASS |
-| PR4 | 待 PR3 merge 后创建 | pending | blocked by PR3 merge + GitNexus analyze |
+| PR3 | [`SPEC-1/pr3-bootstrap-boundary-plan.md`](./SPEC-1/pr3-bootstrap-boundary-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
+| PR4 | [`SPEC-1/pr4-store-boundary-plan.md`](./SPEC-1/pr4-store-boundary-plan.md) | ready for PR | Architect PASS / Tester PASS / Reviewer PASS |
 | PR5 | 待 PR4 merge 后创建 | pending | blocked by PR4 merge + GitNexus analyze |
 
 Commander 调度规则：
