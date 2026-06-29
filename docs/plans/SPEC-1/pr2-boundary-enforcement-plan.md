@@ -1,6 +1,6 @@
 # SPEC-1 PR2: Boundary Enforcement Plan
 
-> Status: implemented / pending Tester + Reviewer gates | Branch: `codex/spec-1-pr2-boundary-enforcement` | Owner: Commander
+> Status: merged | Branch: `codex/spec-1-pr2-boundary-enforcement` | Owner: Commander
 
 ## Goal
 

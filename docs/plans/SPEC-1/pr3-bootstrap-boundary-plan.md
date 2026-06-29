@@ -1,6 +1,6 @@
 # SPEC-1 PR3: Bootstrap Boundary Cleanup Plan
 
-> Status: architect PASS / ready for Coder implementation | Branch: `codex/spec-1-pr3-bootstrap-boundary` | Owner: Commander
+> Status: merged | Branch: `codex/spec-1-pr3-bootstrap-boundary` | Owner: Commander
 
 ## Goal
 
