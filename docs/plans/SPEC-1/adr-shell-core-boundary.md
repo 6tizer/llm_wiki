@@ -80,6 +80,7 @@ PR2 expands this into static enforcement:
 
 - core contract modules cannot import React components, Zustand stores, Tauri plugin APIs, or plugin-store;
 - test coverage includes negative examples for forbidden imports;
+- the boundary checker stays test-only and is not exported from the runtime contract index;
 - old coupled modules can still exist, but new core modules must stay clean.
 
 ## Consequences

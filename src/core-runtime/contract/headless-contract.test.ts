@@ -1,7 +1,7 @@
-import { readdirSync, readFileSync } from "node:fs"
-import { basename, join, resolve } from "node:path"
-import ts from "typescript"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
+import { checkCoreRuntimeBoundary } from "./boundary-check"
 import {
   RUNTIME_CONTRACT_FAMILIES,
   type RuntimeContractFamily,
@@ -44,70 +44,6 @@ const APP_STATE_LOCK_KEYS = [
 
 function repoFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf-8")
-}
-
-function contractSourceFiles(): string[] {
-  const dir = resolve(process.cwd(), "src/core-runtime/contract")
-  return readdirSync(dir)
-    .filter((name) => name.endsWith(".ts"))
-    .filter((name) => !name.endsWith(".test.ts"))
-    .map((name) => join(dir, name))
-}
-
-function moduleSpecifiers(source: string): string[] {
-  const file = ts.createSourceFile("contract.ts", source, ts.ScriptTarget.Latest, true)
-  const specifiers: string[] = []
-
-  function addModuleSpecifier(node: { moduleSpecifier?: ts.Expression }): void {
-    if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifiers.push(node.moduleSpecifier.text)
-    }
-  }
-
-  function visit(node: ts.Node): void {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      addModuleSpecifier(node)
-    }
-    if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference) &&
-      ts.isStringLiteral(node.moduleReference.expression)
-    ) {
-      specifiers.push(node.moduleReference.expression.text)
-    }
-    if (
-      ts.isImportTypeNode(node) &&
-      ts.isLiteralTypeNode(node.argument) &&
-      ts.isStringLiteral(node.argument.literal)
-    ) {
-      specifiers.push(node.argument.literal.text)
-    }
-    if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length === 1 &&
-      ts.isStringLiteral(node.arguments[0])
-    ) {
-      specifiers.push(node.arguments[0].text)
-    }
-    ts.forEachChild(node, visit)
-  }
-
-  visit(file)
-  return specifiers
-}
-
-function isForbiddenSpecifier(specifier: string): boolean {
-  return (
-    specifier === "react" ||
-    specifier.startsWith("react/") ||
-    specifier === "zustand" ||
-    specifier.startsWith("zustand/") ||
-    specifier.startsWith("@tauri-apps/") ||
-    specifier.startsWith("@/stores/") ||
-    specifier === "@tauri-apps/plugin-store" ||
-    specifier === "@/lib/runtime.db"
-  )
 }
 
 function adrInventoryFamilies(adr: string): string[] {
@@ -159,36 +95,14 @@ describe("Core Runtime headless contract skeleton", () => {
   })
 
   it("keeps all contract modules independent from shell/runtime imports", () => {
-    for (const file of contractSourceFiles()) {
-      const specifiers = moduleSpecifiers(readFileSync(file, "utf-8"))
-      expect(specifiers.filter(isForbiddenSpecifier), basename(file)).toEqual([])
-    }
-  })
-
-  it("extracts multiline, side-effect, export, and dynamic module specifiers", () => {
-    const source = `
-      import {
-        create
-      } from "zustand"
-      import "@tauri-apps/plugin-store"
-      export { thing } from "@/stores/wiki-store"
-      import legacy = require("@/lib/runtime.db")
-      type ReactNode = import("react/jsx-runtime").JSX.Element
-      type Store = import("zustand/vanilla").StoreApi<unknown>
-      async function load() {
-        return import("react")
-      }
-    `
-
-    expect(moduleSpecifiers(source)).toEqual([
-      "zustand",
-      "@tauri-apps/plugin-store",
-      "@/stores/wiki-store",
-      "@/lib/runtime.db",
-      "react/jsx-runtime",
-      "zustand/vanilla",
-      "react",
-    ])
+    expect(
+      checkCoreRuntimeBoundary([
+        {
+          filePath: "src/core-runtime/contract/index.ts",
+          sourceText: repoFile("src/core-runtime/contract/index.ts"),
+        },
+      ]),
+    ).toEqual([])
   })
 
   it("keeps the ADR inventory aligned with the frozen skeleton", () => {

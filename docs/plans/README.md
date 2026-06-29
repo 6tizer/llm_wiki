@@ -12,6 +12,7 @@
 | [spec-1-app-architecture-decomposition.md](./spec-1-app-architecture-decomposition.md) | UI shell / Core Runtime / adapter 边界；为后续 runtime 和 Swift 回填铺路。 | planned / doc reviewed |
 | [SPEC-1/pr1-boundary-adr-plan.md](./SPEC-1/pr1-boundary-adr-plan.md) | SPEC-1 PR1 执行计划：shell/core boundary ADR、module boundary map、runtime command/event inventory。 | active PR plan / architect PASS |
 | [SPEC-1/adr-shell-core-boundary.md](./SPEC-1/adr-shell-core-boundary.md) | SPEC-1 PR1 ADR：UI Shell、Core Runtime、Platform Adapter、Agent Adapter、Storage Boundary、runtime command/event inventory。 | active PR artifact / frozen |
+| [SPEC-1/pr2-boundary-enforcement-plan.md](./SPEC-1/pr2-boundary-enforcement-plan.md) | SPEC-1 PR2 执行计划：headless contract 扩展、core runtime import/static boundary enforcement。 | active PR plan / architect PASS |
 | [spec-2-work-runtime.md](./spec-2-work-runtime.md) | Work Runtime、SQLite runtime ledger、job/lease/event/scheduler 底座。 | planned |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
