@@ -10,6 +10,8 @@ import {
 } from "./adapter-contract"
 import { checkCoreRuntimeBoundary, collectModuleSpecifiers } from "./boundary-check"
 import {
+  JOB_RUNTIME_COMMAND_NAMES,
+  JOB_RUNTIME_EVENT_NAMES,
   RUNTIME_CONTRACT_FAMILIES,
   createMockCoreRuntimeContract,
   type RuntimeContractFamily,
@@ -51,6 +53,9 @@ describe("SPEC-1 adapter contract tests", () => {
   it("drives every core family and direction through a mock shell without exact placeholder names", async () => {
     const shell = createMockShellAdapter(createMockCoreRuntimeContract())
     const driven = await shell.driveFamilyDirections()
+    const jobRuntimeMessages = createMockCoreRuntimeContract()
+      .listMessages()
+      .filter((message) => message.family === "job-runtime")
 
     expect(shell.allowedFamilies).toEqual(RUNTIME_CONTRACT_FAMILIES)
     expect(driven).toHaveLength(RUNTIME_CONTRACT_FAMILIES.length * 2)
@@ -61,6 +66,14 @@ describe("SPEC-1 adapter contract tests", () => {
       ...Array.from({ length: RUNTIME_CONTRACT_FAMILIES.length }, () => "collected-event"),
       ...Array.from({ length: RUNTIME_CONTRACT_FAMILIES.length }, () => "invoked-command"),
     ].sort())
+    expect(jobRuntimeMessages.filter((message) => message.direction === "command").map((message) => message.name)).toEqual(
+      JOB_RUNTIME_COMMAND_NAMES,
+    )
+    expect(jobRuntimeMessages.filter((message) => message.direction === "event").map((message) => message.name)).toEqual(
+      JOB_RUNTIME_EVENT_NAMES,
+    )
+    expect(jobRuntimeMessages.map((message) => message.name)).not.toContain("job-runtime:placeholder-command")
+    expect(jobRuntimeMessages.map((message) => message.name)).not.toContain("job-runtime:placeholder-event")
   })
 
   it("keeps adapter role family ownership explicit", () => {

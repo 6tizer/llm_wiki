@@ -17,6 +17,8 @@
 | [SPEC-1/pr4-store-boundary-plan.md](./SPEC-1/pr4-store-boundary-plan.md) | SPEC-1 PR4 执行计划：Store boundary inventory、Rust-locked app-state schema、Zustand mirror 分类。 | merged |
 | [SPEC-1/pr5-adapter-contract-tests-plan.md](./SPEC-1/pr5-adapter-contract-tests-plan.md) | SPEC-1 PR5 执行计划：mock shell / platform / storage / agent adapter contract tests。 | merged |
 | [spec-2-work-runtime.md](./spec-2-work-runtime.md) | Work Runtime、SQLite runtime ledger、job/lease/event/scheduler 底座。 | next |
+| [SPEC-2/pr1-runtime-adr-plan.md](./SPEC-2/pr1-runtime-adr-plan.md) | SPEC-2 PR1 执行计划：runtime ADR、schema families、job state machine、single-writer hard gate。 | in progress |
+| [SPEC-2/adr-work-runtime.md](./SPEC-2/adr-work-runtime.md) | SPEC-2 PR1 ADR：project-scoped runtime.db、kill switch、portable schema families、job transitions、SPEC-3/4 gates。 | accepted for PR1 gate |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
