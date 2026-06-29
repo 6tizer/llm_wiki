@@ -1,116 +1,68 @@
 # Upstream v0.5.x Delta
 
-> 类型：调研入口 | 创建：2026-06-24 | 更新：2026-06-28 | 状态：active
+> 类型：调研入口 | 创建：2026-06-24 | 更新：2026-06-29 | 状态：active / recheck gate
 
 ## 结论
 
-Phase 6 完成后，新的实现 PR 不再以 `v0.4.25` 为当前目标；PR E / H-lite / G / F / I / J / K 主线已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 也已完成到当前 main/head `248bd27 feat: expose OKF and knowledge workflow tools`。新的实现 PR 开工前仍要重新核对 upstream `v0.5.x` delta，并把发现分流到并行加速平台架构讨论、Claude Agent SDK alignment、Phase 7 backlog 或新的 tracking issue。
+本文只保留为后续实现 PR 的 upstream delta 复核入口，不再承载 Phase 6、follow-up sweep、OKF/KW 或安全串流的完成证据。
 
-本地已确认 upstream `v0.5.0@997db74`，且截至 2026-06-24 upstream `main` 已更新到 `v0.5.1@cc4b98f`。后续 PR 的计划、PR body 和 reviewer packet 必须记录开工时看到的最新 upstream tag/commit。
+当前历史完成证据已归档：
 
-## Alignment Principles
+- Phase 6 PR A-K、follow-up sweep、OKF/KW baseline：[archive/upstream-sync-phase6.md](./archive/upstream-sync-phase6.md)
+- Chat Agent Router alignment：[archive/upstream-chat-agent-router-alignment.md](./archive/upstream-chat-agent-router-alignment.md)
+- OKF compatibility baseline：[archive/okf-compatibility.md](./archive/okf-compatibility.md)
+- Knowledge Wiki business-layer baseline：[archive/knowledge-wiki-business-layer.md](./archive/knowledge-wiki-business-layer.md)
+- Security / quality follow-ups：[archive/security-review-119-fixes.md](./archive/security-review-119-fixes.md)
 
-- 上游优先对齐：普通 Chat、RAG、UI 和低风险用户体验尽量贴近 upstream `v0.5.x`，避免无理由 fork。
-- fork 差异保留：Mac-only 产品定位、Claude Agent SDK sidecar、可写 Wiki 工具、permission/session/pipeline 和安全边界继续作为本 fork 的核心差异。
-- OKF 兼容：`<project>/wiki/` 逐步明确为 OKF-compatible knowledge bundle root；OKF 只作为知识包格式兼容层，不替代 MCP、Agent runtime 或 local HTTP API。
+当前 active SPEC stream 不是继续执行旧 upstream/OKF/KW 队列，而是围绕并行加速平台架构收敛：
 
-## Agent Terminology Boundary
+- #184 Work Runtime / SQLite runtime ledger / Markdown source of record
+- #185 User-selected Model Profiles + Runtime Scheduling
+- #186 Model-call Profile vs Agent-run Profile / Unified Agentic Chat control plane
+- #187 `index.md` / `overview.md` 去核心化
+- #188 Markdown commit layer
+- #189 Derived knowledge rebuild lifecycle
+- #191 Parallel Knowledge Pipeline / bulk prepare-commit-repair
 
-上游 `v0.5.x` 的 Agent 是 **Chat Agent Router**：
+## Current Baseline
 
-- 位置：普通 Chat 内部，核心在 `src/lib/chat-agent.ts`。
-- 运行时：TypeScript planner，最终仍调用当前配置的 `streamChat` provider。
-- 工具：`project_files`、`project_file_read`、`wiki_search`、`graph_search`、`web_search`、`anytxt_search`，以只读检索和上下文组装为主。
-- UI：Chat 输入区的 `fast / standard / deep / local_first` mode，消息内保存 agent steps/tool progress。
+截至 2026-06-29：
 
-本 fork 的 Agent 是 **Agent SDK sidecar**：
+- 本地 OKF/KW stream 已完成到 `248bd27 feat: expose OKF and knowledge workflow tools`。
+- Phase 6 upstream `v0.5.x` 主线和 follow-up sweep 已完成并归档。
+- 后续实现 PR 若触碰 upstream-overlapping area，仍必须重新核对当时最新 upstream tag/commit。
 
-- 位置：`src-tauri/sidecar`、Rust `agent_spawn`、frontend `src/lib/agent/*`。
-- 运行时：Claude Agent SDK sidecar，通过 stdin/stdout JSON-lines 与 Tauri/Rust 桥接。
-- 工具：读写 Wiki MCP tools、app-level tools、permission bridge、resource limits、session resume/fork/continue、多 Agent pipeline。
-- UI：Agent session、permission approval、tool/activity timeline、rewind/resume/compact 等 Phase 7 productization 项。
-
-结论：上游 Chat Agent Router 是可吸收的 Chat/RAG 路由能力，不是 Agent SDK sidecar 的替代品。PR G 核心已完成；未来相关 delta 应分流到 residual Chat Router follow-up、新 tracking issue 或 Phase 7 边界评估，并避免直接覆盖本地 sidecar、permission、session 和 pipeline 设计。
+旧结论不得直接复用为当前事实；开工时必须重新跑 delta assessment。
 
 ## Delta Assessment Checklist
 
-每个实现 PR 开工前先做：
+每个可能触碰 upstream-overlapping area 的实现 PR，开工前先做：
 
-1. 确认 upstream remote、latest tag、`upstream/main` commit；若已超过 `v0.5.0`，记录新事实。
-2. 查看 `v0.4.26` through latest `v0.5.x` 的 upstream delta，也可用 `v0.4.25..latest` range 抽取 commit/file 变化。
-3. 对照本地 main，标出直接 merge 会覆盖或删除的本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary 或 Mac-only product positioning 差异。
-4. 把 delta 分流到下方完成映射或当前 follow-up；不确定项先开 tracking issue，不混入无关 PR。
-5. 在对应 PR plan / PR body 记录 delta 结论和未处理项。
+1. 确认 upstream remote、latest tag、`upstream/main` commit。
+2. 查看从本地已知基线到 latest upstream 的 commit/file delta。
+3. 标出会触碰本地差异的风险点：
+   - Claude Agent SDK sidecar
+   - Agent UI / permission / session / pipeline
+   - Tauri resource、sidecar binary、Mac-only product positioning
+   - docs/plans 当前架构方向
+   - OKF/KW 本地业务层语义
+4. 将发现分流到新的 scoped issue / plan，不混入无关 PR。
+5. 在对应 PR plan、PR body 和 reviewer packet 记录当时看到的 upstream tag/commit 和 delta 结论。
 
 ## Routing Rules
 
 | Delta type | Route |
 |------------|-------|
-| Ingest、schema、review create page、source path safety | PR E completed; review missing-page per-title classification #128 completed by #164; new residuals need scoped issues |
-| Zoom、layout、app visibility、project open/create UX | H-lite completed; residual UI polish should get a scoped issue |
-| Chat image、multimodal message、chat standalone | PR G/#134 completed; UI polish #135/#136 completed by #162 |
-| Chat Agent Router、agent modes、agent steps/tool progress、reasoning fallback | PR G completed; sidecar lifecycle remains Phase 7 |
-| OKF-compatible wiki bundle、validator/export/import | OKF/KW completed baseline; new residuals need scoped issues |
-| MinerU / PDF parsing | PR F completed; regression fix #153 completed; large PDF / side-cache polish #152 completed by #161 |
-| Theme、tray、general settings、window close behavior | PR I completed; tray localization #151 completed |
-| Graph rendering/performance | PR J completed; hover label contrast #158 completed; new residuals need scoped issues |
-| AnyTXT、source import extras、lint persistence、low-risk misc | PR K completed; #154/#157 completed; review/chat autosave isolation #156 completed by #160 |
-| CI/release/platform target cleanup | `mac-product-baseline` |
-| Agent UX/session/permission/internal RPC | Claude Agent SDK alignment / Phase 7 backlog; current next step is planning, not direct implementation |
-
-## Phase 6 Completion Mapping
-
-| PR | v0.5.x delta status | Notes |
-|----|---------------------|-------|
-| PR E | completed | #129 `d22f401`; residual per-title review create-page classification #128 completed by #164 `b273c85`. |
-| H-lite | completed | #131 `087b135`; future layout polish should be scoped separately. |
-| PR G | completed | #137 `5765200` + #134 `1183710`; Chat UI polish #135/#136 completed by #162 `ac797ee`. |
-| PR F | completed | #140 `87c7caf`; regression fix #153 merged; large PDF / side-cache polish #152 completed by #161 `7d1b044`. |
-| PR I | completed | #142 `c343b2a`; tray menu localization completed by #151. |
-| PR J | completed | #145 `c5403f7`; hover label contrast completed by #158. |
-| PR K | completed | #148 `0fd1d95`; llmConfig forwarding completed by #154; lint autosave isolation completed by #157; review/chat autosave isolation #156 completed by #160 `334c382`. |
-
-## OKF/KW Completed Baseline
-
-当前 main/head：`248bd27 feat: expose OKF and knowledge workflow tools`。
-
-| Stream | Status | Evidence |
-|--------|--------|----------|
-| KW-QA | completed | `f9f63c5` |
-| OKF-A：validator/export | completed | `e300cdd` |
-| OKF-B：import/mapping | completed | `67f54f6` |
-| KW-B1：Knowledge Agents config base | completed | `95e4bb9` |
-| KW-B2：Prompt Registry | completed | `8ea2326` |
-| KW-C1：Tag taxonomy schema + bootstrap/growth base | completed | `127fc9e` |
-| KW-D：Multi-dimensional synthesis | completed | `3a01730` |
-| KW-C2：Taxonomy-aware Tag Agent | completed | `ad0b9d5` |
-| OKF-C：Unified Agent tools + MCP/local API exposure | completed | `248bd27` |
-
-## Current Follow-up Routing
-
-Recommended routing after #170 and OKF/KW completion:
-
-1. Parallel acceleration platform architecture discussion: Work Runtime, DB selection, provider profiles, work scheduler, and related planning.
-2. Claude Agent SDK alignment: planning candidate only until a new tracking / plan says otherwise.
-3. Phase 7 Agent SDK productization backlog: keep as backlog, do not auto-start from this queue.
-4. New tracking issue: use for residual upstream delta, OKF/KW enhancements, or platform architecture items that are not yet scoped.
-
-This document does not commit to a concrete concurrent runtime implementation.
-
-Completed follow-up closeout evidence:
-
-- Plans/delta queue calibration completed by #159 `cebfc88`.
-- #156 review/chat autosave project-path isolation completed by #160 `334c382`.
-- #152 MinerU large PDF / parsed side-cache polish completed by #161 `7d1b044`.
-- #135/#136 Chat UI polish completed by #162 `ac797ee`.
-- #128 review missing-page per-title classification completed by #164 `b273c85`.
-- #120 sidecar npm audit high vulnerability completed by Hono lockfile update commits `eb8c702` / `4c9aa5c`.
-- #126-A local API hardening completed by #167 `85cf4da`.
-- #126-B autosave error surfacing completed by #168 `6ea9488`.
-- #126-C Agent / Ingest maintainability refactor completed by #169 `de1fbaf`.
-- #126-D P3 hardening completed by #170 `7d3bda5`.
-- OKF/KW stream completed by `f9f63c5`, `e300cdd`, `67f54f6`, `95e4bb9`, `8ea2326`, `127fc9e`, `3a01730`, `ad0b9d5`, `248bd27`.
+| 普通 Chat / RAG / 低风险 UI polish | 可考虑手动 port；必须保护 Unified Agentic Chat 方向 |
+| Chat Agent Router residual | 先开 scoped issue；不要替代 Claude Agent SDK sidecar |
+| Agent SDK sidecar / permission / session / pipeline | 执行入口以 [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) 为准；[claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) 和 [agent-sidecar-phase6.1.md](./agent-sidecar-phase6.1.md) 是背景资料 |
+| Ingest / queue / review / synthesis / taxonomy / embedding | 先对齐并行 runtime 架构 issues #184-#189/#191 |
+| OKF / Knowledge Wiki 增强 | 新 scoped issue；不得重开已完成 OKF/KW 串流 |
+| Mac product identity / CI / release | 先确认是否仍符合 Mac-only active maintenance |
+| Native Swift / SwiftUI / iOS | [native-architecture.md](./native-architecture.md)、[spec-1-app-architecture-decomposition.md](./spec-1-app-architecture-decomposition.md)、[spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md)；Swift 实现 deferred，native-ready boundary active |
 
 ## Direct Merge Policy
 
-Do not directly merge upstream into this fork. Direct merge would risk overwriting or deleting local Agent sidecar, docs, Agent UI, Tauri resource, and product-positioning differences. Continue manual port by feature batch.
+不要直接 merge upstream into this fork。直接 merge 仍可能覆盖或删除本地 Agent sidecar、Agent UI、docs、Tauri resource、sidecar binary、产品定位和本地 workflow 差异。
+
+后续吸收 upstream 功能时继续按 feature batch 手动 port，并以当前产品方向为准。

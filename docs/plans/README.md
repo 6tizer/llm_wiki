@@ -1,43 +1,55 @@
 # Plans Index
 
-> 类型：计划索引 | 更新：2026-06-28 | owner：LLM Wiki commander / planner
+> 类型：计划索引 | 更新：2026-06-29 | owner：LLM Wiki commander / planner
 
 ## 当前有效计划
 
-这些文档是当前计划的单一入口。旧文档若与本索引冲突，以本索引和下列计划为准。
+这些文档是当前计划的单一入口。已完成或历史计划已归档到 [`archive/`](./archive/)；归档文档若与本索引冲突，以本索引和根目录当前计划为准。
 
 | Plan | Charter | Status |
 |------|---------|--------|
-| [mac-product-baseline.md](./mac-product-baseline.md) | 已完成基线：把产品、CI、release、app identity 口径收敛到 Mac-only active maintenance。 | completed |
-| [upstream-sync-phase6.md](./upstream-sync-phase6.md) | Phase 6：PR A-K 主线已完成；现在只作为完成证据、follow-up 路由和后续 delta 校准入口。 | completed / routing |
-| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 调研入口；PR E/H/G/F/I/J/K 和 OKF/KW stream 已完成，后续用于 residual upstream delta 和新实现 PR 分流。 | active |
-| [upstream-chat-agent-router-alignment.md](./upstream-chat-agent-router-alignment.md) | 普通 Chat 对齐 upstream `v0.5.x` Chat Agent Router；PR G 核心和 #135/#136 UI polish follow-up 已完成。 | completed |
-| [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Phase 7 前置评估入口；当前不直接进入实现，等待新 tracking / planning 决策。 | candidate |
-| [okf-compatibility.md](./okf-compatibility.md) | 已完成基线：`<project>/wiki/` 作为 OKF-compatible knowledge bundle root，含 validator/export/import/Agent tools 暴露。 | completed |
-| [knowledge-wiki-business-layer.md](./knowledge-wiki-business-layer.md) | 已完成基线：Knowledge Wiki Skill 作为 OKF 之上的业务工作流层，含 QA、Knowledge Agents、prompt registry、tag taxonomy、synthesis 和 Agent/API exposure。 | completed |
-| [security-review-119-fixes.md](./security-review-119-fixes.md) | issue #119 深度 review 的 4 个安全 PR、#120 和 #126-A/B/C/D 后续安全/质量串流均已完成；保留为历史证据。 | completed |
+| [spec-0-roadmap-baseline.md](./spec-0-roadmap-baseline.md) | 当前 roadmap / issue / archive 基线收口；后续 SPEC 的入口。 | active |
+| [spec-1-app-architecture-decomposition.md](./spec-1-app-architecture-decomposition.md) | UI shell / Core Runtime / adapter 边界；为后续 runtime 和 Swift 回填铺路。 | planned / doc reviewed |
+| [spec-2-work-runtime.md](./spec-2-work-runtime.md) | Work Runtime、SQLite runtime ledger、job/lease/event/scheduler 底座。 | planned |
+| [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
+| [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
+| [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
+| [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |
+| [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
+| [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | planned |
+| [spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md) | Swift/SwiftUI native shell 回填锚点；等 core boundary 稳定后进入。 | deferred / gated |
+| [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 复核入口；不再承载完成证据，只用于后续 PR 开工前重新核对 upstream 并分流。 | active / recheck gate |
+| [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Claude Agent SDK alignment 背景资料；实际执行归入 SPEC-7 PR1。 | planned via SPEC-7 |
 | [agent-sidecar-phase6.1.md](./agent-sidecar-phase6.1.md) | Phase 7 backlog：Agent SDK productization；文件名保留历史编号。 | backlog |
-| [native-architecture.md](./native-architecture.md) | Swift/SwiftUI/iOS/native 架构 ADR 入口；当前不改变 Tauri/Rust/TS 主线。 | ADR backlog |
-| [agent-sidecar-roadmap.md](./agent-sidecar-roadmap.md) | Agent Sidecar 历史总览入口；保留设计背景和已完成阶段，不作为当前执行顺序来源。 | historical |
+| [native-architecture.md](./native-architecture.md) | Swift/SwiftUI/iOS/native 架构 ADR；Swift 实现 deferred，但 native-ready boundary 已由 SPEC-1 纳入当前主线。 | active boundary / deferred implementation |
 
 ## Historical Archive
 
-Phase 1-5、Phase 3.x、旧 roadmap 和 follow-up 文档保留为历史记录，用于追踪设计决策、验收证据和已完成工作。它们不是当前 roadmap 的权威来源。
+已完成内容已移动到 [`archive/`](./archive/)，用于追踪设计决策、验收证据和已完成工作。它们不是当前 roadmap 的权威来源。
 
-历史文档中的跨平台承诺、Windows/Linux release 口径、旧 Phase 6+ 命名、上游 `v0.4.25` 目标或后续 PR 顺序，如果与本索引或当前有效计划冲突，以本索引、`mac-product-baseline.md`、`upstream-sync-phase6.md` 和 `upstream-0.5-delta.md` 为准。
+归档范围包括：
+
+- Agent Sidecar Phase 1-5.2、旧 roadmap 和 follow-up plan。
+- Mac-only product baseline。
+- Phase 6 upstream sync、Chat Agent Router alignment、PR K AnyTXT options。
+- OKF compatibility 与 Knowledge Wiki business-layer completed baseline。
+- Security review #119、#120、#126-A/B/C/D completed plan。
+
+历史文档中的跨平台承诺、Windows/Linux release 口径、旧 Phase 6+ 命名、上游 `v0.4.25` 目标或后续 PR 顺序，如果与本索引或当前有效计划冲突，以本索引和当前根目录计划为准。
 
 ## Maintenance Rules
 
 - 新计划先加入本索引，再作为 implementation PR 的依据。
-- 完成或废弃的计划保留原文，但要在本索引移出 active 列表或标注为 archive。
+- 完成或废弃的计划保留原文，并移动到 `docs/plans/archive/`。
 - Current Execution Order 以本索引为 canonical；其他计划文档中的顺序列表只是对应领域的镜像摘要，后续改序必须先改本索引，再同步必要镜像。
 - 本仓库 `.gitignore` 覆盖 `docs/`；新增计划文档必须使用 `git add -f docs/plans/<file>.md`，否则 PR 会出现断链或漏文件。
+- GitNexus CLI canonical command 使用连字符：`npx gitnexus detect-changes --repo llm_wiki`；MCP/tool 名称可能使用下划线 `detect_changes`，不要混写。
 - 不在旧文档里反复改写历史事实；只修会误导当前执行的交叉引用。
 - docs-only roadmap PR 不代表 CI/release 已完成清理；实际 pruning 由 `mac-product-baseline` 实现 PR 处理。
 
 ## Current Execution Order
 
-截至 2026-06-29，当前 main/head 基线为 `248bd27 feat: expose OKF and knowledge workflow tools`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 也已完成，不再作为当前串流队列继续执行。
+截至 2026-06-29，当前 main/head 基线为 `248bd27 feat: expose OKF and knowledge workflow tools`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 也已完成，并已归档，不再作为当前串流队列继续执行。
 
 已完成 OKF/KW 基线证据：
 
@@ -51,6 +63,8 @@ Phase 1-5、Phase 3.x、旧 roadmap 和 follow-up 文档保留为历史记录，
 8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
 9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
 
-Next planning candidate：继续围绕并行加速 / Work Runtime / DB 选型 / provider profiles / work scheduler 讨论和规划。当前不直接进入 Phase 7 / Claude Agent SDK alignment 实现，也不继续按旧 OKF/KW 队列执行；如需进入 Claude Agent SDK alignment、Phase 7 backlog 或新平台架构实现，先开新的 tracking / plan 校准。
+Next execution sequence：先完成阶段 SPEC 的审查定稿，再按 SPEC 拆实现 PR。实现阶段顺序以 SPEC-1 PR1（shell/core boundary ADR + runtime command/event inventory）为第一硬门槛；SPEC-2 runtime DB/job API 必须在这个边界内落地。SPEC-2 PR1（runtime schema + state-machine ADR）合并前，SPEC-3/4 只能做独立调研或草案，不能做依赖 runtime schema 的集成实现。允许的 parallel preparation 仅限 docs、ADR、接口草案和只读调研；任何触碰 shared runtime types/schema、持久化 runtime state 或 core API implementation 的代码 PR 必须等待对应 gate 合并。SPEC-2 PR1 合并后，再推进 SPEC-3/4 integration PR，随后进入 SPEC-5/6。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by SPEC-2 job ledger。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
 
-Swift/SwiftUI/iOS/native 架构继续作为远期 ADR，不进入近期实现队列。
+当前不直接进入 Phase 7 / Claude Agent SDK alignment 实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR。
+
+Swift/SwiftUI/iOS/native 实现继续 deferred；但 native-ready shell/core boundary 已进入 SPEC-1，后置 Swift 回填由 SPEC-9 承接。

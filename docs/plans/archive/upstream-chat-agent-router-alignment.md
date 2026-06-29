@@ -2,7 +2,7 @@
 
 > 类型：alignment roadmap | 创建：2026-06-25 | 更新：2026-06-27 | 状态：completed
 > 上级：[Phase 6 upstream sync](./upstream-sync-phase6.md)
-> Delta 入口：[Upstream v0.5.x Delta](./upstream-0.5-delta.md)
+> Delta 入口：[Upstream v0.5.x Delta](../upstream-0.5-delta.md)
 > 上游基线：`nashsu/llm_wiki` `v0.5.1@cc4b98f`
 
 ## 结论
