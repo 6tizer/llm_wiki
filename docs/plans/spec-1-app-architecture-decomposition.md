@@ -60,8 +60,8 @@ Strangler migration priority:
 
 ## 预期 PR 拆分
 
-1. Architecture ADR + module boundary map + runtime command/event inventory：定义 UI Shell、Core Runtime、Platform Adapter、Agent Adapter、Storage Boundary，并把 contract 提升到 `frozen`。
-2. Boundary enforcement：加入 headless contract test skeleton 和 import/static check，防止新 core 模块依赖 React/Zustand/Tauri plugin-store。
+1. Architecture ADR + module boundary map + runtime command/event inventory + minimal headless contract skeleton：定义 UI Shell、Core Runtime、Platform Adapter、Agent Adapter、Storage Boundary，并把 contract 提升到 `frozen`。
+2. Boundary enforcement：扩展 headless contract tests，并加入 import/static check，防止新 core 模块依赖 React/Zustand/Tauri plugin-store。
 3. Bootstrap boundary cleanup：把 `App.tsx` 中非 UI bootstrap 标记为 runtime/bootstrap service 候选，不在 UI lifecycle 新增业务副作用。
 4. Store boundary cleanup plan：区分 UI view state、runtime state、persisted app settings、project runtime state。
 5. Adapter contract tests：用 mock shell 调 Core Runtime API，证明 core 不依赖 React render 或 Tauri plugin-store。
