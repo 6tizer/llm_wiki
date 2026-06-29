@@ -22,8 +22,10 @@ src-tauri/gen/
 .env.local
 .env.*.local
 
-# Internal docs (not shipped)
-docs/
+# Internal docs are local by default, except tracked planning specs.
+docs/*
+!docs/plans/
+!docs/plans/**
 AGENTS.md
 
 # Benchmark and test data (local only)
