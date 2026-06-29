@@ -66,6 +66,25 @@ Strangler migration priority:
 4. Store boundary cleanup plan：区分 UI view state、runtime state、persisted app settings、project runtime state。
 5. Adapter contract tests：用 mock shell 调 Core Runtime API，证明 core 不依赖 React render 或 Tauri plugin-store。
 
+## 五个 PR 连续执行计划
+
+每个 PR 只在开工时产出该 PR 的具体计划，并落盘到 `docs/plans/SPEC-1/`；计划先由 Commander 编写，再由 Architect 做对抗审查。审查通过后才进入实现、测试、review、PR、merge 和 post-merge GitNexus analyze。
+
+| PR | Plan | Status | Gate |
+| --- | --- | --- | --- |
+| PR1 | [`SPEC-1/pr1-boundary-adr-plan.md`](./SPEC-1/pr1-boundary-adr-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
+| PR2 | [`SPEC-1/pr2-boundary-enforcement-plan.md`](./SPEC-1/pr2-boundary-enforcement-plan.md) | implemented / pending gates | Architect PASS |
+| PR3 | 待 PR2 merge 后创建 | pending | blocked by PR2 merge + GitNexus analyze |
+| PR4 | 待 PR3 merge 后创建 | pending | blocked by PR3 merge + GitNexus analyze |
+| PR5 | 待 PR4 merge 后创建 | pending | blocked by PR4 merge + GitNexus analyze |
+
+Commander 调度规则：
+
+- 每个 PR 开始时先落具体计划，不提前为后续 PR 写实现级计划。
+- 外部 gate 优先使用 Claude / Kimi / ZCode；每个 gate 都必须有 fallback，超时或无报告不能视为 PASS。
+- 内部 Architect / Coder / Tester / Reviewer 作为外部 gate 失败或需要二次确认时的 fallback。
+- 每个 PR 合并后必须回到 `main`、`git pull --ff-only`、运行 `npx gitnexus analyze` 并确认 index up to date，再启动下一个 PR。
+
 ## 验证策略
 
 - 文档验收：SPEC-2 到 SPEC-9 都明确依赖本 SPEC 的 shell/core 边界；SPEC-9 只能在该边界稳定后进入 Swift shell re-entry。
