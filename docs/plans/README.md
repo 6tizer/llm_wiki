@@ -10,6 +10,8 @@
 |------|---------|--------|
 | [spec-0-roadmap-baseline.md](./spec-0-roadmap-baseline.md) | 当前 roadmap / issue / archive 基线收口；后续 SPEC 的入口。 | active |
 | [spec-1-app-architecture-decomposition.md](./spec-1-app-architecture-decomposition.md) | UI shell / Core Runtime / adapter 边界；为后续 runtime 和 Swift 回填铺路。 | planned / doc reviewed |
+| [SPEC-1/pr1-boundary-adr-plan.md](./SPEC-1/pr1-boundary-adr-plan.md) | SPEC-1 PR1 执行计划：shell/core boundary ADR、module boundary map、runtime command/event inventory。 | active PR plan / architect PASS |
+| [SPEC-1/adr-shell-core-boundary.md](./SPEC-1/adr-shell-core-boundary.md) | SPEC-1 PR1 ADR：UI Shell、Core Runtime、Platform Adapter、Agent Adapter、Storage Boundary、runtime command/event inventory。 | active PR artifact / frozen |
 | [spec-2-work-runtime.md](./spec-2-work-runtime.md) | Work Runtime、SQLite runtime ledger、job/lease/event/scheduler 底座。 | planned |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
@@ -40,6 +42,7 @@
 ## Maintenance Rules
 
 - 新计划先加入本索引，再作为 implementation PR 的依据。
+- 每个 SPEC 的 PR 级执行计划放在 `docs/plans/SPEC-N/`，只在对应 PR 开始时创建或更新；阶段 SPEC 文档继续保留在 `docs/plans/spec-N-*.md`。
 - 完成或废弃的计划保留原文，并移动到 `docs/plans/archive/`。
 - Current Execution Order 以本索引为 canonical；其他计划文档中的顺序列表只是对应领域的镜像摘要，后续改序必须先改本索引，再同步必要镜像。
 - 本仓库 `.gitignore` 覆盖 `docs/`；新增计划文档必须使用 `git add -f docs/plans/<file>.md`，否则 PR 会出现断链或漏文件。
@@ -63,7 +66,7 @@
 8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
 9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
 
-Next execution sequence：从 SPEC-1 PR1（shell/core boundary ADR + runtime command/event inventory）开始实现，这是第一硬门槛；SPEC-2 runtime DB/job API 必须在这个边界内落地。SPEC-2 PR1（runtime schema + state-machine ADR）合并前，SPEC-3/4 只能做独立调研或草案，不能做依赖 runtime schema 的集成实现。允许的 parallel preparation 仅限 docs、ADR、接口草案和只读调研；任何触碰 shared runtime types/schema、持久化 runtime state 或 core API implementation 的代码 PR 必须等待对应 gate 合并。SPEC-2 PR1 合并后，再推进 SPEC-3/4 integration PR，随后进入 SPEC-5/6。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by SPEC-2 job ledger。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
+Next execution sequence：从 SPEC-1 PR1（shell/core boundary ADR + runtime command/event inventory + minimal headless contract skeleton）开始实现，这是第一硬门槛；SPEC-2 runtime DB/job API 必须在这个边界内落地。SPEC-2 PR1（runtime schema + state-machine ADR）合并前，SPEC-3/4 只能做独立调研或草案，不能做依赖 runtime schema 的集成实现。允许的 parallel preparation 仅限 docs、ADR、接口草案和只读调研；任何触碰 shared runtime types/schema、持久化 runtime state 或 core API implementation 的代码 PR 必须等待对应 gate 合并。SPEC-2 PR1 合并后，再推进 SPEC-3/4 integration PR，随后进入 SPEC-5/6。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by SPEC-2 job ledger。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
 
 当前不直接进入 Phase 7 / Claude Agent SDK alignment 实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR。
 
