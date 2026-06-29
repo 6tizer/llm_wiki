@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::commands::file_sync::ProjectRootState;
@@ -18,15 +19,27 @@ const JOBS_FAMILY: &str = "jobs";
 const JOBS_VERSION: i64 = 1;
 const LEASES_FAMILY: &str = "leases";
 const LEASES_VERSION: i64 = 1;
+const RESOURCE_BUDGETS_FAMILY: &str = "resource-budgets";
+const RESOURCE_BUDGETS_VERSION: i64 = 1;
 const WORK_RUNTIME_ENABLED_ENV: &str = "LLM_WIKI_CORE_WORK_RUNTIME_ENABLED";
 const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 const DEFAULT_PRIORITY: i64 = 0;
 const DEFAULT_LEASE_TTL_MS: i64 = 120_000;
 const DEFAULT_RETRY_BACKOFF_MS: i64 = 30_000;
+const DEFAULT_COMMIT_TOTAL_CAPACITY: i64 = 2;
+const COMMIT_BUDGET_AMOUNT: i64 = 1;
+const MIN_COMMIT_BUDGET_TTL_MS: i64 = 1_000;
+const MAX_COMMIT_BUDGET_TTL_MS: i64 = 1_200_000;
 const ACTIVE_LEASE_STATUS: &str = "active";
 const RELEASED_LEASE_STATUS: &str = "released";
 const EXPIRED_LEASE_STATUS: &str = "expired";
 const CANCELLED_LEASE_STATUS: &str = "cancelled";
+const COMMIT_TOTAL_SCOPE: &str = "commit-total";
+const COMMIT_PATH_SCOPE: &str = "commit-path";
+const COMMIT_TOTAL_RESOURCE_KEY: &str = "*";
+const ACTIVE_CLAIM_STATUS: &str = "active";
+const RELEASED_CLAIM_STATUS: &str = "released";
+const EXPIRED_CLAIM_STATUS: &str = "expired";
 
 static RUNTIME_DB_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -166,6 +179,80 @@ pub struct RuntimeJobList {
     leases: Vec<RuntimeJobLeaseRecord>,
 }
 
+/// Request payload for claiming commit-path budget capacity.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCommitBudgetClaimRequest {
+    affected_path: String,
+    holder: String,
+    job_id: Option<String>,
+    claim_id: Option<String>,
+    ttl_ms: Option<i64>,
+}
+
+/// Request payload for releasing commit-path budget capacity.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCommitBudgetReleaseRequest {
+    claim_id: String,
+}
+
+/// Snapshot of one resource budget row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResourceBudgetRecord {
+    scope: String,
+    resource_key: String,
+    display_key: String,
+    capacity: i64,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+/// Snapshot of one resource budget claim row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeResourceBudgetClaimRecord {
+    claim_id: String,
+    scope: String,
+    resource_key: String,
+    display_key: String,
+    job_id: Option<String>,
+    holder: String,
+    amount: i64,
+    acquired_at_ms: i64,
+    expires_at_ms: i64,
+    released_at_ms: Option<i64>,
+    status: String,
+}
+
+/// Response payload for a successful commit budget claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCommitBudgetClaim {
+    claim_id: String,
+    resource_key: String,
+    display_key: String,
+    expires_at_ms: i64,
+    claims: Vec<RuntimeResourceBudgetClaimRecord>,
+}
+
+/// Snapshot response for commit budget rows and active claims.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCommitBudgetList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    budgets: Vec<RuntimeResourceBudgetRecord>,
+    claims: Vec<RuntimeResourceBudgetClaimRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedAffectedPath {
+    display_key: String,
+    resource_key: String,
+}
+
 fn runtime_db_path(project_root: &Path) -> PathBuf {
     project_root.join(RUNTIME_DIR).join(RUNTIME_DB_FILE)
 }
@@ -213,12 +300,7 @@ pub fn runtime_job_create(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_create_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_create_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -232,12 +314,7 @@ pub fn runtime_job_claim(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_claim_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_claim_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -251,12 +328,7 @@ pub fn runtime_job_heartbeat(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_heartbeat_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_heartbeat_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -270,12 +342,7 @@ pub fn runtime_job_complete(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_complete_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_complete_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -289,12 +356,7 @@ pub fn runtime_job_fail(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_fail_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_fail_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -308,12 +370,7 @@ pub fn runtime_job_retry(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_retry_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_retry_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -327,12 +384,7 @@ pub fn runtime_job_cancel(
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_cancel_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
+        runtime_job_cancel_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -341,6 +393,57 @@ pub fn runtime_job_cancel(
 pub fn runtime_job_list(root_state: State<'_, ProjectRootState>) -> Result<RuntimeJobList, String> {
     run_guarded("runtime_job_list", || {
         runtime_job_list_for_project(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+        )
+    })
+}
+
+/// Claim commit-path budget capacity for the currently-open project.
+#[tauri::command]
+pub fn runtime_commit_budget_claim(
+    request: RuntimeCommitBudgetClaimRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeCommitBudgetClaim, String> {
+    run_guarded("runtime_commit_budget_claim", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_commit_budget_claim_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// Release an active commit-path budget claim.
+#[tauri::command]
+pub fn runtime_commit_budget_release(
+    request: RuntimeCommitBudgetReleaseRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
+    run_guarded("runtime_commit_budget_release", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_commit_budget_release_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// List commit budget rows and active claims for the currently-open project.
+#[tauri::command]
+pub fn runtime_commit_budget_list(
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeCommitBudgetList, String> {
+    run_guarded("runtime_commit_budget_list", || {
+        runtime_commit_budget_list_for_project(
             root_state.get().as_deref(),
             resolve_work_runtime_enabled(read_work_runtime_flag_value()),
         )
@@ -587,6 +690,110 @@ fn initialize_job_schema(connection: &Connection) -> Result<(), String> {
 
     record_migration_family(connection, JOBS_FAMILY, JOBS_VERSION)?;
     record_migration_family(connection, LEASES_FAMILY, LEASES_VERSION)
+}
+
+fn open_resource_budget_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+    let connection = open_job_runtime_locked(project_root)?;
+    initialize_resource_budget_schema(&connection)?;
+    Ok(connection)
+}
+
+fn initialize_resource_budget_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "CREATE TABLE IF NOT EXISTS runtime_resource_budgets (
+                scope TEXT NOT NULL CHECK (scope IN ('commit-total', 'commit-path')),
+                resource_key TEXT NOT NULL,
+                display_key TEXT NOT NULL,
+                capacity INTEGER NOT NULL CHECK (capacity >= 1),
+                created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(scope, resource_key)
+            )",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime resource budgets table: {err}"))?;
+
+    connection
+        .execute(
+            "CREATE TABLE IF NOT EXISTS runtime_resource_budget_claims (
+                claim_id TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK (scope IN ('commit-total', 'commit-path')),
+                resource_key TEXT NOT NULL,
+                display_key TEXT NOT NULL,
+                job_id TEXT,
+                holder TEXT NOT NULL,
+                amount INTEGER NOT NULL CHECK (amount >= 1),
+                acquired_at_ms INTEGER NOT NULL,
+                expires_at_ms INTEGER NOT NULL,
+                released_at_ms INTEGER,
+                status TEXT NOT NULL CHECK (status IN ('active', 'released', 'expired')),
+                PRIMARY KEY(claim_id, scope, resource_key),
+                FOREIGN KEY(scope, resource_key)
+                    REFERENCES runtime_resource_budgets(scope, resource_key),
+                FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id)
+            )",
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime resource budget claims table: {err}")
+        })?;
+
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_resource_claims_active_idx
+             ON runtime_resource_budget_claims(scope, resource_key, status, expires_at_ms)",
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime resource claim active index: {err}")
+        })?;
+    connection
+        .execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS runtime_commit_path_active_unique_idx
+             ON runtime_resource_budget_claims(resource_key)
+             WHERE scope = 'commit-path' AND status = 'active'",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime commit path unique index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_resource_claims_claim_idx
+             ON runtime_resource_budget_claims(claim_id, status)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime resource claim id index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_resource_claims_job_idx
+             ON runtime_resource_budget_claims(job_id, status)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime resource claim job index: {err}"))?;
+
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO runtime_resource_budgets (
+                scope,
+                resource_key,
+                display_key,
+                capacity,
+                created_at_ms,
+                updated_at_ms
+            ) VALUES (?1, ?2, ?2, ?3, ?4, ?4)",
+            params![
+                COMMIT_TOTAL_SCOPE,
+                COMMIT_TOTAL_RESOURCE_KEY,
+                DEFAULT_COMMIT_TOTAL_CAPACITY,
+                now_ms()?
+            ],
+        )
+        .map_err(|err| format!("Failed to initialize runtime commit total budget: {err}"))?;
+    record_migration_family(
+        connection,
+        RESOURCE_BUDGETS_FAMILY,
+        RESOURCE_BUDGETS_VERSION,
+    )
 }
 
 fn record_migration_family(
@@ -965,6 +1172,185 @@ fn runtime_job_list_for_project(
     })
 }
 
+fn runtime_commit_budget_claim_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeCommitBudgetClaimRequest,
+    now: i64,
+) -> Result<RuntimeCommitBudgetClaim, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let affected_path = normalize_affected_path(&request.affected_path)?;
+    let ttl_ms = normalize_commit_budget_ttl(request.ttl_ms)?;
+    let expires_at_ms = now
+        .checked_add(ttl_ms)
+        .ok_or_else(|| "invalid-ttl: commit budget expiry overflow".to_string())?;
+    let holder = require_non_empty("invalid-holder", "holder", &request.holder)?.to_string();
+    let claim_id = match request.claim_id {
+        Some(claim_id) => require_non_empty("invalid-claim-id", "claimId", &claim_id)?.to_string(),
+        None => Uuid::new_v4().to_string(),
+    };
+
+    with_runtime_writer(|| {
+        let mut connection = open_resource_budget_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        ensure_claim_id_available(&tx, &claim_id)?;
+        if let Some(job_id) = request.job_id.as_deref() {
+            ensure_job_exists(&tx, job_id)?;
+        }
+        ensure_path_budget(&tx, &affected_path, now)?;
+        ensure_commit_total_capacity(&tx)?;
+        ensure_commit_path_available(&tx, &affected_path.resource_key)?;
+
+        insert_commit_budget_claim_row(
+            &tx,
+            &claim_id,
+            COMMIT_TOTAL_SCOPE,
+            COMMIT_TOTAL_RESOURCE_KEY,
+            COMMIT_TOTAL_RESOURCE_KEY,
+            request.job_id.as_deref(),
+            &holder,
+            now,
+            expires_at_ms,
+        )?;
+        insert_commit_budget_claim_row(
+            &tx,
+            &claim_id,
+            COMMIT_PATH_SCOPE,
+            &affected_path.resource_key,
+            &affected_path.display_key,
+            request.job_id.as_deref(),
+            &holder,
+            now,
+            expires_at_ms,
+        )?;
+
+        let claims = read_claims_by_id_tx(&tx, &claim_id)?;
+        ensure_claim_pair(&claims)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeCommitBudgetClaim {
+            claim_id,
+            resource_key: affected_path.resource_key,
+            display_key: affected_path.display_key,
+            expires_at_ms,
+            claims,
+        })
+    })
+}
+
+fn runtime_commit_budget_release_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeCommitBudgetReleaseRequest,
+    now: i64,
+) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let claim_id = require_non_empty("invalid-claim-id", "claimId", &request.claim_id)?;
+    with_runtime_writer(|| {
+        let mut connection = open_resource_budget_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let active_claims = read_active_claims_by_id_tx(&tx, claim_id)?;
+        if active_claims.is_empty() {
+            return Err("claim-inactive: commit budget claim is not active".to_string());
+        }
+        ensure_claim_pair(&active_claims)?;
+        let updated = update_claim_status(&tx, claim_id, RELEASED_CLAIM_STATUS, now)?;
+        if updated != 2 {
+            return Err(
+                "claim-inconsistent: commit budget claim did not release exactly two rows"
+                    .to_string(),
+            );
+        }
+        let claims = read_claims_by_id_tx(&tx, claim_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(claims)
+    })
+}
+
+fn runtime_commit_budget_list_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+) -> Result<RuntimeCommitBudgetList, String> {
+    if !enabled {
+        return Ok(RuntimeCommitBudgetList {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            budgets: Vec::new(),
+            claims: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeCommitBudgetList {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            budgets: Vec::new(),
+            claims: Vec::new(),
+        });
+    };
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeCommitBudgetList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            budgets: Vec::new(),
+            claims: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("commit-budget-list-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_resource_budgets")?
+        || !table_exists(&connection, "runtime_resource_budget_claims")?
+    {
+        return Ok(RuntimeCommitBudgetList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            budgets: Vec::new(),
+            claims: Vec::new(),
+        });
+    }
+    Ok(RuntimeCommitBudgetList {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        budgets: read_resource_budgets(&connection)?,
+        claims: read_active_resource_claims(&connection)?,
+    })
+}
+
+#[allow(dead_code)]
+fn runtime_commit_budget_expire_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    claim_id: &str,
+    now: i64,
+) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let claim_id = require_non_empty("invalid-claim-id", "claimId", claim_id)?;
+    with_runtime_writer(|| {
+        let mut connection = open_resource_budget_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let active_claims = read_active_claims_by_id_tx(&tx, claim_id)?;
+        if active_claims.is_empty() {
+            return Err("claim-inactive: commit budget claim is not active".to_string());
+        }
+        ensure_claim_pair(&active_claims)?;
+        if active_claims.iter().any(|claim| claim.expires_at_ms > now) {
+            return Err("claim-not-expired: commit budget claim has not expired".to_string());
+        }
+        let updated = update_claim_status(&tx, claim_id, EXPIRED_CLAIM_STATUS, now)?;
+        if updated != 2 {
+            return Err(
+                "claim-inconsistent: commit budget claim did not expire exactly two rows"
+                    .to_string(),
+            );
+        }
+        let claims = read_claims_by_id_tx(&tx, claim_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(claims)
+    })
+}
+
 fn terminal_running_operation(
     project_root: Option<&Path>,
     enabled: bool,
@@ -1052,6 +1438,249 @@ fn require_non_empty<'a>(code: &str, field: &str, value: &'a str) -> Result<&'a 
     } else {
         Ok(trimmed)
     }
+}
+
+fn normalize_commit_budget_ttl(ttl_ms: Option<i64>) -> Result<i64, String> {
+    let ttl_ms = ttl_ms.unwrap_or(DEFAULT_LEASE_TTL_MS);
+    if !(MIN_COMMIT_BUDGET_TTL_MS..=MAX_COMMIT_BUDGET_TTL_MS).contains(&ttl_ms) {
+        Err(format!(
+            "invalid-ttl: ttlMs must be between {MIN_COMMIT_BUDGET_TTL_MS} and {MAX_COMMIT_BUDGET_TTL_MS}"
+        ))
+    } else {
+        Ok(ttl_ms)
+    }
+}
+
+fn normalize_affected_path(raw: &str) -> Result<NormalizedAffectedPath, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("invalid-affected-path: affectedPath must not be empty".to_string());
+    }
+    let raw_bytes = trimmed.as_bytes();
+    if raw_bytes.len() >= 2 && raw_bytes[1] == b':' && raw_bytes[0].is_ascii_alphabetic() {
+        return Err("invalid-affected-path: drive-prefixed paths are not allowed".to_string());
+    }
+
+    let normalized_slashes = trimmed.replace('\\', "/");
+    if normalized_slashes.starts_with('/') {
+        return Err("invalid-affected-path: absolute paths are not allowed".to_string());
+    }
+    if normalized_slashes.ends_with('/') {
+        return Err("invalid-affected-path: directory paths are not allowed".to_string());
+    }
+
+    let mut segments = Vec::new();
+    for segment in normalized_slashes.split('/') {
+        if segment.is_empty() {
+            return Err("invalid-affected-path: empty path segments are not allowed".to_string());
+        }
+        if matches!(segment, "." | "..") {
+            return Err("invalid-affected-path: traversal segments are not allowed".to_string());
+        }
+        segments.push(segment);
+    }
+
+    let leaf = segments
+        .last()
+        .ok_or_else(|| "invalid-affected-path: affectedPath must not be empty".to_string())?;
+    let leaf_lower = leaf.to_ascii_lowercase();
+    if leaf_lower == ".md" || !leaf_lower.ends_with(".md") {
+        return Err(
+            "invalid-affected-path: affectedPath must point to a Markdown file".to_string(),
+        );
+    }
+
+    let display_key = segments.join("/");
+    let resource_key = segments
+        .iter()
+        .map(|segment| segment.nfc().collect::<String>().to_lowercase())
+        .collect::<Vec<_>>()
+        .join("/");
+    Ok(NormalizedAffectedPath {
+        display_key,
+        resource_key,
+    })
+}
+
+fn ensure_claim_id_available(tx: &Transaction<'_>, claim_id: &str) -> Result<(), String> {
+    let existing = tx
+        .query_row(
+            "SELECT COUNT(*)
+             FROM runtime_resource_budget_claims
+             WHERE claim_id = ?1",
+            [claim_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("claim-id-check-failed: {err}"))?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err("claim-id-conflict: commit budget claim id already exists".to_string())
+    }
+}
+
+fn ensure_job_exists(tx: &Transaction<'_>, job_id: &str) -> Result<(), String> {
+    let exists = tx
+        .query_row(
+            "SELECT 1 FROM runtime_jobs WHERE job_id = ?1 LIMIT 1",
+            [job_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|err| format!("job-check-failed: {err}"))?
+        .is_some();
+    if exists {
+        Ok(())
+    } else {
+        Err("job-not-found: runtime job does not exist".to_string())
+    }
+}
+
+fn ensure_path_budget(
+    tx: &Transaction<'_>,
+    affected_path: &NormalizedAffectedPath,
+    now: i64,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT OR IGNORE INTO runtime_resource_budgets (
+            scope,
+            resource_key,
+            display_key,
+            capacity,
+            created_at_ms,
+            updated_at_ms
+        ) VALUES (?1, ?2, ?3, 1, ?4, ?4)",
+        params![
+            COMMIT_PATH_SCOPE,
+            affected_path.resource_key,
+            affected_path.display_key,
+            now
+        ],
+    )
+    .map_err(|err| format!("commit-path-budget-create-failed: {err}"))?;
+    Ok(())
+}
+
+fn ensure_commit_total_capacity(tx: &Transaction<'_>) -> Result<(), String> {
+    let capacity = tx
+        .query_row(
+            "SELECT capacity
+             FROM runtime_resource_budgets
+             WHERE scope = ?1 AND resource_key = ?2",
+            params![COMMIT_TOTAL_SCOPE, COMMIT_TOTAL_RESOURCE_KEY],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("commit-total-budget-read-failed: {err}"))?;
+    let active_amount = tx
+        .query_row(
+            "SELECT COALESCE(SUM(amount), 0)
+             FROM runtime_resource_budget_claims
+             WHERE scope = ?1 AND resource_key = ?2 AND status = ?3",
+            params![
+                COMMIT_TOTAL_SCOPE,
+                COMMIT_TOTAL_RESOURCE_KEY,
+                ACTIVE_CLAIM_STATUS
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("commit-total-budget-sum-failed: {err}"))?;
+    if active_amount + COMMIT_BUDGET_AMOUNT <= capacity {
+        Ok(())
+    } else {
+        Err("commit-total-budget-exhausted: commit total budget is exhausted".to_string())
+    }
+}
+
+fn ensure_commit_path_available(tx: &Transaction<'_>, resource_key: &str) -> Result<(), String> {
+    let active_count = tx
+        .query_row(
+            "SELECT COUNT(*)
+             FROM runtime_resource_budget_claims
+             WHERE scope = ?1 AND resource_key = ?2 AND status = ?3",
+            params![COMMIT_PATH_SCOPE, resource_key, ACTIVE_CLAIM_STATUS],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("commit-path-budget-check-failed: {err}"))?;
+    if active_count == 0 {
+        Ok(())
+    } else {
+        Err("commit-path-already-claimed: commit path budget is already claimed".to_string())
+    }
+}
+
+fn insert_commit_budget_claim_row(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+    scope: &str,
+    resource_key: &str,
+    display_key: &str,
+    job_id: Option<&str>,
+    holder: &str,
+    now: i64,
+    expires_at_ms: i64,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT INTO runtime_resource_budget_claims (
+            claim_id,
+            scope,
+            resource_key,
+            display_key,
+            job_id,
+            holder,
+            amount,
+            acquired_at_ms,
+            expires_at_ms,
+            status
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            claim_id,
+            scope,
+            resource_key,
+            display_key,
+            job_id,
+            holder,
+            COMMIT_BUDGET_AMOUNT,
+            now,
+            expires_at_ms,
+            ACTIVE_CLAIM_STATUS
+        ],
+    )
+    .map_err(|err| format!("commit-budget-claim-insert-failed: {err}"))?;
+    Ok(())
+}
+
+fn ensure_claim_pair(claims: &[RuntimeResourceBudgetClaimRecord]) -> Result<(), String> {
+    if claims.len() != 2 {
+        return Err(
+            "claim-inconsistent: commit budget claim must contain exactly two active rows"
+                .to_string(),
+        );
+    }
+    let has_total = claims.iter().any(|claim| {
+        claim.scope == COMMIT_TOTAL_SCOPE && claim.resource_key == COMMIT_TOTAL_RESOURCE_KEY
+    });
+    let has_path = claims.iter().any(|claim| claim.scope == COMMIT_PATH_SCOPE);
+    if has_total && has_path {
+        Ok(())
+    } else {
+        Err("claim-inconsistent: commit budget claim must include total and path rows".to_string())
+    }
+}
+
+fn update_claim_status(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+    status: &str,
+    now: i64,
+) -> Result<usize, String> {
+    tx.execute(
+        "UPDATE runtime_resource_budget_claims
+         SET status = ?2,
+             released_at_ms = CASE WHEN ?2 = 'released' THEN ?3 ELSE released_at_ms END
+         WHERE claim_id = ?1 AND status = ?4",
+        params![claim_id, status, now, ACTIVE_CLAIM_STATUS],
+    )
+    .map_err(|err| format!("commit-budget-claim-update-failed: {err}"))
 }
 
 fn ensure_no_active_lease(tx: &Transaction<'_>, job_id: &str) -> Result<(), String> {
@@ -1186,6 +1815,69 @@ fn read_leases(connection: &Connection) -> Result<Vec<RuntimeJobLeaseRecord>, St
         .map_err(|err| format!("leases-read-failed: {err}"))
 }
 
+fn read_resource_budgets(
+    connection: &Connection,
+) -> Result<Vec<RuntimeResourceBudgetRecord>, String> {
+    let mut statement = connection
+        .prepare(&resource_budget_select_sql(
+            "ORDER BY scope ASC, resource_key ASC",
+        ))
+        .map_err(|err| format!("resource-budgets-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([], map_resource_budget_row)
+        .map_err(|err| format!("resource-budgets-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("resource-budgets-read-failed: {err}"))
+}
+
+fn read_active_resource_claims(
+    connection: &Connection,
+) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
+    let mut statement = connection
+        .prepare(&resource_claim_select_sql(
+            "WHERE status = 'active' ORDER BY acquired_at_ms ASC, claim_id ASC, scope ASC",
+        ))
+        .map_err(|err| format!("resource-claims-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([], map_resource_claim_row)
+        .map_err(|err| format!("resource-claims-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("resource-claims-read-failed: {err}"))
+}
+
+fn read_claims_by_id_tx(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
+    let mut statement = tx
+        .prepare(&resource_claim_select_sql(
+            "WHERE claim_id = ?1 ORDER BY scope ASC, resource_key ASC",
+        ))
+        .map_err(|err| format!("resource-claims-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([claim_id], map_resource_claim_row)
+        .map_err(|err| format!("resource-claims-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("resource-claims-read-failed: {err}"))
+}
+
+fn read_active_claims_by_id_tx(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
+    let mut statement = tx
+        .prepare(&resource_claim_select_sql(
+            "WHERE claim_id = ?1 AND status = 'active'
+             ORDER BY scope ASC, resource_key ASC",
+        ))
+        .map_err(|err| format!("resource-claims-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([claim_id], map_resource_claim_row)
+        .map_err(|err| format!("resource-claims-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("resource-claims-read-failed: {err}"))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
     connection
         .query_row(
@@ -1237,6 +1929,35 @@ fn lease_select_sql(suffix: &str) -> String {
     )
 }
 
+fn resource_budget_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT scope,
+                resource_key,
+                display_key,
+                capacity,
+                created_at_ms,
+                updated_at_ms
+         FROM runtime_resource_budgets {suffix}"
+    )
+}
+
+fn resource_claim_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT claim_id,
+                scope,
+                resource_key,
+                display_key,
+                job_id,
+                holder,
+                amount,
+                acquired_at_ms,
+                expires_at_ms,
+                released_at_ms,
+                status
+         FROM runtime_resource_budget_claims {suffix}"
+    )
+}
+
 fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
     Ok(RuntimeJobRecord {
         job_id: row.get(0)?,
@@ -1268,6 +1989,37 @@ fn map_lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobLeaseRec
         expires_at_ms: row.get(5)?,
         released_at_ms: row.get(6)?,
         status: row.get(7)?,
+    })
+}
+
+fn map_resource_budget_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RuntimeResourceBudgetRecord> {
+    Ok(RuntimeResourceBudgetRecord {
+        scope: row.get(0)?,
+        resource_key: row.get(1)?,
+        display_key: row.get(2)?,
+        capacity: row.get(3)?,
+        created_at_ms: row.get(4)?,
+        updated_at_ms: row.get(5)?,
+    })
+}
+
+fn map_resource_claim_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RuntimeResourceBudgetClaimRecord> {
+    Ok(RuntimeResourceBudgetClaimRecord {
+        claim_id: row.get(0)?,
+        scope: row.get(1)?,
+        resource_key: row.get(2)?,
+        display_key: row.get(3)?,
+        job_id: row.get(4)?,
+        holder: row.get(5)?,
+        amount: row.get(6)?,
+        acquired_at_ms: row.get(7)?,
+        expires_at_ms: row.get(8)?,
+        released_at_ms: row.get(9)?,
+        status: row.get(10)?,
     })
 }
 
@@ -1570,6 +2322,22 @@ mod tests {
         }
     }
 
+    fn commit_claim_request(path: &str, claim_id: &str) -> RuntimeCommitBudgetClaimRequest {
+        RuntimeCommitBudgetClaimRequest {
+            affected_path: path.to_string(),
+            holder: "tester:worker-a".to_string(),
+            job_id: None,
+            claim_id: Some(claim_id.to_string()),
+            ttl_ms: None,
+        }
+    }
+
+    fn commit_release_request(claim_id: &str) -> RuntimeCommitBudgetReleaseRequest {
+        RuntimeCommitBudgetReleaseRequest {
+            claim_id: claim_id.to_string(),
+        }
+    }
+
     #[test]
     fn disabled_job_create_does_not_touch_disk() {
         let project = temp_project("disabled-job-create");
@@ -1601,6 +2369,61 @@ mod tests {
     }
 
     #[test]
+    fn disabled_commit_budget_commands_do_not_touch_disk() {
+        let project = temp_project("disabled-commit-budget");
+        let runtime_dir = project.join(RUNTIME_DIR);
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        let db_path = runtime_dir.join(RUNTIME_DB_FILE);
+        fs::write(&db_path, b"not sqlite").expect("write damaged db");
+
+        let claim_error = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            false,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect_err("disabled claim should fail");
+        assert!(claim_error.starts_with("runtime-disabled"));
+        let release_error = runtime_commit_budget_release_for_project(
+            Some(&project),
+            false,
+            commit_release_request("claim-1"),
+            100,
+        )
+        .expect_err("disabled release should fail");
+        assert!(release_error.starts_with("runtime-disabled"));
+        let list = runtime_commit_budget_list_for_project(Some(&project), false)
+            .expect("disabled list succeeds");
+        assert_eq!(list.status, RuntimeDbHealthState::Disabled);
+        assert_eq!(fs::read(&db_path).expect("read damaged db"), b"not sqlite");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn enabled_commit_budget_commands_without_project_are_no_touch() {
+        let claim_error = runtime_commit_budget_claim_for_project(
+            None,
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect_err("no-project claim should fail");
+        assert!(claim_error.starts_with("no-project"));
+        let release_error = runtime_commit_budget_release_for_project(
+            None,
+            true,
+            commit_release_request("claim-1"),
+            100,
+        )
+        .expect_err("no-project release should fail");
+        assert!(release_error.starts_with("no-project"));
+        let list = runtime_commit_budget_list_for_project(None, true).expect("no-project list");
+        assert_eq!(list.status, RuntimeDbHealthState::NoProject);
+        assert!(list.budgets.is_empty());
+        assert!(list.claims.is_empty());
+    }
+
+    #[test]
     fn enabled_job_list_on_pr2_only_db_returns_empty_without_migration() {
         let project = temp_project("enabled-job-list-pr2-db");
         fs::create_dir_all(&project).expect("create temp project");
@@ -1613,6 +2436,546 @@ mod tests {
         assert!(list.leases.is_empty());
         let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
         assert!(!table_exists(&connection, "runtime_jobs").expect("check jobs table"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_list_on_pr3_only_db_returns_empty_without_migration() {
+        let project = temp_project("commit-budget-list-pr3-db");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create PR3 runtime db");
+
+        let list = runtime_commit_budget_list_for_project(Some(&project), true)
+            .expect("list commit budgets");
+
+        assert_eq!(list.status, RuntimeDbHealthState::Healthy);
+        assert!(list.budgets.is_empty());
+        assert!(list.claims.is_empty());
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        assert!(!table_exists(&connection, "runtime_resource_budgets").expect("check budgets"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn enabled_commit_budget_list_on_damaged_runtime_db_returns_error() {
+        let project = temp_project("commit-budget-list-damaged-db");
+        let runtime_dir = project.join(RUNTIME_DIR);
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        fs::write(runtime_dir.join(RUNTIME_DB_FILE), b"not sqlite").expect("write damaged db");
+
+        let error = runtime_commit_budget_list_for_project(Some(&project), true)
+            .expect_err("enabled list should report damaged db");
+
+        assert!(
+            error.contains("commit-budget-list-open-failed")
+                || error.contains("table-exists-check-failed")
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_claim_upgrades_pr2_db_and_rejects_missing_job_id() {
+        let project = temp_project("commit-budget-pr2-upgrade");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create PR2 runtime db");
+
+        let mut request = commit_claim_request("wiki/a.md", "claim-1");
+        request.job_id = Some("missing-job".to_string());
+        let error = runtime_commit_budget_claim_for_project(Some(&project), true, request, 100)
+            .expect_err("missing job should fail");
+
+        assert!(error.starts_with("job-not-found"));
+        assert_eq!(
+            read_migration_family(&project, JOBS_FAMILY).version,
+            JOBS_VERSION
+        );
+        assert_eq!(
+            read_migration_family(&project, LEASES_FAMILY).version,
+            LEASES_VERSION
+        );
+        assert_eq!(
+            read_migration_family(&project, RESOURCE_BUDGETS_FAMILY).version,
+            RESOURCE_BUDGETS_VERSION
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn resource_budget_migration_preserves_higher_version() {
+        let project = temp_project("commit-budget-higher-version");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create PR2 runtime db");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "INSERT INTO runtime_schema_migrations (
+                    family,
+                    version,
+                    applied_at_ms
+                ) VALUES (?1, ?2, ?3)",
+                params![RESOURCE_BUDGETS_FAMILY, 2_i64, 42_i64],
+            )
+            .expect("seed higher migration");
+        drop(connection);
+
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim budget");
+        let migration = read_migration_family(&project, RESOURCE_BUDGETS_FAMILY);
+
+        assert_eq!(
+            migration,
+            RuntimeDbMigrationStatus {
+                family: RESOURCE_BUDGETS_FAMILY.to_string(),
+                version: 2,
+                applied_at_ms: 42,
+            }
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn normalize_affected_path_rejects_unsafe_inputs_and_normalizes_identity() {
+        let normalized = normalize_affected_path(" Wiki/Café.MD ").expect("normalize path");
+        assert_eq!(normalized.display_key, "Wiki/Café.MD");
+        assert_eq!(normalized.resource_key, "wiki/café.md");
+        let decomposed = normalize_affected_path("wiki/Cafe\u{301}.md").expect("normalize nfc");
+        assert_eq!(decomposed.resource_key, "wiki/café.md");
+
+        for raw in [
+            "",
+            "/a.md",
+            "\\a.md",
+            "C:\\a.md",
+            "a//b.md",
+            "./a.md",
+            "a/../b.md",
+            "a/.md",
+            "wiki/a.txt",
+            "wiki/",
+            "\\\\?\\C:\\a.md",
+            "\\\\server\\share\\a.md",
+        ] {
+            assert!(
+                normalize_affected_path(raw).is_err(),
+                "{raw:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn commit_budget_claim_release_and_list_happy_path() {
+        let project = temp_project("commit-budget-happy");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        let claim = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("Wiki/A.md", "claim-1"),
+            100,
+        )
+        .expect("claim commit budget");
+
+        assert_eq!(claim.claim_id, "claim-1");
+        assert_eq!(claim.display_key, "Wiki/A.md");
+        assert_eq!(claim.resource_key, "wiki/a.md");
+        assert_eq!(claim.expires_at_ms, 100 + DEFAULT_LEASE_TTL_MS);
+        assert_eq!(claim.claims.len(), 2);
+        assert!(claim
+            .claims
+            .iter()
+            .all(|row| row.status == ACTIVE_CLAIM_STATUS));
+
+        let list = runtime_commit_budget_list_for_project(Some(&project), true)
+            .expect("list commit budgets");
+        assert_eq!(list.budgets.len(), 2);
+        assert_eq!(list.claims.len(), 2);
+
+        let released = runtime_commit_budget_release_for_project(
+            Some(&project),
+            true,
+            commit_release_request("claim-1"),
+            200,
+        )
+        .expect("release commit budget");
+        assert_eq!(released.len(), 2);
+        assert!(released
+            .iter()
+            .all(|row| row.status == RELEASED_CLAIM_STATUS));
+        assert!(released.iter().all(|row| row.released_at_ms == Some(200)));
+
+        let released_again = runtime_commit_budget_release_for_project(
+            Some(&project),
+            true,
+            commit_release_request("claim-1"),
+            300,
+        )
+        .expect_err("repeated release is inactive");
+        assert!(released_again.starts_with("claim-inactive"));
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_claim_with_existing_job_id_persists_job_id() {
+        let project = temp_project("commit-budget-job-id");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+        let mut request = commit_claim_request("wiki/a.md", "claim-1");
+        request.job_id = Some("job-1".to_string());
+
+        let claim = runtime_commit_budget_claim_for_project(Some(&project), true, request, 200)
+            .expect("claim with job id");
+
+        assert_eq!(claim.claims.len(), 2);
+        assert!(claim
+            .claims
+            .iter()
+            .all(|row| row.job_id.as_deref() == Some("job-1")));
+        let list = runtime_commit_budget_list_for_project(Some(&project), true).expect("list");
+        assert!(list
+            .claims
+            .iter()
+            .all(|row| row.job_id.as_deref() == Some("job-1")));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_rejects_duplicate_claim_id_and_same_path() {
+        let project = temp_project("commit-budget-duplicates");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim first path");
+
+        let duplicate_id = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/b.md", "claim-1"),
+            100,
+        )
+        .expect_err("duplicate claim id is rejected");
+        assert!(duplicate_id.starts_with("claim-id-conflict"));
+
+        let duplicate_path = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("WIKI/A.MD", "claim-2"),
+            100,
+        )
+        .expect_err("same path identity is rejected");
+        assert!(duplicate_path.starts_with("commit-path-already-claimed"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_rejects_empty_claim_id_without_mutation() {
+        let project = temp_project("commit-budget-empty-claim-id");
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut request = commit_claim_request("wiki/a.md", "   ");
+        request.claim_id = Some("   ".to_string());
+
+        let error = runtime_commit_budget_claim_for_project(Some(&project), true, request, 100)
+            .expect_err("empty claim id is rejected");
+
+        assert!(error.starts_with("invalid-claim-id"));
+        let list = runtime_commit_budget_list_for_project(Some(&project), true).expect("list");
+        assert!(list.budgets.is_empty());
+        assert!(list.claims.is_empty());
+        assert!(!runtime_db_path(&project).exists());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_unique_index_rejects_duplicate_active_path_claim() {
+        let project = temp_project("commit-budget-unique-index");
+        fs::create_dir_all(&project).expect("create temp project");
+        with_runtime_writer(|| {
+            let connection = open_resource_budget_runtime_locked(&project)?;
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO runtime_resource_budgets (
+                        scope,
+                        resource_key,
+                        display_key,
+                        capacity,
+                        created_at_ms,
+                        updated_at_ms
+                    ) VALUES ('commit-path', 'wiki/a.md', 'wiki/a.md', 1, 100, 100)",
+                    [],
+                )
+                .expect("insert path budget");
+            connection
+                .execute(
+                    "INSERT INTO runtime_resource_budget_claims (
+                        claim_id,
+                        scope,
+                        resource_key,
+                        display_key,
+                        holder,
+                        amount,
+                        acquired_at_ms,
+                        expires_at_ms,
+                        status
+                    ) VALUES ('claim-1', 'commit-path', 'wiki/a.md', 'wiki/a.md', 'tester:a', 1, 100, 200, 'active')",
+                    [],
+                )
+                .expect("insert first active path claim");
+            let error = connection
+                .execute(
+                    "INSERT INTO runtime_resource_budget_claims (
+                        claim_id,
+                        scope,
+                        resource_key,
+                        display_key,
+                        holder,
+                        amount,
+                        acquired_at_ms,
+                        expires_at_ms,
+                        status
+                    ) VALUES ('claim-2', 'commit-path', 'wiki/a.md', 'wiki/a.md', 'tester:b', 1, 100, 200, 'active')",
+                    [],
+                )
+                .expect_err("second active path claim must fail");
+            assert!(error.to_string().contains("UNIQUE"));
+            Ok(())
+        })
+        .expect("unique index test succeeds");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_total_capacity_rolls_back_path_claim() {
+        let project = temp_project("commit-budget-total-capacity");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim first path");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/b.md", "claim-2"),
+            100,
+        )
+        .expect("claim second path");
+
+        let exhausted = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/c.md", "claim-3"),
+            100,
+        )
+        .expect_err("total capacity exhausted");
+
+        assert!(exhausted.starts_with("commit-total-budget-exhausted"));
+        let list = runtime_commit_budget_list_for_project(Some(&project), true)
+            .expect("list commit budgets");
+        assert_eq!(list.claims.len(), 4);
+        assert!(!list
+            .claims
+            .iter()
+            .any(|claim| claim.resource_key == "wiki/c.md"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_expire_releases_capacity_after_ttl() {
+        let project = temp_project("commit-budget-expire");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim path");
+
+        let early = runtime_commit_budget_expire_for_project(
+            Some(&project),
+            true,
+            "claim-1",
+            100 + DEFAULT_LEASE_TTL_MS - 1,
+        )
+        .expect_err("early expire is rejected");
+        assert!(early.starts_with("claim-not-expired"));
+
+        let expired = runtime_commit_budget_expire_for_project(
+            Some(&project),
+            true,
+            "claim-1",
+            100 + DEFAULT_LEASE_TTL_MS,
+        )
+        .expect("expire claim");
+        assert_eq!(expired.len(), 2);
+        assert!(expired.iter().all(|row| row.status == EXPIRED_CLAIM_STATUS));
+        assert!(expired.iter().all(|row| row.released_at_ms.is_none()));
+
+        let release_expired = runtime_commit_budget_release_for_project(
+            Some(&project),
+            true,
+            commit_release_request("claim-1"),
+            300,
+        )
+        .expect_err("expired claim cannot be released");
+        assert!(release_expired.starts_with("claim-inactive"));
+
+        let reclaimed = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-2"),
+            300,
+        )
+        .expect("reclaim expired path");
+        assert_eq!(reclaimed.resource_key, "wiki/a.md");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_release_and_expire_reject_inconsistent_claim_pairs() {
+        let project = temp_project("commit-budget-inconsistent");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim path");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_resource_budget_claims
+                 SET status = 'released'
+                 WHERE claim_id = 'claim-1' AND scope = 'commit-path'",
+                [],
+            )
+            .expect("damage claim pair");
+        drop(connection);
+
+        let release_error = runtime_commit_budget_release_for_project(
+            Some(&project),
+            true,
+            commit_release_request("claim-1"),
+            200,
+        )
+        .expect_err("inconsistent release is rejected");
+        assert!(release_error.starts_with("claim-inconsistent"));
+
+        let expire_error =
+            runtime_commit_budget_expire_for_project(Some(&project), true, "claim-1", 500_000)
+                .expect_err("inconsistent expire is rejected");
+        assert!(expire_error.starts_with("claim-inconsistent"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_release_rejects_extra_active_claim_rows() {
+        let project = temp_project("commit-budget-extra-active-row");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim path");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO runtime_resource_budgets (
+                    scope,
+                    resource_key,
+                    display_key,
+                    capacity,
+                    created_at_ms,
+                    updated_at_ms
+                ) VALUES ('commit-path', 'wiki/extra.md', 'wiki/extra.md', 1, 100, 100)",
+                [],
+            )
+            .expect("insert extra budget");
+        connection
+            .execute(
+                "INSERT INTO runtime_resource_budget_claims (
+                    claim_id,
+                    scope,
+                    resource_key,
+                    display_key,
+                    holder,
+                    amount,
+                    acquired_at_ms,
+                    expires_at_ms,
+                    status
+                ) VALUES ('claim-1', 'commit-path', 'wiki/extra.md', 'wiki/extra.md', 'tester:x', 1, 100, 200, 'active')",
+                [],
+            )
+            .expect("insert extra active row");
+        drop(connection);
+
+        let error = runtime_commit_budget_release_for_project(
+            Some(&project),
+            true,
+            commit_release_request("claim-1"),
+            200,
+        )
+        .expect_err("extra active row is inconsistent");
+
+        assert!(error.starts_with("claim-inconsistent"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_ttl_bounds_are_enforced() {
+        let project = temp_project("commit-budget-ttl");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        for (claim_id, ttl_ms) in [("claim-low", Some(0)), ("claim-high", Some(1_200_001))] {
+            let mut request = commit_claim_request("wiki/a.md", claim_id);
+            request.ttl_ms = ttl_ms;
+            let error = runtime_commit_budget_claim_for_project(Some(&project), true, request, 100)
+                .expect_err("invalid ttl is rejected");
+            assert!(error.starts_with("invalid-ttl"));
+        }
+
+        let mut overflow = commit_claim_request("wiki/a.md", "claim-overflow");
+        overflow.ttl_ms = Some(MAX_COMMIT_BUDGET_TTL_MS);
+        let error =
+            runtime_commit_budget_claim_for_project(Some(&project), true, overflow, i64::MAX)
+                .expect_err("ttl overflow is rejected");
+        assert!(error.starts_with("invalid-ttl"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn commit_budget_ttl_min_and_max_bounds_are_allowed() {
+        let project = temp_project("commit-budget-ttl-bounds");
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut min_request = commit_claim_request("wiki/min.md", "claim-min");
+        min_request.ttl_ms = Some(MIN_COMMIT_BUDGET_TTL_MS);
+        let min_claim =
+            runtime_commit_budget_claim_for_project(Some(&project), true, min_request, 100)
+                .expect("min ttl is allowed");
+        assert_eq!(min_claim.expires_at_ms, 100 + MIN_COMMIT_BUDGET_TTL_MS);
+
+        let mut max_request = commit_claim_request("wiki/max.md", "claim-max");
+        max_request.ttl_ms = Some(MAX_COMMIT_BUDGET_TTL_MS);
+        let max_claim =
+            runtime_commit_budget_claim_for_project(Some(&project), true, max_request, 100)
+                .expect("max ttl is allowed");
+        assert_eq!(max_claim.expires_at_ms, 100 + MAX_COMMIT_BUDGET_TTL_MS);
         let _ = fs::remove_dir_all(project);
     }
 
