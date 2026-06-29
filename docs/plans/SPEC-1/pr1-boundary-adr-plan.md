@@ -1,6 +1,6 @@
 # SPEC-1 PR1 Plan: Shell/Core Boundary ADR + Runtime Inventory
 
-> Type: PR execution plan | Status: Architect PASS / implementation in progress | Owner: Commander | Branch: `codex/spec-1-pr1-boundary-adr-plan`
+> Type: PR execution plan | Status: merged | Owner: Commander | Branch: `codex/spec-1-pr1-boundary-adr-plan`
 
 ## Goal
 
@@ -70,9 +70,9 @@ This PR is a gate PR. It must make later runtime work harder to accidentally cou
    - Fallback 2: internal Architect subagent.
 4. Commander revises the plan/ADR from accepted findings.
 5. If code symbols/interfaces are added or touched for the headless skeleton, run GitNexus impact on nearby existing symbols before editing and record why new symbols have no upstream callers yet.
-6. Stage ignored plan/docs files before validation and PR creation:
-   - `git add -f docs/plans/SPEC-1/<file>.md` for the PR plan and new ADR files.
-   - `git diff --cached --name-only` must show the new `docs/plans/SPEC-1/` files before commit.
+6. Stage plan/docs files before validation and PR creation:
+   - `git add docs/plans/SPEC-1/<file>.md` for PR plans and ADR files.
+   - `git diff --cached --name-only` must show the relevant `docs/plans/SPEC-1/` files before commit.
 7. Run validation and gate:
    - Focused docs grep/link sanity.
    - Headless contract skeleton test: `pnpm exec vitest run src/core-runtime/contract/headless-contract.test.ts`.

@@ -1,6 +1,6 @@
 # SPEC-1: App Architecture Decomposition / Native-Ready Core Boundary
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：desktop architecture、Swift readiness、#184-#191 的共同前置
+> 类型：阶段 SPEC | 状态：completed | 覆盖：desktop architecture、Swift readiness、#184-#191 的共同前置
 
 ## 目标与成功标准
 
@@ -14,7 +14,7 @@
 - Platform adapter 只封装文件系统、Keychain、window/tray、dialog、open-url、local server、process lifecycle 等平台能力。
 - Agent adapter 只封装 Claude Agent SDK sidecar / future Agent runtime，不直接依赖 React UI state。
 - 旧 TS 业务逻辑采用 strangler migration：旧路径可保留，新能力先走 core boundary，后续逐步迁移。
-- SPEC-1 PR1 必须产出 runtime command/event inventory 和 boundary enforcement 方案，才能允许 SPEC-2/3/4 做依赖 core contract 的集成实现。
+- SPEC-1 PR1 已产出 runtime command/event inventory 和 boundary enforcement 方案，允许 SPEC-2/3/4 在该 core contract 内继续推进。
 
 ## 关键设计决策
 

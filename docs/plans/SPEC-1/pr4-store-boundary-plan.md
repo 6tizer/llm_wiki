@@ -1,6 +1,6 @@
 # SPEC-1 PR4: Store Boundary Cleanup Plan
 
-> Status: gates PASS / ready for PR | Branch: `codex/spec-1-pr4-store-boundary` | Owner: Commander
+> Status: merged | Branch: `codex/spec-1-pr4-store-boundary` | Owner: Commander
 
 ## Goal
 
