@@ -23,7 +23,8 @@
 | [SPEC-2/pr3-job-ledger-plan.md](./SPEC-2/pr3-job-ledger-plan.md) | SPEC-2 PR3 执行计划：job ledger、lease / heartbeat / retry / cancel。 | merged |
 | [SPEC-2/pr4-commit-budget-plan.md](./SPEC-2/pr4-commit-budget-plan.md) | SPEC-2 PR4 执行计划：commit-path concurrency budget、resource claim/release ledger。 | merged |
 | [SPEC-2/pr5-event-progress-plan.md](./SPEC-2/pr5-event-progress-plan.md) | SPEC-2 PR5 执行计划：event log、progress API、timeline snapshot。 | merged |
-| [SPEC-2/pr6-staging-gc-plan.md](./SPEC-2/pr6-staging-gc-plan.md) | SPEC-2 PR6 执行计划：staging artifact metadata、commit-success cleanup、failed/cancelled TTL GC。 | in progress |
+| [SPEC-2/pr6-staging-gc-plan.md](./SPEC-2/pr6-staging-gc-plan.md) | SPEC-2 PR6 执行计划：staging artifact metadata、commit-success cleanup、failed/cancelled TTL GC。 | merged |
+| [SPEC-2/pr7-runtime-ui-plan.md](./SPEC-2/pr7-runtime-ui-plan.md) | SPEC-2 PR7 执行计划：minimal runtime UI、job queue status、pause/resume/cancel controls。 | in progress |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
