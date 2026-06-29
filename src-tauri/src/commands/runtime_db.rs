@@ -21,11 +21,20 @@ const LEASES_FAMILY: &str = "leases";
 const LEASES_VERSION: i64 = 1;
 const RESOURCE_BUDGETS_FAMILY: &str = "resource-budgets";
 const RESOURCE_BUDGETS_VERSION: i64 = 1;
+const EVENTS_PROGRESS_FAMILY: &str = "events-progress";
+const EVENTS_PROGRESS_VERSION: i64 = 1;
 const WORK_RUNTIME_ENABLED_ENV: &str = "LLM_WIKI_CORE_WORK_RUNTIME_ENABLED";
 const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 const DEFAULT_PRIORITY: i64 = 0;
 const DEFAULT_LEASE_TTL_MS: i64 = 120_000;
 const DEFAULT_RETRY_BACKOFF_MS: i64 = 30_000;
+const DEFAULT_HEARTBEAT_MIN_INTERVAL_MS: i64 = 5_000;
+const DEFAULT_PROGRESS_MIN_INTERVAL_MS: i64 = 2_000;
+const MAX_EVENT_PAYLOAD_BYTES: usize = 16_384;
+const DEFAULT_TIMELINE_LIMIT: i64 = 100;
+const MAX_TIMELINE_LIMIT: i64 = 500;
+const DEFAULT_PROGRESS_LIMIT: i64 = 100;
+const MAX_PROGRESS_LIMIT: i64 = 500;
 const DEFAULT_COMMIT_TOTAL_CAPACITY: i64 = 2;
 const COMMIT_BUDGET_AMOUNT: i64 = 1;
 const MIN_COMMIT_BUDGET_TTL_MS: i64 = 1_000;
@@ -40,6 +49,8 @@ const COMMIT_TOTAL_RESOURCE_KEY: &str = "*";
 const ACTIVE_CLAIM_STATUS: &str = "active";
 const RELEASED_CLAIM_STATUS: &str = "released";
 const EXPIRED_CLAIM_STATUS: &str = "expired";
+const EVENT_APPENDED_NAME: &str = "job-runtime:event-appended";
+const PROGRESS_APPENDED_NAME: &str = "job-runtime:progress-appended";
 
 static RUNTIME_DB_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -247,6 +258,90 @@ pub struct RuntimeCommitBudgetList {
     claims: Vec<RuntimeResourceBudgetClaimRecord>,
 }
 
+/// Request payload for appending a durable runtime event.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeEventAppendRequest {
+    job_id: Option<String>,
+    event_id: Option<String>,
+    payload: String,
+}
+
+/// Request payload for appending or coalescing a runtime progress fact.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProgressAppendRequest {
+    job_id: Option<String>,
+    progress_key: String,
+    event_id: Option<String>,
+    payload: String,
+    durable: Option<bool>,
+}
+
+/// Request payload for listing runtime events.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeTimelineListRequest {
+    job_id: Option<String>,
+    limit: Option<i64>,
+}
+
+/// Request payload for listing runtime progress facts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProgressListRequest {
+    job_id: Option<String>,
+    limit: Option<i64>,
+}
+
+/// Snapshot of one append-only runtime event row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEventRecord {
+    event_id: String,
+    job_id: String,
+    event_name: String,
+    payload: String,
+    created_at_ms: i64,
+}
+
+/// Snapshot of one coalesced runtime progress fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProgressRecord {
+    job_id: String,
+    progress_key: String,
+    payload: String,
+    updated_at_ms: i64,
+    last_event_id: Option<String>,
+}
+
+/// Response payload for a progress append.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProgressAppend {
+    progress: RuntimeProgressRecord,
+    event: Option<RuntimeEventRecord>,
+}
+
+/// Snapshot response for the runtime event timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTimelineList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    events: Vec<RuntimeEventRecord>,
+}
+
+/// Snapshot response for current runtime progress facts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProgressList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    progress: Vec<RuntimeProgressRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormalizedAffectedPath {
     display_key: String,
@@ -446,6 +541,70 @@ pub fn runtime_commit_budget_list(
         runtime_commit_budget_list_for_project(
             root_state.get().as_deref(),
             resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+        )
+    })
+}
+
+/// Append a durable runtime event for the currently-open project.
+#[tauri::command]
+pub fn runtime_event_append(
+    request: RuntimeEventAppendRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeEventRecord, String> {
+    run_guarded("runtime_event_append", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_event_append_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// Append or coalesce a runtime progress fact for the currently-open project.
+#[tauri::command]
+pub fn runtime_progress_append(
+    request: RuntimeProgressAppendRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProgressAppend, String> {
+    run_guarded("runtime_progress_append", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_progress_append_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// List runtime events for the currently-open project.
+#[tauri::command]
+pub fn runtime_timeline_list(
+    request: Option<RuntimeTimelineListRequest>,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeTimelineList, String> {
+    run_guarded("runtime_timeline_list", || {
+        runtime_timeline_list_for_project(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+            request.unwrap_or(RuntimeTimelineListRequest {
+                job_id: None,
+                limit: None,
+            }),
+        )
+    })
+}
+
+/// List runtime progress facts for the currently-open project.
+#[tauri::command]
+pub fn runtime_progress_list(
+    request: Option<RuntimeProgressListRequest>,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProgressList, String> {
+    run_guarded("runtime_progress_list", || {
+        runtime_progress_list_for_project(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+            request.unwrap_or(RuntimeProgressListRequest {
+                job_id: None,
+                limit: None,
+            }),
         )
     })
 }
@@ -698,6 +857,12 @@ fn open_resource_budget_runtime_locked(project_root: &Path) -> Result<Connection
     Ok(connection)
 }
 
+fn open_events_progress_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+    let connection = open_job_runtime_locked(project_root)?;
+    initialize_events_progress_schema(&connection)?;
+    Ok(connection)
+}
+
 fn initialize_resource_budget_schema(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
@@ -794,6 +959,72 @@ fn initialize_resource_budget_schema(connection: &Connection) -> Result<(), Stri
         RESOURCE_BUDGETS_FAMILY,
         RESOURCE_BUDGETS_VERSION,
     )
+}
+
+fn initialize_events_progress_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_events (
+                    event_id TEXT PRIMARY KEY CHECK(length(event_id) > 0),
+                    job_id TEXT NOT NULL CHECK(length(job_id) > 0),
+                    event_name TEXT NOT NULL CHECK(length(event_name) > 0),
+                    payload TEXT NOT NULL CHECK(
+                        length(CAST(payload AS BLOB)) > 0
+                        AND length(CAST(payload AS BLOB)) <= {MAX_EVENT_PAYLOAD_BYTES}
+                    ),
+                    created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                    FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime events table: {err}"))?;
+
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_progress (
+                    job_id TEXT NOT NULL CHECK(length(job_id) > 0),
+                    progress_key TEXT NOT NULL CHECK(length(progress_key) > 0),
+                    payload TEXT NOT NULL CHECK(
+                        length(CAST(payload AS BLOB)) > 0
+                        AND length(CAST(payload AS BLOB)) <= {MAX_EVENT_PAYLOAD_BYTES}
+                    ),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    last_event_id TEXT,
+                    PRIMARY KEY(job_id, progress_key),
+                    FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id),
+                    FOREIGN KEY(last_event_id) REFERENCES runtime_events(event_id)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime progress table: {err}"))?;
+
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_events_job_time_idx
+             ON runtime_events(job_id, created_at_ms, event_id)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime events job-time index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_events_time_idx
+             ON runtime_events(created_at_ms, event_id)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime events time index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_progress_updated_idx
+             ON runtime_progress(updated_at_ms, job_id, progress_key)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime progress updated index: {err}"))?;
+
+    record_migration_family(connection, EVENTS_PROGRESS_FAMILY, EVENTS_PROGRESS_VERSION)
 }
 
 fn record_migration_family(
@@ -929,6 +1160,19 @@ fn runtime_job_heartbeat_for_project(
         let mut connection = open_job_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
         ensure_active_running_lease(&tx, &request.job_id, &request.lease_id, Some(now))?;
+        let existing_lease = read_lease_tx(&tx, &request.lease_id)?;
+        let within_min_interval =
+            now.saturating_sub(existing_lease.heartbeat_at_ms) < DEFAULT_HEARTBEAT_MIN_INTERVAL_MS;
+        let has_safe_expiry_margin =
+            existing_lease.expires_at_ms.saturating_sub(now) >= DEFAULT_HEARTBEAT_MIN_INTERVAL_MS;
+        if within_min_interval && has_safe_expiry_margin {
+            let job = read_job_tx(&tx, &request.job_id)?;
+            tx.commit().map_err(tx_err)?;
+            return Ok(RuntimeJobClaim {
+                job,
+                lease: existing_lease,
+            });
+        }
         tx.execute(
             "UPDATE runtime_job_leases
              SET heartbeat_at_ms = ?3,
@@ -1318,6 +1562,184 @@ fn runtime_commit_budget_list_for_project(
     })
 }
 
+fn runtime_event_append_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeEventAppendRequest,
+    now: i64,
+) -> Result<RuntimeEventRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let job_id = require_required_non_empty("invalid-job-id", "jobId", request.job_id.as_deref())?;
+    let payload = require_event_payload(&request.payload)?;
+    let event_id = normalize_optional_id("invalid-event-id", "eventId", request.event_id)?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_events_progress_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        ensure_job_exists(&tx, job_id)?;
+        let event_id = insert_runtime_event_tx(
+            &tx,
+            event_id.as_deref(),
+            job_id,
+            EVENT_APPENDED_NAME,
+            payload,
+            now,
+        )?;
+        let event = read_event_tx(&tx, &event_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(event)
+    })
+}
+
+fn runtime_progress_append_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProgressAppendRequest,
+    now: i64,
+) -> Result<RuntimeProgressAppend, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let job_id = require_required_non_empty("invalid-job-id", "jobId", request.job_id.as_deref())?;
+    let progress_key =
+        require_non_empty("invalid-progress-key", "progressKey", &request.progress_key)?;
+    let payload = require_event_payload(&request.payload)?;
+    let event_id = normalize_optional_id("invalid-event-id", "eventId", request.event_id)?;
+    let durable = request.durable.unwrap_or(false);
+
+    with_runtime_writer(|| {
+        let mut connection = open_events_progress_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        ensure_job_exists(&tx, job_id)?;
+        let previous = read_progress_optional_tx(&tx, job_id, progress_key)?;
+        let should_append_event = durable
+            || previous.as_ref().is_none_or(|progress| {
+                now.saturating_sub(progress.updated_at_ms) >= DEFAULT_PROGRESS_MIN_INTERVAL_MS
+            });
+        let inserted_event_id = if should_append_event {
+            Some(insert_runtime_event_tx(
+                &tx,
+                event_id.as_deref(),
+                job_id,
+                PROGRESS_APPENDED_NAME,
+                payload,
+                now,
+            )?)
+        } else {
+            None
+        };
+        upsert_runtime_progress_tx(
+            &tx,
+            job_id,
+            progress_key,
+            payload,
+            now,
+            inserted_event_id.as_deref(),
+        )?;
+        let progress = read_progress_tx(&tx, job_id, progress_key)?;
+        let event = match inserted_event_id {
+            Some(event_id) => Some(read_event_tx(&tx, &event_id)?),
+            None => None,
+        };
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeProgressAppend { progress, event })
+    })
+}
+
+fn runtime_timeline_list_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeTimelineListRequest,
+) -> Result<RuntimeTimelineList, String> {
+    if !enabled {
+        return Ok(RuntimeTimelineList {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            events: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeTimelineList {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            events: Vec::new(),
+        });
+    };
+    let limit = normalize_list_limit(request.limit, DEFAULT_TIMELINE_LIMIT, MAX_TIMELINE_LIMIT)?;
+    let job_id = normalize_optional_filter("invalid-job-id", "jobId", request.job_id)?;
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeTimelineList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            events: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("timeline-list-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_events")? {
+        return Ok(RuntimeTimelineList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            events: Vec::new(),
+        });
+    }
+    Ok(RuntimeTimelineList {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        events: read_events(&connection, job_id.as_deref(), limit)?,
+    })
+}
+
+fn runtime_progress_list_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProgressListRequest,
+) -> Result<RuntimeProgressList, String> {
+    if !enabled {
+        return Ok(RuntimeProgressList {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            progress: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeProgressList {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            progress: Vec::new(),
+        });
+    };
+    let limit = normalize_list_limit(request.limit, DEFAULT_PROGRESS_LIMIT, MAX_PROGRESS_LIMIT)?;
+    let job_id = normalize_optional_filter("invalid-job-id", "jobId", request.job_id)?;
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeProgressList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            progress: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("progress-list-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_progress")? {
+        return Ok(RuntimeProgressList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            progress: Vec::new(),
+        });
+    }
+    Ok(RuntimeProgressList {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        progress: read_progress_rows(&connection, job_id.as_deref(), limit)?,
+    })
+}
+
 #[allow(dead_code)]
 fn runtime_commit_budget_expire_for_project(
     project_root: Option<&Path>,
@@ -1437,6 +1859,59 @@ fn require_non_empty<'a>(code: &str, field: &str, value: &'a str) -> Result<&'a 
         Err(format!("{code}: {field} must not be empty"))
     } else {
         Ok(trimmed)
+    }
+}
+
+fn require_required_non_empty<'a>(
+    code: &str,
+    field: &str,
+    value: Option<&'a str>,
+) -> Result<&'a str, String> {
+    let value = value.ok_or_else(|| format!("{code}: {field} is required"))?;
+    require_non_empty(code, field, value)
+}
+
+fn require_event_payload(value: &str) -> Result<&str, String> {
+    let payload = require_non_empty("invalid-payload", "payload", value)?;
+    if payload.len() > MAX_EVENT_PAYLOAD_BYTES {
+        Err(format!(
+            "invalid-payload: payload must be at most {MAX_EVENT_PAYLOAD_BYTES} bytes"
+        ))
+    } else {
+        Ok(payload)
+    }
+}
+
+fn normalize_optional_id(
+    code: &str,
+    field: &str,
+    value: Option<String>,
+) -> Result<Option<String>, String> {
+    value
+        .map(|value| require_non_empty(code, field, &value).map(str::to_string))
+        .transpose()
+}
+
+fn normalize_optional_filter(
+    code: &str,
+    field: &str,
+    value: Option<String>,
+) -> Result<Option<String>, String> {
+    normalize_optional_id(code, field, value)
+}
+
+fn normalize_list_limit(
+    limit: Option<i64>,
+    default_limit: i64,
+    max_limit: i64,
+) -> Result<i64, String> {
+    let limit = limit.unwrap_or(default_limit);
+    if (1..=max_limit).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err(format!(
+            "invalid-limit: limit must be between 1 and {max_limit}"
+        ))
     }
 }
 
@@ -1771,6 +2246,61 @@ fn release_lease(
     }
 }
 
+fn insert_runtime_event_tx(
+    tx: &Transaction<'_>,
+    event_id: Option<&str>,
+    job_id: &str,
+    event_name: &str,
+    payload: &str,
+    now: i64,
+) -> Result<String, String> {
+    let event_id = event_id
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    tx.execute(
+        "INSERT INTO runtime_events (
+            event_id,
+            job_id,
+            event_name,
+            payload,
+            created_at_ms
+        ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![event_id, job_id, event_name, payload, now],
+    )
+    .map_err(|err| format!("event-insert-failed: {err}"))?;
+    Ok(event_id)
+}
+
+fn upsert_runtime_progress_tx(
+    tx: &Transaction<'_>,
+    job_id: &str,
+    progress_key: &str,
+    payload: &str,
+    now: i64,
+    last_event_id: Option<&str>,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT INTO runtime_progress (
+            job_id,
+            progress_key,
+            payload,
+            updated_at_ms,
+            last_event_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5)
+        ON CONFLICT(job_id, progress_key) DO UPDATE SET
+            payload = excluded.payload,
+            updated_at_ms = excluded.updated_at_ms,
+            last_event_id = CASE
+                WHEN excluded.last_event_id IS NULL
+                THEN runtime_progress.last_event_id
+                ELSE excluded.last_event_id
+            END",
+        params![job_id, progress_key, payload, now, last_event_id],
+    )
+    .map_err(|err| format!("progress-upsert-failed: {err}"))?;
+    Ok(())
+}
+
 fn read_job(connection: &Connection, job_id: &str) -> Result<RuntimeJobRecord, String> {
     connection
         .query_row(&job_select_sql("WHERE job_id = ?1"), [job_id], map_job_row)
@@ -1878,6 +2408,92 @@ fn read_active_claims_by_id_tx(
         .map_err(|err| format!("resource-claims-read-failed: {err}"))
 }
 
+fn read_event_tx(tx: &Transaction<'_>, event_id: &str) -> Result<RuntimeEventRecord, String> {
+    tx.query_row(
+        &event_select_sql("WHERE event_id = ?1"),
+        [event_id],
+        map_event_row,
+    )
+    .map_err(|err| format!("event-read-failed: {err}"))
+}
+
+fn read_progress_tx(
+    tx: &Transaction<'_>,
+    job_id: &str,
+    progress_key: &str,
+) -> Result<RuntimeProgressRecord, String> {
+    tx.query_row(
+        &progress_select_sql("WHERE job_id = ?1 AND progress_key = ?2"),
+        params![job_id, progress_key],
+        map_progress_row,
+    )
+    .map_err(|err| format!("progress-read-failed: {err}"))
+}
+
+fn read_progress_optional_tx(
+    tx: &Transaction<'_>,
+    job_id: &str,
+    progress_key: &str,
+) -> Result<Option<RuntimeProgressRecord>, String> {
+    tx.query_row(
+        &progress_select_sql("WHERE job_id = ?1 AND progress_key = ?2"),
+        params![job_id, progress_key],
+        map_progress_row,
+    )
+    .optional()
+    .map_err(|err| format!("progress-read-failed: {err}"))
+}
+
+fn read_events(
+    connection: &Connection,
+    job_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<RuntimeEventRecord>, String> {
+    let suffix = match job_id {
+        Some(_) => "WHERE job_id = ?1 ORDER BY created_at_ms ASC, event_id ASC LIMIT ?2",
+        None => "ORDER BY created_at_ms ASC, event_id ASC LIMIT ?1",
+    };
+    let mut statement = connection
+        .prepare(&event_select_sql(suffix))
+        .map_err(|err| format!("events-read-prepare-failed: {err}"))?;
+    let rows = match job_id {
+        Some(job_id) => statement
+            .query_map(params![job_id, limit], map_event_row)
+            .map_err(|err| format!("events-read-failed: {err}"))?,
+        None => statement
+            .query_map([limit], map_event_row)
+            .map_err(|err| format!("events-read-failed: {err}"))?,
+    };
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("events-read-failed: {err}"))
+}
+
+fn read_progress_rows(
+    connection: &Connection,
+    job_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<RuntimeProgressRecord>, String> {
+    let suffix = match job_id {
+        Some(_) => {
+            "WHERE job_id = ?1 ORDER BY updated_at_ms ASC, job_id ASC, progress_key ASC LIMIT ?2"
+        }
+        None => "ORDER BY updated_at_ms ASC, job_id ASC, progress_key ASC LIMIT ?1",
+    };
+    let mut statement = connection
+        .prepare(&progress_select_sql(suffix))
+        .map_err(|err| format!("progress-read-prepare-failed: {err}"))?;
+    let rows = match job_id {
+        Some(job_id) => statement
+            .query_map(params![job_id, limit], map_progress_row)
+            .map_err(|err| format!("progress-read-failed: {err}"))?,
+        None => statement
+            .query_map([limit], map_progress_row)
+            .map_err(|err| format!("progress-read-failed: {err}"))?,
+    };
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("progress-read-failed: {err}"))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
     connection
         .query_row(
@@ -1958,6 +2574,28 @@ fn resource_claim_select_sql(suffix: &str) -> String {
     )
 }
 
+fn event_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT event_id,
+                job_id,
+                event_name,
+                payload,
+                created_at_ms
+         FROM runtime_events {suffix}"
+    )
+}
+
+fn progress_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT job_id,
+                progress_key,
+                payload,
+                updated_at_ms,
+                last_event_id
+         FROM runtime_progress {suffix}"
+    )
+}
+
 fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
     Ok(RuntimeJobRecord {
         job_id: row.get(0)?,
@@ -2020,6 +2658,26 @@ fn map_resource_claim_row(
         expires_at_ms: row.get(8)?,
         released_at_ms: row.get(9)?,
         status: row.get(10)?,
+    })
+}
+
+fn map_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeEventRecord> {
+    Ok(RuntimeEventRecord {
+        event_id: row.get(0)?,
+        job_id: row.get(1)?,
+        event_name: row.get(2)?,
+        payload: row.get(3)?,
+        created_at_ms: row.get(4)?,
+    })
+}
+
+fn map_progress_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeProgressRecord> {
+    Ok(RuntimeProgressRecord {
+        job_id: row.get(0)?,
+        progress_key: row.get(1)?,
+        payload: row.get(2)?,
+        updated_at_ms: row.get(3)?,
+        last_event_id: row.get(4)?,
     })
 }
 
@@ -2338,6 +2996,104 @@ mod tests {
         }
     }
 
+    fn event_request(
+        job_id: Option<&str>,
+        event_id: &str,
+        payload: &str,
+    ) -> RuntimeEventAppendRequest {
+        RuntimeEventAppendRequest {
+            job_id: job_id.map(str::to_string),
+            event_id: Some(event_id.to_string()),
+            payload: payload.to_string(),
+        }
+    }
+
+    fn progress_request(
+        job_id: Option<&str>,
+        progress_key: &str,
+        event_id: &str,
+        payload: &str,
+        durable: bool,
+    ) -> RuntimeProgressAppendRequest {
+        RuntimeProgressAppendRequest {
+            job_id: job_id.map(str::to_string),
+            progress_key: progress_key.to_string(),
+            event_id: Some(event_id.to_string()),
+            payload: payload.to_string(),
+            durable: Some(durable),
+        }
+    }
+
+    fn timeline_request(job_id: Option<&str>) -> RuntimeTimelineListRequest {
+        RuntimeTimelineListRequest {
+            job_id: job_id.map(str::to_string),
+            limit: None,
+        }
+    }
+
+    fn progress_list_request(job_id: Option<&str>) -> RuntimeProgressListRequest {
+        RuntimeProgressListRequest {
+            job_id: job_id.map(str::to_string),
+            limit: None,
+        }
+    }
+
+    fn migration_family_exists(project_root: &Path, family: &str) -> bool {
+        let connection = Connection::open(runtime_db_path(project_root)).expect("open runtime db");
+        connection
+            .query_row(
+                "SELECT 1
+                 FROM runtime_schema_migrations
+                 WHERE family = ?1
+                 LIMIT 1",
+                [family],
+                |_| Ok(()),
+            )
+            .optional()
+            .expect("query migration family")
+            .is_some()
+    }
+
+    #[test]
+    fn pr5_request_shapes_reject_unknown_fields() {
+        let event = serde_json::from_value::<RuntimeEventAppendRequest>(serde_json::json!({
+            "jobId": "job-1",
+            "eventId": "event-1",
+            "payload": "{}",
+            "dbPath": "/tmp/runtime.db"
+        }))
+        .expect_err("event request rejects dbPath");
+        assert!(event.to_string().contains("unknown field"));
+
+        let progress = serde_json::from_value::<RuntimeProgressAppendRequest>(serde_json::json!({
+            "jobId": "job-1",
+            "progressKey": "compile",
+            "eventId": "event-2",
+            "payload": "{}",
+            "durable": false,
+            "timestamp": 123
+        }))
+        .expect_err("progress request rejects timestamp");
+        assert!(progress.to_string().contains("unknown field"));
+
+        let timeline = serde_json::from_value::<RuntimeTimelineListRequest>(serde_json::json!({
+            "jobId": "job-1",
+            "limit": 10,
+            "root": "/tmp/project"
+        }))
+        .expect_err("timeline request rejects root");
+        assert!(timeline.to_string().contains("unknown field"));
+
+        let progress_list =
+            serde_json::from_value::<RuntimeProgressListRequest>(serde_json::json!({
+                "jobId": "job-1",
+                "limit": 10,
+                "minIntervalMs": 1
+            }))
+            .expect_err("progress list request rejects minIntervalMs");
+        assert!(progress_list.to_string().contains("unknown field"));
+    }
+
     #[test]
     fn disabled_job_create_does_not_touch_disk() {
         let project = temp_project("disabled-job-create");
@@ -2400,6 +3156,54 @@ mod tests {
     }
 
     #[test]
+    fn disabled_event_progress_commands_do_not_touch_damaged_runtime_db() {
+        let project = temp_project("disabled-events-progress");
+        let runtime_dir = project.join(RUNTIME_DIR);
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        let db_path = runtime_dir.join(RUNTIME_DB_FILE);
+        fs::write(&db_path, b"not sqlite").expect("write damaged db");
+
+        let event_error = runtime_event_append_for_project(
+            Some(&project),
+            false,
+            event_request(Some("job-1"), "event-1", "{}"),
+            100,
+        )
+        .expect_err("disabled event append should fail");
+        assert!(event_error.starts_with("runtime-disabled"));
+
+        let progress_error = runtime_progress_append_for_project(
+            Some(&project),
+            false,
+            progress_request(Some("job-1"), "compile", "event-2", "{}", false),
+            100,
+        )
+        .expect_err("disabled progress append should fail");
+        assert!(progress_error.starts_with("runtime-disabled"));
+
+        let timeline = runtime_timeline_list_for_project(
+            Some(&project),
+            false,
+            timeline_request(Some("job-1")),
+        )
+        .expect("disabled timeline list");
+        assert_eq!(timeline.status, RuntimeDbHealthState::Disabled);
+        assert!(timeline.events.is_empty());
+
+        let progress = runtime_progress_list_for_project(
+            Some(&project),
+            false,
+            progress_list_request(Some("job-1")),
+        )
+        .expect("disabled progress list");
+        assert_eq!(progress.status, RuntimeDbHealthState::Disabled);
+        assert!(progress.progress.is_empty());
+
+        assert_eq!(fs::read(&db_path).expect("read damaged db"), b"not sqlite");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
     fn enabled_commit_budget_commands_without_project_are_no_touch() {
         let claim_error = runtime_commit_budget_claim_for_project(
             None,
@@ -2421,6 +3225,37 @@ mod tests {
         assert_eq!(list.status, RuntimeDbHealthState::NoProject);
         assert!(list.budgets.is_empty());
         assert!(list.claims.is_empty());
+    }
+
+    #[test]
+    fn enabled_event_progress_commands_without_project_are_no_touch() {
+        let event_error = runtime_event_append_for_project(
+            None,
+            true,
+            event_request(Some("job-1"), "event-1", "{}"),
+            100,
+        )
+        .expect_err("no-project event append should fail");
+        assert!(event_error.starts_with("no-project"));
+
+        let progress_error = runtime_progress_append_for_project(
+            None,
+            true,
+            progress_request(Some("job-1"), "compile", "event-2", "{}", false),
+            100,
+        )
+        .expect_err("no-project progress append should fail");
+        assert!(progress_error.starts_with("no-project"));
+
+        let timeline = runtime_timeline_list_for_project(None, true, timeline_request(None))
+            .expect("timeline");
+        assert_eq!(timeline.status, RuntimeDbHealthState::NoProject);
+        assert!(timeline.events.is_empty());
+
+        let progress = runtime_progress_list_for_project(None, true, progress_list_request(None))
+            .expect("progress list");
+        assert_eq!(progress.status, RuntimeDbHealthState::NoProject);
+        assert!(progress.progress.is_empty());
     }
 
     #[test]
@@ -2455,6 +3290,65 @@ mod tests {
         let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
         assert!(!table_exists(&connection, "runtime_resource_budgets").expect("check budgets"));
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn event_progress_lists_return_empty_without_migration_on_existing_runtime_dbs() {
+        let pr4_project = temp_project("events-progress-pr4-db");
+        fs::create_dir_all(&pr4_project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&pr4_project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("create PR4 runtime db");
+
+        let timeline =
+            runtime_timeline_list_for_project(Some(&pr4_project), true, timeline_request(None))
+                .expect("timeline list");
+        let progress = runtime_progress_list_for_project(
+            Some(&pr4_project),
+            true,
+            progress_list_request(None),
+        )
+        .expect("progress list");
+
+        assert!(timeline.events.is_empty());
+        assert!(progress.progress.is_empty());
+        let connection = Connection::open(runtime_db_path(&pr4_project)).expect("open runtime db");
+        assert!(!table_exists(&connection, "runtime_events").expect("check events"));
+        assert!(!migration_family_exists(
+            &pr4_project,
+            EVENTS_PROGRESS_FAMILY
+        ));
+        drop(connection);
+        let _ = fs::remove_dir_all(pr4_project);
+
+        let pr3_project = temp_project("events-progress-pr3-db");
+        fs::create_dir_all(&pr3_project).expect("create temp project");
+        runtime_job_create_for_project(Some(&pr3_project), true, create_request("job-1"), 100)
+            .expect("create PR3 runtime db");
+
+        let timeline =
+            runtime_timeline_list_for_project(Some(&pr3_project), true, timeline_request(None))
+                .expect("timeline list");
+        let progress = runtime_progress_list_for_project(
+            Some(&pr3_project),
+            true,
+            progress_list_request(None),
+        )
+        .expect("progress list");
+        assert!(timeline.events.is_empty());
+        assert!(progress.progress.is_empty());
+        let connection = Connection::open(runtime_db_path(&pr3_project)).expect("open runtime db");
+        assert!(!table_exists(&connection, "runtime_events").expect("check events"));
+        assert!(!table_exists(&connection, "runtime_progress").expect("check progress"));
+        assert!(!migration_family_exists(
+            &pr3_project,
+            EVENTS_PROGRESS_FAMILY
+        ));
+        let _ = fs::remove_dir_all(pr3_project);
     }
 
     #[test]
@@ -2535,6 +3429,97 @@ mod tests {
                 version: 2,
                 applied_at_ms: 42,
             }
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn events_progress_migration_preserves_higher_version_and_is_idempotent() {
+        let project = temp_project("events-progress-higher-version");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create PR2 runtime db");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "INSERT INTO runtime_schema_migrations (
+                    family,
+                    version,
+                    applied_at_ms
+                ) VALUES (?1, ?2, ?3)",
+                params![EVENTS_PROGRESS_FAMILY, 2_i64, 42_i64],
+            )
+            .expect("seed higher migration");
+        drop(connection);
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-1", "{}"),
+            200,
+        )
+        .expect("append event");
+        let first = read_migration_family(&project, EVENTS_PROGRESS_FAMILY);
+
+        runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-2", "{}"),
+            300,
+        )
+        .expect("append second event");
+        let second = read_migration_family(&project, EVENTS_PROGRESS_FAMILY);
+
+        assert_eq!(
+            first,
+            RuntimeDbMigrationStatus {
+                family: EVENTS_PROGRESS_FAMILY.to_string(),
+                version: 2,
+                applied_at_ms: 42,
+            }
+        );
+        assert_eq!(first, second);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn event_schema_enables_foreign_keys_and_rejects_orphan_event() {
+        let project = temp_project("events-progress-fk");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        with_runtime_writer(|| {
+            let connection = open_events_progress_runtime_locked(&project)?;
+            let foreign_keys = connection
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .expect("read foreign key pragma");
+            assert_eq!(foreign_keys, 1);
+            let error = connection
+                .execute(
+                    "INSERT INTO runtime_events (
+                        event_id,
+                        job_id,
+                        event_name,
+                        payload,
+                        created_at_ms
+                    ) VALUES ('event-orphan', 'missing-job', 'job-runtime:event-appended', '{}', 1)",
+                    [],
+                )
+                .expect_err("orphan event must fail");
+            assert!(error.to_string().contains("FOREIGN KEY"));
+            Ok(())
+        })
+        .expect("schema init succeeds");
+
+        let migration = read_migration_family(&project, EVENTS_PROGRESS_FAMILY);
+        with_runtime_writer(|| {
+            open_events_progress_runtime_locked(&project)?;
+            Ok(())
+        })
+        .expect("schema init is idempotent");
+        assert_eq!(
+            migration,
+            read_migration_family(&project, EVENTS_PROGRESS_FAMILY)
         );
         let _ = fs::remove_dir_all(project);
     }
@@ -2643,6 +3628,287 @@ mod tests {
             .claims
             .iter()
             .all(|row| row.job_id.as_deref() == Some("job-1")));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn event_append_requires_existing_job_and_timeline_is_stably_ordered() {
+        let project = temp_project("events-progress-event-order");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        let missing_job = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("missing-job"), "event-missing", "{}"),
+            100,
+        )
+        .expect_err("missing job is rejected");
+        assert!(missing_job.starts_with("job-not-found"));
+
+        let missing_job_id = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(None, "event-no-job", "{}"),
+            100,
+        )
+        .expect_err("missing job id is rejected");
+        assert!(missing_job_id.starts_with("invalid-job-id"));
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+        let before = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(before.jobs[0].state, "queued");
+        assert_eq!(before.jobs[0].updated_at_ms, 100);
+        let event_b = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-b", "{\"step\":2}"),
+            200,
+        )
+        .expect("append event b");
+        let event_a = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-a", "{\"step\":1}"),
+            200,
+        )
+        .expect("append event a");
+
+        assert_eq!(event_a.event_name, EVENT_APPENDED_NAME);
+        assert_eq!(event_b.event_name, EVENT_APPENDED_NAME);
+        let after = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(after.jobs[0].state, "queued");
+        assert_eq!(after.jobs[0].updated_at_ms, 100);
+        let timeline = runtime_timeline_list_for_project(
+            Some(&project),
+            true,
+            timeline_request(Some("job-1")),
+        )
+        .expect("timeline list");
+        assert_eq!(
+            timeline
+                .events
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["event-a", "event-b"]
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn progress_append_coalesces_by_key_and_preserves_last_event_id() {
+        let project = temp_project("events-progress-coalesce");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+
+        let first = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-1", "{\"pct\":10}", false),
+            1_000,
+        )
+        .expect("first progress append");
+        assert_eq!(
+            first.event.as_ref().map(|event| event.event_id.as_str()),
+            Some("event-1")
+        );
+        assert_eq!(first.progress.last_event_id.as_deref(), Some("event-1"));
+
+        let coalesced = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-2", "{\"pct\":20}", false),
+            1_000 + DEFAULT_PROGRESS_MIN_INTERVAL_MS - 1,
+        )
+        .expect("coalesced progress append");
+        assert!(coalesced.event.is_none());
+        assert_eq!(coalesced.progress.payload, "{\"pct\":20}");
+        assert_eq!(coalesced.progress.last_event_id.as_deref(), Some("event-1"));
+
+        let boundary = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-3", "{\"pct\":30}", false),
+            1_000 + DEFAULT_PROGRESS_MIN_INTERVAL_MS - 1 + DEFAULT_PROGRESS_MIN_INTERVAL_MS,
+        )
+        .expect("boundary progress append");
+        assert_eq!(
+            boundary.event.as_ref().map(|event| event.event_id.as_str()),
+            Some("event-3")
+        );
+        assert_eq!(boundary.progress.last_event_id.as_deref(), Some("event-3"));
+
+        let durable = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-4", "{\"pct\":40}", true),
+            1_000 + DEFAULT_PROGRESS_MIN_INTERVAL_MS - 1 + DEFAULT_PROGRESS_MIN_INTERVAL_MS + 1,
+        )
+        .expect("durable progress append");
+        assert_eq!(
+            durable.event.as_ref().map(|event| event.event_id.as_str()),
+            Some("event-4")
+        );
+        assert_eq!(durable.progress.last_event_id.as_deref(), Some("event-4"));
+
+        let durable_again = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-5", "{\"pct\":45}", true),
+            1_000 + DEFAULT_PROGRESS_MIN_INTERVAL_MS - 1 + DEFAULT_PROGRESS_MIN_INTERVAL_MS + 2,
+        )
+        .expect("second durable progress append");
+        assert_eq!(
+            durable_again
+                .event
+                .as_ref()
+                .map(|event| event.event_id.as_str()),
+            Some("event-5")
+        );
+        assert_eq!(
+            durable_again.progress.last_event_id.as_deref(),
+            Some("event-5")
+        );
+
+        let suppressed_after_durable = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-6", "{\"pct\":50}", false),
+            1_000 + DEFAULT_PROGRESS_MIN_INTERVAL_MS - 1 + DEFAULT_PROGRESS_MIN_INTERVAL_MS + 2,
+        )
+        .expect("suppressed after durable");
+        assert!(suppressed_after_durable.event.is_none());
+        assert_eq!(
+            suppressed_after_durable.progress.last_event_id.as_deref(),
+            Some("event-5")
+        );
+
+        let timeline = runtime_timeline_list_for_project(
+            Some(&project),
+            true,
+            timeline_request(Some("job-1")),
+        )
+        .expect("timeline list");
+        assert_eq!(
+            timeline
+                .events
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["event-1", "event-3", "event-4", "event-5"]
+        );
+        let progress = runtime_progress_list_for_project(
+            Some(&project),
+            true,
+            progress_list_request(Some("job-1")),
+        )
+        .expect("progress list");
+        assert_eq!(progress.progress.len(), 1);
+        assert_eq!(progress.progress[0].payload, "{\"pct\":50}");
+        assert_eq!(
+            progress.progress[0].last_event_id.as_deref(),
+            Some("event-5")
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn event_progress_validation_rejects_blank_and_oversized_payloads() {
+        let project = temp_project("events-progress-validation");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+
+        let exact_payload = "x".repeat(MAX_EVENT_PAYLOAD_BYTES);
+        let exact_event = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-exact", &exact_payload),
+            150,
+        )
+        .expect("exact max payload is allowed");
+        assert_eq!(exact_event.payload.len(), MAX_EVENT_PAYLOAD_BYTES);
+
+        let blank_event = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-blank", "  "),
+            200,
+        )
+        .expect_err("blank event payload rejected");
+        assert!(blank_event.starts_with("invalid-payload"));
+
+        let oversized = "x".repeat(MAX_EVENT_PAYLOAD_BYTES + 1);
+        let oversized_progress = runtime_progress_append_for_project(
+            Some(&project),
+            true,
+            progress_request(Some("job-1"), "compile", "event-large", &oversized, false),
+            200,
+        )
+        .expect_err("oversized progress payload rejected");
+        assert!(oversized_progress.starts_with("invalid-payload"));
+
+        with_runtime_writer(|| {
+            let connection = open_events_progress_runtime_locked(&project)?;
+            let error = connection
+                .execute(
+                    "INSERT INTO runtime_events (
+                        event_id,
+                        job_id,
+                        event_name,
+                        payload,
+                        created_at_ms
+                    ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        "event-db-check",
+                        "job-1",
+                        EVENT_APPENDED_NAME,
+                        oversized,
+                        250_i64
+                    ],
+                )
+                .expect_err("DB CHECK rejects oversized event payload");
+            assert!(error.to_string().contains("CHECK"));
+
+            let multibyte_oversized = "你".repeat((MAX_EVENT_PAYLOAD_BYTES / "你".len()) + 1);
+            assert!(multibyte_oversized.chars().count() <= MAX_EVENT_PAYLOAD_BYTES);
+            assert!(multibyte_oversized.len() > MAX_EVENT_PAYLOAD_BYTES);
+            let multibyte_error = connection
+                .execute(
+                    "INSERT INTO runtime_progress (
+                        job_id,
+                        progress_key,
+                        payload,
+                        updated_at_ms
+                    ) VALUES (?1, ?2, ?3, ?4)",
+                    params!["job-1", "multibyte", multibyte_oversized, 260_i64],
+                )
+                .expect_err("DB CHECK rejects multibyte oversized progress payload");
+            assert!(multibyte_error.to_string().contains("CHECK"));
+            Ok(())
+        })
+        .expect("DB CHECK boundary test succeeds");
+
+        let invalid_limit = runtime_timeline_list_for_project(
+            Some(&project),
+            true,
+            RuntimeTimelineListRequest {
+                job_id: None,
+                limit: Some(MAX_TIMELINE_LIMIT + 1),
+            },
+        )
+        .expect_err("invalid limit rejected");
+        assert!(invalid_limit.starts_with("invalid-limit"));
+
+        let list = runtime_progress_list_for_project(
+            Some(&project),
+            true,
+            progress_list_request(Some("job-1")),
+        )
+        .expect("progress list");
+        assert!(list.progress.is_empty());
         let _ = fs::remove_dir_all(project);
     }
 
@@ -3132,20 +4398,40 @@ mod tests {
         assert_eq!(claimed.lease.status, ACTIVE_LEASE_STATUS);
         assert_eq!(claimed.lease.expires_at_ms, 200 + DEFAULT_LEASE_TTL_MS);
 
-        let heartbeat = runtime_job_heartbeat_for_project(
+        let early_heartbeat = runtime_job_heartbeat_for_project(
             Some(&project),
             true,
             lease_request("job-1", "lease-1"),
             250,
         )
-        .expect("heartbeat job");
-        assert_eq!(heartbeat.lease.heartbeat_at_ms, 250);
+        .expect("early heartbeat is idempotent");
+        assert_eq!(early_heartbeat.lease.heartbeat_at_ms, 200);
+        assert_eq!(
+            early_heartbeat.lease.expires_at_ms,
+            200 + DEFAULT_LEASE_TTL_MS
+        );
+
+        let heartbeat = runtime_job_heartbeat_for_project(
+            Some(&project),
+            true,
+            lease_request("job-1", "lease-1"),
+            200 + DEFAULT_HEARTBEAT_MIN_INTERVAL_MS,
+        )
+        .expect("heartbeat job after min interval");
+        assert_eq!(
+            heartbeat.lease.heartbeat_at_ms,
+            200 + DEFAULT_HEARTBEAT_MIN_INTERVAL_MS
+        );
+        assert_eq!(
+            heartbeat.lease.expires_at_ms,
+            200 + DEFAULT_HEARTBEAT_MIN_INTERVAL_MS + DEFAULT_LEASE_TTL_MS
+        );
 
         let completed = runtime_job_complete_for_project(
             Some(&project),
             true,
             lease_request("job-1", "lease-1"),
-            300,
+            200 + DEFAULT_HEARTBEAT_MIN_INTERVAL_MS + 100,
         )
         .expect("complete job");
         assert_eq!(completed.state, "completed");
@@ -3153,6 +4439,61 @@ mod tests {
         let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
         assert_eq!(list.jobs.len(), 1);
         assert_eq!(list.leases[0].status, RELEASED_LEASE_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn heartbeat_near_expiry_bypasses_min_interval_noop() {
+        let project = temp_project("job-heartbeat-near-expiry");
+        fs::create_dir_all(&project).expect("create temp project");
+        with_runtime_writer(|| {
+            let connection = open_job_runtime_locked(&project)?;
+            connection
+                .execute(
+                    "INSERT INTO runtime_jobs (
+                        job_id,
+                        kind,
+                        payload,
+                        state,
+                        attempt,
+                        max_attempts,
+                        priority,
+                        created_at_ms,
+                        updated_at_ms,
+                        queued_at_ms,
+                        started_at_ms
+                    ) VALUES ('job-1', 'compile-page', '{}', 'running', 1, 3, 0, 100, 100, 100, 100)",
+                    [],
+                )
+                .expect("insert running job");
+            connection
+                .execute(
+                    "INSERT INTO runtime_job_leases (
+                        lease_id,
+                        job_id,
+                        holder,
+                        acquired_at_ms,
+                        heartbeat_at_ms,
+                        expires_at_ms,
+                        status
+                    ) VALUES ('lease-1', 'job-1', 'worker-a', 100, 1000, 5999, 'active')",
+                    [],
+                )
+                .expect("insert near-expiry active lease");
+            Ok(())
+        })
+        .expect("seed near-expiry lease succeeds");
+
+        let heartbeat = runtime_job_heartbeat_for_project(
+            Some(&project),
+            true,
+            lease_request("job-1", "lease-1"),
+            5000,
+        )
+        .expect("near-expiry heartbeat renews");
+
+        assert_eq!(heartbeat.lease.heartbeat_at_ms, 5000);
+        assert_eq!(heartbeat.lease.expires_at_ms, 5000 + DEFAULT_LEASE_TTL_MS);
         let _ = fs::remove_dir_all(project);
     }
 
