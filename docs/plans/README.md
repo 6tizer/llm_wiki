@@ -15,7 +15,7 @@
 | [SPEC-1/pr2-boundary-enforcement-plan.md](./SPEC-1/pr2-boundary-enforcement-plan.md) | SPEC-1 PR2 执行计划：headless contract 扩展、core runtime import/static boundary enforcement。 | merged |
 | [SPEC-1/pr3-bootstrap-boundary-plan.md](./SPEC-1/pr3-bootstrap-boundary-plan.md) | SPEC-1 PR3 执行计划：App.tsx 非 UI bootstrap boundary inventory 和测试护栏。 | merged |
 | [SPEC-1/pr4-store-boundary-plan.md](./SPEC-1/pr4-store-boundary-plan.md) | SPEC-1 PR4 执行计划：Store boundary inventory、Rust-locked app-state schema、Zustand mirror 分类。 | merged |
-| [SPEC-1/pr5-adapter-contract-tests-plan.md](./SPEC-1/pr5-adapter-contract-tests-plan.md) | SPEC-1 PR5 执行计划：mock shell / platform / storage / agent adapter contract tests。 | gates PASS / ready for PR |
+| [SPEC-1/pr5-adapter-contract-tests-plan.md](./SPEC-1/pr5-adapter-contract-tests-plan.md) | SPEC-1 PR5 执行计划：mock shell / platform / storage / agent adapter contract tests。 | merged |
 | [spec-2-work-runtime.md](./spec-2-work-runtime.md) | Work Runtime、SQLite runtime ledger、job/lease/event/scheduler 底座。 | planned |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |

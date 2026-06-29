@@ -76,7 +76,7 @@ Strangler migration priority:
 | PR2 | [`SPEC-1/pr2-boundary-enforcement-plan.md`](./SPEC-1/pr2-boundary-enforcement-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
 | PR3 | [`SPEC-1/pr3-bootstrap-boundary-plan.md`](./SPEC-1/pr3-bootstrap-boundary-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
 | PR4 | [`SPEC-1/pr4-store-boundary-plan.md`](./SPEC-1/pr4-store-boundary-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
-| PR5 | [`SPEC-1/pr5-adapter-contract-tests-plan.md`](./SPEC-1/pr5-adapter-contract-tests-plan.md) | ready for PR | Architect PASS / Tester PASS / Reviewer PASS |
+| PR5 | [`SPEC-1/pr5-adapter-contract-tests-plan.md`](./SPEC-1/pr5-adapter-contract-tests-plan.md) | merged | Architect PASS / Tester PASS / Reviewer PASS |
 
 Commander 调度规则：
 

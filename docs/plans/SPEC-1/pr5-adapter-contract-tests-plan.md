@@ -1,6 +1,6 @@
 # SPEC-1 PR5: Adapter Contract Tests Plan
 
-> Status: gates PASS / ready for PR | Branch: `codex/spec-1-pr5-adapter-contract-tests` | Owner: Commander
+> Status: merged | Branch: `codex/spec-1-pr5-adapter-contract-tests` | Owner: Commander
 
 ## Goal
 
