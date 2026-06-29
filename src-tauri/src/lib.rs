@@ -430,6 +430,7 @@ pub fn run() {
             commands::project::create_project,
             commands::project::open_project,
             commands::project::open_project_folder,
+            commands::runtime_db::runtime_db_health,
             commands::search::search_project,
             clip_server_status,
             api_server_status,

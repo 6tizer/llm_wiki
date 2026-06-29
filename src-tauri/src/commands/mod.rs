@@ -1,6 +1,7 @@
 pub mod agent_cli;
 pub mod file_ops;
 pub mod project;
+pub mod runtime_db;
 pub mod search;
 
 // Backward-compatible re-exports for lib.rs / api_server.rs paths
