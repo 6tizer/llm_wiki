@@ -20,7 +20,8 @@
 | [SPEC-2/pr1-runtime-adr-plan.md](./SPEC-2/pr1-runtime-adr-plan.md) | SPEC-2 PR1 执行计划：runtime ADR、schema families、job state machine、single-writer hard gate。 | merged |
 | [SPEC-2/adr-work-runtime.md](./SPEC-2/adr-work-runtime.md) | SPEC-2 PR1 ADR：project-scoped runtime.db、kill switch、portable schema families、job transitions、SPEC-3/4 gates。 | accepted for PR1 gate |
 | [SPEC-2/pr2-sqlite-init-plan.md](./SPEC-2/pr2-sqlite-init-plan.md) | SPEC-2 PR2 执行计划：SQLite init、migration bookkeeping、runtime DB health check。 | merged |
-| [SPEC-2/pr3-job-ledger-plan.md](./SPEC-2/pr3-job-ledger-plan.md) | SPEC-2 PR3 执行计划：job ledger、lease / heartbeat / retry / cancel。 | in progress |
+| [SPEC-2/pr3-job-ledger-plan.md](./SPEC-2/pr3-job-ledger-plan.md) | SPEC-2 PR3 执行计划：job ledger、lease / heartbeat / retry / cancel。 | merged |
+| [SPEC-2/pr4-commit-budget-plan.md](./SPEC-2/pr4-commit-budget-plan.md) | SPEC-2 PR4 执行计划：commit-path concurrency budget、resource claim/release ledger。 | in progress |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | planned |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
