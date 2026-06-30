@@ -1,6 +1,6 @@
 # SPEC-2 PR7: Minimal Runtime UI Plan
 
-> 类型：PR 执行计划 | 状态：in progress | 分支：`codex/spec-2-pr7-runtime-ui` | 基线：`1df54d7` | Commander：Codex
+> 类型：PR 执行计划 | 状态：merged | 分支：`codex/spec-2-pr7-runtime-ui` | 基线：`1df54d7` | merge：PR #208 / `156f9db` | Commander：Codex
 
 ## 目标
 
@@ -42,7 +42,7 @@
 - `src/i18n/en.json` / `src/i18n/zh.json`
   - 新增 runtime UI 文案，保持 parity。
 - `docs/plans/README.md`
-  - 更新 PR6 merged，登记 PR7 plan in progress。
+  - 开工时更新 PR6 merged 并登记 PR7 plan；合并后由 docs consistency 标记 PR7 merged。
 
 不做：
 
@@ -170,7 +170,7 @@ PR7 开工 gate：
 - `pnpm lint`
 - `git diff --check`
 - `cargo build --release --manifest-path src-tauri/Cargo.toml`
-- `npx gitnexus detect-changes --repo llm_wiki`
+- `npx gitnexus detect-changes --repo llm_wiki --scope staged`
 - Tester/Reviewer gates；UI 改动如有可视状态，保留截图或 DOM evidence。
 
 ## 当前 Commander 判断

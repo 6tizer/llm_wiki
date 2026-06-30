@@ -1,6 +1,6 @@
 # SPEC-2: Work Runtime / DB / 并行调度底座
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#184 | 依赖：SPEC-1 shell/core boundary
+> 类型：阶段 SPEC | 状态：completed | 覆盖：#184 | 依赖：SPEC-1 shell/core boundary
 
 ## 目标与成功标准
 
@@ -63,7 +63,7 @@
 
 ## Gate 结论摘要
 
-本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR 必须重新审查 SQLite 单写 actor、migration rollback、kill switch、scheduler state machine 和 SPEC-1 shell/core boundary。
+本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR1-PR7 已合并至 `156f9db`，后续依赖进入 SPEC-3 Markdown commit layer。后续修改 runtime DB / scheduler / event API 仍必须重新审查 SQLite 单写 actor、migration rollback、kill switch、scheduler state machine 和 SPEC-1 shell/core boundary。
 
 ## Non-goals / Follow-up
 
