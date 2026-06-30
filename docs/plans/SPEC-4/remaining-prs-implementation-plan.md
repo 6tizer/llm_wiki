@@ -1,13 +1,13 @@
 # SPEC-4 Remaining PRs Implementation Plan
 
-> Type: execution plan | Status: active | Owner: Commander | Current branch: `codex/spec-4-pr3-capability-probe` | Current main: `500cb3c feat: add settings model profiles` | Run: `6abcc134-1134-467d-a5f6-b1aebce2eb47`
+> Type: execution plan | Status: active | Owner: Commander | Current branch: `codex/spec-4-pr4-scheduler-profile-pool` | Current main: `9dff202 feat: add model profile capability probe` | Run: `a4d26b56-03df-49ae-a800-14d03223a2a2`
 
 ## Decision
 
 Continue SPEC-4 as three implementation PRs:
 
-1. PR3 Capability Probe.
-2. PR4 Scheduler Profile Pool.
+1. PR3 Capability Probe. Completed by PR #219 at `9dff202`.
+2. PR4 Scheduler Profile Pool. Current.
 3. PR5 Agent-run Adapter.
 
 Merge standard for every remaining PR:
@@ -23,9 +23,10 @@ PR4 and PR5 must get their own detailed PR plans when each PR starts. This docum
 
 - PR1 merged via #217 at `4ca772e`; it added runtime profile schema, profile capability fields, and the internal `SecretStore` read path.
 - PR2 merged via #218 at `500cb3c`; it added Settings profile management and secret write/delete boundaries.
+- PR3 merged via #219 at `9dff202`; it added stored/draft capability probes, `profile-probe.v1` cache semantics, and Settings probe UI wiring.
 - `runtime_model_profiles` already has `capability_status`, `capability_json`, `capability_version`, `capability_checked_at_ms`, `probe_backoff_until_ms`, and `last_capability_error`.
 - `profile_secrets.rs` has `read_profile_secret`, but there is intentionally no frontend read command.
-- Settings profile tests still use the PR2 raw-secret smoke path; the UI text explicitly says stored-secret probes arrive in PR3.
+- Settings profile tests now cover stored-profile and draft profile probes without exposing stored secret values.
 - Existing provider request construction is TypeScript in `llm-providers.ts`, but stored-profile probes must not read secrets back into the webview.
 - `reqwest` is already available in `src-tauri/Cargo.toml`, so PR3 can implement a Rust-side network probe without adding a new HTTP dependency.
 - Agent mode currently builds sidecar options from global `llmConfig` and forwards `model`, `apiKey`, and `baseUrl`; it does not carry `profileId`, `apiMode`, auth style, or cached capability.
@@ -44,7 +45,7 @@ PR4 and PR5 must get their own detailed PR plans when each PR starts. This docum
 
 ## PR3: Capability Probe
 
-Status: current.
+Status: completed by PR #219 at `9dff202`.
 
 Detailed plan: [`pr3-capability-probe-plan.md`](./pr3-capability-probe-plan.md).
 
@@ -74,16 +75,18 @@ PR3 non-goals:
 
 ## PR4: Scheduler Profile Pool
 
-Status: next after PR3 merge.
+Status: current.
+
+Detailed plan: [`pr4-scheduler-profile-pool-plan.md`](./pr4-scheduler-profile-pool-plan.md).
 
 Planned scope:
 
 - Add a SPEC-2-owned profile usage/claim layer for model-call and agent-run profile capacity.
-- Select only enabled profiles whose `kind`, `taskFamilies`, `profile-probe.v1` cached capability, and backoff state match the requested work.
+- Select only enabled profiles whose `kind`, `taskFamilies`, `profile-probe.v1` cached capability, probe backoff state, circuit-break state, and active claim count match the requested work. Capability JSON support facts must be parsed defensively: malformed JSON, missing keys, non-boolean keys, or false support values make a profile ineligible, not a hard claim error.
 - Enforce `maxConcurrency` with active profile claims.
-- Record retry-after / circuit-break facts through profile status or profile usage records, without redefining the job ledger.
-- Expose shell-neutral TS wrappers for profile pool claim/release/status.
-- Add focused tests for capacity exhaustion, expired claims, retry-after/backoff, disabled profiles, unsupported capability, and concurrent claims.
+- Record retry-after / circuit-break facts through profile usage records, without redefining the job ledger.
+- Expose shell-neutral TS wrappers for profile pool claim/release/list.
+- Add focused tests for user/preferred order, capacity exhaustion, expired claims, retry-after/backoff, disabled profiles, unsupported capability, duplicate/released claims, malformed capability JSON, breaker bounds, and job-linked event/progress writes.
 
 PR4 hard boundary:
 

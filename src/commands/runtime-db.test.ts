@@ -12,6 +12,9 @@ import {
   runtimeJobResume,
   runtimeProfileCreate,
   runtimeProfileList,
+  runtimeProfilePoolClaim,
+  runtimeProfilePoolList,
+  runtimeProfilePoolRelease,
   runtimeProfileProbe,
   runtimeProfileStatus,
   runtimeProfileUpdate,
@@ -361,6 +364,75 @@ describe("runtime-db commands", () => {
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_list")
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(5, "runtime_profile_status", {
       request: { profileId: "profile-1" },
+    })
+  })
+
+  it("sends runtime profile pool claim, release, and list payloads", async () => {
+    const claimed = {
+      claimId: "claim-1",
+      profileId: "profile-1",
+      expiresAtMs: 123,
+      claim: { claimId: "claim-1" },
+    }
+    const released = { claim: { claimId: "claim-1" }, circuitBreaker: null }
+    const list = { enabled: true, status: "healthy", activeClaims: [], circuitBreakers: [] }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(claimed)
+      .mockResolvedValueOnce(released)
+      .mockResolvedValueOnce(list)
+
+    await expect(
+      runtimeProfilePoolClaim({
+        claimId: "claim-1",
+        kind: "model-call",
+        taskFamily: "summarize",
+        holder: "worker-1",
+        jobId: "job-1",
+        ttlMs: 30000,
+        preferredProfileIds: ["profile-2", "profile-1"],
+      }),
+    ).resolves.toBe(claimed)
+    await expect(
+      runtimeProfilePoolRelease({
+        claimId: "claim-1",
+        outcome: "rate-limited",
+        retryAfterMs: 60000,
+        reason: "provider 429",
+      }),
+    ).resolves.toBe(released)
+    await expect(
+      runtimeProfilePoolList({
+        kind: "model-call",
+        taskFamily: "summarize",
+        jobId: "job-1",
+      }),
+    ).resolves.toBe(list)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_profile_pool_claim", {
+      request: {
+        claimId: "claim-1",
+        kind: "model-call",
+        taskFamily: "summarize",
+        holder: "worker-1",
+        jobId: "job-1",
+        ttlMs: 30000,
+        preferredProfileIds: ["profile-2", "profile-1"],
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_profile_pool_release", {
+      request: {
+        claimId: "claim-1",
+        outcome: "rate-limited",
+        retryAfterMs: 60000,
+        reason: "provider 429",
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_profile_pool_list", {
+      request: {
+        kind: "model-call",
+        taskFamily: "summarize",
+        jobId: "job-1",
+      },
     })
   })
 })
