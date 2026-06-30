@@ -77,7 +77,7 @@
 
 ## Current Execution Order
 
-截至 2026-07-01，当前 main/head 基线为 `285214c feat: wire agent runs to runtime profiles (#221)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#216 完成 PR1-PR6，SPEC-4 PR1 已由 #217 完成，SPEC-4 PR2 已由 #218 完成，SPEC-4 PR3 已由 #219 完成，SPEC-4 PR4 已由 #220 完成，SPEC-4 PR5 已由 #221 完成。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
+截至 2026-07-01，SPEC-4 implementation baseline 为 `285214c feat: wire agent runs to runtime profiles (#221)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#216 完成 PR1-PR6，SPEC-4 PR1 已由 #217 完成，SPEC-4 PR2 已由 #218 完成，SPEC-4 PR3 已由 #219 完成，SPEC-4 PR4 已由 #220 完成，SPEC-4 PR5 已由 #221 完成。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
 
 已完成 OKF/KW 基线证据：
 
