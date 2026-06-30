@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  runtimeDerivedStaleMarkerList,
+  runtimeDerivedStaleMarkerRecord,
   runtimeCommitBudgetClaim,
   runtimeCommitBudgetRelease,
+  runtimeEventAppend,
   runtimeJobCancel,
   runtimeJobList,
   runtimeJobPause,
@@ -138,6 +141,79 @@ describe("runtime-db commands", () => {
       "runtime_staging_artifact_commit_success",
       {
         request: { artifactId: "artifact-1" },
+      },
+    )
+  })
+
+  it("sends runtime event append payloads", async () => {
+    const response = { eventId: "event-1", createdAtMs: 123 }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeEventAppend({
+        jobId: "job-1",
+        eventId: "event-1",
+        payload: "{\"kind\":\"markdown-commit\"}",
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_event_append", {
+      request: {
+        jobId: "job-1",
+        eventId: "event-1",
+        payload: "{\"kind\":\"markdown-commit\"}",
+      },
+    })
+  })
+
+  it("sends derived stale marker record and list payloads", async () => {
+    const record = { markerId: "marker-1" }
+    const list = { enabled: true, status: "healthy", markers: [record] }
+    tauriMocks.invoke.mockResolvedValueOnce(record).mockResolvedValueOnce(list)
+
+    await expect(
+      runtimeDerivedStaleMarkerRecord({
+        markerId: "marker-1",
+        layer: "embedding",
+        affectedPath: "wiki/Page.md",
+        inputHash: "sha256:abc",
+        baseVersion: "event:123:event-1",
+        reason: "commit",
+        sourceEventId: "event-1",
+      }),
+    ).resolves.toBe(record)
+    await expect(
+      runtimeDerivedStaleMarkerList({
+        layer: "embedding",
+        affectedPath: "wiki/Page.md",
+        status: "pending",
+      }),
+    ).resolves.toBe(list)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(
+      1,
+      "runtime_derived_stale_marker_record",
+      {
+        request: {
+          markerId: "marker-1",
+          layer: "embedding",
+          affectedPath: "wiki/Page.md",
+          inputHash: "sha256:abc",
+          baseVersion: "event:123:event-1",
+          reason: "commit",
+          sourceEventId: "event-1",
+        },
+      },
+    )
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(
+      2,
+      "runtime_derived_stale_marker_list",
+      {
+        request: {
+          layer: "embedding",
+          affectedPath: "wiki/Page.md",
+          status: "pending",
+        },
       },
     )
   })

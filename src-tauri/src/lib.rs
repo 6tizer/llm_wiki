@@ -434,6 +434,8 @@ pub fn run() {
             commands::runtime_db::runtime_commit_budget_list,
             commands::runtime_db::runtime_commit_budget_release,
             commands::runtime_db::runtime_db_health,
+            commands::runtime_db::runtime_derived_stale_marker_list,
+            commands::runtime_db::runtime_derived_stale_marker_record,
             commands::runtime_db::runtime_event_append,
             commands::runtime_db::runtime_job_cancel,
             commands::runtime_db::runtime_job_claim,

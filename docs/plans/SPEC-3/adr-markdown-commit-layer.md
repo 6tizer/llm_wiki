@@ -103,7 +103,7 @@ SPEC-3 depends on SPEC-2 primitives and must not define competing runtime state.
 | Per-path serialization | `resource-budgets`, jobs, leases | Claim/release commit-path capacity through SPEC-2 operations; no SPEC-3-local limiter and no alternate commit queue. |
 | Durable audit facts | `events-progress` | Append bounded commit audit payloads through `job-runtime:event-append`; no SPEC-3 commit-events table and no `runtime_commit_events` table. |
 | Staging artifact status and cleanup | `staging-artifacts` | Update status only through SPEC-2-owned artifact status operations. Successful commit calls commit-success cleanup after final Markdown write and marker enqueue. Failed/conflict artifacts remain until SPEC-2 TTL/GC. No new artifact schema family. |
-| Derived stale markers | `derived-stale-markers` | SPEC-3 owns the logical marker field set and writes/diagnoses through SPEC-2 operations; SPEC-6 consumes markers for rebuild scheduling. No new runtime write operations. |
+| Derived stale markers | `derived-stale-markers` | SPEC-3 owns the logical marker field set and writes/diagnoses through SPEC-2 operations; SPEC-6 consumes markers for rebuild scheduling. No SPEC-3-owned runtime write operations. If a SPEC-3 PR implements missing marker storage/API, it does so as SPEC-2-owned Core Runtime support. |
 | Migration bookkeeping | `migrations` | SPEC-3 PR1 adds no new schema family and no migration. |
 
 Per-path serialization is layered on SPEC-2 jobs, leases, and resource-budget claims. The commit layer must not introduce another queue, lock table, or scheduler.
@@ -118,8 +118,10 @@ Required audit fields:
 
 | Field | Meaning |
 | --- | --- |
+| `kind` | Payload discriminator. PR4 uses `markdown-commit` because the SPEC-2 event name is generic. |
 | `artifact_id` | Staged artifact identity. |
 | `artifact_hash` | Hash of staged artifact content. |
+| `source_kind` | Source worker kind from the staged artifact metadata. |
 | `target_path` | Normalized affected Markdown path. |
 | `operation_intent` | Intent attempted by commit processing. |
 | `result` | Commit result. |
@@ -128,6 +130,8 @@ Required audit fields:
 | `final_hash` | Hash after successful final write, when present. |
 | `affected_paths` | Paths touched by the operation. |
 | `repair_job_id` | Repair/review job id for conflicts, when queued. |
+
+Audit records cover both applied mutations and visible non-applied outcomes. A `rejected`, `conflicted`, or `skipped` audit event records the attempted commit decision and diagnostics; it does not imply committed Markdown content changed or that derived marker rows exist.
 
 Content rollback is not provided by runtime DB. Users rely on the project/worktree history for content-level rollback.
 
@@ -146,7 +150,7 @@ Logical marker fields:
 | `source_event_id` | Runtime event id for the commit audit fact. |
 | `status` | `pending`, `claimed`, `done`, `failed`, or `cancelled`. |
 
-SPEC-3 PR1 freezes the logical marker field set. SPEC-2 owns the physical schema and write operation. SPEC-6 owns rebuild scheduling and terminal marker consumption.
+SPEC-3 PR1 freezes the logical marker field set. SPEC-2 owns the physical schema and write operation. SPEC-3 PR4 may add the missing physical schema/API only as SPEC-2-owned Core Runtime support, not as a SPEC-3-owned store. SPEC-6 owns rebuild scheduling and terminal marker consumption.
 
 ## Index / Overview Boundary
 

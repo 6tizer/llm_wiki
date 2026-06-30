@@ -70,6 +70,106 @@ describe("markdown commit operation", () => {
     expect(io.cleanupCommittedArtifact).toHaveBeenCalledWith("artifact-1")
   })
 
+  it("appends a bounded audit event after release and before cleanup", async () => {
+    const calls: string[] = []
+    const io = adapters({
+      releaseBudget: vi.fn(async () => {
+        calls.push("release")
+      }),
+      appendCommitEvent: vi.fn(async () => {
+        calls.push("event")
+        return { eventId: "event-1", createdAtMs: 300 }
+      }),
+      cleanupCommittedArtifact: vi.fn(async () => {
+        calls.push("cleanup")
+      }),
+    })
+
+    const result = await commitMarkdownArtifact(
+      { artifact: artifact(), holder: "tester:1" },
+      io,
+    )
+
+    expect(result).toMatchObject({ result: "committed", eventId: "event-1" })
+    expect(calls).toEqual(["release", "event", "cleanup"])
+    expect(io.appendCommitEvent).toHaveBeenCalledWith({
+      kind: "markdown-commit",
+      artifactId: "artifact-1",
+      artifactHash: fakeHash("staged"),
+      targetPath: "wiki/Page.md",
+      operationIntent: "create",
+      result: "committed",
+      baseHash: null,
+      currentHash: null,
+      finalHash: fakeHash("staged"),
+      affectedPaths: ["wiki/Page.md"],
+      repairJobId: null,
+      sourceKind: "test",
+    })
+  })
+
+  it("does not include Markdown body content in the audit payload", async () => {
+    const stagedBody = "PRIVATE BODY SHOULD NOT BE IN AUDIT"
+    let payload: unknown
+    const io = adapters({
+      readStagedArtifactBody: vi.fn(async () => stagedBody),
+      hashContent: vi.fn(async () => "sha256:opaque"),
+      appendCommitEvent: vi.fn(async (received) => {
+        payload = received
+        return { eventId: "event-1" }
+      }),
+    })
+
+    await commitMarkdownArtifact(
+      {
+        artifact: artifact({ artifactHash: "sha256:opaque" }),
+        holder: "tester:1",
+      },
+      io,
+    )
+
+    expect(payload).toBeDefined()
+    expect(JSON.stringify(payload)).not.toContain(stagedBody)
+  })
+
+  it("records caller-supplied markers after the audit event and before cleanup", async () => {
+    const calls: string[] = []
+    const io = adapters({
+      releaseBudget: vi.fn(async () => {
+        calls.push("release")
+      }),
+      appendCommitEvent: vi.fn(async () => {
+        calls.push("event")
+        return { eventId: "event-1", createdAtMs: 300 }
+      }),
+      recordDerivedStaleMarkers: vi.fn(async () => {
+        calls.push("marker")
+      }),
+      cleanupCommittedArtifact: vi.fn(async () => {
+        calls.push("cleanup")
+      }),
+    })
+    const markerOperations = [
+      { layer: "embedding" as const, affectedPath: "wiki/Page.md" },
+    ]
+
+    const result = await commitMarkdownArtifact(
+      { artifact: artifact(), holder: "tester:1", markerOperations },
+      io,
+    )
+
+    expect(result.result).toBe("committed")
+    expect(calls).toEqual(["release", "event", "marker", "cleanup"])
+    expect(io.recordDerivedStaleMarkers).toHaveBeenCalledWith({
+      event: { eventId: "event-1", createdAtMs: 300 },
+      result: expect.objectContaining({
+        result: "committed",
+        eventId: "event-1",
+      }),
+      markerOperations,
+    })
+  })
+
   it("rejects claim failure without releasing an unclaimed budget", async () => {
     const io = adapters({
       claimBudget: vi.fn(async () => {
@@ -524,6 +624,31 @@ describe("markdown commit operation", () => {
       releaseBudget: vi.fn(async () => {
         throw new Error("release failed")
       }),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+      recordDerivedStaleMarkers: vi.fn(async () => undefined),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact(),
+        holder: "tester:1",
+        markerOperations: [{ layer: "embedding", affectedPath: "wiki/Page.md" }],
+      },
+      io,
+    )
+
+    expect(result.result).toBe("committed")
+    expect(result.releaseError).toBe("release failed")
+    expect(io.appendCommitEvent).not.toHaveBeenCalled()
+    expect(io.recordDerivedStaleMarkers).not.toHaveBeenCalled()
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("keeps committed result and skips cleanup when audit event append fails", async () => {
+    const io = adapters({
+      appendCommitEvent: vi.fn(async () => {
+        throw new Error("event failed")
+      }),
     })
 
     const result = await commitMarkdownArtifact(
@@ -532,8 +657,107 @@ describe("markdown commit operation", () => {
     )
 
     expect(result.result).toBe("committed")
-    expect(result.releaseError).toBe("release failed")
-    expect(io.cleanupCommittedArtifact).toHaveBeenCalledWith("artifact-1")
+    expect(result.eventError).toBe("event failed")
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("keeps committed result and skips cleanup when marker recording fails", async () => {
+    const io = adapters({
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+      recordDerivedStaleMarkers: vi.fn(async () => {
+        throw new Error("marker failed")
+      }),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact(),
+        holder: "tester:1",
+        markerOperations: [{ layer: "embedding", affectedPath: "wiki/Page.md" }],
+      },
+      io,
+    )
+
+    expect(result.result).toBe("committed")
+    expect(result.eventId).toBe("event-1")
+    expect(result.markerError).toBe("marker failed")
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("appends conflict audit events without markers or cleanup", async () => {
+    const io = adapters({
+      readCommittedMarkdown: vi.fn(async () => "current"),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+      recordDerivedStaleMarkers: vi.fn(async () => undefined),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact(),
+        holder: "tester:1",
+        markerOperations: [{ layer: "embedding", affectedPath: "wiki/Page.md" }],
+      },
+      io,
+    )
+
+    expect(result).toMatchObject({ result: "conflicted", eventId: "event-1" })
+    expect(io.appendCommitEvent).toHaveBeenCalled()
+    expect(io.recordDerivedStaleMarkers).not.toHaveBeenCalled()
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("appends rejected audit events after a failed write without markers or cleanup", async () => {
+    const io = adapters({
+      writeCommittedMarkdownAtomic: vi.fn(async () => {
+        throw new Error("write failed")
+      }),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+      recordDerivedStaleMarkers: vi.fn(async () => undefined),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact(),
+        holder: "tester:1",
+        markerOperations: [{ layer: "embedding", affectedPath: "wiki/Page.md" }],
+      },
+      io,
+    )
+
+    expect(result).toMatchObject({
+      result: "rejected",
+      error: "write failed",
+      eventId: "event-1",
+    })
+    expect(io.appendCommitEvent).toHaveBeenCalled()
+    expect(io.recordDerivedStaleMarkers).not.toHaveBeenCalled()
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("appends skipped audit events without markers or cleanup", async () => {
+    const io = adapters({
+      readStagedArtifactBody: vi.fn(async () => ""),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+      recordDerivedStaleMarkers: vi.fn(async () => undefined),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact({
+          artifactHash: fakeHash(""),
+          operationIntent: "delete",
+          baseHash: fakeHash("old"),
+        }),
+        holder: "tester:1",
+        markerOperations: [{ layer: "embedding", affectedPath: "wiki/Page.md" }],
+      },
+      io,
+    )
+
+    expect(result).toMatchObject({ result: "skipped", eventId: "event-1" })
+    expect(io.appendCommitEvent).toHaveBeenCalled()
+    expect(io.recordDerivedStaleMarkers).not.toHaveBeenCalled()
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
   })
 
   it("canonicalizes hash and append inputs without trimming content", () => {

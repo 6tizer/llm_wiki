@@ -268,7 +268,8 @@ describe("Core Runtime headless contract skeleton", () => {
       "No new artifact schema family",
       "no new schema family",
       "no migration",
-      "No new runtime write operations",
+      "No SPEC-3-owned runtime write operations",
+      "SPEC-2-owned Core Runtime support",
       "no alternate commit queue",
     ]) {
       expect(dependencySection).toContain(token)

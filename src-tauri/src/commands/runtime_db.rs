@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use rusqlite::{
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
+};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use unicode_normalization::UnicodeNormalization;
@@ -26,6 +28,8 @@ const EVENTS_PROGRESS_FAMILY: &str = "events-progress";
 const EVENTS_PROGRESS_VERSION: i64 = 1;
 const STAGING_ARTIFACTS_FAMILY: &str = "staging-artifacts";
 const STAGING_ARTIFACTS_VERSION: i64 = 1;
+const DERIVED_STALE_MARKERS_FAMILY: &str = "derived-stale-markers";
+const DERIVED_STALE_MARKERS_VERSION: i64 = 1;
 const WORK_RUNTIME_ENABLED_ENV: &str = "LLM_WIKI_CORE_WORK_RUNTIME_ENABLED";
 const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 const DEFAULT_PRIORITY: i64 = 0;
@@ -40,6 +44,8 @@ const DEFAULT_PROGRESS_LIMIT: i64 = 100;
 const MAX_PROGRESS_LIMIT: i64 = 500;
 const DEFAULT_STAGING_ARTIFACT_LIMIT: i64 = 100;
 const MAX_STAGING_ARTIFACT_LIMIT: i64 = 500;
+const DEFAULT_DERIVED_MARKER_LIMIT: i64 = 100;
+const MAX_DERIVED_MARKER_LIMIT: i64 = 500;
 const DEFAULT_COMMIT_TOTAL_CAPACITY: i64 = 2;
 const COMMIT_BUDGET_AMOUNT: i64 = 1;
 const MIN_COMMIT_BUDGET_TTL_MS: i64 = 1_000;
@@ -49,6 +55,7 @@ const MAX_FAILED_ARTIFACT_TTL_MS: i64 = 2_592_000_000;
 const MAX_STAGING_ARTIFACT_PATH_BYTES: usize = 1024;
 const MAX_STAGING_ARTIFACT_HASH_BYTES: usize = 128;
 const MAX_STAGING_ARTIFACT_ERROR_BYTES: usize = 4096;
+const MAX_DERIVED_MARKER_BASE_VERSION_BYTES: usize = 256;
 const ACTIVE_LEASE_STATUS: &str = "active";
 const RELEASED_LEASE_STATUS: &str = "released";
 const EXPIRED_LEASE_STATUS: &str = "expired";
@@ -66,6 +73,7 @@ const COMMITTED_ARTIFACT_STATUS: &str = "committed";
 const FAILED_ARTIFACT_STATUS: &str = "failed";
 const CANCELLED_ARTIFACT_STATUS: &str = "cancelled";
 const DELETED_ARTIFACT_STATUS: &str = "deleted";
+const PENDING_MARKER_STATUS: &str = "pending";
 
 static RUNTIME_DB_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -430,6 +438,55 @@ pub struct RuntimeStagingArtifactList {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeStagingArtifactGc {
     deleted: Vec<RuntimeStagingArtifactRecord>,
+}
+
+/// Request payload for recording one derived stale marker.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDerivedStaleMarkerRecordRequest {
+    marker_id: Option<String>,
+    layer: String,
+    affected_path: String,
+    input_hash: Option<String>,
+    base_version: String,
+    reason: String,
+    source_event_id: String,
+}
+
+/// Request payload for listing derived stale marker snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDerivedStaleMarkerListRequest {
+    layer: Option<String>,
+    affected_path: Option<String>,
+    status: Option<String>,
+    limit: Option<i64>,
+}
+
+/// Snapshot of one derived stale marker row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDerivedStaleMarkerRecord {
+    marker_id: String,
+    layer: String,
+    affected_path: String,
+    input_hash: Option<String>,
+    base_version: String,
+    marked_at_ms: i64,
+    reason: String,
+    source_event_id: String,
+    status: String,
+    updated_at_ms: i64,
+    last_error: Option<String>,
+}
+
+/// Snapshot response for derived stale marker rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDerivedStaleMarkerList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    markers: Vec<RuntimeDerivedStaleMarkerRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -801,6 +858,45 @@ pub fn runtime_staging_artifact_list(
     })
 }
 
+/// Record one pending derived stale marker for the currently-open project.
+#[tauri::command]
+pub fn runtime_derived_stale_marker_record(
+    request: RuntimeDerivedStaleMarkerRecordRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeDerivedStaleMarkerRecord, String> {
+    run_guarded("runtime_derived_stale_marker_record", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_derived_stale_marker_record_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// List derived stale markers for the currently-open project.
+#[tauri::command]
+pub fn runtime_derived_stale_marker_list(
+    request: Option<RuntimeDerivedStaleMarkerListRequest>,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeDerivedStaleMarkerList, String> {
+    run_guarded("runtime_derived_stale_marker_list", || {
+        runtime_derived_stale_marker_list_for_project(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+            request.unwrap_or(RuntimeDerivedStaleMarkerListRequest {
+                layer: None,
+                affected_path: None,
+                status: None,
+                limit: None,
+            }),
+        )
+    })
+}
+
 #[cfg(test)]
 fn runtime_db_health_with_fallback(
     explicit_root: Option<PathBuf>,
@@ -1061,6 +1157,12 @@ fn open_staging_artifacts_runtime_locked(project_root: &Path) -> Result<Connecti
     Ok(connection)
 }
 
+fn open_derived_stale_markers_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+    let connection = open_events_progress_runtime_locked(project_root)?;
+    initialize_derived_stale_markers_schema(&connection)?;
+    Ok(connection)
+}
+
 fn initialize_resource_budget_schema(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
@@ -1279,6 +1381,85 @@ fn initialize_staging_artifacts_schema(connection: &Connection) -> Result<(), St
         connection,
         STAGING_ARTIFACTS_FAMILY,
         STAGING_ARTIFACTS_VERSION,
+    )
+}
+
+fn initialize_derived_stale_markers_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_derived_stale_markers (
+                    marker_id TEXT PRIMARY KEY CHECK(length(marker_id) > 0),
+                    layer TEXT NOT NULL CHECK (
+                        layer IN (
+                            'embedding',
+                            'graph',
+                            'taxonomy',
+                            'synthesis',
+                            'search',
+                            'index_export',
+                            'overview'
+                        )
+                    ),
+                    affected_path TEXT NOT NULL CHECK(length(affected_path) > 0),
+                    input_hash TEXT CHECK(
+                        input_hash IS NULL
+                        OR length(CAST(input_hash AS BLOB)) <= {MAX_STAGING_ARTIFACT_HASH_BYTES}
+                    ),
+                    base_version TEXT NOT NULL CHECK(
+                        length(CAST(base_version AS BLOB)) > 0
+                        AND length(CAST(base_version AS BLOB)) <= {MAX_DERIVED_MARKER_BASE_VERSION_BYTES}
+                    ),
+                    marked_at_ms INTEGER NOT NULL CHECK(marked_at_ms >= 0),
+                    reason TEXT NOT NULL CHECK (
+                        reason IN ('commit', 'delete', 'schema_change', 'manual_rebuild')
+                    ),
+                    source_event_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('pending', 'claimed', 'done', 'failed', 'cancelled')
+                    ),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    last_error TEXT CHECK(
+                        last_error IS NULL
+                        OR length(CAST(last_error AS BLOB)) <= {MAX_STAGING_ARTIFACT_ERROR_BYTES}
+                    ),
+                    FOREIGN KEY(source_event_id) REFERENCES runtime_events(event_id)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime derived stale markers table: {err}")
+        })?;
+
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_derived_markers_status_idx
+             ON runtime_derived_stale_markers(status, layer, marked_at_ms, marker_id)",
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime derived marker status index: {err}")
+        })?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_derived_markers_path_idx
+             ON runtime_derived_stale_markers(affected_path, layer, status)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime derived marker path index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_derived_markers_event_idx
+             ON runtime_derived_stale_markers(source_event_id)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime derived marker event index: {err}"))?;
+
+    record_migration_family(
+        connection,
+        DERIVED_STALE_MARKERS_FAMILY,
+        DERIVED_STALE_MARKERS_VERSION,
     )
 }
 
@@ -2314,6 +2495,142 @@ fn runtime_staging_artifact_list_for_project(
     })
 }
 
+fn runtime_derived_stale_marker_record_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeDerivedStaleMarkerRecordRequest,
+    now: i64,
+) -> Result<RuntimeDerivedStaleMarkerRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let marker_id = normalize_optional_id("invalid-marker-id", "markerId", request.marker_id)?
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let layer = normalize_marker_layer(&request.layer)?;
+    let affected_path = normalize_affected_path(&request.affected_path)?.display_key;
+    let reason = normalize_marker_reason(&request.reason)?;
+    let input_hash = normalize_marker_input_hash(request.input_hash, reason)?;
+    let base_version = require_limited_non_empty(
+        "invalid-base-version",
+        "baseVersion",
+        &request.base_version,
+        MAX_DERIVED_MARKER_BASE_VERSION_BYTES,
+    )?
+    .to_string();
+    let source_event_id = require_non_empty(
+        "invalid-source-event-id",
+        "sourceEventId",
+        &request.source_event_id,
+    )?
+    .to_string();
+    if base_version == source_event_id {
+        return Err(
+            "invalid-base-version: baseVersion must not duplicate sourceEventId".to_string(),
+        );
+    }
+
+    with_runtime_writer(|| {
+        let mut connection = open_derived_stale_markers_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        read_event_tx(&tx, &source_event_id)?;
+        tx.execute(
+            "INSERT INTO runtime_derived_stale_markers (
+                marker_id,
+                layer,
+                affected_path,
+                input_hash,
+                base_version,
+                marked_at_ms,
+                reason,
+                source_event_id,
+                status,
+                updated_at_ms,
+                last_error
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?6, NULL)",
+            params![
+                marker_id,
+                layer,
+                affected_path,
+                input_hash,
+                base_version,
+                now,
+                reason,
+                source_event_id,
+                PENDING_MARKER_STATUS
+            ],
+        )
+        .map_err(|err| format!("derived-marker-record-insert-failed: {err}"))?;
+        let marker = read_derived_marker_tx(&tx, &marker_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(marker)
+    })
+}
+
+fn runtime_derived_stale_marker_list_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeDerivedStaleMarkerListRequest,
+) -> Result<RuntimeDerivedStaleMarkerList, String> {
+    if !enabled {
+        return Ok(RuntimeDerivedStaleMarkerList {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            markers: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeDerivedStaleMarkerList {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            markers: Vec::new(),
+        });
+    };
+    let limit = normalize_list_limit(
+        request.limit,
+        DEFAULT_DERIVED_MARKER_LIMIT,
+        MAX_DERIVED_MARKER_LIMIT,
+    )?;
+    let layer = request
+        .layer
+        .as_deref()
+        .map(normalize_marker_layer)
+        .transpose()?;
+    let affected_path = request
+        .affected_path
+        .as_deref()
+        .map(normalize_affected_path)
+        .transpose()?
+        .map(|path| path.display_key);
+    let status = request
+        .status
+        .as_deref()
+        .map(normalize_marker_status)
+        .transpose()?;
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeDerivedStaleMarkerList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            markers: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("derived-marker-list-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_derived_stale_markers")? {
+        return Ok(RuntimeDerivedStaleMarkerList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            markers: Vec::new(),
+        });
+    }
+    Ok(RuntimeDerivedStaleMarkerList {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        markers: read_derived_markers(&connection, layer, affected_path.as_deref(), status, limit)?,
+    })
+}
+
 #[allow(dead_code)]
 fn runtime_commit_budget_expire_for_project(
     project_root: Option<&Path>,
@@ -2413,6 +2730,63 @@ fn runtime_job_lease_timeout_for_project(
         tx.commit().map_err(tx_err)?;
         Ok(job)
     })
+}
+
+fn normalize_marker_layer(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "embedding" => Ok("embedding"),
+        "graph" => Ok("graph"),
+        "taxonomy" => Ok("taxonomy"),
+        "synthesis" => Ok("synthesis"),
+        "search" => Ok("search"),
+        "index_export" => Ok("index_export"),
+        "overview" => Ok("overview"),
+        _ => Err("invalid-layer: unknown derived marker layer".to_string()),
+    }
+}
+
+fn normalize_marker_reason(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "commit" => Ok("commit"),
+        "delete" => Ok("delete"),
+        "schema_change" => Ok("schema_change"),
+        "manual_rebuild" => Ok("manual_rebuild"),
+        _ => Err("invalid-reason: unknown derived marker reason".to_string()),
+    }
+}
+
+fn normalize_marker_status(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "pending" => Ok("pending"),
+        "claimed" => Ok("claimed"),
+        "done" => Ok("done"),
+        "failed" => Ok("failed"),
+        "cancelled" => Ok("cancelled"),
+        _ => Err("invalid-status: unknown derived marker status".to_string()),
+    }
+}
+
+fn normalize_marker_input_hash(
+    input_hash: Option<String>,
+    reason: &str,
+) -> Result<Option<String>, String> {
+    let input_hash = normalize_optional_limited_text(
+        "invalid-input-hash",
+        "inputHash",
+        input_hash,
+        MAX_STAGING_ARTIFACT_HASH_BYTES,
+    )?;
+    if reason == "delete" {
+        return if input_hash.is_none() {
+            Ok(None)
+        } else {
+            Err("invalid-input-hash: inputHash must be null for delete markers".to_string())
+        };
+    }
+    match input_hash {
+        Some(input_hash) => Ok(Some(input_hash)),
+        None => Err("invalid-input-hash: inputHash is required for non-delete markers".to_string()),
+    }
 }
 
 fn require_enabled_project(project_root: Option<&Path>, enabled: bool) -> Result<&Path, String> {
@@ -3331,6 +3705,59 @@ fn read_staging_artifacts(
     }
 }
 
+fn read_derived_marker_tx(
+    tx: &Transaction<'_>,
+    marker_id: &str,
+) -> Result<RuntimeDerivedStaleMarkerRecord, String> {
+    tx.query_row(
+        &derived_marker_select_sql("WHERE marker_id = ?1"),
+        [marker_id],
+        map_derived_marker_row,
+    )
+    .map_err(|err| format!("derived-marker-read-failed: {err}"))
+}
+
+fn read_derived_markers(
+    connection: &Connection,
+    layer: Option<&str>,
+    affected_path: Option<&str>,
+    status: Option<&str>,
+    limit: i64,
+) -> Result<Vec<RuntimeDerivedStaleMarkerRecord>, String> {
+    let mut filters = Vec::new();
+    let mut values: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(layer) = layer {
+        filters.push("layer = ?");
+        values.push(Box::new(layer.to_string()));
+    }
+    if let Some(affected_path) = affected_path {
+        filters.push("affected_path = ?");
+        values.push(Box::new(affected_path.to_string()));
+    }
+    if let Some(status) = status {
+        filters.push("status = ?");
+        values.push(Box::new(status.to_string()));
+    }
+    let suffix = if filters.is_empty() {
+        "ORDER BY marked_at_ms ASC, marker_id ASC LIMIT ?".to_string()
+    } else {
+        format!(
+            "WHERE {} ORDER BY marked_at_ms ASC, marker_id ASC LIMIT ?",
+            filters.join(" AND ")
+        )
+    };
+    values.push(Box::new(limit));
+    let params = values.iter().map(|value| value.as_ref());
+    let mut statement = connection
+        .prepare(&derived_marker_select_sql(&suffix))
+        .map_err(|err| format!("derived-markers-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map(params_from_iter(params), map_derived_marker_row)
+        .map_err(|err| format!("derived-markers-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("derived-markers-read-failed: {err}"))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
     connection
         .query_row(
@@ -3449,6 +3876,23 @@ fn staging_artifact_select_sql(suffix: &str) -> String {
     )
 }
 
+fn derived_marker_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT marker_id,
+                layer,
+                affected_path,
+                input_hash,
+                base_version,
+                marked_at_ms,
+                reason,
+                source_event_id,
+                status,
+                updated_at_ms,
+                last_error
+         FROM runtime_derived_stale_markers {suffix}"
+    )
+}
+
 fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
     Ok(RuntimeJobRecord {
         job_id: row.get(0)?,
@@ -3548,6 +3992,24 @@ fn map_staging_artifact_row(
         expires_at_ms: row.get(7)?,
         deleted_at_ms: row.get(8)?,
         last_error: row.get(9)?,
+    })
+}
+
+fn map_derived_marker_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RuntimeDerivedStaleMarkerRecord> {
+    Ok(RuntimeDerivedStaleMarkerRecord {
+        marker_id: row.get(0)?,
+        layer: row.get(1)?,
+        affected_path: row.get(2)?,
+        input_hash: row.get(3)?,
+        base_version: row.get(4)?,
+        marked_at_ms: row.get(5)?,
+        reason: row.get(6)?,
+        source_event_id: row.get(7)?,
+        status: row.get(8)?,
+        updated_at_ms: row.get(9)?,
+        last_error: row.get(10)?,
     })
 }
 
@@ -3949,6 +4411,36 @@ mod tests {
     ) -> RuntimeStagingArtifactListRequest {
         RuntimeStagingArtifactListRequest {
             job_id: job_id.map(str::to_string),
+            status: status.map(str::to_string),
+            limit: None,
+        }
+    }
+
+    fn marker_record_request(
+        marker_id: &str,
+        layer: &str,
+        affected_path: &str,
+        source_event_id: &str,
+    ) -> RuntimeDerivedStaleMarkerRecordRequest {
+        RuntimeDerivedStaleMarkerRecordRequest {
+            marker_id: Some(marker_id.to_string()),
+            layer: layer.to_string(),
+            affected_path: affected_path.to_string(),
+            input_hash: Some("sha256:def456".to_string()),
+            base_version: format!("event:200:{source_event_id}"),
+            reason: "commit".to_string(),
+            source_event_id: source_event_id.to_string(),
+        }
+    }
+
+    fn marker_list_request(
+        layer: Option<&str>,
+        affected_path: Option<&str>,
+        status: Option<&str>,
+    ) -> RuntimeDerivedStaleMarkerListRequest {
+        RuntimeDerivedStaleMarkerListRequest {
+            layer: layer.map(str::to_string),
+            affected_path: affected_path.map(str::to_string),
             status: status.map(str::to_string),
             limit: None,
         }
@@ -4455,6 +4947,295 @@ mod tests {
         let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
         assert!(!table_exists(&connection, "runtime_staging_artifacts").expect("check table"));
         assert!(!migration_family_exists(&project, STAGING_ARTIFACTS_FAMILY));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_stale_marker_record_and_list_happy_path() {
+        let project = temp_project("derived-marker-happy");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let event = runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-1", "{}"),
+            200,
+        )
+        .expect("append commit event");
+
+        let marker = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            marker_record_request("marker-1", "embedding", "Wiki\\Page.md", &event.event_id),
+            300,
+        )
+        .expect("record marker");
+
+        assert_eq!(marker.marker_id, "marker-1");
+        assert_eq!(marker.layer, "embedding");
+        assert_eq!(marker.affected_path, "Wiki/Page.md");
+        assert_eq!(marker.input_hash.as_deref(), Some("sha256:def456"));
+        assert_eq!(marker.base_version, "event:200:event-1");
+        assert_eq!(marker.reason, "commit");
+        assert_eq!(marker.source_event_id, "event-1");
+        assert_eq!(marker.status, PENDING_MARKER_STATUS);
+        assert_eq!(marker.marked_at_ms, 300);
+        assert_eq!(marker.updated_at_ms, 300);
+        assert!(marker.last_error.is_none());
+
+        let all = runtime_derived_stale_marker_list_for_project(
+            Some(&project),
+            true,
+            marker_list_request(None, None, None),
+        )
+        .expect("list all markers");
+        assert_eq!(all.markers, vec![marker.clone()]);
+
+        let filtered = runtime_derived_stale_marker_list_for_project(
+            Some(&project),
+            true,
+            marker_list_request(Some("embedding"), Some("Wiki/Page.md"), Some("pending")),
+        )
+        .expect("list filtered markers");
+        assert_eq!(filtered.markers, vec![marker]);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_stale_marker_list_returns_empty_without_migration_on_existing_runtime_dbs() {
+        let project = temp_project("derived-marker-list-pr5-db");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-1", "{}"),
+            200,
+        )
+        .expect("create events-progress runtime db");
+
+        let list = runtime_derived_stale_marker_list_for_project(
+            Some(&project),
+            true,
+            marker_list_request(None, None, None),
+        )
+        .expect("list derived markers");
+
+        assert_eq!(list.status, RuntimeDbHealthState::Healthy);
+        assert!(list.markers.is_empty());
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        assert!(!table_exists(&connection, "runtime_derived_stale_markers").expect("check table"));
+        assert!(!migration_family_exists(
+            &project,
+            DERIVED_STALE_MARKERS_FAMILY
+        ));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_stale_marker_list_disabled_and_no_project_are_no_touch() {
+        let disabled = runtime_derived_stale_marker_list_for_project(
+            None,
+            false,
+            marker_list_request(None, None, None),
+        )
+        .expect("disabled list succeeds");
+        assert_eq!(disabled.status, RuntimeDbHealthState::Disabled);
+        assert!(disabled.markers.is_empty());
+
+        let no_project = runtime_derived_stale_marker_list_for_project(
+            None,
+            true,
+            marker_list_request(None, None, None),
+        )
+        .expect("no-project list succeeds");
+        assert_eq!(no_project.status, RuntimeDbHealthState::NoProject);
+        assert!(no_project.markers.is_empty());
+    }
+
+    #[test]
+    fn derived_stale_marker_validation_rejects_invalid_inputs() {
+        let project = temp_project("derived-marker-validation");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-1", "{}"),
+            200,
+        )
+        .expect("append commit event");
+
+        let mut missing_hash =
+            marker_record_request("marker-no-hash", "embedding", "wiki/a.md", "event-1");
+        missing_hash.input_hash = None;
+        let missing_hash_error = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            missing_hash,
+            300,
+        )
+        .expect_err("non-delete marker requires input hash");
+        assert!(missing_hash_error.starts_with("invalid-input-hash"));
+
+        let mut duplicate_version =
+            marker_record_request("marker-duplicate-version", "embedding", "wiki/a.md", "event-1");
+        duplicate_version.base_version = "event-1".to_string();
+        let duplicate_version_error = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            duplicate_version,
+            300,
+        )
+        .expect_err("baseVersion cannot duplicate sourceEventId");
+        assert!(duplicate_version_error.starts_with("invalid-base-version"));
+
+        let mut delete_marker =
+            marker_record_request("marker-delete", "search", "wiki/a.md", "event-1");
+        delete_marker.reason = "delete".to_string();
+        delete_marker.input_hash = None;
+        let deleted = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            delete_marker,
+            300,
+        )
+        .expect("delete marker allows null input hash");
+        assert_eq!(deleted.reason, "delete");
+        assert!(deleted.input_hash.is_none());
+
+        let duplicate_id =
+            marker_record_request("marker-delete", "search", "wiki/a.md", "event-1");
+        let duplicate_error = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            duplicate_id,
+            300,
+        )
+        .expect_err("duplicate marker id rejected");
+        assert!(duplicate_error.starts_with("derived-marker-record-insert-failed"));
+
+        let mut delete_with_hash =
+            marker_record_request("marker-delete-hash", "search", "wiki/a.md", "event-1");
+        delete_with_hash.reason = "delete".to_string();
+        let delete_hash_error = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            delete_with_hash,
+            300,
+        )
+        .expect_err("delete marker rejects input hash");
+        assert!(delete_hash_error.starts_with("invalid-input-hash"));
+
+        let invalid_layer =
+            marker_record_request("marker-invalid-layer", "unknown", "wiki/a.md", "event-1");
+        let layer_error = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            invalid_layer,
+            300,
+        )
+        .expect_err("invalid layer rejected");
+        assert!(layer_error.starts_with("invalid-layer"));
+
+        let missing_event =
+            marker_record_request("marker-missing-event", "embedding", "wiki/a.md", "missing");
+        let event_error = runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            missing_event,
+            300,
+        )
+        .expect_err("missing source event rejected");
+        assert!(event_error.starts_with("event-read-failed"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_stale_marker_migration_preserves_higher_version_and_enforces_fk() {
+        let project = temp_project("derived-marker-migration");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create PR2 runtime db");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "INSERT INTO runtime_schema_migrations (
+                    family,
+                    version,
+                    applied_at_ms
+                ) VALUES (?1, ?2, ?3)",
+                params![DERIVED_STALE_MARKERS_FAMILY, 2_i64, 42_i64],
+            )
+            .expect("seed higher migration");
+        drop(connection);
+
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("job-1"), "event-1", "{}"),
+            200,
+        )
+        .expect("append event");
+        runtime_derived_stale_marker_record_for_project(
+            Some(&project),
+            true,
+            marker_record_request("marker-1", "embedding", "wiki/a.md", "event-1"),
+            300,
+        )
+        .expect("record marker");
+
+        assert_eq!(
+            read_migration_family(&project, DERIVED_STALE_MARKERS_FAMILY),
+            RuntimeDbMigrationStatus {
+                family: DERIVED_STALE_MARKERS_FAMILY.to_string(),
+                version: 2,
+                applied_at_ms: 42,
+            }
+        );
+
+        with_runtime_writer(|| {
+            let connection = open_derived_stale_markers_runtime_locked(&project)?;
+            let foreign_keys = connection
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .expect("read foreign key pragma");
+            assert_eq!(foreign_keys, 1);
+            let error = connection
+                .execute(
+                    "INSERT INTO runtime_derived_stale_markers (
+                        marker_id,
+                        layer,
+                        affected_path,
+                        input_hash,
+                        base_version,
+                        marked_at_ms,
+                        reason,
+                        source_event_id,
+                        status,
+                        updated_at_ms
+                    ) VALUES (
+                        'marker-orphan',
+                        'embedding',
+                        'wiki/a.md',
+                        'sha256:def',
+                        'event:1:missing',
+                        1,
+                        'commit',
+                        'missing',
+                        'pending',
+                        1
+                    )",
+                    [],
+                )
+                .expect_err("orphan marker must fail");
+            assert!(error.to_string().contains("FOREIGN KEY"));
+            Ok(())
+        })
+        .expect("schema init succeeds");
         let _ = fs::remove_dir_all(project);
     }
 
