@@ -25,14 +25,14 @@
 | [SPEC-2/pr5-event-progress-plan.md](./SPEC-2/pr5-event-progress-plan.md) | SPEC-2 PR5 执行计划：event log、progress API、timeline snapshot。 | merged |
 | [SPEC-2/pr6-staging-gc-plan.md](./SPEC-2/pr6-staging-gc-plan.md) | SPEC-2 PR6 执行计划：staging artifact metadata、commit-success cleanup、failed/cancelled TTL GC。 | merged |
 | [SPEC-2/pr7-runtime-ui-plan.md](./SPEC-2/pr7-runtime-ui-plan.md) | SPEC-2 PR7 执行计划：minimal runtime UI、job queue status、pause/resume/cancel controls。 | merged |
-| [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | next / planned |
+| [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | completed |
 | [SPEC-3/pr1-commit-layer-adr-plan.md](./SPEC-3/pr1-commit-layer-adr-plan.md) | SPEC-3 PR1 执行计划：Markdown commit layer ADR、artifact/result/conflict/event/marker boundary、inert core contract metadata。 | merged |
 | [SPEC-3/adr-markdown-commit-layer.md](./SPEC-3/adr-markdown-commit-layer.md) | SPEC-3 PR1 ADR：staged artifact、commit result、base hash matrix、SPEC-2 dependency boundary、derived stale marker ownership。 | frozen for SPEC-3 PR2+ |
 | [SPEC-3/pr2-optional-index-overview-plan.md](./SPEC-3/pr2-optional-index-overview-plan.md) | SPEC-3 PR2 执行计划：normal ingest 不再默认读、生成或覆盖 root `wiki/index.md` / `wiki/overview.md`。 | merged |
 | [SPEC-3/pr3-commit-operation-plan.md](./SPEC-3/pr3-commit-operation-plan.md) | SPEC-3 PR3 执行计划：shell-neutral Markdown commit operation、base-hash matrix、commit-path budget claim/release。 | merged |
 | [SPEC-3/pr4-commit-events-markers-plan.md](./SPEC-3/pr4-commit-events-markers-plan.md) | SPEC-3 PR4 执行计划：commit audit event、derived stale marker schema/API、commit side-effect ordering。 | merged |
 | [SPEC-3/pr5-conflict-repair-job-plan.md](./SPEC-3/pr5-conflict-repair-job-plan.md) | SPEC-3 PR5 执行计划：conflict review / repair job 入口、staging artifact conflict failure、repair audit id。 | merged |
-| [SPEC-3/pr6-template-okf-wording-plan.md](./SPEC-3/pr6-template-okf-wording-plan.md) | SPEC-3 PR6 执行计划：project template / OKF validator wording 收口，确认 root index/overview optional。 | in progress |
+| [SPEC-3/pr6-template-okf-wording-plan.md](./SPEC-3/pr6-template-okf-wording-plan.md) | SPEC-3 PR6 执行计划：project template / OKF validator wording 收口，确认 root index/overview optional。 | merged |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |
@@ -71,7 +71,7 @@
 
 ## Current Execution Order
 
-截至 2026-06-30，当前 main/head 基线为 `b58b324 feat: route markdown commit conflicts to repair jobs (#214)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#214 完成 PR1-PR5。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
+截至 2026-06-30，当前 main/head 基线为 `ccdc5b0 chore: mark index overview templates optional (#215)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#215 完成 PR1-PR6。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
 
 已完成 OKF/KW 基线证据：
 
@@ -85,7 +85,7 @@
 8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
 9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
 
-Next execution sequence：SPEC-1 和 SPEC-2 已完成；SPEC-3 PR1-PR5 已完成。下一步是 SPEC-3 PR6（Project template / OKF validator wording），收口 root `wiki/index.md` optional directory/export view、root `wiki/overview.md` optional synthesis/user-authored summary 的模板和 OKF 验证口径。SPEC-4 provider/profile integration 可按依赖规则准备，但不能绕过 SPEC-3 commit-layer hard gate。SPEC-5/6 在 runtime + commit + profile contracts 可用后推进。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
+Next execution sequence：SPEC-1、SPEC-2、SPEC-3 已完成。下一步是 SPEC-4 provider/profile integration；SPEC-5/6 在 runtime + commit + profile contracts 可用后推进。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
 
 当前主线不跳过 SPEC-2 直接进入 Phase 7 / Unified Agentic Chat 完整实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR，可按依赖规则并行准备。
 

@@ -1,6 +1,6 @@
 # SPEC-3: Markdown Commit Layer / 去全局阻塞
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#187、#188 | 依赖：SPEC-1、SPEC-2
+> 类型：阶段 SPEC | 状态：completed via PR1-PR6 | 覆盖：#187、#188 | 依赖：SPEC-1、SPEC-2
 
 ## 目标与成功标准
 
