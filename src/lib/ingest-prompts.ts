@@ -117,7 +117,7 @@ export function languageRule(sourceContent: string = ""): string {
  * Step 1 prompt: AI reads the source and produces a structured analysis.
  * This is the "discussion" step — the AI reasons about the source before writing wiki pages.
  */
-export function buildAnalysisPrompt(purpose: string, index: string, sourceContent: string = ""): string {
+export function buildAnalysisPrompt(purpose: string, existingWikiContext: string, sourceContent: string = ""): string {
   return [
     "You are an expert research analyst. Read the source document and produce a structured analysis.",
     "Do not output chain-of-thought, hidden reasoning, or a thinking transcript. Reason internally and write only the concise final analysis.",
@@ -130,7 +130,7 @@ export function buildAnalysisPrompt(purpose: string, index: string, sourceConten
     "List people, organizations, products, datasets, tools mentioned. For each:",
     "- Name and type",
     "- Role in the source (central vs. peripheral)",
-    "- Whether it likely already exists in the wiki (check the index)",
+    "- Whether it likely already exists in the wiki when existing context is available",
     "",
     "## Key Concepts",
     "List theories, methods, techniques, phenomena. For each:",
@@ -161,7 +161,7 @@ export function buildAnalysisPrompt(purpose: string, index: string, sourceConten
     "If a folder context is provided, use it as a hint for categorization — the folder structure often reflects the user's organizational intent (e.g., 'papers/energy' suggests the file is an energy-related paper).",
     "",
     purpose ? `## Wiki Purpose (for context)\n${purpose}` : "",
-    index ? `## Current Wiki Index (for checking existing content)\n${index}` : "",
+    existingWikiContext ? `## Existing Wiki Context (optional)\n${existingWikiContext}` : "",
   ].filter(Boolean).join("\n")
 }
 
@@ -171,9 +171,9 @@ export function buildAnalysisPrompt(purpose: string, index: string, sourceConten
 export function buildGenerationPrompt(
   schema: string,
   purpose: string,
-  index: string,
+  _index: string,
   sourceFileName: string,
-  overview?: string,
+  _overview?: string,
   sourceContent: string = "",
   sourceSummaryPath?: string,
 ): string {
@@ -196,9 +196,7 @@ export function buildGenerationPrompt(
     `1. A source summary page at **${summaryPath}** (MUST use this exact path)`,
     "2. Entity or schema-defined typed pages for key named things identified in the analysis. Prefer schema-defined directories when present; otherwise use wiki/entities/.",
     "3. Concept or schema-defined typed pages for key ideas, methods, techniques, and abstractions. Prefer schema-defined directories when present; otherwise wiki/concepts/.",
-    "4. An updated wiki/index.md — add new entries to existing categories, preserve all existing entries",
-    "5. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)",
-    "6. An updated wiki/overview.md — a high-level summary of what the entire wiki covers, updated to reflect the newly ingested source. This should be a comprehensive 2-5 paragraph overview of ALL topics in the wiki, not just the new source.",
+    "4. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)",
     "",
     "## Frontmatter Rules (CRITICAL — parser is strict)",
     "",
@@ -253,7 +251,7 @@ export function buildGenerationPrompt(
     "After all FILE blocks, optionally emit REVIEW blocks for anything that needs human judgment:",
     "",
     "- contradiction: the analysis found conflicts with existing wiki content",
-    "- duplicate: an entity/concept might already exist under a different name in the index",
+    "- duplicate: an entity/concept might already exist under a different name",
     "- missing-page: an important concept is referenced but has no dedicated page",
     "- suggestion: ideas for further research, related sources to look for, or connections worth exploring",
     "",
@@ -284,8 +282,6 @@ export function buildGenerationPrompt(
           "Use wiki/entities/ and wiki/concepts/ only when the schema does not provide a more specific destination.",
         ].join("\n")
       : "",
-    index ? `## Current Wiki Index (preserve all existing entries, add new ones)\n${index}` : "",
-    overview ? `## Current Overview (update this to reflect the new source)\n${overview}` : "",
     "",
     // ── OUTPUT FORMAT MUST BE THE LAST SECTION — models weight recent instructions highest ──
     "## Output Format (MUST FOLLOW EXACTLY — this is how the parser reads your response)",

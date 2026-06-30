@@ -670,11 +670,10 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
  *
  * Concurrency: this function holds a per-project lock for its full
  * duration. Two simultaneous calls for the same project (e.g. queue
- * + Save-to-Wiki) take turns. The lock is necessary because the
- * analysis stage reads `wiki/index.md` and the generation stage
- * overwrites it; without serialization, each call would emit an
- * "updated" index based on the same pre-state and overwrite each
- * other's additions.
+ * + Save-to-Wiki) take turns while normal ingest still writes directly.
+ * Root index/overview pages are no longer normal-ingest write targets;
+ * the lock remains until the SPEC-3 commit layer owns final Markdown
+ * writes.
  */
 
 // ──────────────────────────────────────────────────────────────────
@@ -893,13 +892,13 @@ async function autoIngestImpl(
     filesWritten: [],
   })
 
-  let [sourcePlan, schema, purpose, index, overview] = await Promise.all([
+  let [sourcePlan, schema, purpose] = await Promise.all([
     planSourceForIngestCache(sp),
     tryReadFile(`${pp}/schema.md`),
     tryReadFile(`${pp}/purpose.md`),
-    tryReadFile(`${pp}/wiki/index.md`),
-    tryReadFile(`${pp}/wiki/overview.md`),
   ])
+  const index = ""
+  const overview = ""
   const schemaRouting = parseWikiSchemaRouting(schema)
 
   let precheckedCachedFiles: string[] | null = null
@@ -1129,7 +1128,7 @@ async function autoIngestImpl(
     signal,
   })
 
-  const stableContextLength = schema.length + purpose.length + index.length + overview.length
+  const stableContextLength = schema.length + purpose.length
   const sourceBudget = computeIngestSourceBudget(llmConfig.maxContextSize, stableContextLength)
   let sourceContext = enrichedSourceContent
   let precomputedAnalysis = ""
@@ -1314,11 +1313,12 @@ async function autoIngestImpl(
   // don't have to open devtools to find out a block was dropped.
   // Keeping the base "Writing files..." detail on top and appending the
   // first few warnings; full list stays in the console.
+  let writeWarningDetail = ""
   if (writeWarnings.length > 0) {
-    const summary = writeWarnings.length === 1
+    writeWarningDetail = writeWarnings.length === 1
       ? writeWarnings[0]
       : `${writeWarnings.length} ingest warnings: ${writeWarnings.slice(0, 2).join(" · ")}${writeWarnings.length > 2 ? ` … (+${writeWarnings.length - 2} more in console)` : ""}`
-    activity.updateItem(activityId, { detail: summary })
+    activity.updateItem(activityId, { detail: writeWarningDetail })
   }
 
   // Ensure source summary page exists (LLM may not have generated it correctly)
@@ -1452,9 +1452,10 @@ async function autoIngestImpl(
     }
   }
 
-  const detail = writtenPaths.length > 0
+  const baseDetail = writtenPaths.length > 0
     ? `${writtenPaths.length} files written${reviewItems.length > 0 ? `, ${reviewItems.length} review item(s)` : ""}`
     : "No files generated"
+  const detail = writeWarningDetail ? `${baseDetail} · ${writeWarningDetail}` : baseDetail
 
   activity.updateItem(activityId, {
     status: writtenPaths.length > 0 ? "done" : "error",
@@ -1510,6 +1511,10 @@ function isListingPath(relativePath: string): boolean {
     relativePath === "wiki/overview.md" ||
     relativePath.endsWith("/overview.md")
   )
+}
+
+export function isRootIngestAggregatePath(relativePath: string): boolean {
+  return relativePath === "wiki/index.md" || relativePath === "wiki/overview.md"
 }
 
 function canonicalizeSourcesField(content: string, sourceIdentity: string): string {
@@ -1678,6 +1683,13 @@ async function writeFileBlocks(
       relativePath = sourceSummaryPath
     }
 
+    if (isRootIngestAggregatePath(relativePath)) {
+      const msg = `Skipped "${relativePath}" — root index/overview are optional derived artifacts and are not updated by normal ingest.`
+      console.warn(`[ingest] ${msg}`)
+      warnings.push(msg)
+      continue
+    }
+
     // Sanitize at the boundary — strip stray code-fence wrappers,
     // `frontmatter:` prefixes, and repair invalid wikilink-list
     // YAML lines so the file we write is canonical regardless of
@@ -1737,10 +1749,9 @@ async function writeFileBlocks(
       } else if (
         isListingPath(relativePath)
       ) {
-        // Listing pages (index / overview) are always overwritten
-        // wholesale — their sources field is incidental and merging
-        // wouldn't make semantic sense (they aren't source-derived
-        // content pages).
+        // Nested listing pages keep the legacy wholesale-write behavior.
+        // Root index/overview were skipped above because normal ingest no
+        // longer owns those optional aggregate pages.
         await writeFile(fullPath, content)
       } else {
         // ── Dedup check: normalized slug collision ──

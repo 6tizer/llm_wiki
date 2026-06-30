@@ -25,12 +25,6 @@ const BASIC_PURPOSE = `# Purpose
 This wiki tracks deep-learning research concepts.
 `
 
-const BASIC_INDEX = `# Index
-
-## Concepts
-- [[attention]]
-`
-
 const BASIC_SCHEMA = `# Schema
 
 ## wiki/sources/
@@ -51,7 +45,6 @@ export const ingestScenarios: IngestScenario[] = [
     initialWiki: {
       "purpose.md": BASIC_PURPOSE,
       "schema.md": BASIC_SCHEMA,
-      "wiki/index.md": BASIC_INDEX,
     },
     source: {
       path: "raw/sources/rope-paper.md",
@@ -117,6 +110,92 @@ export const ingestScenarios: IngestScenario[] = [
     },
   },
 
+  // 2. root-index-overview-skipped — legacy model output cannot overwrite root aggregate pages
+  {
+    name: "root-index-overview-skipped",
+    description:
+      "Stage 2 emits legacy root index/overview blocks. Normal ingest must " +
+      "skip those root aggregate pages, preserve existing files, still append " +
+      "log.md, and keep nested index/overview pages writable.",
+    initialWiki: {
+      "purpose.md": "",
+      "schema.md": "",
+      "wiki/index.md": "# User Index\n\nUser-maintained directory.\n",
+      "wiki/overview.md": "# User Overview\n\nUser-authored summary.\n",
+      "wiki/log.md": "## Existing log\nOld entry.",
+    },
+    source: {
+      path: "raw/sources/optional-root-pages.md",
+      content: "A source about optional root index and overview pages.",
+    },
+    analysisResponse: "## Recommendations\n- Create a source summary.\n",
+    generationResponse: [
+      "---FILE: wiki/index.md---",
+      "# Generated Index",
+      "",
+      "This must not overwrite the user index.",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/overview.md---",
+      "# Generated Overview",
+      "",
+      "This must not overwrite the user overview.",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/log.md---",
+      "## 2026-06-30 ingest | Optional Root Pages",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/projects/index.md---",
+      "# Project Index",
+      "",
+      "Nested index content remains a writable page.",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/topics/overview.md---",
+      "# Topic Overview",
+      "",
+      "Nested overview content remains a writable page.",
+      "---END FILE---",
+      "",
+      "---FILE: wiki/sources/optional-root-pages.md---",
+      "---",
+      "title: \"Source: optional-root-pages.md\"",
+      "sources: [optional-root-pages.md]",
+      "---",
+      "",
+      "# Source: optional-root-pages.md",
+      "",
+      "Source summary.",
+      "---END FILE---",
+    ].join("\n"),
+    expected: {
+      writtenPaths: [
+        "wiki/log.md",
+        "wiki/projects/index.md",
+        "wiki/topics/overview.md",
+        "wiki/sources/optional-root-pages.md",
+      ],
+      fileContains: {
+        "wiki/log.md": [
+          "## Existing log",
+          "## 2026-06-30 ingest | Optional Root Pages",
+        ],
+        "wiki/projects/index.md": ["Nested index content remains a writable page."],
+        "wiki/topics/overview.md": ["Nested overview content remains a writable page."],
+      },
+      unchangedFiles: {
+        "wiki/index.md": "# User Index\n\nUser-maintained directory.\n",
+        "wiki/overview.md": "# User Overview\n\nUser-authored summary.\n",
+      },
+      warningContains: [
+        "Skipped \"wiki/index.md\"",
+        "Skipped \"wiki/overview.md\"",
+      ],
+      reviewsCreated: [],
+    },
+  },
+
   // 2. generates-review-items — REVIEW blocks in generation become store items
   {
     name: "generates-review-items",
@@ -126,7 +205,6 @@ export const ingestScenarios: IngestScenario[] = [
     initialWiki: {
       "purpose.md": BASIC_PURPOSE,
       "schema.md": BASIC_SCHEMA,
-      "wiki/index.md": BASIC_INDEX,
     },
     source: {
       path: "raw/sources/flash-attention.md",
@@ -174,7 +252,6 @@ export const ingestScenarios: IngestScenario[] = [
     initialWiki: {
       "purpose.md": BASIC_PURPOSE,
       "schema.md": BASIC_SCHEMA,
-      "wiki/index.md": BASIC_INDEX,
       "wiki/attention.md":
         "---\ntitle: Attention\n---\n\n# Attention\n\nThe attention mechanism.\n",
     },
@@ -226,7 +303,6 @@ export const ingestScenarios: IngestScenario[] = [
     initialWiki: {
       "purpose.md": "# 用途\n\n深度学习研究笔记。\n",
       "schema.md": BASIC_SCHEMA,
-      "wiki/index.md": "# 索引\n\n- [[注意力机制]]\n",
     },
     source: {
       path: "raw/sources/transformer-survey.md",

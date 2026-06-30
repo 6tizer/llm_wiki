@@ -150,7 +150,26 @@ async function assertOutcome(
     }
   }
 
-  // 3. Review store has the expected items
+  // 3. Files declared as unchanged keep exact byte-for-byte contents.
+  if (expected.unchangedFiles) {
+    for (const [relPath, exactContent] of Object.entries(expected.unchangedFiles)) {
+      const full = path.join(tmpPath, relPath)
+      await expect(readFileRaw(full)).resolves.toBe(exactContent)
+    }
+  }
+
+  // 4. Writer warnings are surfaced through the activity detail.
+  if (expected.warningContains) {
+    const details = useActivityStore.getState().items.map((item) => item.detail).join("\n")
+    for (const warning of expected.warningContains) {
+      expect(details).toContain(warning)
+    }
+  } else if (expected.writtenPaths.length > 0) {
+    const details = useActivityStore.getState().items.map((item) => item.detail)
+    expect(details[details.length - 1]).toMatch(new RegExp(`^${expected.writtenPaths.length} files written`))
+  }
+
+  // 5. Review store has the expected items
   const expectedReviews = expected.reviewsCreated ?? []
   const actualReviews = useReviewStore.getState().items
   for (const e of expectedReviews) {
@@ -171,7 +190,7 @@ async function assertOutcome(
     expect(match, `review missing: ${JSON.stringify(e)}`).toBeTruthy()
   }
 
-  // 4. If the scenario declared no reviews, store must be empty.
+  // 6. If the scenario declared no reviews, store must be empty.
   if (expectedReviews.length === 0) {
     expect(actualReviews).toHaveLength(0)
   }
