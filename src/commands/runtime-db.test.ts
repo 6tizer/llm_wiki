@@ -10,6 +10,10 @@ import {
   runtimeJobList,
   runtimeJobPause,
   runtimeJobResume,
+  runtimeProfileCreate,
+  runtimeProfileList,
+  runtimeProfileStatus,
+  runtimeProfileUpdate,
   runtimeStagingArtifactRecord,
   runtimeStagingArtifactCommitSuccess,
 } from "./runtime-db"
@@ -271,5 +275,70 @@ describe("runtime-db commands", () => {
         },
       },
     )
+  })
+
+  it("sends runtime profile create, update, list, and status payloads", async () => {
+    const created = { profileId: "profile-1", capabilityStatus: "unknown" }
+    const updated = { profileId: "profile-1", capabilityStatus: "limited" }
+    const list = { enabled: true, status: "healthy", profiles: [updated] }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(created)
+      .mockResolvedValueOnce(updated)
+      .mockResolvedValueOnce(list)
+      .mockResolvedValueOnce(updated)
+
+    await expect(
+      runtimeProfileCreate({
+        profileId: "profile-1",
+        kind: "model-call",
+        displayName: "GPT-4.1",
+        providerId: "openai",
+        modelId: "gpt-4.1",
+        apiMode: "openai-chat-completions",
+        authStyle: "bearer",
+        secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
+        taskFamilies: ["summarize", "tag"],
+        maxConcurrency: 2,
+      }),
+    ).resolves.toBe(created)
+    await expect(
+      runtimeProfileUpdate({
+        profileId: "profile-1",
+        clearSecretRef: true,
+        enabled: false,
+        capabilityStatus: "limited",
+        capabilityJson: "{\"reason\":\"manual\"}",
+      }),
+    ).resolves.toBe(updated)
+    await expect(runtimeProfileList()).resolves.toBe(list)
+    await expect(runtimeProfileStatus({ profileId: "profile-1" })).resolves.toBe(updated)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_profile_create", {
+      request: {
+        profileId: "profile-1",
+        kind: "model-call",
+        displayName: "GPT-4.1",
+        providerId: "openai",
+        modelId: "gpt-4.1",
+        apiMode: "openai-chat-completions",
+        authStyle: "bearer",
+        secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
+        taskFamilies: ["summarize", "tag"],
+        maxConcurrency: 2,
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_profile_update", {
+      request: {
+        profileId: "profile-1",
+        clearSecretRef: true,
+        enabled: false,
+        capabilityStatus: "limited",
+        capabilityJson: "{\"reason\":\"manual\"}",
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_profile_list")
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_status", {
+      request: { profileId: "profile-1" },
+    })
   })
 })

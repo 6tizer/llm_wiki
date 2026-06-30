@@ -19,6 +19,8 @@ import {
   MARKDOWN_COMMIT_EVENT_NAMES,
   MARKDOWN_COMMIT_OPERATION_INTENTS,
   MARKDOWN_COMMIT_RESULTS,
+  PROFILE_COMMAND_NAMES,
+  PROFILE_EVENT_NAMES,
   RUNTIME_CONTRACT_FAMILIES,
   RUNTIME_CONTRACT_MESSAGES,
   type RuntimeContractFamily,
@@ -251,6 +253,27 @@ describe("Core Runtime headless contract skeleton", () => {
     expect(markdownMessages.every((message) => message.payloadShape === "placeholder")).toBe(true)
     expect(markdownMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-command")
     expect(markdownMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-event")
+  })
+
+  it("keeps SPEC-4 profile operations and events aligned with the SPEC-1 ADR inventory", () => {
+    const adr = repoFile("docs/plans/SPEC-1/adr-shell-core-boundary.md")
+    const contract = createMockCoreRuntimeContract()
+    const profileMessages = contract.listMessages().filter((message) => message.family === "profiles")
+    const profileAdrRow = tableRows(sectionBetween(adr, "| Family | Commands | Events |", "## Enforcement Hooks"))
+      .find(([family]) => family === "Profiles")
+
+    expect(profileMessages.filter((message) => message.direction === "command").map((message) => message.name)).toEqual(
+      PROFILE_COMMAND_NAMES,
+    )
+    expect(profileMessages.filter((message) => message.direction === "event").map((message) => message.name)).toEqual(
+      PROFILE_EVENT_NAMES,
+    )
+    expect(profileMessages.every((message) => message.payloadShape === "placeholder")).toBe(true)
+    expect(profileMessages.map((message) => message.name)).not.toContain("profiles:placeholder-command")
+    expect(profileMessages.map((message) => message.name)).not.toContain("profiles:placeholder-event")
+    expect(profileAdrRow?.[1]).toBe("list, create, update, test, resolve secret reference, read capability status")
+    expect(profileAdrRow?.[2]).toBe("profile changed, capability changed")
+    expect(profileAdrRow?.[3]).toContain("no secret values in payloads")
   })
 
   it("keeps SPEC-3 commit ownership boundaries explicit", () => {

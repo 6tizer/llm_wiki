@@ -34,6 +34,7 @@
 | [SPEC-3/pr5-conflict-repair-job-plan.md](./SPEC-3/pr5-conflict-repair-job-plan.md) | SPEC-3 PR5 执行计划：conflict review / repair job 入口、staging artifact conflict failure、repair audit id。 | merged |
 | [SPEC-3/pr6-template-okf-wording-plan.md](./SPEC-3/pr6-template-okf-wording-plan.md) | SPEC-3 PR6 执行计划：project template / OKF validator wording 收口，确认 root index/overview optional。 | merged |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
+| [SPEC-4/pr1-profile-schema-storage-plan.md](./SPEC-4/pr1-profile-schema-storage-plan.md) | SPEC-4 PR1 执行计划：Profile schema、runtime storage、OS secret reference、Core Runtime profile contract。 | in progress |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
