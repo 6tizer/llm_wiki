@@ -488,6 +488,26 @@
           "custom": "自定义",
           "budgetTokens": "thinking token 预算",
           "hint": "结构化任务（如 ingest）可能会自动关闭 reasoning，避免模型只输出思考过程而没有正文。"
+        },
+        "profiles": {
+          "title": "Model Profiles",
+          "description": "Profile 是 runtime 用于 model-call 和 agent-run 调度的记录。密钥只以引用形式保存，真实值写入系统凭据存储。",
+          "loading": "正在加载 profiles…",
+          "newProfile": "新建 profile",
+          "displayName": "显示名称",
+          "provider": "Provider 预设",
+          "kind": "Profile 类型",
+          "authStyle": "鉴权方式",
+          "maxConcurrency": "最大并发",
+          "enabled": "启用 runtime 调度",
+          "taskFamilies": "任务族",
+          "secretSaved": "密钥已保存",
+          "secretWillClear": "保存时清除",
+          "secretPlaceholder": "输入此 profile 的新密钥",
+          "clearSecret": "清除已保存密钥",
+          "saveProfile": "保存 profile",
+          "saved": "Profile 已保存。",
+          "saveFailed": "保存失败：{{message}}"
         }
       },
       "embedding": {

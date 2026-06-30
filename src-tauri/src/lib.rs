@@ -451,6 +451,8 @@ pub fn run() {
             commands::runtime_db::runtime_profile_list,
             commands::runtime_db::runtime_profile_status,
             commands::runtime_db::runtime_profile_update,
+            commands::profile_secrets::profile_secret_delete,
+            commands::profile_secrets::profile_secret_write,
             commands::runtime_db::runtime_progress_append,
             commands::runtime_db::runtime_progress_list,
             commands::runtime_db::runtime_staging_artifact_commit_success,

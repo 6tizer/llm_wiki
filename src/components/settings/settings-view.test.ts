@@ -33,6 +33,10 @@ vi.mock("./sections/synthesis-section", () => ({
     `Mock Synthesis Section:${project?.path ?? "no-project"}`,
 }))
 
+vi.mock("./sections/model-profiles-section", () => ({
+  ModelProfilesSection: () => "Mock Model Profiles Section",
+}))
+
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
 
