@@ -47,6 +47,176 @@ export type JobRuntimeEventName =
   | "job-runtime:event-appended"
   | "job-runtime:progress-appended"
 
+/** Frozen markdown commit command names from SPEC-3 PR1. */
+export const MARKDOWN_COMMIT_COMMAND_NAMES = [
+  "markdown-commit:submit-artifact",
+  "markdown-commit:commit-path",
+  "markdown-commit:report-conflict",
+  "markdown-commit:enqueue-repair",
+] as const
+
+/** Frozen markdown commit event names from SPEC-3 PR1. */
+export const MARKDOWN_COMMIT_EVENT_NAMES = [
+  "markdown-commit:artifact-ready",
+  "markdown-commit:commit-applied",
+  "markdown-commit:conflict-detected",
+  "markdown-commit:repair-queued",
+] as const
+
+/** Commit-layer operation intents represented as inert contract metadata. */
+export const MARKDOWN_COMMIT_OPERATION_INTENTS = [
+  "create",
+  "update",
+  "append",
+  "delete",
+] as const
+
+/** Commit-layer result names represented as inert contract metadata. */
+export const MARKDOWN_COMMIT_RESULTS = [
+  "committed",
+  "merged",
+  "conflicted",
+  "rejected",
+  "skipped",
+] as const
+
+/** Staged artifact metadata fields frozen by SPEC-3 PR1. */
+export const MARKDOWN_COMMIT_ARTIFACT_FIELDS = [
+  "artifact_id",
+  "job_id",
+  "artifact_path",
+  "artifact_hash",
+  "target_path",
+  "base_hash",
+  "operation_intent",
+  "source_kind",
+  "created_at_ms",
+] as const
+
+/** Durable audit payload fields frozen by SPEC-3 PR1. */
+export const MARKDOWN_COMMIT_AUDIT_FIELDS = [
+  "artifact_id",
+  "artifact_hash",
+  "target_path",
+  "operation_intent",
+  "result",
+  "base_hash",
+  "current_hash",
+  "final_hash",
+  "affected_paths",
+  "repair_job_id",
+] as const
+
+/** Base-hash decision matrix rows frozen as inert contract metadata. */
+export const MARKDOWN_COMMIT_BASE_HASH_CASES = [
+  {
+    intent: "create",
+    currentState: "missing and base_hash = null",
+    requiredOutcome: "committed create.",
+  },
+  {
+    intent: "create",
+    currentState: "exists while base_hash = null",
+    requiredOutcome: "conflicted; do not overwrite.",
+  },
+  {
+    intent: "update",
+    currentState: "exists and current hash equals base_hash",
+    requiredOutcome: "committed or merged.",
+  },
+  {
+    intent: "update",
+    currentState: "missing while base_hash is present",
+    requiredOutcome: "conflicted.",
+  },
+  {
+    intent: "update",
+    currentState: "exists and current hash differs from base_hash",
+    requiredOutcome: "conflicted.",
+  },
+  {
+    intent: "append",
+    currentState: "missing and base_hash = null",
+    requiredOutcome: "committed create with append content.",
+  },
+  {
+    intent: "append",
+    currentState: "exists and current hash equals base_hash",
+    requiredOutcome: "committed append or merged append strategy.",
+  },
+  {
+    intent: "append",
+    currentState: "exists and current hash differs from base_hash",
+    requiredOutcome: "conflicted unless a future append strategy explicitly proves safe.",
+  },
+  {
+    intent: "delete",
+    currentState: "exists and current hash equals base_hash",
+    requiredOutcome: "committed delete.",
+  },
+  {
+    intent: "delete",
+    currentState: "missing and base_hash = null",
+    requiredOutcome: "skipped.",
+  },
+  {
+    intent: "delete",
+    currentState: "missing while base_hash is present",
+    requiredOutcome: "skipped with audit record.",
+  },
+  {
+    intent: "delete",
+    currentState: "exists and current hash differs from base_hash",
+    requiredOutcome: "conflicted; do not delete.",
+  },
+] as const
+
+/** Logical derived marker layers dirtied by committed Markdown changes. */
+export const DERIVED_STALE_MARKER_LAYERS = [
+  "embedding",
+  "graph",
+  "taxonomy",
+  "synthesis",
+  "search",
+  "index_export",
+  "overview",
+] as const
+
+/** Logical reasons a derived stale marker exists. */
+export const DERIVED_STALE_MARKER_REASONS = [
+  "commit",
+  "delete",
+  "schema_change",
+  "manual_rebuild",
+] as const
+
+/** Frozen markdown commit command names from SPEC-3 PR1. */
+export type MarkdownCommitCommandName = (typeof MARKDOWN_COMMIT_COMMAND_NAMES)[number]
+
+/** Frozen markdown commit event names from SPEC-3 PR1. */
+export type MarkdownCommitEventName = (typeof MARKDOWN_COMMIT_EVENT_NAMES)[number]
+
+/** Commit-layer operation intents represented as inert contract metadata. */
+export type MarkdownCommitOperationIntent = (typeof MARKDOWN_COMMIT_OPERATION_INTENTS)[number]
+
+/** Commit-layer result names represented as inert contract metadata. */
+export type MarkdownCommitResult = (typeof MARKDOWN_COMMIT_RESULTS)[number]
+
+/** Staged artifact metadata field names frozen by SPEC-3 PR1. */
+export type MarkdownCommitArtifactField = (typeof MARKDOWN_COMMIT_ARTIFACT_FIELDS)[number]
+
+/** Durable audit payload field names frozen by SPEC-3 PR1. */
+export type MarkdownCommitAuditField = (typeof MARKDOWN_COMMIT_AUDIT_FIELDS)[number]
+
+/** Base-hash decision matrix row frozen by SPEC-3 PR1. */
+export type MarkdownCommitBaseHashCase = (typeof MARKDOWN_COMMIT_BASE_HASH_CASES)[number]
+
+/** Logical derived marker layers dirtied by committed Markdown changes. */
+export type DerivedStaleMarkerLayer = (typeof DERIVED_STALE_MARKER_LAYERS)[number]
+
+/** Logical reasons a derived stale marker exists. */
+export type DerivedStaleMarkerReason = (typeof DERIVED_STALE_MARKER_REASONS)[number]
+
 export type JobRuntimeSchemaFamily =
   | "jobs"
   | "leases"
@@ -241,38 +411,70 @@ export const JOB_RUNTIME_DEFAULTS: JobRuntimeDefaults = {
   writerMaxQueueEntries: 1000,
 }
 
+/** Frozen message names by runtime family; non-special families stay placeholder-only. */
+export const RUNTIME_CONTRACT_MESSAGES: Readonly<Record<
+  RuntimeContractFamily,
+  {
+    readonly commandNames: readonly string[]
+    readonly eventNames: readonly string[]
+  }
+>> = {
+  project: {
+    commandNames: ["project:placeholder-command"],
+    eventNames: ["project:placeholder-event"],
+  },
+  "job-runtime": {
+    commandNames: JOB_RUNTIME_COMMAND_NAMES,
+    eventNames: JOB_RUNTIME_EVENT_NAMES,
+  },
+  "markdown-commit": {
+    commandNames: MARKDOWN_COMMIT_COMMAND_NAMES,
+    eventNames: MARKDOWN_COMMIT_EVENT_NAMES,
+  },
+  profiles: {
+    commandNames: ["profiles:placeholder-command"],
+    eventNames: ["profiles:placeholder-event"],
+  },
+  derived: {
+    commandNames: ["derived:placeholder-command"],
+    eventNames: ["derived:placeholder-event"],
+  },
+  "search-vector": {
+    commandNames: ["search-vector:placeholder-command"],
+    eventNames: ["search-vector:placeholder-event"],
+  },
+  "file-platform": {
+    commandNames: ["file-platform:placeholder-command"],
+    eventNames: ["file-platform:placeholder-event"],
+  },
+  "process-cli": {
+    commandNames: ["process-cli:placeholder-command"],
+    eventNames: ["process-cli:placeholder-event"],
+  },
+  "agent-run": {
+    commandNames: ["agent-run:placeholder-command"],
+    eventNames: ["agent-run:placeholder-event"],
+  },
+  "settings-status": {
+    commandNames: ["settings-status:placeholder-command"],
+    eventNames: ["settings-status:placeholder-event"],
+  },
+}
+
 export function createMockCoreRuntimeContract(): CoreRuntimeContract {
   const messages = RUNTIME_CONTRACT_FAMILIES.flatMap((family) => [
-    ...(family === "job-runtime"
-      ? JOB_RUNTIME_COMMAND_NAMES.map((name) => ({
-          family,
-          direction: "command" as const,
-          name,
-          payloadShape: "placeholder" as const,
-        }))
-      : [
-          {
-            family,
-            direction: "command" as const,
-            name: `${family}:placeholder-command`,
-            payloadShape: "placeholder" as const,
-          },
-        ]),
-    ...(family === "job-runtime"
-      ? JOB_RUNTIME_EVENT_NAMES.map((name) => ({
-          family,
-          direction: "event" as const,
-          name,
-          payloadShape: "placeholder" as const,
-        }))
-      : [
-          {
-            family,
-            direction: "event" as const,
-            name: `${family}:placeholder-event`,
-            payloadShape: "placeholder" as const,
-          },
-        ]),
+    ...RUNTIME_CONTRACT_MESSAGES[family].commandNames.map((name) => ({
+      family,
+      direction: "command" as const,
+      name,
+      payloadShape: "placeholder" as const,
+    })),
+    ...RUNTIME_CONTRACT_MESSAGES[family].eventNames.map((name) => ({
+      family,
+      direction: "event" as const,
+      name,
+      payloadShape: "placeholder" as const,
+    })),
   ])
 
   return {
