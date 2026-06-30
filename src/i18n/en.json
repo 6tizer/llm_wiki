@@ -488,6 +488,26 @@
           "custom": "Custom",
           "budgetTokens": "thinking budget tokens",
           "hint": "Structured tasks such as ingest may override this to Off to avoid reasoning-only responses."
+        },
+        "profiles": {
+          "title": "Model profiles",
+          "description": "Profiles are runtime records for model-call and agent-run routing. Secrets are stored by reference in the OS credential store.",
+          "loading": "Loading profiles…",
+          "newProfile": "New profile",
+          "displayName": "Display name",
+          "provider": "Provider preset",
+          "kind": "Profile kind",
+          "authStyle": "Auth style",
+          "maxConcurrency": "Max concurrency",
+          "enabled": "Enabled for runtime selection",
+          "taskFamilies": "Task families",
+          "secretSaved": "secret saved",
+          "secretWillClear": "will clear on save",
+          "secretPlaceholder": "Enter a new secret for this profile",
+          "clearSecret": "Clear saved secret",
+          "saveProfile": "Save profile",
+          "saved": "Profile saved.",
+          "saveFailed": "Save failed: {{message}}"
         }
       },
       "embedding": {

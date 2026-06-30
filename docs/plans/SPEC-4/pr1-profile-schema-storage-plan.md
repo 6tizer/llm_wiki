@@ -1,6 +1,6 @@
 # SPEC-4 PR1 Plan: Profile Schema + Runtime Storage + Secret Reference
 
-> Type: PR execution plan | Status: in progress | Owner: Commander | Branch: `codex/spec-4-pr1-profile-schema-storage` | Primary issue: #186 | Refs: #185 | Run: `f31f22ec-2971-44dd-b227-787712000a6c`
+> Type: PR execution plan | Status: merged via PR #217 | Owner: Commander | Branch: `codex/spec-4-pr1-profile-schema-storage` | Primary issue: #186 | Refs: #185 | Run: `f31f22ec-2971-44dd-b227-787712000a6c`
 
 ## Goal
 
