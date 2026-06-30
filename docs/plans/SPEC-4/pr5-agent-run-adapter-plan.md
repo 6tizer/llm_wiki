@@ -1,10 +1,12 @@
 # SPEC-4 PR5 Plan: Agent-run Adapter
 
-> Type: implementation plan | Status: active | Owner: Commander | Branch: `codex/spec-4-pr5-agent-run-adapter` | Main baseline: `f0d3a49 feat: add profile pool scheduler claims` | Run: `bc558559-9178-4dda-ad0e-dccaa5701cdf`
+> Type: implementation plan | Status: merged | Owner: Commander | Completed by PR #221 at `285214c feat: wire agent runs to runtime profiles` | Run: `bc558559-9178-4dda-ad0e-dccaa5701cdf`
 
 ## Decision
 
 Implement the Agent-run profile adapter as the final SPEC-4 PR. The Agent sidecar should run from a claimed `agent-run` profile, resolve stored secrets only inside Rust, inject per-run SDK environment/config, and leave global provider settings untouched.
+
+Completion: PR #221 merged this scope at `285214c`. CI, focused gates, full verification, staged GitNexus detect, post-merge `npx gitnexus analyze`, and agent-loop stop all passed.
 
 Merge standard:
 
