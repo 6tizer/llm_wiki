@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
+import type { MarkdownCommitBudgetClaimRequest } from "@/core-runtime/markdown-commit"
 
 export type RuntimeDbHealthState = "disabled" | "no-project" | "healthy"
 export type RuntimeJobState =
@@ -47,8 +48,67 @@ export interface RuntimeJobList {
   leases: RuntimeJobLeaseRecord[]
 }
 
+export type RuntimeCommitBudgetClaimRequest = MarkdownCommitBudgetClaimRequest
+
+export interface RuntimeResourceBudgetClaimRecord {
+  claimId: string
+  scope: string
+  resourceKey: string
+  displayKey: string
+  jobId?: string | null
+  holder: string
+  amount: number
+  acquiredAtMs: number
+  expiresAtMs: number
+  releasedAtMs?: number | null
+  status: string
+}
+
+export interface RuntimeCommitBudgetClaim {
+  claimId: string
+  resourceKey: string
+  displayKey: string
+  expiresAtMs: number
+  claims: RuntimeResourceBudgetClaimRecord[]
+}
+
+export interface RuntimeStagingArtifactRecord {
+  artifactId: string
+  jobId: string
+  artifactPath: string
+  artifactHash: string
+  status: string
+  createdAtMs: number
+  updatedAtMs: number
+  expiresAtMs?: number | null
+  deletedAtMs?: number | null
+  lastError?: string | null
+}
+
 export function runtimeJobList(): Promise<RuntimeJobList> {
   return invoke<RuntimeJobList>("runtime_job_list")
+}
+
+export function runtimeCommitBudgetClaim(
+  request: RuntimeCommitBudgetClaimRequest,
+): Promise<RuntimeCommitBudgetClaim> {
+  return invoke<RuntimeCommitBudgetClaim>("runtime_commit_budget_claim", { request })
+}
+
+export function runtimeCommitBudgetRelease(
+  claimId: string,
+): Promise<RuntimeResourceBudgetClaimRecord[]> {
+  return invoke<RuntimeResourceBudgetClaimRecord[]>("runtime_commit_budget_release", {
+    request: { claimId },
+  })
+}
+
+export function runtimeStagingArtifactCommitSuccess(
+  artifactId: string,
+): Promise<RuntimeStagingArtifactRecord> {
+  return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_commit_success", {
+    request: { artifactId },
+  })
 }
 
 export function runtimeJobCancel(jobId: string): Promise<RuntimeJobRecord> {

@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  runtimeCommitBudgetClaim,
+  runtimeCommitBudgetRelease,
   runtimeJobCancel,
   runtimeJobList,
   runtimeJobPause,
   runtimeJobResume,
+  runtimeStagingArtifactCommitSuccess,
 } from "./runtime-db"
 
 const tauriMocks = vi.hoisted(() => ({
@@ -18,19 +21,26 @@ describe("runtime-db commands", () => {
   })
 
   it("lists runtime jobs with the pure list command", async () => {
-    tauriMocks.invoke.mockResolvedValue({ enabled: true, status: "healthy", jobs: [], leases: [] })
+    const response = { enabled: true, status: "healthy", jobs: [], leases: [] }
+    tauriMocks.invoke.mockResolvedValue(response)
 
-    await runtimeJobList()
+    await expect(runtimeJobList()).resolves.toBe(response)
 
     expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_job_list")
   })
 
   it("sends cancel, pause, and resume request payloads by job id only", async () => {
-    tauriMocks.invoke.mockResolvedValue({ jobId: "job-1" })
+    const cancelResponse = { jobId: "job-1" }
+    const pauseResponse = { jobId: "job-2" }
+    const resumeResponse = { jobId: "job-3" }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(cancelResponse)
+      .mockResolvedValueOnce(pauseResponse)
+      .mockResolvedValueOnce(resumeResponse)
 
-    await runtimeJobCancel("job-1")
-    await runtimeJobPause("job-2")
-    await runtimeJobResume("job-3")
+    await expect(runtimeJobCancel("job-1")).resolves.toBe(cancelResponse)
+    await expect(runtimeJobPause("job-2")).resolves.toBe(pauseResponse)
+    await expect(runtimeJobResume("job-3")).resolves.toBe(resumeResponse)
 
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_job_cancel", {
       request: { jobId: "job-1" },
@@ -41,5 +51,94 @@ describe("runtime-db commands", () => {
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_job_resume", {
       request: { jobId: "job-3" },
     })
+  })
+
+  it("sends commit budget claim payloads with Rust serde camelCase fields", async () => {
+    tauriMocks.invoke.mockResolvedValue({ claimId: "claim-1" })
+
+    await runtimeCommitBudgetClaim({
+      affectedPath: "wiki/Page.md",
+      holder: "tester:1",
+      jobId: "job-1",
+      claimId: "claim-1",
+      ttlMs: 120000,
+    })
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_commit_budget_claim", {
+      request: {
+        affectedPath: "wiki/Page.md",
+        holder: "tester:1",
+        jobId: "job-1",
+        claimId: "claim-1",
+        ttlMs: 120000,
+      },
+    })
+  })
+
+  it("sends minimal commit budget claim payloads without optional fields", async () => {
+    const response = {
+      claimId: "claim-1",
+      resourceKey: "wiki/page.md",
+      displayKey: "wiki/Page.md",
+      expiresAtMs: 123,
+      claims: [],
+    }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeCommitBudgetClaim({
+        affectedPath: "wiki/Page.md",
+        holder: "tester:1",
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_commit_budget_claim", {
+      request: {
+        affectedPath: "wiki/Page.md",
+        holder: "tester:1",
+      },
+    })
+  })
+
+  it("propagates commit budget claim failures", async () => {
+    tauriMocks.invoke.mockRejectedValue(new Error("claim failed"))
+
+    await expect(
+      runtimeCommitBudgetClaim({
+        affectedPath: "wiki/Page.md",
+        holder: "tester:1",
+      }),
+    ).rejects.toThrow("claim failed")
+  })
+
+  it("sends commit budget release payloads", async () => {
+    const response = [{ claimId: "claim-1" }]
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(runtimeCommitBudgetRelease("claim-1")).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_commit_budget_release", {
+      request: { claimId: "claim-1" },
+    })
+  })
+
+  it("propagates commit budget release failures", async () => {
+    tauriMocks.invoke.mockRejectedValue(new Error("release failed"))
+
+    await expect(runtimeCommitBudgetRelease("claim-1")).rejects.toThrow("release failed")
+  })
+
+  it("sends staging artifact cleanup payloads", async () => {
+    const response = { artifactId: "artifact-1" }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(runtimeStagingArtifactCommitSuccess("artifact-1")).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      "runtime_staging_artifact_commit_success",
+      {
+        request: { artifactId: "artifact-1" },
+      },
+    )
   })
 })
