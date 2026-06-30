@@ -44,6 +44,7 @@ export interface MarkdownCommitAuditPayload {
   readonly finalHash: string | null
   readonly affectedPaths: readonly string[]
   readonly repairJobId: string | null
+  readonly repairError?: string
   readonly sourceKind: string
 }
 
@@ -61,6 +62,25 @@ export interface MarkdownCommitDerivedMarkerContext {
   readonly event: MarkdownCommitEventReceipt
   readonly result: MarkdownCommitOperationResult
   readonly markerOperations: readonly MarkdownCommitDerivedMarkerOperation[]
+}
+
+export interface MarkdownCommitConflictRepairContext {
+  readonly artifactId: string
+  readonly jobId: string
+  readonly artifactPath: string
+  readonly artifactHash: string
+  readonly targetPath: string
+  readonly operationIntent: MarkdownCommitOperationIntent
+  readonly result: "conflicted"
+  readonly baseHash: string | null
+  readonly currentHash: string | null
+  readonly affectedPaths: readonly string[]
+  readonly sourceKind: string
+  readonly conflictReason: string
+}
+
+export interface MarkdownCommitConflictRepairReceipt {
+  readonly repairJobId: string
 }
 
 export interface MarkdownCommitAdapters {
@@ -86,6 +106,9 @@ export interface MarkdownCommitAdapters {
   readonly recordDerivedStaleMarkers?: (
     context: MarkdownCommitDerivedMarkerContext,
   ) => Promise<void>
+  readonly routeConflictRepair?: (
+    context: MarkdownCommitConflictRepairContext,
+  ) => Promise<MarkdownCommitConflictRepairReceipt>
   readonly hashContent?: (content: string) => Promise<string> | string
 }
 
@@ -108,12 +131,16 @@ export interface MarkdownCommitOperationResult {
   readonly finalHash: string | null
   readonly affectedPaths: readonly string[]
   readonly eventId: string | null
+  readonly repairJobId: string | null
   readonly error?: string
   readonly cleanupError?: string
   readonly releaseError?: string
   readonly eventError?: string
   readonly markerError?: string
+  readonly repairError?: string
 }
+
+const MAX_REPAIR_ERROR_CHARS = 1024
 
 export function canonicalizeMarkdownContentForHash(content: string): string {
   return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
@@ -178,6 +205,10 @@ export async function commitMarkdownArtifact(
     return outcome
   }
 
+  if (outcome.result === "conflicted") {
+    outcome = await routeConflictRepairIfAvailable(outcome, artifact, adapters)
+  }
+
   const event = await appendCommitEventIfAvailable(outcome, artifact, adapters)
   if (!event.ok) {
     return { ...outcome, eventError: event.eventError }
@@ -207,6 +238,36 @@ export async function commitMarkdownArtifact(
   }
 
   return outcome
+}
+
+async function routeConflictRepairIfAvailable(
+  outcome: MarkdownCommitOperationResult,
+  artifact: MarkdownCommitArtifact,
+  adapters: MarkdownCommitAdapters,
+): Promise<MarkdownCommitOperationResult> {
+  if (!adapters.routeConflictRepair) {
+    return outcome
+  }
+  try {
+    const receipt = await adapters.routeConflictRepair({
+      artifactId: outcome.artifactId,
+      jobId: artifact.jobId,
+      artifactPath: artifact.artifactPath,
+      artifactHash: outcome.artifactHash,
+      targetPath: outcome.targetPath,
+      operationIntent: outcome.operationIntent,
+      result: "conflicted",
+      baseHash: outcome.baseHash,
+      currentHash: outcome.currentHash,
+      affectedPaths: outcome.affectedPaths,
+      sourceKind: artifact.sourceKind,
+      conflictReason: buildConflictReason(outcome),
+    })
+    return { ...outcome, repairJobId: receipt.repairJobId }
+  } catch (error) {
+    const repairError = describeError(error).slice(0, MAX_REPAIR_ERROR_CHARS)
+    return { ...outcome, repairError }
+  }
 }
 
 async function appendCommitEventIfAvailable(
@@ -245,7 +306,8 @@ function buildAuditPayload(
     currentHash: outcome.currentHash,
     finalHash: outcome.finalHash,
     affectedPaths: outcome.affectedPaths,
-    repairJobId: null,
+    repairJobId: outcome.repairJobId,
+    ...(outcome.repairError ? { repairError: outcome.repairError } : {}),
     sourceKind: artifact.sourceKind,
   }
 }
@@ -395,8 +457,13 @@ function buildResult(
     finalHash,
     affectedPaths: [artifact.targetPath],
     eventId: null,
+    repairJobId: null,
     ...(error ? { error } : {}),
   }
+}
+
+function buildConflictReason(outcome: MarkdownCommitOperationResult): string {
+  return `commit-conflict: ${outcome.operationIntent} target does not match the expected base hash`
 }
 
 function describeError(error: unknown): string {

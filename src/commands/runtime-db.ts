@@ -30,6 +30,14 @@ export interface RuntimeJobRecord {
   lastError?: string | null
 }
 
+export interface RuntimeJobCreateRequest {
+  jobId?: string | null
+  kind: string
+  payload: string
+  maxAttempts?: number | null
+  priority?: number | null
+}
+
 export interface RuntimeJobLeaseRecord {
   leaseId: string
   jobId: string
@@ -82,6 +90,16 @@ export interface RuntimeStagingArtifactRecord {
   updatedAtMs: number
   expiresAtMs?: number | null
   deletedAtMs?: number | null
+  lastError?: string | null
+}
+
+export interface RuntimeStagingArtifactRecordRequest {
+  artifactId?: string | null
+  jobId: string
+  artifactPath: string
+  artifactHash: string
+  status?: string | null
+  ttlMs?: number | null
   lastError?: string | null
 }
 
@@ -140,6 +158,12 @@ export function runtimeJobList(): Promise<RuntimeJobList> {
   return invoke<RuntimeJobList>("runtime_job_list")
 }
 
+export function runtimeJobCreate(
+  request: RuntimeJobCreateRequest,
+): Promise<RuntimeJobRecord> {
+  return invoke<RuntimeJobRecord>("runtime_job_create", { request })
+}
+
 export function runtimeCommitBudgetClaim(
   request: RuntimeCommitBudgetClaimRequest,
 ): Promise<RuntimeCommitBudgetClaim> {
@@ -159,6 +183,14 @@ export function runtimeStagingArtifactCommitSuccess(
 ): Promise<RuntimeStagingArtifactRecord> {
   return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_commit_success", {
     request: { artifactId },
+  })
+}
+
+export function runtimeStagingArtifactRecord(
+  request: RuntimeStagingArtifactRecordRequest,
+): Promise<RuntimeStagingArtifactRecord> {
+  return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_record", {
+    request,
   })
 }
 

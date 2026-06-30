@@ -93,7 +93,7 @@ export const MARKDOWN_COMMIT_ARTIFACT_FIELDS = [
   "created_at_ms",
 ] as const
 
-/** Durable audit payload fields frozen by SPEC-3 PR1 and amended by PR4. */
+/** Durable audit payload fields frozen by SPEC-3 PR1 and amended by PR4/PR5. */
 export const MARKDOWN_COMMIT_AUDIT_FIELDS = [
   "kind",
   "artifact_id",
@@ -107,6 +107,7 @@ export const MARKDOWN_COMMIT_AUDIT_FIELDS = [
   "final_hash",
   "affected_paths",
   "repair_job_id",
+  "repair_error",
 ] as const
 
 /** Base-hash decision matrix rows frozen as inert contract metadata. */

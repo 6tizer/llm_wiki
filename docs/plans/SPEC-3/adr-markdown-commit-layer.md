@@ -130,6 +130,7 @@ Required audit fields:
 | `final_hash` | Hash after successful final write, when present. |
 | `affected_paths` | Paths touched by the operation. |
 | `repair_job_id` | Repair/review job id for conflicts, when queued. |
+| `repair_error` | Bounded repair-routing failure detail for conflicts that could not queue a repair job. Added in PR5; absent when routing succeeds or is not attempted. Current PR5 TypeScript operation bounds this field to 1024 characters before audit append. |
 
 Audit records cover both applied mutations and visible non-applied outcomes. A `rejected`, `conflicted`, or `skipped` audit event records the attempted commit decision and diagnostics; it does not imply committed Markdown content changed or that derived marker rows exist.
 
@@ -163,5 +164,5 @@ Existing `index.md` and `overview.md` files remain user Markdown assets. SPEC-3 
 - PR2 can remove mandatory `index.md` / `overview.md` from normal ingest without changing commit behavior yet.
 - PR3 can implement shell-neutral commit operation against frozen artifact/result/base-hash semantics.
 - PR4 must write audit facts through SPEC-2 `events-progress` and markers through SPEC-2 `derived-stale-markers`.
-- PR5 can create repair jobs without inventing a separate conflict store.
+- PR5 can create repair jobs without inventing a separate conflict store. It records repair jobs through SPEC-2 `runtime_jobs`, marks the conflicted staging artifact `failed` through SPEC-2 staging artifact metadata, and reuses the default failed-artifact TTL window of 7 days. If repair routing fails, the conflict audit event is still appended with `repair_job_id = null` and bounded `repair_error`. PR5 provides the commit-operation adapter slot and shell helper, but does not migrate normal production ingest/write flows onto a production Markdown commit adapter assembly.
 - SPEC-5/6 cannot bypass the commit-layer hard gate.
