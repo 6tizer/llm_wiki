@@ -14,6 +14,8 @@ import {
   JOB_RUNTIME_EVENT_NAMES,
   MARKDOWN_COMMIT_COMMAND_NAMES,
   MARKDOWN_COMMIT_EVENT_NAMES,
+  PROFILE_COMMAND_NAMES,
+  PROFILE_EVENT_NAMES,
   RUNTIME_CONTRACT_FAMILIES,
   createMockCoreRuntimeContract,
   type RuntimeContractFamily,
@@ -61,6 +63,9 @@ describe("SPEC-1 adapter contract tests", () => {
     const markdownCommitMessages = createMockCoreRuntimeContract()
       .listMessages()
       .filter((message) => message.family === "markdown-commit")
+    const profileMessages = createMockCoreRuntimeContract()
+      .listMessages()
+      .filter((message) => message.family === "profiles")
 
     expect(shell.allowedFamilies).toEqual(RUNTIME_CONTRACT_FAMILIES)
     expect(driven).toHaveLength(RUNTIME_CONTRACT_FAMILIES.length * 2)
@@ -87,6 +92,14 @@ describe("SPEC-1 adapter contract tests", () => {
     )
     expect(markdownCommitMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-command")
     expect(markdownCommitMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-event")
+    expect(profileMessages.filter((message) => message.direction === "command").map((message) => message.name)).toEqual(
+      PROFILE_COMMAND_NAMES,
+    )
+    expect(profileMessages.filter((message) => message.direction === "event").map((message) => message.name)).toEqual(
+      PROFILE_EVENT_NAMES,
+    )
+    expect(profileMessages.map((message) => message.name)).not.toContain("profiles:placeholder-command")
+    expect(profileMessages.map((message) => message.name)).not.toContain("profiles:placeholder-event")
   })
 
   it("keeps adapter role family ownership explicit", () => {

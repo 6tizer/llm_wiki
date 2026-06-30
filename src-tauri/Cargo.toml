@@ -46,6 +46,7 @@ tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt
 which = "7"
 uuid = { version = "1", features = ["v4"] }
 unicode-normalization = "0.1"
+keyring = "4.1.2"
 # libc (Unix only): process-group kill (killpg) for agent_kill, so we reap
 # the sidecar's grandchildren (tool subprocesses), not just the direct child.
 [target.'cfg(unix)'.dependencies]

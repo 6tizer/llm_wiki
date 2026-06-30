@@ -154,6 +154,96 @@ export interface RuntimeDerivedStaleMarkerList {
   markers: RuntimeDerivedStaleMarkerRecord[]
 }
 
+export type RuntimeProfileKind = "model-call" | "agent-run"
+export type RuntimeProfileApiMode =
+  | "openai-chat-completions"
+  | "anthropic-messages"
+  | "google-generate-content"
+  | "local-cli"
+export type RuntimeProfileAuthStyle =
+  | "none"
+  | "bearer"
+  | "x-api-key"
+  | "api-key"
+  | "oauth-local-cli"
+export type RuntimeProfileCapabilityStatus =
+  | "unknown"
+  | "supported"
+  | "limited"
+  | "unsupported"
+  | "error"
+
+export interface RuntimeProfileCreateRequest {
+  profileId?: string | null
+  kind: RuntimeProfileKind
+  displayName: string
+  providerId: string
+  modelId: string
+  endpoint?: string | null
+  apiMode: RuntimeProfileApiMode
+  authStyle: RuntimeProfileAuthStyle
+  secretRef?: string | null
+  enabled?: boolean | null
+  taskFamilies: string[]
+  maxConcurrency?: number | null
+}
+
+export interface RuntimeProfileUpdateRequest {
+  profileId: string
+  displayName?: string | null
+  providerId?: string | null
+  modelId?: string | null
+  endpoint?: string | null
+  clearEndpoint?: boolean | null
+  apiMode?: RuntimeProfileApiMode | null
+  authStyle?: RuntimeProfileAuthStyle | null
+  secretRef?: string | null
+  clearSecretRef?: boolean | null
+  enabled?: boolean | null
+  taskFamilies?: string[] | null
+  maxConcurrency?: number | null
+  capabilityStatus?: RuntimeProfileCapabilityStatus | null
+  capabilityJson?: string | null
+  capabilityVersion?: string | null
+  capabilityCheckedAtMs?: number | null
+  probeBackoffUntilMs?: number | null
+  lastCapabilityError?: string | null
+  clearLastCapabilityError?: boolean | null
+}
+
+export interface RuntimeProfileStatusRequest {
+  profileId: string
+}
+
+export interface RuntimeProfileRecord {
+  profileId: string
+  kind: RuntimeProfileKind
+  displayName: string
+  providerId: string
+  modelId: string
+  endpoint?: string | null
+  apiMode: RuntimeProfileApiMode
+  authStyle: RuntimeProfileAuthStyle
+  secretRef?: string | null
+  enabled: boolean
+  taskFamilies: string[]
+  maxConcurrency: number
+  capabilityStatus: RuntimeProfileCapabilityStatus
+  capabilityJson: string
+  capabilityVersion: string
+  capabilityCheckedAtMs?: number | null
+  probeBackoffUntilMs?: number | null
+  lastCapabilityError?: string | null
+  createdAtMs: number
+  updatedAtMs: number
+}
+
+export interface RuntimeProfileList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  profiles: RuntimeProfileRecord[]
+}
+
 export function runtimeJobList(): Promise<RuntimeJobList> {
   return invoke<RuntimeJobList>("runtime_job_list")
 }
@@ -214,6 +304,28 @@ export function runtimeDerivedStaleMarkerList(
   return invoke<RuntimeDerivedStaleMarkerList>("runtime_derived_stale_marker_list", {
     request,
   })
+}
+
+export function runtimeProfileCreate(
+  request: RuntimeProfileCreateRequest,
+): Promise<RuntimeProfileRecord> {
+  return invoke<RuntimeProfileRecord>("runtime_profile_create", { request })
+}
+
+export function runtimeProfileUpdate(
+  request: RuntimeProfileUpdateRequest,
+): Promise<RuntimeProfileRecord> {
+  return invoke<RuntimeProfileRecord>("runtime_profile_update", { request })
+}
+
+export function runtimeProfileList(): Promise<RuntimeProfileList> {
+  return invoke<RuntimeProfileList>("runtime_profile_list")
+}
+
+export function runtimeProfileStatus(
+  request: RuntimeProfileStatusRequest,
+): Promise<RuntimeProfileRecord> {
+  return invoke<RuntimeProfileRecord>("runtime_profile_status", { request })
 }
 
 export function runtimeJobCancel(jobId: string): Promise<RuntimeJobRecord> {

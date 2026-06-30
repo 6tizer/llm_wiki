@@ -47,6 +47,22 @@ export type JobRuntimeEventName =
   | "job-runtime:event-appended"
   | "job-runtime:progress-appended"
 
+/** Frozen profile command names from SPEC-4 PR1. */
+export const PROFILE_COMMAND_NAMES = [
+  "profiles:list",
+  "profiles:create",
+  "profiles:update",
+  "profiles:test",
+  "profiles:resolve-secret-reference",
+  "profiles:read-capability-status",
+] as const
+
+/** Frozen profile event names from SPEC-4 PR1. */
+export const PROFILE_EVENT_NAMES = [
+  "profiles:profile-changed",
+  "profiles:capability-changed",
+] as const
+
 /** Frozen markdown commit command names from SPEC-3 PR1. */
 export const MARKDOWN_COMMIT_COMMAND_NAMES = [
   "markdown-commit:submit-artifact",
@@ -198,6 +214,12 @@ export type MarkdownCommitCommandName = (typeof MARKDOWN_COMMIT_COMMAND_NAMES)[n
 
 /** Frozen markdown commit event names from SPEC-3 PR1. */
 export type MarkdownCommitEventName = (typeof MARKDOWN_COMMIT_EVENT_NAMES)[number]
+
+/** Frozen profile command names from SPEC-4 PR1. */
+export type ProfileCommandName = (typeof PROFILE_COMMAND_NAMES)[number]
+
+/** Frozen profile event names from SPEC-4 PR1. */
+export type ProfileEventName = (typeof PROFILE_EVENT_NAMES)[number]
 
 /** Commit-layer operation intents represented as inert contract metadata. */
 export type MarkdownCommitOperationIntent = (typeof MARKDOWN_COMMIT_OPERATION_INTENTS)[number]
@@ -435,8 +457,8 @@ export const RUNTIME_CONTRACT_MESSAGES: Readonly<Record<
     eventNames: MARKDOWN_COMMIT_EVENT_NAMES,
   },
   profiles: {
-    commandNames: ["profiles:placeholder-command"],
-    eventNames: ["profiles:placeholder-event"],
+    commandNames: PROFILE_COMMAND_NAMES,
+    eventNames: PROFILE_EVENT_NAMES,
   },
   derived: {
     commandNames: ["derived:placeholder-command"],

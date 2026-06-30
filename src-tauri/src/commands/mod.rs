@@ -1,5 +1,6 @@
 pub mod agent_cli;
 pub mod file_ops;
+pub mod profile_secrets;
 pub mod project;
 pub mod runtime_db;
 pub mod search;

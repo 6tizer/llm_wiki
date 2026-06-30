@@ -11,6 +11,9 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::commands::file_sync::ProjectRootState;
+use crate::commands::profile_secrets::{
+    validate_profile_secret_ref, PROFILE_SECRET_REF_BYTES, PROFILE_SECRET_REF_SQL_GLOB,
+};
 use crate::panic_guard::run_guarded;
 
 const RUNTIME_DIR: &str = ".llm-wiki/runtime";
@@ -30,6 +33,8 @@ const STAGING_ARTIFACTS_FAMILY: &str = "staging-artifacts";
 const STAGING_ARTIFACTS_VERSION: i64 = 1;
 const DERIVED_STALE_MARKERS_FAMILY: &str = "derived-stale-markers";
 const DERIVED_STALE_MARKERS_VERSION: i64 = 1;
+const PROFILE_STATUS_FAMILY: &str = "profile-status";
+const PROFILE_STATUS_VERSION: i64 = 1;
 const WORK_RUNTIME_ENABLED_ENV: &str = "LLM_WIKI_CORE_WORK_RUNTIME_ENABLED";
 const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 const DEFAULT_PRIORITY: i64 = 0;
@@ -56,6 +61,20 @@ const MAX_STAGING_ARTIFACT_PATH_BYTES: usize = 1024;
 const MAX_STAGING_ARTIFACT_HASH_BYTES: usize = 128;
 const MAX_STAGING_ARTIFACT_ERROR_BYTES: usize = 4096;
 const MAX_DERIVED_MARKER_BASE_VERSION_BYTES: usize = 256;
+const MAX_PROFILE_ID_BYTES: usize = 128;
+const MAX_PROFILE_DISPLAY_NAME_BYTES: usize = 256;
+const MAX_PROFILE_PROVIDER_BYTES: usize = 128;
+const MAX_PROFILE_MODEL_BYTES: usize = 256;
+const MAX_PROFILE_ENDPOINT_BYTES: usize = 2048;
+const MAX_PROFILE_TASK_FAMILIES_BYTES: usize = 4096;
+const MAX_PROFILE_TASK_FAMILY_BYTES: usize = 128;
+const MAX_PROFILE_CAPABILITY_JSON_BYTES: usize = 8192;
+const MAX_PROFILE_CAPABILITY_VERSION_BYTES: usize = 64;
+const MAX_PROFILE_CAPABILITY_ERROR_BYTES: usize = 4096;
+const DEFAULT_PROFILE_CAPABILITY_VERSION: &str = "spec-4-pr1";
+const DEFAULT_PROFILE_CAPABILITY_JSON: &str = "{}";
+const DEFAULT_PROFILE_STATUS: &str = "unknown";
+const MAX_PROFILE_CONCURRENCY: i64 = 128;
 const ACTIVE_LEASE_STATUS: &str = "active";
 const RELEASED_LEASE_STATUS: &str = "released";
 const EXPIRED_LEASE_STATUS: &str = "expired";
@@ -489,6 +508,92 @@ pub struct RuntimeDerivedStaleMarkerList {
     markers: Vec<RuntimeDerivedStaleMarkerRecord>,
 }
 
+/// Request payload for creating a stored model profile.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileCreateRequest {
+    profile_id: Option<String>,
+    kind: String,
+    display_name: String,
+    provider_id: String,
+    model_id: String,
+    endpoint: Option<String>,
+    api_mode: String,
+    auth_style: String,
+    secret_ref: Option<String>,
+    enabled: Option<bool>,
+    task_families: Vec<String>,
+    max_concurrency: Option<i64>,
+}
+
+/// Request payload for updating non-secret model profile metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileUpdateRequest {
+    profile_id: String,
+    display_name: Option<String>,
+    provider_id: Option<String>,
+    model_id: Option<String>,
+    endpoint: Option<String>,
+    clear_endpoint: Option<bool>,
+    api_mode: Option<String>,
+    auth_style: Option<String>,
+    secret_ref: Option<String>,
+    clear_secret_ref: Option<bool>,
+    enabled: Option<bool>,
+    task_families: Option<Vec<String>>,
+    max_concurrency: Option<i64>,
+    capability_status: Option<String>,
+    capability_json: Option<String>,
+    capability_version: Option<String>,
+    capability_checked_at_ms: Option<i64>,
+    probe_backoff_until_ms: Option<i64>,
+    last_capability_error: Option<String>,
+    clear_last_capability_error: Option<bool>,
+}
+
+/// Request payload for reading one stored model profile.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileStatusRequest {
+    profile_id: String,
+}
+
+/// Snapshot of one stored model profile. It never contains a secret value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileRecord {
+    profile_id: String,
+    kind: String,
+    display_name: String,
+    provider_id: String,
+    model_id: String,
+    endpoint: Option<String>,
+    api_mode: String,
+    auth_style: String,
+    secret_ref: Option<String>,
+    enabled: bool,
+    task_families: Vec<String>,
+    max_concurrency: i64,
+    capability_status: String,
+    capability_json: String,
+    capability_version: String,
+    capability_checked_at_ms: Option<i64>,
+    probe_backoff_until_ms: Option<i64>,
+    last_capability_error: Option<String>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+/// Snapshot response for stored model profiles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    profiles: Vec<RuntimeProfileRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormalizedAffectedPath {
     display_key: String,
@@ -897,6 +1002,62 @@ pub fn runtime_derived_stale_marker_list(
     })
 }
 
+/// Create a stored model profile for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_create(
+    request: RuntimeProfileCreateRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileRecord, String> {
+    run_guarded("runtime_profile_create", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_profile_create_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// Update non-secret model profile metadata for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_update(
+    request: RuntimeProfileUpdateRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileRecord, String> {
+    run_guarded("runtime_profile_update", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_profile_update_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// List stored model profiles for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_list(
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileList, String> {
+    run_guarded("runtime_profile_list", || {
+        runtime_profile_list_for_project(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+        )
+    })
+}
+
+/// Read one stored model profile/capability status for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_status(
+    request: RuntimeProfileStatusRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileRecord, String> {
+    run_guarded("runtime_profile_status", || {
+        runtime_profile_status_for_project(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+            request,
+        )
+    })
+}
+
 #[cfg(test)]
 fn runtime_db_health_with_fallback(
     explicit_root: Option<PathBuf>,
@@ -1160,6 +1321,13 @@ fn open_staging_artifacts_runtime_locked(project_root: &Path) -> Result<Connecti
 fn open_derived_stale_markers_runtime_locked(project_root: &Path) -> Result<Connection, String> {
     let connection = open_events_progress_runtime_locked(project_root)?;
     initialize_derived_stale_markers_schema(&connection)?;
+    Ok(connection)
+}
+
+fn open_profile_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+    initialize_runtime_db_locked(project_root)?;
+    let connection = open_runtime_connection(&runtime_db_path(project_root))?;
+    initialize_profile_schema(&connection)?;
     Ok(connection)
 }
 
@@ -1461,6 +1629,107 @@ fn initialize_derived_stale_markers_schema(connection: &Connection) -> Result<()
         DERIVED_STALE_MARKERS_FAMILY,
         DERIVED_STALE_MARKERS_VERSION,
     )
+}
+
+fn initialize_profile_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_model_profiles (
+                    profile_id TEXT PRIMARY KEY CHECK(
+                        length(CAST(profile_id AS BLOB)) > 0
+                        AND length(CAST(profile_id AS BLOB)) <= {MAX_PROFILE_ID_BYTES}
+                    ),
+                    kind TEXT NOT NULL CHECK(kind IN ('model-call', 'agent-run')),
+                    display_name TEXT NOT NULL CHECK(
+                        length(CAST(display_name AS BLOB)) > 0
+                        AND length(CAST(display_name AS BLOB)) <= {MAX_PROFILE_DISPLAY_NAME_BYTES}
+                    ),
+                    provider_id TEXT NOT NULL CHECK(
+                        length(CAST(provider_id AS BLOB)) > 0
+                        AND length(CAST(provider_id AS BLOB)) <= {MAX_PROFILE_PROVIDER_BYTES}
+                    ),
+                    model_id TEXT NOT NULL CHECK(
+                        length(CAST(model_id AS BLOB)) > 0
+                        AND length(CAST(model_id AS BLOB)) <= {MAX_PROFILE_MODEL_BYTES}
+                    ),
+                    endpoint TEXT CHECK(
+                        endpoint IS NULL
+                        OR length(CAST(endpoint AS BLOB)) <= {MAX_PROFILE_ENDPOINT_BYTES}
+                    ),
+                    api_mode TEXT NOT NULL CHECK(
+                        api_mode IN (
+                            'openai-chat-completions',
+                            'anthropic-messages',
+                            'google-generate-content',
+                            'local-cli'
+                        )
+                    ),
+                    auth_style TEXT NOT NULL CHECK(
+                        auth_style IN ('none', 'bearer', 'x-api-key', 'api-key', 'oauth-local-cli')
+                    ),
+                    secret_ref TEXT CHECK(
+                        secret_ref IS NULL
+                        OR (
+                            length(CAST(secret_ref AS BLOB)) = {PROFILE_SECRET_REF_BYTES}
+                            AND secret_ref GLOB '{PROFILE_SECRET_REF_SQL_GLOB}'
+                        )
+                    ),
+                    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+                    task_families_json TEXT NOT NULL CHECK(
+                        length(CAST(task_families_json AS BLOB)) > 0
+                        AND length(CAST(task_families_json AS BLOB)) <= {MAX_PROFILE_TASK_FAMILIES_BYTES}
+                    ),
+                    max_concurrency INTEGER NOT NULL CHECK(
+                        max_concurrency >= 1 AND max_concurrency <= {MAX_PROFILE_CONCURRENCY}
+                    ),
+                    capability_status TEXT NOT NULL CHECK(
+                        capability_status IN ('unknown', 'supported', 'limited', 'unsupported', 'error')
+                    ),
+                    capability_json TEXT NOT NULL CHECK(
+                        length(CAST(capability_json AS BLOB)) > 0
+                        AND length(CAST(capability_json AS BLOB)) <= {MAX_PROFILE_CAPABILITY_JSON_BYTES}
+                    ),
+                    capability_version TEXT NOT NULL CHECK(
+                        length(CAST(capability_version AS BLOB)) > 0
+                        AND length(CAST(capability_version AS BLOB)) <= {MAX_PROFILE_CAPABILITY_VERSION_BYTES}
+                    ),
+                    capability_checked_at_ms INTEGER CHECK(
+                        capability_checked_at_ms IS NULL OR capability_checked_at_ms >= 0
+                    ),
+                    probe_backoff_until_ms INTEGER CHECK(
+                        probe_backoff_until_ms IS NULL OR probe_backoff_until_ms >= 0
+                    ),
+                    last_capability_error TEXT CHECK(
+                        last_capability_error IS NULL
+                        OR length(CAST(last_capability_error AS BLOB)) <= {MAX_PROFILE_CAPABILITY_ERROR_BYTES}
+                    ),
+                    created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime model profiles table: {err}"))?;
+
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_model_profiles_kind_idx
+             ON runtime_model_profiles(kind, enabled, provider_id, model_id)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime model profiles kind index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_model_profiles_status_idx
+             ON runtime_model_profiles(capability_status, updated_at_ms, profile_id)",
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime model profiles status index: {err}")
+        })?;
+
+    record_migration_family(connection, PROFILE_STATUS_FAMILY, PROFILE_STATUS_VERSION)
 }
 
 fn record_migration_family(
@@ -1923,6 +2192,345 @@ fn runtime_job_list_for_project(
         jobs: read_jobs(&connection)?,
         leases: read_leases(&connection)?,
     })
+}
+
+fn runtime_profile_create_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileCreateRequest,
+    now: i64,
+) -> Result<RuntimeProfileRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let profile_id = match request.profile_id {
+        Some(profile_id) => normalize_profile_text(
+            "invalid-profile-id",
+            "profileId",
+            &profile_id,
+            MAX_PROFILE_ID_BYTES,
+        )?,
+        None => Uuid::new_v4().to_string(),
+    };
+    let kind = normalize_profile_kind(&request.kind)?;
+    let display_name = normalize_profile_text(
+        "invalid-display-name",
+        "displayName",
+        &request.display_name,
+        MAX_PROFILE_DISPLAY_NAME_BYTES,
+    )?;
+    let provider_id = normalize_profile_text(
+        "invalid-provider-id",
+        "providerId",
+        &request.provider_id,
+        MAX_PROFILE_PROVIDER_BYTES,
+    )?;
+    let model_id = normalize_profile_text(
+        "invalid-model-id",
+        "modelId",
+        &request.model_id,
+        MAX_PROFILE_MODEL_BYTES,
+    )?;
+    let endpoint = normalize_optional_profile_text(
+        request.endpoint,
+        "invalid-endpoint",
+        "endpoint",
+        MAX_PROFILE_ENDPOINT_BYTES,
+    )?;
+    let api_mode = normalize_profile_api_mode(&request.api_mode)?;
+    let auth_style = normalize_profile_auth_style(&request.auth_style)?;
+    let secret_ref = normalize_profile_secret_ref(request.secret_ref)?;
+    let task_families = normalize_profile_task_families(request.task_families)?;
+    let task_families_json = serialize_profile_task_families(&task_families)?;
+    let max_concurrency = normalize_profile_concurrency(request.max_concurrency)?;
+
+    with_runtime_writer(|| {
+        let connection = open_profile_runtime_locked(project_root)?;
+        connection
+            .execute(
+                "INSERT INTO runtime_model_profiles (
+                    profile_id,
+                    kind,
+                    display_name,
+                    provider_id,
+                    model_id,
+                    endpoint,
+                    api_mode,
+                    auth_style,
+                    secret_ref,
+                    enabled,
+                    task_families_json,
+                    max_concurrency,
+                    capability_status,
+                    capability_json,
+                    capability_version,
+                    capability_checked_at_ms,
+                    probe_backoff_until_ms,
+                    last_capability_error,
+                    created_at_ms,
+                    updated_at_ms
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                    ?11, ?12, ?13, ?14, ?15, NULL, NULL, NULL, ?16, ?16
+                )",
+                params![
+                    profile_id,
+                    kind,
+                    display_name,
+                    provider_id,
+                    model_id,
+                    endpoint,
+                    api_mode,
+                    auth_style,
+                    secret_ref,
+                    bool_to_i64(request.enabled.unwrap_or(true)),
+                    task_families_json,
+                    max_concurrency,
+                    DEFAULT_PROFILE_STATUS,
+                    DEFAULT_PROFILE_CAPABILITY_JSON,
+                    DEFAULT_PROFILE_CAPABILITY_VERSION,
+                    now
+                ],
+            )
+            .map_err(|err| format!("profile-create-failed: {err}"))?;
+        read_profile(&connection, &profile_id)
+    })
+}
+
+fn runtime_profile_update_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileUpdateRequest,
+    now: i64,
+) -> Result<RuntimeProfileRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let profile_id = normalize_profile_text(
+        "invalid-profile-id",
+        "profileId",
+        &request.profile_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_profile_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let existing = read_profile_tx(&tx, &profile_id)?;
+        let display_name = normalize_profile_text_update(
+            request.display_name,
+            existing.display_name,
+            "invalid-display-name",
+            "displayName",
+            MAX_PROFILE_DISPLAY_NAME_BYTES,
+        )?;
+        let provider_id = normalize_profile_text_update(
+            request.provider_id,
+            existing.provider_id,
+            "invalid-provider-id",
+            "providerId",
+            MAX_PROFILE_PROVIDER_BYTES,
+        )?;
+        let model_id = normalize_profile_text_update(
+            request.model_id,
+            existing.model_id,
+            "invalid-model-id",
+            "modelId",
+            MAX_PROFILE_MODEL_BYTES,
+        )?;
+        let endpoint = if request.clear_endpoint.unwrap_or(false) {
+            None
+        } else {
+            normalize_optional_profile_text(
+                request.endpoint,
+                "invalid-endpoint",
+                "endpoint",
+                MAX_PROFILE_ENDPOINT_BYTES,
+            )?
+            .or(existing.endpoint)
+        };
+        let api_mode = normalize_profile_enum_update(
+            request.api_mode,
+            existing.api_mode,
+            normalize_profile_api_mode,
+        )?;
+        let auth_style = normalize_profile_enum_update(
+            request.auth_style,
+            existing.auth_style,
+            normalize_profile_auth_style,
+        )?;
+        let secret_ref = if request.clear_secret_ref.unwrap_or(false) {
+            None
+        } else {
+            normalize_profile_secret_ref(request.secret_ref)?.or(existing.secret_ref)
+        };
+        let task_families_json = match request.task_families {
+            Some(value) => {
+                serialize_profile_task_families(&normalize_profile_task_families(value)?)?
+            }
+            None => serialize_profile_task_families(&existing.task_families)?,
+        };
+        let max_concurrency = match request.max_concurrency {
+            Some(value) => normalize_profile_concurrency(Some(value))?,
+            None => existing.max_concurrency,
+        };
+        let capability_status = normalize_profile_enum_update(
+            request.capability_status,
+            existing.capability_status,
+            normalize_profile_capability_status,
+        )?;
+        let capability_json = normalize_profile_json_update(
+            request.capability_json,
+            existing.capability_json,
+            "invalid-capability-json",
+            "capabilityJson",
+            MAX_PROFILE_CAPABILITY_JSON_BYTES,
+        )?;
+        let capability_version = normalize_profile_text_update(
+            request.capability_version,
+            existing.capability_version,
+            "invalid-capability-version",
+            "capabilityVersion",
+            MAX_PROFILE_CAPABILITY_VERSION_BYTES,
+        )?;
+        let capability_checked_at_ms = normalize_profile_ms_update(
+            request.capability_checked_at_ms,
+            existing.capability_checked_at_ms,
+            "invalid-capability-checked-at",
+            "capabilityCheckedAtMs",
+        )?;
+        let probe_backoff_until_ms = normalize_profile_ms_update(
+            request.probe_backoff_until_ms,
+            existing.probe_backoff_until_ms,
+            "invalid-probe-backoff",
+            "probeBackoffUntilMs",
+        )?;
+        let last_capability_error = if request.clear_last_capability_error.unwrap_or(false) {
+            None
+        } else {
+            normalize_optional_profile_text(
+                request.last_capability_error,
+                "invalid-capability-error",
+                "lastCapabilityError",
+                MAX_PROFILE_CAPABILITY_ERROR_BYTES,
+            )?
+            .or(existing.last_capability_error)
+        };
+
+        tx.execute(
+            "UPDATE runtime_model_profiles
+             SET display_name = ?2,
+                 provider_id = ?3,
+                 model_id = ?4,
+                 endpoint = ?5,
+                 api_mode = ?6,
+                 auth_style = ?7,
+                 secret_ref = ?8,
+                 enabled = ?9,
+                 task_families_json = ?10,
+                 max_concurrency = ?11,
+                 capability_status = ?12,
+                 capability_json = ?13,
+                 capability_version = ?14,
+                 capability_checked_at_ms = ?15,
+                 probe_backoff_until_ms = ?16,
+                 last_capability_error = ?17,
+                 updated_at_ms = ?18
+             WHERE profile_id = ?1",
+            params![
+                profile_id,
+                display_name,
+                provider_id,
+                model_id,
+                endpoint,
+                api_mode,
+                auth_style,
+                secret_ref,
+                bool_to_i64(request.enabled.unwrap_or(existing.enabled)),
+                task_families_json,
+                max_concurrency,
+                capability_status,
+                capability_json,
+                capability_version,
+                capability_checked_at_ms,
+                probe_backoff_until_ms,
+                last_capability_error,
+                now
+            ],
+        )
+        .map_err(|err| format!("profile-update-failed: {err}"))?;
+        let profile = read_profile_tx(&tx, &profile_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(profile)
+    })
+}
+
+fn runtime_profile_list_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+) -> Result<RuntimeProfileList, String> {
+    if !enabled {
+        return Ok(RuntimeProfileList {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            profiles: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeProfileList {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            profiles: Vec::new(),
+        });
+    };
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeProfileList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            profiles: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("profile-list-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_model_profiles")? {
+        return Ok(RuntimeProfileList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            profiles: Vec::new(),
+        });
+    }
+    Ok(RuntimeProfileList {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        profiles: read_profiles(&connection)?,
+    })
+}
+
+fn runtime_profile_status_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileStatusRequest,
+) -> Result<RuntimeProfileRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let profile_id = normalize_profile_text(
+        "invalid-profile-id",
+        "profileId",
+        &request.profile_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Err("profile-not-found: runtime model profile does not exist".to_string());
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("profile-status-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_model_profiles")? {
+        return Err("profile-not-found: runtime model profile does not exist".to_string());
+    }
+    read_profile(&connection, &profile_id)
 }
 
 fn runtime_commit_budget_claim_for_project(
@@ -2786,6 +3394,194 @@ fn normalize_marker_input_hash(
     match input_hash {
         Some(input_hash) => Ok(Some(input_hash)),
         None => Err("invalid-input-hash: inputHash is required for non-delete markers".to_string()),
+    }
+}
+
+fn normalize_profile_kind(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "model-call" => Ok("model-call"),
+        "agent-run" => Ok("agent-run"),
+        _ => Err("invalid-profile-kind: kind must be model-call or agent-run".to_string()),
+    }
+}
+
+fn normalize_profile_api_mode(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "openai-chat-completions" => Ok("openai-chat-completions"),
+        "anthropic-messages" => Ok("anthropic-messages"),
+        "google-generate-content" => Ok("google-generate-content"),
+        "local-cli" => Ok("local-cli"),
+        _ => Err("invalid-api-mode: apiMode is not supported".to_string()),
+    }
+}
+
+fn normalize_profile_auth_style(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "none" => Ok("none"),
+        "bearer" => Ok("bearer"),
+        "x-api-key" => Ok("x-api-key"),
+        "api-key" => Ok("api-key"),
+        "oauth-local-cli" => Ok("oauth-local-cli"),
+        _ => Err("invalid-auth-style: authStyle is not supported".to_string()),
+    }
+}
+
+fn normalize_profile_capability_status(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "unknown" => Ok("unknown"),
+        "supported" => Ok("supported"),
+        "limited" => Ok("limited"),
+        "unsupported" => Ok("unsupported"),
+        "error" => Ok("error"),
+        _ => Err("invalid-capability-status: capabilityStatus is not supported".to_string()),
+    }
+}
+
+fn normalize_profile_text(
+    code: &str,
+    field: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let value = require_limited_non_empty(code, field, value.trim(), max_bytes)?;
+    Ok(value.to_string())
+}
+
+fn normalize_optional_profile_text(
+    value: Option<String>,
+    code: &str,
+    field: &str,
+    max_bytes: usize,
+) -> Result<Option<String>, String> {
+    value
+        .map(|value| normalize_profile_text(code, field, &value, max_bytes))
+        .transpose()
+}
+
+fn normalize_profile_text_update(
+    value: Option<String>,
+    existing: String,
+    code: &str,
+    field: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    value
+        .map(|value| normalize_profile_text(code, field, &value, max_bytes))
+        .transpose()
+        .map(|value| value.unwrap_or(existing))
+}
+
+fn normalize_profile_enum_update(
+    value: Option<String>,
+    existing: String,
+    normalize: fn(&str) -> Result<&'static str, String>,
+) -> Result<String, String> {
+    value
+        .map(|value| normalize(&value).map(str::to_string))
+        .transpose()
+        .map(|value| value.unwrap_or(existing))
+}
+
+fn normalize_profile_json_update(
+    value: Option<String>,
+    existing: String,
+    code: &str,
+    field: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    value
+        .map(|value| normalize_profile_json(code, field, &value, max_bytes))
+        .transpose()
+        .map(|value| value.unwrap_or(existing))
+}
+
+fn normalize_profile_ms_update(
+    value: Option<i64>,
+    existing: Option<i64>,
+    code: &str,
+    field: &str,
+) -> Result<Option<i64>, String> {
+    value
+        .map(|value| normalize_non_negative_ms(code, field, value))
+        .transpose()
+        .map(|value| value.or(existing))
+}
+
+fn normalize_profile_secret_ref(value: Option<String>) -> Result<Option<String>, String> {
+    value
+        .map(|value| {
+            let secret_ref = validate_profile_secret_ref(&value)?;
+            Ok(secret_ref.to_string())
+        })
+        .transpose()
+}
+
+fn normalize_profile_task_families(value: Vec<String>) -> Result<Vec<String>, String> {
+    if value.is_empty() {
+        return Err("invalid-task-families: taskFamilies must not be empty".to_string());
+    }
+    let mut task_families = Vec::new();
+    for task_family in value {
+        let normalized = normalize_profile_text(
+            "invalid-task-family",
+            "taskFamilies",
+            &task_family,
+            MAX_PROFILE_TASK_FAMILY_BYTES,
+        )?;
+        if !task_families.contains(&normalized) {
+            task_families.push(normalized);
+        }
+    }
+    let serialized = serialize_profile_task_families(&task_families)?;
+    if serialized.len() > MAX_PROFILE_TASK_FAMILIES_BYTES {
+        Err(format!(
+            "invalid-task-families: taskFamilies must serialize to at most {MAX_PROFILE_TASK_FAMILIES_BYTES} bytes"
+        ))
+    } else {
+        Ok(task_families)
+    }
+}
+
+fn serialize_profile_task_families(value: &[String]) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|err| format!("invalid-task-families: {err}"))
+}
+
+fn normalize_profile_concurrency(value: Option<i64>) -> Result<i64, String> {
+    let value = value.unwrap_or(1);
+    if (1..=MAX_PROFILE_CONCURRENCY).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!(
+            "invalid-max-concurrency: maxConcurrency must be between 1 and {MAX_PROFILE_CONCURRENCY}"
+        ))
+    }
+}
+
+fn normalize_profile_json(
+    code: &str,
+    field: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<String, String> {
+    let value = require_limited_non_empty(code, field, value.trim(), max_bytes)?;
+    serde_json::from_str::<serde_json::Value>(value)
+        .map_err(|err| format!("{code}: {field} must be valid JSON: {err}"))?;
+    Ok(value.to_string())
+}
+
+fn normalize_non_negative_ms(code: &str, field: &str, value: i64) -> Result<i64, String> {
+    if value >= 0 {
+        Ok(value)
+    } else {
+        Err(format!("{code}: {field} must be non-negative"))
+    }
+}
+
+fn bool_to_i64(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
     }
 }
 
@@ -3758,6 +4554,38 @@ fn read_derived_markers(
         .map_err(|err| format!("derived-markers-read-failed: {err}"))
 }
 
+fn read_profile(connection: &Connection, profile_id: &str) -> Result<RuntimeProfileRecord, String> {
+    connection
+        .query_row(
+            &profile_select_sql("WHERE profile_id = ?1"),
+            [profile_id],
+            map_profile_row,
+        )
+        .map_err(|err| format!("profile-read-failed: {err}"))
+}
+
+fn read_profile_tx(tx: &Transaction<'_>, profile_id: &str) -> Result<RuntimeProfileRecord, String> {
+    tx.query_row(
+        &profile_select_sql("WHERE profile_id = ?1"),
+        [profile_id],
+        map_profile_row,
+    )
+    .map_err(|err| format!("profile-read-failed: {err}"))
+}
+
+fn read_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRecord>, String> {
+    let mut statement = connection
+        .prepare(&profile_select_sql(
+            "ORDER BY updated_at_ms ASC, profile_id ASC",
+        ))
+        .map_err(|err| format!("profiles-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([], map_profile_row)
+        .map_err(|err| format!("profiles-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("profiles-read-failed: {err}"))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
     connection
         .query_row(
@@ -3893,6 +4721,32 @@ fn derived_marker_select_sql(suffix: &str) -> String {
     )
 }
 
+fn profile_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT profile_id,
+                kind,
+                display_name,
+                provider_id,
+                model_id,
+                endpoint,
+                api_mode,
+                auth_style,
+                secret_ref,
+                enabled,
+                task_families_json,
+                max_concurrency,
+                capability_status,
+                capability_json,
+                capability_version,
+                capability_checked_at_ms,
+                probe_backoff_until_ms,
+                last_capability_error,
+                created_at_ms,
+                updated_at_ms
+         FROM runtime_model_profiles {suffix}"
+    )
+}
+
 fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
     Ok(RuntimeJobRecord {
         job_id: row.get(0)?,
@@ -4010,6 +4864,37 @@ fn map_derived_marker_row(
         status: row.get(8)?,
         updated_at_ms: row.get(9)?,
         last_error: row.get(10)?,
+    })
+}
+
+fn map_profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeProfileRecord> {
+    Ok(RuntimeProfileRecord {
+        profile_id: row.get(0)?,
+        kind: row.get(1)?,
+        display_name: row.get(2)?,
+        provider_id: row.get(3)?,
+        model_id: row.get(4)?,
+        endpoint: row.get(5)?,
+        api_mode: row.get(6)?,
+        auth_style: row.get(7)?,
+        secret_ref: row.get(8)?,
+        enabled: row.get::<_, i64>(9)? == 1,
+        task_families: parse_profile_task_families(row.get(10)?)?,
+        max_concurrency: row.get(11)?,
+        capability_status: row.get(12)?,
+        capability_json: row.get(13)?,
+        capability_version: row.get(14)?,
+        capability_checked_at_ms: row.get(15)?,
+        probe_backoff_until_ms: row.get(16)?,
+        last_capability_error: row.get(17)?,
+        created_at_ms: row.get(18)?,
+        updated_at_ms: row.get(19)?,
+    })
+}
+
+fn parse_profile_task_families(value: String) -> rusqlite::Result<Vec<String>> {
+    serde_json::from_str(&value).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(err))
     })
 }
 
@@ -4446,6 +5331,62 @@ mod tests {
         }
     }
 
+    fn profile_secret_ref(id: &str) -> String {
+        let uuid = match id {
+            "profile-1" => "550e8400-e29b-41d4-a716-446655440000",
+            "profile-clear" => "550e8400-e29b-41d4-a716-446655440001",
+            "profile-json" => "550e8400-e29b-41d4-a716-446655440002",
+            _ => "550e8400-e29b-41d4-a716-446655440099",
+        };
+        format!(
+            "{}{}",
+            crate::commands::profile_secrets::PROFILE_SECRET_REF_PREFIX,
+            uuid
+        )
+    }
+
+    fn profile_create_request(profile_id: &str) -> RuntimeProfileCreateRequest {
+        RuntimeProfileCreateRequest {
+            profile_id: Some(profile_id.to_string()),
+            kind: "model-call".to_string(),
+            display_name: "GPT-4.1".to_string(),
+            provider_id: "openai".to_string(),
+            model_id: "gpt-4.1".to_string(),
+            endpoint: None,
+            api_mode: "openai-chat-completions".to_string(),
+            auth_style: "bearer".to_string(),
+            secret_ref: Some(profile_secret_ref(profile_id)),
+            enabled: None,
+            task_families: vec!["summarize".to_string(), "tag".to_string()],
+            max_concurrency: Some(2),
+        }
+    }
+
+    fn profile_update_request(profile_id: &str) -> RuntimeProfileUpdateRequest {
+        RuntimeProfileUpdateRequest {
+            profile_id: profile_id.to_string(),
+            display_name: None,
+            provider_id: None,
+            model_id: None,
+            endpoint: None,
+            clear_endpoint: None,
+            api_mode: None,
+            auth_style: None,
+            secret_ref: None,
+            clear_secret_ref: None,
+            enabled: None,
+            task_families: None,
+            max_concurrency: None,
+            capability_status: None,
+            capability_json: None,
+            capability_version: None,
+            capability_checked_at_ms: None,
+            probe_backoff_until_ms: None,
+            last_capability_error: None,
+            clear_last_capability_error: None,
+        }
+    }
+
     fn write_staging_file(project_root: &Path, relative_path: &str, contents: &[u8]) -> PathBuf {
         let path = staging_dir_path(project_root).join(relative_path);
         fs::create_dir_all(path.parent().expect("staging file has parent"))
@@ -4557,6 +5498,31 @@ mod tests {
         }))
         .expect_err("resume request rejects dbPath");
         assert!(resume.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn profile_request_shapes_reject_unknown_fields() {
+        let create = serde_json::from_value::<RuntimeProfileCreateRequest>(serde_json::json!({
+            "profileId": "profile-1",
+            "kind": "model-call",
+            "displayName": "GPT-4.1",
+            "providerId": "openai",
+            "modelId": "gpt-4.1",
+            "apiMode": "openai-chat-completions",
+            "authStyle": "bearer",
+            "taskFamilies": ["summarize"],
+            "secretValue": "sk-test"
+        }))
+        .expect_err("create request rejects raw secret fields");
+        assert!(create.to_string().contains("unknown field"));
+
+        let update = serde_json::from_value::<RuntimeProfileUpdateRequest>(serde_json::json!({
+            "profileId": "profile-1",
+            "capabilityStatus": "limited",
+            "dbPath": "/tmp/runtime.db"
+        }))
+        .expect_err("update request rejects dbPath");
+        assert!(update.to_string().contains("unknown field"));
     }
 
     #[test]
@@ -5056,6 +6022,279 @@ mod tests {
     }
 
     #[test]
+    fn profile_list_returns_empty_without_migration_on_existing_runtime_db() {
+        let project = temp_project("profile-list-pr2-db");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create base runtime db");
+
+        let list = runtime_profile_list_for_project(Some(&project), true).expect("list profiles");
+
+        assert_eq!(list.status, RuntimeDbHealthState::Healthy);
+        assert!(list.profiles.is_empty());
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        assert!(!table_exists(&connection, "runtime_model_profiles").expect("check table"));
+        assert!(!migration_family_exists(&project, PROFILE_STATUS_FAMILY));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_schema_preserves_existing_higher_migration_version() {
+        let project = temp_project("profile-higher-version");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create base runtime db");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "INSERT INTO runtime_schema_migrations (
+                    family,
+                    version,
+                    applied_at_ms
+                ) VALUES (?1, ?2, ?3)",
+                params![PROFILE_STATUS_FAMILY, 2_i64, 42_i64],
+            )
+            .expect("seed higher profile migration");
+        drop(connection);
+
+        runtime_profile_create_for_project(
+            Some(&project),
+            true,
+            profile_create_request("profile-1"),
+            100,
+        )
+        .expect("create profile");
+        let migration = read_migration_family(&project, PROFILE_STATUS_FAMILY);
+
+        assert_eq!(
+            migration,
+            RuntimeDbMigrationStatus {
+                family: PROFILE_STATUS_FAMILY.to_string(),
+                version: 2,
+                applied_at_ms: 42,
+            }
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_create_update_list_and_status_round_trip_without_secret_values() {
+        let project = temp_project("profile-round-trip");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        let created = runtime_profile_create_for_project(
+            Some(&project),
+            true,
+            profile_create_request("profile-1"),
+            100,
+        )
+        .expect("create profile");
+
+        assert_eq!(created.profile_id, "profile-1");
+        assert_eq!(created.kind, "model-call");
+        assert_eq!(created.display_name, "GPT-4.1");
+        assert_eq!(created.provider_id, "openai");
+        assert_eq!(created.model_id, "gpt-4.1");
+        assert_eq!(created.auth_style, "bearer");
+        assert_eq!(created.capability_status, DEFAULT_PROFILE_STATUS);
+        assert_eq!(created.capability_json, DEFAULT_PROFILE_CAPABILITY_JSON);
+        assert!(created.enabled);
+        assert_eq!(created.max_concurrency, 2);
+        assert_eq!(
+            created.secret_ref.as_deref(),
+            Some(profile_secret_ref("profile-1").as_str())
+        );
+        assert!(!created
+            .secret_ref
+            .as_deref()
+            .unwrap_or_default()
+            .contains("sk-"));
+        assert!(migration_family_exists(&project, PROFILE_STATUS_FAMILY));
+        let secret_value = "sk-test-secret-never-stored";
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let stored_secret_ref: Option<String> = connection
+            .query_row(
+                "SELECT secret_ref FROM runtime_model_profiles WHERE profile_id = ?1",
+                ["profile-1"],
+                |row| row.get(0),
+            )
+            .expect("read stored secret ref");
+        assert_eq!(stored_secret_ref.as_deref(), created.secret_ref.as_deref());
+        let stored_text: String = connection
+            .query_row(
+                "SELECT profile_id
+                    || display_name
+                    || provider_id
+                    || model_id
+                    || COALESCE(endpoint, '')
+                    || api_mode
+                    || auth_style
+                    || COALESCE(secret_ref, '')
+                    || task_families_json
+                    || capability_json
+                    || capability_version
+                    || COALESCE(last_capability_error, '')
+                 FROM runtime_model_profiles
+                 WHERE profile_id = ?1",
+                ["profile-1"],
+                |row| row.get(0),
+            )
+            .expect("read stored profile text");
+        let created_payload = serde_json::to_string(&created).expect("serialize profile");
+        assert!(!stored_text.contains(secret_value));
+        assert!(!created_payload.contains(secret_value));
+
+        let mut update = profile_update_request("profile-1");
+        update.display_name = Some("GPT-4.1 compact".to_string());
+        update.endpoint = Some("https://api.openai.example/v1".to_string());
+        update.clear_secret_ref = Some(true);
+        update.enabled = Some(false);
+        update.task_families = Some(vec!["summarize".to_string(), "summarize".to_string()]);
+        update.capability_status = Some("limited".to_string());
+        update.capability_json = Some("{\"contextWindow\":8192}".to_string());
+        update.capability_version = Some("probe-v1".to_string());
+        update.capability_checked_at_ms = Some(200);
+        update.probe_backoff_until_ms = Some(300);
+        update.last_capability_error = Some("rate limited".to_string());
+
+        let updated = runtime_profile_update_for_project(Some(&project), true, update, 250)
+            .expect("update profile");
+
+        assert_eq!(updated.display_name, "GPT-4.1 compact");
+        assert_eq!(
+            updated.endpoint.as_deref(),
+            Some("https://api.openai.example/v1")
+        );
+        assert!(updated.secret_ref.is_none());
+        assert!(!updated.enabled);
+        assert_eq!(updated.task_families, vec!["summarize".to_string()]);
+        assert_eq!(updated.capability_status, "limited");
+        assert_eq!(updated.capability_json, "{\"contextWindow\":8192}");
+        assert_eq!(updated.capability_version, "probe-v1");
+        assert_eq!(updated.capability_checked_at_ms, Some(200));
+        assert_eq!(updated.probe_backoff_until_ms, Some(300));
+        assert_eq!(
+            updated.last_capability_error.as_deref(),
+            Some("rate limited")
+        );
+        assert_eq!(updated.created_at_ms, 100);
+        assert_eq!(updated.updated_at_ms, 250);
+
+        let list = runtime_profile_list_for_project(Some(&project), true).expect("list profiles");
+        assert_eq!(list.profiles, vec![updated.clone()]);
+        let status = runtime_profile_status_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileStatusRequest {
+                profile_id: "profile-1".to_string(),
+            },
+        )
+        .expect("profile status");
+        assert_eq!(status, updated);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_update_preserves_nullable_fields_until_clear_flags_are_set() {
+        let project = temp_project("profile-update-clear-flags");
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut create = profile_create_request("profile-clear");
+        create.endpoint = Some("https://api.openai.example/v1".to_string());
+        runtime_profile_create_for_project(Some(&project), true, create, 100)
+            .expect("create profile");
+
+        let mut seed_error = profile_update_request("profile-clear");
+        seed_error.last_capability_error = Some("temporary outage".to_string());
+        runtime_profile_update_for_project(Some(&project), true, seed_error, 150)
+            .expect("seed nullable fields");
+
+        let mut rename_only = profile_update_request("profile-clear");
+        rename_only.display_name = Some("Renamed profile".to_string());
+        let preserved = runtime_profile_update_for_project(Some(&project), true, rename_only, 200)
+            .expect("rename preserves nullable fields");
+
+        assert_eq!(preserved.display_name, "Renamed profile");
+        assert_eq!(
+            preserved.endpoint.as_deref(),
+            Some("https://api.openai.example/v1")
+        );
+        assert_eq!(
+            preserved.secret_ref.as_deref(),
+            Some(profile_secret_ref("profile-clear").as_str())
+        );
+        assert_eq!(
+            preserved.last_capability_error.as_deref(),
+            Some("temporary outage")
+        );
+
+        let mut clear_secret = profile_update_request("profile-clear");
+        clear_secret.clear_secret_ref = Some(true);
+        let secret_cleared =
+            runtime_profile_update_for_project(Some(&project), true, clear_secret, 225)
+                .expect("clear secret ref");
+
+        assert_eq!(
+            secret_cleared.endpoint.as_deref(),
+            Some("https://api.openai.example/v1")
+        );
+        assert!(secret_cleared.secret_ref.is_none());
+        assert_eq!(
+            secret_cleared.last_capability_error.as_deref(),
+            Some("temporary outage")
+        );
+
+        let mut clear = profile_update_request("profile-clear");
+        clear.clear_endpoint = Some(true);
+        clear.clear_last_capability_error = Some(true);
+        let cleared = runtime_profile_update_for_project(Some(&project), true, clear, 250)
+            .expect("clear nullable fields");
+
+        assert!(cleared.endpoint.is_none());
+        assert!(cleared.secret_ref.is_none());
+        assert!(cleared.last_capability_error.is_none());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_validation_rejects_plain_secret_refs_and_bad_json() {
+        let project = temp_project("profile-validation");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        let mut raw_secret = profile_create_request("profile-plain-secret");
+        raw_secret.secret_ref = Some("sk-test-secret".to_string());
+        let raw_secret_error =
+            runtime_profile_create_for_project(Some(&project), true, raw_secret, 100)
+                .expect_err("plain secret ref rejected");
+        assert!(raw_secret_error.starts_with("invalid-secret-ref"));
+
+        let mut prefixed_secret = profile_create_request("profile-prefixed-secret");
+        prefixed_secret.secret_ref = Some("llm-wiki-profile-secret:sk-test-secret".to_string());
+        let prefixed_secret_error =
+            runtime_profile_create_for_project(Some(&project), true, prefixed_secret, 100)
+                .expect_err("prefixed secret value rejected");
+        assert!(prefixed_secret_error.starts_with("invalid-secret-ref"));
+
+        runtime_profile_create_for_project(
+            Some(&project),
+            true,
+            profile_create_request("profile-json"),
+            100,
+        )
+        .expect("create profile");
+        let mut disguised_secret = profile_update_request("profile-json");
+        disguised_secret.secret_ref = Some("llm-wiki-profile-secret:sk-test-secret".to_string());
+        let disguised_secret_error =
+            runtime_profile_update_for_project(Some(&project), true, disguised_secret, 150)
+                .expect_err("prefixed secret value rejected on update");
+        assert!(disguised_secret_error.starts_with("invalid-secret-ref"));
+        let mut bad_json = profile_update_request("profile-json");
+        bad_json.capability_json = Some("{bad json}".to_string());
+        let bad_json_error =
+            runtime_profile_update_for_project(Some(&project), true, bad_json, 200)
+                .expect_err("invalid capability JSON rejected");
+        assert!(bad_json_error.starts_with("invalid-capability-json"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
     fn derived_stale_marker_validation_rejects_invalid_inputs() {
         let project = temp_project("derived-marker-validation");
         fs::create_dir_all(&project).expect("create temp project");
@@ -5081,8 +6320,12 @@ mod tests {
         .expect_err("non-delete marker requires input hash");
         assert!(missing_hash_error.starts_with("invalid-input-hash"));
 
-        let mut duplicate_version =
-            marker_record_request("marker-duplicate-version", "embedding", "wiki/a.md", "event-1");
+        let mut duplicate_version = marker_record_request(
+            "marker-duplicate-version",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+        );
         duplicate_version.base_version = "event-1".to_string();
         let duplicate_version_error = runtime_derived_stale_marker_record_for_project(
             Some(&project),
@@ -5107,8 +6350,7 @@ mod tests {
         assert_eq!(deleted.reason, "delete");
         assert!(deleted.input_hash.is_none());
 
-        let duplicate_id =
-            marker_record_request("marker-delete", "search", "wiki/a.md", "event-1");
+        let duplicate_id = marker_record_request("marker-delete", "search", "wiki/a.md", "event-1");
         let duplicate_error = runtime_derived_stale_marker_record_for_project(
             Some(&project),
             true,
