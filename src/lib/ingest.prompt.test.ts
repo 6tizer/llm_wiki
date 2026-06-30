@@ -46,6 +46,19 @@ describe("buildAnalysisPrompt language directive", () => {
     expect(prompt).toContain("## Main Arguments & Findings")
     expect(prompt).toContain("## Recommendations")
   })
+
+  it("does not frame root index as required context", () => {
+    const prompt = buildAnalysisPrompt("purpose", "", "source")
+    expect(prompt).not.toContain("check the index")
+    expect(prompt).not.toContain("Current Wiki Index")
+  })
+
+  it("can include optional existing wiki context without naming root index", () => {
+    const prompt = buildAnalysisPrompt("purpose", "Existing page: [[attention]]", "source")
+    expect(prompt).toContain("## Existing Wiki Context (optional)")
+    expect(prompt).toContain("[[attention]]")
+    expect(prompt).not.toContain("Current Wiki Index")
+  })
 })
 
 describe("buildGenerationPrompt language directive", () => {
@@ -70,6 +83,16 @@ describe("buildGenerationPrompt language directive", () => {
   it("includes the source filename in output instructions", () => {
     const prompt = buildGenerationPrompt("", "", "", "my-paper.pdf")
     expect(prompt).toContain("my-paper.pdf")
+  })
+
+  it("does not require root index or overview output", () => {
+    const prompt = buildGenerationPrompt("schema", "purpose", "# Index", "source.pdf", "# Overview")
+    expect(prompt).not.toContain("updated wiki/index.md")
+    expect(prompt).not.toContain("updated wiki/overview.md")
+    expect(prompt).not.toContain("Current Wiki Index")
+    expect(prompt).not.toContain("Current Overview")
+    expect(prompt).not.toContain("preserve all existing entries")
+    expect(prompt).toContain("A log entry for wiki/log.md")
   })
 
   it("makes project schema routing authoritative over default entity and concept folders", () => {

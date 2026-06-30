@@ -18,7 +18,7 @@
  * to dropping pages without telling anyone.
  */
 import { describe, it, expect } from "vitest"
-import { parseFileBlocks, isSafeIngestPath } from "./ingest"
+import { parseFileBlocks, isRootIngestAggregatePath, isSafeIngestPath } from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
 
@@ -402,6 +402,18 @@ describe("isSafeIngestPath — what the validator accepts and rejects", () => {
     expect(isSafeIngestPath("wiki/concepts/topic ")).toBe(false)
     expect(isSafeIngestPath("wiki/concepts/folder./topic.md")).toBe(false)
     expect(isSafeIngestPath("wiki/concepts/folder /topic.md")).toBe(false)
+  })
+})
+
+describe("isRootIngestAggregatePath — normal ingest root aggregate policy", () => {
+  it("matches only root index and overview pages", () => {
+    expect(isRootIngestAggregatePath("wiki/index.md")).toBe(true)
+    expect(isRootIngestAggregatePath("wiki/overview.md")).toBe(true)
+    expect(isRootIngestAggregatePath("wiki/log.md")).toBe(false)
+    expect(isRootIngestAggregatePath("wiki/projects/index.md")).toBe(false)
+    expect(isRootIngestAggregatePath("wiki/topics/overview.md")).toBe(false)
+    expect(isRootIngestAggregatePath("Wiki/Index.md")).toBe(false)
+    expect(isRootIngestAggregatePath("wiki/index.md ")).toBe(false)
   })
 })
 
