@@ -1,4 +1,5 @@
 import type {
+  DerivedStaleMarkerLayer,
   MarkdownCommitOperationIntent,
   MarkdownCommitResult,
 } from "../contract"
@@ -31,6 +32,37 @@ export interface MarkdownCommitBudgetClaimReceipt {
   readonly expiresAtMs?: number
 }
 
+export interface MarkdownCommitAuditPayload {
+  readonly kind: "markdown-commit"
+  readonly artifactId: string
+  readonly artifactHash: string
+  readonly targetPath: string
+  readonly operationIntent: MarkdownCommitOperationIntent
+  readonly result: MarkdownCommitResult
+  readonly baseHash: string | null
+  readonly currentHash: string | null
+  readonly finalHash: string | null
+  readonly affectedPaths: readonly string[]
+  readonly repairJobId: string | null
+  readonly sourceKind: string
+}
+
+export interface MarkdownCommitEventReceipt {
+  readonly eventId: string
+  readonly createdAtMs?: number
+}
+
+export interface MarkdownCommitDerivedMarkerOperation {
+  readonly layer: DerivedStaleMarkerLayer
+  readonly affectedPath: string
+}
+
+export interface MarkdownCommitDerivedMarkerContext {
+  readonly event: MarkdownCommitEventReceipt
+  readonly result: MarkdownCommitOperationResult
+  readonly markerOperations: readonly MarkdownCommitDerivedMarkerOperation[]
+}
+
 export interface MarkdownCommitAdapters {
   readonly claimBudget: (
     request: MarkdownCommitBudgetClaimRequest,
@@ -48,6 +80,12 @@ export interface MarkdownCommitAdapters {
   ) => Promise<void>
   readonly deleteCommittedMarkdown: (targetPath: string) => Promise<void>
   readonly cleanupCommittedArtifact: (artifactId: string) => Promise<void>
+  readonly appendCommitEvent?: (
+    payload: MarkdownCommitAuditPayload,
+  ) => Promise<MarkdownCommitEventReceipt>
+  readonly recordDerivedStaleMarkers?: (
+    context: MarkdownCommitDerivedMarkerContext,
+  ) => Promise<void>
   readonly hashContent?: (content: string) => Promise<string> | string
 }
 
@@ -56,6 +94,7 @@ export interface MarkdownCommitRequest {
   readonly holder: string
   readonly claimId?: string
   readonly ttlMs?: number
+  readonly markerOperations?: readonly MarkdownCommitDerivedMarkerOperation[]
 }
 
 export interface MarkdownCommitOperationResult {
@@ -68,10 +107,12 @@ export interface MarkdownCommitOperationResult {
   readonly currentHash: string | null
   readonly finalHash: string | null
   readonly affectedPaths: readonly string[]
-  readonly eventId: null
+  readonly eventId: string | null
   readonly error?: string
   readonly cleanupError?: string
   readonly releaseError?: string
+  readonly eventError?: string
+  readonly markerError?: string
 }
 
 export function canonicalizeMarkdownContentForHash(content: string): string {
@@ -134,6 +175,27 @@ export async function commitMarkdownArtifact(
 
   if (releaseError) {
     outcome = { ...outcome, releaseError }
+    return outcome
+  }
+
+  const event = await appendCommitEventIfAvailable(outcome, artifact, adapters)
+  if (!event.ok) {
+    return { ...outcome, eventError: event.eventError }
+  }
+  if (event.receipt) {
+    outcome = { ...outcome, eventId: event.receipt.eventId }
+  }
+
+  if (shouldRecordMarkers(outcome) && event.receipt && request.markerOperations?.length) {
+    try {
+      await adapters.recordDerivedStaleMarkers?.({
+        event: event.receipt,
+        result: outcome,
+        markerOperations: request.markerOperations,
+      })
+    } catch (error) {
+      return { ...outcome, markerError: describeError(error) }
+    }
   }
 
   if (outcome.result === "committed" || outcome.result === "merged") {
@@ -145,6 +207,51 @@ export async function commitMarkdownArtifact(
   }
 
   return outcome
+}
+
+async function appendCommitEventIfAvailable(
+  outcome: MarkdownCommitOperationResult,
+  artifact: MarkdownCommitArtifact,
+  adapters: MarkdownCommitAdapters,
+): Promise<
+  | { readonly ok: true; readonly receipt: MarkdownCommitEventReceipt | null }
+  | { readonly ok: false; readonly eventError: string }
+> {
+  if (!adapters.appendCommitEvent) {
+    return { ok: true, receipt: null }
+  }
+  try {
+    return {
+      ok: true,
+      receipt: await adapters.appendCommitEvent(buildAuditPayload(artifact, outcome)),
+    }
+  } catch (error) {
+    return { ok: false, eventError: describeError(error) }
+  }
+}
+
+function buildAuditPayload(
+  artifact: MarkdownCommitArtifact,
+  outcome: MarkdownCommitOperationResult,
+): MarkdownCommitAuditPayload {
+  return {
+    kind: "markdown-commit",
+    artifactId: outcome.artifactId,
+    artifactHash: outcome.artifactHash,
+    targetPath: outcome.targetPath,
+    operationIntent: outcome.operationIntent,
+    result: outcome.result,
+    baseHash: outcome.baseHash,
+    currentHash: outcome.currentHash,
+    finalHash: outcome.finalHash,
+    affectedPaths: outcome.affectedPaths,
+    repairJobId: null,
+    sourceKind: artifact.sourceKind,
+  }
+}
+
+function shouldRecordMarkers(outcome: MarkdownCommitOperationResult): boolean {
+  return outcome.result === "committed" || outcome.result === "merged"
 }
 
 async function decideAndApplyCommit(

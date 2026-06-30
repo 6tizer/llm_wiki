@@ -85,6 +85,57 @@ export interface RuntimeStagingArtifactRecord {
   lastError?: string | null
 }
 
+export interface RuntimeEventAppendRequest {
+  jobId?: string | null
+  eventId?: string | null
+  payload: string
+}
+
+export interface RuntimeEventRecord {
+  eventId: string
+  jobId: string
+  eventName: string
+  payload: string
+  createdAtMs: number
+}
+
+export interface RuntimeDerivedStaleMarkerRecordRequest {
+  markerId?: string | null
+  layer: string
+  affectedPath: string
+  inputHash?: string | null
+  baseVersion: string
+  reason: string
+  sourceEventId: string
+}
+
+export interface RuntimeDerivedStaleMarkerListRequest {
+  layer?: string | null
+  affectedPath?: string | null
+  status?: string | null
+  limit?: number | null
+}
+
+export interface RuntimeDerivedStaleMarkerRecord {
+  markerId: string
+  layer: string
+  affectedPath: string
+  inputHash?: string | null
+  baseVersion: string
+  markedAtMs: number
+  reason: string
+  sourceEventId: string
+  status: string
+  updatedAtMs: number
+  lastError?: string | null
+}
+
+export interface RuntimeDerivedStaleMarkerList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  markers: RuntimeDerivedStaleMarkerRecord[]
+}
+
 export function runtimeJobList(): Promise<RuntimeJobList> {
   return invoke<RuntimeJobList>("runtime_job_list")
 }
@@ -108,6 +159,28 @@ export function runtimeStagingArtifactCommitSuccess(
 ): Promise<RuntimeStagingArtifactRecord> {
   return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_commit_success", {
     request: { artifactId },
+  })
+}
+
+export function runtimeEventAppend(
+  request: RuntimeEventAppendRequest,
+): Promise<RuntimeEventRecord> {
+  return invoke<RuntimeEventRecord>("runtime_event_append", { request })
+}
+
+export function runtimeDerivedStaleMarkerRecord(
+  request: RuntimeDerivedStaleMarkerRecordRequest,
+): Promise<RuntimeDerivedStaleMarkerRecord> {
+  return invoke<RuntimeDerivedStaleMarkerRecord>("runtime_derived_stale_marker_record", {
+    request,
+  })
+}
+
+export function runtimeDerivedStaleMarkerList(
+  request: RuntimeDerivedStaleMarkerListRequest = {},
+): Promise<RuntimeDerivedStaleMarkerList> {
+  return invoke<RuntimeDerivedStaleMarkerList>("runtime_derived_stale_marker_list", {
+    request,
   })
 }
 

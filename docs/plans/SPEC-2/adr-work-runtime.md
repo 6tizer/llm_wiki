@@ -79,6 +79,8 @@ Schema family inventory:
 | `staging-artifacts` | status update by Core Runtime writer, read by SPEC-3 | SPEC-2 | Runtime-owned status for staged Markdown/materialized artifacts. |
 | `migrations` | forward-only bookkeeping by Core Runtime writer | SPEC-2 | Schema family/version direction tracking only. |
 
+Implementation sequencing note: `derived-stale-markers` remains SPEC-2-owned even if the first physical table/API implementation lands in a SPEC-3 integration PR. That implementation must live in Core Runtime runtime DB code, preserve SPEC-2 ownership, and not create a SPEC-3-owned competing store.
+
 Migrations are forward-only at the ADR level: family version `N` advances to `N+1`. Rollback behavior must be represented by a later forward migration. PR1 does not implement a migrations table or name any migration module.
 
 Portable SQLite guard:
