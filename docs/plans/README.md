@@ -26,6 +26,8 @@
 | [SPEC-2/pr6-staging-gc-plan.md](./SPEC-2/pr6-staging-gc-plan.md) | SPEC-2 PR6 执行计划：staging artifact metadata、commit-success cleanup、failed/cancelled TTL GC。 | merged |
 | [SPEC-2/pr7-runtime-ui-plan.md](./SPEC-2/pr7-runtime-ui-plan.md) | SPEC-2 PR7 执行计划：minimal runtime UI、job queue status、pause/resume/cancel controls。 | merged |
 | [spec-3-markdown-commit-layer.md](./spec-3-markdown-commit-layer.md) | Markdown commit layer、staging artifact、`index.md` / `overview.md` 去核心化。 | next / planned |
+| [SPEC-3/pr1-commit-layer-adr-plan.md](./SPEC-3/pr1-commit-layer-adr-plan.md) | SPEC-3 PR1 执行计划：Markdown commit layer ADR、artifact/result/conflict/event/marker boundary、inert core contract metadata。 | ready for PR |
+| [SPEC-3/adr-markdown-commit-layer.md](./SPEC-3/adr-markdown-commit-layer.md) | SPEC-3 PR1 ADR：staged artifact、commit result、base hash matrix、SPEC-2 dependency boundary、derived stale marker ownership。 | frozen for SPEC-3 PR2+ |
 | [spec-4-model-profiles.md](./spec-4-model-profiles.md) | 用户选择的 Model/Profile、多供应商 capability probe、Model-call vs Agent-run Profile。 | planned |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |

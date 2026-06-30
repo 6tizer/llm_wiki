@@ -10,7 +10,17 @@ import {
   JOB_RUNTIME_SINGLE_WRITER_OPERATIONS,
   JOB_RUNTIME_STATES,
   JOB_RUNTIME_TRANSITIONS,
+  DERIVED_STALE_MARKER_LAYERS,
+  DERIVED_STALE_MARKER_REASONS,
+  MARKDOWN_COMMIT_ARTIFACT_FIELDS,
+  MARKDOWN_COMMIT_AUDIT_FIELDS,
+  MARKDOWN_COMMIT_BASE_HASH_CASES,
+  MARKDOWN_COMMIT_COMMAND_NAMES,
+  MARKDOWN_COMMIT_EVENT_NAMES,
+  MARKDOWN_COMMIT_OPERATION_INTENTS,
+  MARKDOWN_COMMIT_RESULTS,
   RUNTIME_CONTRACT_FAMILIES,
+  RUNTIME_CONTRACT_MESSAGES,
   type RuntimeContractFamily,
   createMockCoreRuntimeContract,
 } from "./index"
@@ -50,6 +60,7 @@ const APP_STATE_LOCK_KEYS = [
 ] as const
 
 const SPEC_2_ADR = "docs/plans/SPEC-2/adr-work-runtime.md"
+const SPEC_3_ADR = "docs/plans/SPEC-3/adr-markdown-commit-layer.md"
 
 function repoFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf-8")
@@ -71,7 +82,7 @@ function tableFirstColumn(section: string): string[] {
     .filter((line) => !line.startsWith("| ---"))
     .map((line) => line.split("|")[1]?.trim())
     .filter((value): value is string => Boolean(value))
-    .filter((value) => !["Family", "Name", "State", "Operation", "Setting"].includes(value))
+    .filter((value) => !["Family", "Name", "State", "Operation", "Setting", "Intent", "Result", "Field", "Need"].includes(value))
     .map((value) => value.replace(/^`|`$/g, ""))
 }
 
@@ -87,7 +98,17 @@ function tableRows(section: string): string[][] {
         .slice(1, -1)
         .map((value) => value.trim().replace(/`/g, "")),
     )
-    .filter((row) => row[0] !== "Setting")
+    .filter((row) => !["Field", "Intent", "Setting"].includes(row[0] ?? ""))
+}
+
+function markdownCommitBaseHashRows(adr: string): typeof MARKDOWN_COMMIT_BASE_HASH_CASES {
+  return tableRows(sectionBetween(adr, "## Base Hash Matrix", "Any state not listed")).map(
+    ([intent, currentState, requiredOutcome]) => ({
+      intent,
+      currentState,
+      requiredOutcome,
+    }),
+  ) as unknown as typeof MARKDOWN_COMMIT_BASE_HASH_CASES
 }
 
 function adrTransitionRows(adr: string): string[] {
@@ -129,29 +150,33 @@ describe("Core Runtime headless contract skeleton", () => {
   it("can be exercised without React, Tauri, Zustand, or persistence", async () => {
     const contract = createMockCoreRuntimeContract()
     const messages = contract.listMessages()
-    const expectedMessageCount =
-      (EXPECTED_FAMILIES.length - 1) * 2 + JOB_RUNTIME_COMMAND_NAMES.length + JOB_RUNTIME_EVENT_NAMES.length
+    const expectedMessageCount = RUNTIME_CONTRACT_FAMILIES.reduce((total, family) => {
+      const inventory = RUNTIME_CONTRACT_MESSAGES[family]
+      return total + inventory.commandNames.length + inventory.eventNames.length
+    }, 0)
 
     expect(contract.maturity).toBe("frozen")
     expect(RUNTIME_CONTRACT_FAMILIES).toEqual(EXPECTED_FAMILIES)
     expect(messages).toHaveLength(expectedMessageCount)
 
-    for (const family of EXPECTED_FAMILIES) {
-      if (family === "job-runtime") {
-        continue
+    for (const family of RUNTIME_CONTRACT_FAMILIES) {
+      const inventory = RUNTIME_CONTRACT_MESSAGES[family]
+      for (const name of inventory.commandNames) {
+        expect(messages).toContainEqual({
+          family,
+          direction: "command",
+          name,
+          payloadShape: "placeholder",
+        })
       }
-      expect(messages).toContainEqual({
-        family,
-        direction: "command",
-        name: `${family}:placeholder-command`,
-        payloadShape: "placeholder",
-      })
-      expect(messages).toContainEqual({
-        family,
-        direction: "event",
-        name: `${family}:placeholder-event`,
-        payloadShape: "placeholder",
-      })
+      for (const name of inventory.eventNames) {
+        expect(messages).toContainEqual({
+          family,
+          direction: "event",
+          name,
+          payloadShape: "placeholder",
+        })
+      }
     }
 
     await expect(contract.invokePlaceholder(messages[0])).resolves.toEqual({ ok: true })
@@ -193,6 +218,84 @@ describe("Core Runtime headless contract skeleton", () => {
     expect(jobMessages.every((message) => message.payloadShape === "placeholder")).toBe(true)
     expect(adr).toContain("Payload details remain ADR/contract metadata")
     expect(adr).not.toContain("CREATE TABLE")
+  })
+
+  it("keeps SPEC-3 markdown-commit operations and events aligned with the ADR", () => {
+    const adr = repoFile(SPEC_3_ADR)
+    const contract = createMockCoreRuntimeContract()
+    const markdownMessages = contract.listMessages().filter((message) => message.family === "markdown-commit")
+
+    expect(markdownMessages.filter((message) => message.direction === "command").map((message) => message.name)).toEqual(
+      MARKDOWN_COMMIT_COMMAND_NAMES,
+    )
+    expect(markdownMessages.filter((message) => message.direction === "event").map((message) => message.name)).toEqual(
+      MARKDOWN_COMMIT_EVENT_NAMES,
+    )
+    expect(tableFirstColumn(sectionBetween(adr, "Commands:", "Events:"))).toEqual(MARKDOWN_COMMIT_COMMAND_NAMES)
+    expect(tableFirstColumn(sectionBetween(adr, "Events:", "These Core Runtime contract events"))).toEqual(
+      MARKDOWN_COMMIT_EVENT_NAMES,
+    )
+    expect(tableFirstColumn(sectionBetween(adr, "Operation intents:", "Large LLM output"))).toEqual(
+      MARKDOWN_COMMIT_OPERATION_INTENTS,
+    )
+    expect(tableFirstColumn(sectionBetween(adr, "Commit results:", "Each commit result"))).toEqual(
+      MARKDOWN_COMMIT_RESULTS,
+    )
+    expect(tableFirstColumn(sectionBetween(adr, "Staged artifact metadata contains:", "Operation intents:"))).toEqual(
+      MARKDOWN_COMMIT_ARTIFACT_FIELDS,
+    )
+    expect(tableFirstColumn(sectionBetween(adr, "Required audit fields:", "Content rollback"))).toEqual(
+      MARKDOWN_COMMIT_AUDIT_FIELDS,
+    )
+    expect(markdownCommitBaseHashRows(adr)).toEqual(MARKDOWN_COMMIT_BASE_HASH_CASES)
+    expect(markdownMessages.every((message) => message.payloadShape === "placeholder")).toBe(true)
+    expect(markdownMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-command")
+    expect(markdownMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-event")
+  })
+
+  it("keeps SPEC-3 commit ownership boundaries explicit", () => {
+    const adr = repoFile(SPEC_3_ADR)
+    const dependencySection = sectionBetween(adr, "## SPEC-2 Dependencies", "## Durable Audit Payload")
+
+    for (const token of [
+      "resource-budgets",
+      "events-progress",
+      "staging-artifacts",
+      "derived-stale-markers",
+      "no SPEC-3-local limiter",
+      "no SPEC-3 commit-events table",
+      "runtime_commit_events",
+      "No new artifact schema family",
+      "no new schema family",
+      "no migration",
+      "No new runtime write operations",
+      "no alternate commit queue",
+    ]) {
+      expect(dependencySection).toContain(token)
+    }
+    expect(adr).toContain("Durable audit facts are appended through SPEC-2 `events-progress`")
+    expect(adr).toContain("SPEC-3 must not create a separate commit-events table")
+    expect(adr).toContain("There is no silent overwrite")
+    expect(adr).not.toContain("CREATE TABLE")
+  })
+
+  it("keeps SPEC-3 derived marker logical fields aligned with the contract metadata", () => {
+    const adr = repoFile(SPEC_3_ADR)
+    const markerSection = sectionBetween(adr, "## Derived Stale Marker Boundary", "## Index / Overview Boundary")
+
+    for (const layer of DERIVED_STALE_MARKER_LAYERS) {
+      expect(markerSection).toContain(`\`${layer}\``)
+    }
+    for (const reason of DERIVED_STALE_MARKER_REASONS) {
+      expect(markerSection).toContain(`\`${reason}\``)
+    }
+    for (const token of [
+      "SPEC-3 PR1 freezes the logical marker field set",
+      "SPEC-2 owns the physical schema and write operation",
+      "SPEC-6 owns rebuild scheduling",
+    ]) {
+      expect(markerSection).toContain(token)
+    }
   })
 
   it("keeps SPEC-2 schema families, states, and transitions aligned with the ADR", () => {

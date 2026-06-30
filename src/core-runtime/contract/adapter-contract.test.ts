@@ -12,6 +12,8 @@ import { checkCoreRuntimeBoundary, collectModuleSpecifiers } from "./boundary-ch
 import {
   JOB_RUNTIME_COMMAND_NAMES,
   JOB_RUNTIME_EVENT_NAMES,
+  MARKDOWN_COMMIT_COMMAND_NAMES,
+  MARKDOWN_COMMIT_EVENT_NAMES,
   RUNTIME_CONTRACT_FAMILIES,
   createMockCoreRuntimeContract,
   type RuntimeContractFamily,
@@ -56,6 +58,9 @@ describe("SPEC-1 adapter contract tests", () => {
     const jobRuntimeMessages = createMockCoreRuntimeContract()
       .listMessages()
       .filter((message) => message.family === "job-runtime")
+    const markdownCommitMessages = createMockCoreRuntimeContract()
+      .listMessages()
+      .filter((message) => message.family === "markdown-commit")
 
     expect(shell.allowedFamilies).toEqual(RUNTIME_CONTRACT_FAMILIES)
     expect(driven).toHaveLength(RUNTIME_CONTRACT_FAMILIES.length * 2)
@@ -74,6 +79,14 @@ describe("SPEC-1 adapter contract tests", () => {
     )
     expect(jobRuntimeMessages.map((message) => message.name)).not.toContain("job-runtime:placeholder-command")
     expect(jobRuntimeMessages.map((message) => message.name)).not.toContain("job-runtime:placeholder-event")
+    expect(markdownCommitMessages.filter((message) => message.direction === "command").map((message) => message.name)).toEqual(
+      MARKDOWN_COMMIT_COMMAND_NAMES,
+    )
+    expect(markdownCommitMessages.filter((message) => message.direction === "event").map((message) => message.name)).toEqual(
+      MARKDOWN_COMMIT_EVENT_NAMES,
+    )
+    expect(markdownCommitMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-command")
+    expect(markdownCommitMessages.map((message) => message.name)).not.toContain("markdown-commit:placeholder-event")
   })
 
   it("keeps adapter role family ownership explicit", () => {
