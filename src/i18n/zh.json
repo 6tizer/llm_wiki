@@ -275,6 +275,7 @@
     "error": {
       "unavailable": "Agent 不可用：当前未打开项目。",
       "missingApiKey": "Agent 需要 API key。请在设置中配置当前 provider。",
+      "profileUnavailable": "没有可用的 Agent-run Profile。请检查设置 > Model Profiles。",
       "timeout": "Agent 已超时。你可以重试这次请求。",
       "maxTurnsExceeded": "Agent 已达到最大轮数。你可以拆分任务后继续，或在 Settings > Agent 调高最大轮数。",
       "failed": "Agent 失败：{{error}}"

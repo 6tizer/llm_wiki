@@ -452,6 +452,7 @@ pub fn run() {
             commands::runtime_db::runtime_profile_pool_claim,
             commands::runtime_db::runtime_profile_pool_list,
             commands::runtime_db::runtime_profile_pool_release,
+            commands::runtime_db::runtime_profile_pool_renew,
             commands::runtime_db::runtime_profile_probe,
             commands::runtime_db::runtime_profile_status,
             commands::runtime_db::runtime_profile_update,

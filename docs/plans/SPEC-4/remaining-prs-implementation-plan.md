@@ -1,14 +1,14 @@
 # SPEC-4 Remaining PRs Implementation Plan
 
-> Type: execution plan | Status: active | Owner: Commander | Current branch: `codex/spec-4-pr4-scheduler-profile-pool` | Current main: `9dff202 feat: add model profile capability probe` | Run: `a4d26b56-03df-49ae-a800-14d03223a2a2`
+> Type: execution plan | Status: active | Owner: Commander | Current branch: `codex/spec-4-pr5-agent-run-adapter` | Current main: `f0d3a49 feat: add profile pool scheduler claims` | Run: `bc558559-9178-4dda-ad0e-dccaa5701cdf`
 
 ## Decision
 
 Continue SPEC-4 as three implementation PRs:
 
 1. PR3 Capability Probe. Completed by PR #219 at `9dff202`.
-2. PR4 Scheduler Profile Pool. Current.
-3. PR5 Agent-run Adapter.
+2. PR4 Scheduler Profile Pool. Completed by PR #220 at `f0d3a49`.
+3. PR5 Agent-run Adapter. Current.
 
 Merge standard for every remaining PR:
 
@@ -24,6 +24,7 @@ PR4 and PR5 must get their own detailed PR plans when each PR starts. This docum
 - PR1 merged via #217 at `4ca772e`; it added runtime profile schema, profile capability fields, and the internal `SecretStore` read path.
 - PR2 merged via #218 at `500cb3c`; it added Settings profile management and secret write/delete boundaries.
 - PR3 merged via #219 at `9dff202`; it added stored/draft capability probes, `profile-probe.v1` cache semantics, and Settings probe UI wiring.
+- PR4 merged via #220 at `f0d3a49`; it added profile pool claim/release/list APIs, active profile claims, retry-after/circuit-break records, max-concurrency eligibility, and TS wrappers.
 - `runtime_model_profiles` already has `capability_status`, `capability_json`, `capability_version`, `capability_checked_at_ms`, `probe_backoff_until_ms`, and `last_capability_error`.
 - `profile_secrets.rs` has `read_profile_secret`, but there is intentionally no frontend read command.
 - Settings profile tests now cover stored-profile and draft profile probes without exposing stored secret values.
@@ -75,7 +76,7 @@ PR3 non-goals:
 
 ## PR4: Scheduler Profile Pool
 
-Status: current.
+Status: completed by PR #220 at `f0d3a49`.
 
 Detailed plan: [`pr4-scheduler-profile-pool-plan.md`](./pr4-scheduler-profile-pool-plan.md).
 
@@ -102,13 +103,17 @@ PR4 non-goals:
 
 ## PR5: Agent-run Adapter
 
-Status: after PR4 merge.
+Status: current.
+
+Detailed plan: [`pr5-agent-run-adapter-plan.md`](./pr5-agent-run-adapter-plan.md).
 
 Planned scope:
 
-- Add per-run Agent profile resolution: frontend passes `profileId` or a selected Agent-run profile reference, not raw secrets.
-- Resolve `secretRef` in Rust before spawning the sidecar, then inject per-run `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and model without mutating global provider settings.
-- Gate Agent runs on cached PR3 capability: no streaming/tool-use/SDK-compatible profile means Agent actions are disabled with a Settings repair path.
+- When work runtime is enabled, claim an eligible `agent-run` / `agent` profile through the PR4 profile pool before spawning the sidecar. When work runtime is disabled, preserve the current legacy global-config Agent path.
+- Add per-run Agent profile resolution: frontend passes a non-secret profile/claim reference, not raw secrets.
+- Resolve `secretRef` in Rust before spawning the sidecar, then inject per-run SDK auth/base URL/model without mutating global provider settings.
+- Renew live profile claims while the Rust sidecar reader task is active, then release from Rust terminal cleanup.
+- Gate Agent runs on cached PR3 capability: no fresh `profile-probe.v1` / Agent-run-compatible profile means Agent actions are disabled or routed through an Architect-approved compatibility path.
 - Preserve legacy Chat/model-call behavior separately from Agent-run behavior.
 - Keep sidecar protocol minimal: it can continue receiving `apiKey`, `baseUrl`, and `model` internally, but the webview should not receive stored secret values.
 - Add tests around preflight, profile resolution, missing secret, unsupported profile, and sidecar request serialization.
@@ -119,6 +124,12 @@ PR5 non-goals:
 - No unified chat entrypoint from SPEC-7.
 - No model-call worker pool from SPEC-5.
 - No broad migration of all legacy provider settings unless a small compatibility shim is required.
+
+PR5 resolved Architect decisions:
+
+- `resolve_work_runtime_enabled(None)` is false and profile pool claim requires runtime enabled. PR5 preserves the legacy Agent path when runtime is disabled and uses profile claims only when runtime is enabled.
+- Profile claim TTL is bounded and has no PR4 renewal path. PR5 must add renew support and Rust-owned terminal release so long Agent runs do not expire and oversubscribe profile capacity.
+- Add typed `profile_unavailable` UX for no eligible/busy/backoff/circuit-open profile states; missing stored secret remains `missing_api_key`.
 
 ## Gate Plan
 

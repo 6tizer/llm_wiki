@@ -289,6 +289,35 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("starts the Agent stream with an empty legacy API key so runtime profiles can claim", async () => {
+    setupActiveProjectConversation({ storeMode: "agent" })
+    useWikiStore.setState((state) => ({
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "anthropic",
+        apiKey: "",
+      },
+    }))
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    expect(streamAgentMock).toHaveBeenCalledWith(
+      "run the agent",
+      expect.objectContaining({
+        apiKey: undefined,
+        projectPath: "/project",
+      }),
+      expect.any(Object),
+      expect.any(AbortSignal),
+    )
+    expect(container.textContent).not.toContain("API key")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("does not start duplicate explicit QA saves while one is in flight", async () => {
     setupActiveProjectConversation()
     let resolveSave: (value: { ok: boolean; saved: boolean }) => void = () => undefined

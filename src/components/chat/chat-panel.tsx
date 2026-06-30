@@ -35,9 +35,9 @@ import {
 import {
 	type AgentErrorKind,
 	type AgentRunPhase,
+	agentErrorKindFromError,
 	agentErrorI18nKey,
 	agentRunPhaseI18nKey,
-	classifyAgentError,
 	getAgentPreflightError,
 } from "@/lib/agent/agent-run-state";
 import { streamAgent } from "@/lib/agent/agent-transport";
@@ -571,7 +571,9 @@ export function ChatPanel() {
 				setAgentRunPhase("idle");
 			};
 
-			const preflightError = getAgentPreflightError(project, llmConfig);
+			const preflightError = getAgentPreflightError(project, llmConfig, {
+				deferApiKeyCheck: true,
+			});
 			if (preflightError) {
 				finishAgentError(preflightError);
 				return;
@@ -645,7 +647,7 @@ export function ChatPanel() {
 							finishAgentMessage(finalContent, stats);
 						},
 						onError: (err) => {
-							const kind = classifyAgentError(err.message);
+							const kind = agentErrorKindFromError(err);
 							finishAgentError(kind, err.message);
 						},
 						onToolEvent: (event) => {
@@ -719,7 +721,7 @@ export function ChatPanel() {
 				);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				const kind = classifyAgentError(message);
+				const kind = agentErrorKindFromError(err);
 				finishAgentError(kind, message);
 			}
 		},

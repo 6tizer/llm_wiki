@@ -281,6 +281,11 @@ export interface RuntimeProfilePoolReleaseRequest {
   error?: string | null
 }
 
+export interface RuntimeProfilePoolRenewRequest {
+  claimId: string
+  ttlMs?: number | null
+}
+
 export interface RuntimeProfilePoolListRequest {
   kind?: RuntimeProfileKind | null
   taskFamily?: string | null
@@ -320,6 +325,13 @@ export interface RuntimeProfilePoolClaim {
 export interface RuntimeProfilePoolRelease {
   claim: RuntimeProfileClaimRecord
   circuitBreaker?: RuntimeProfileCircuitBreakerRecord | null
+}
+
+export interface RuntimeProfilePoolRenew {
+  claimId: string
+  profileId: string
+  expiresAtMs: number
+  claim: RuntimeProfileClaimRecord
 }
 
 export interface RuntimeProfilePoolList {
@@ -439,6 +451,12 @@ export function runtimeProfilePoolRelease(
   request: RuntimeProfilePoolReleaseRequest,
 ): Promise<RuntimeProfilePoolRelease> {
   return invoke<RuntimeProfilePoolRelease>("runtime_profile_pool_release", { request })
+}
+
+export function runtimeProfilePoolRenew(
+  request: RuntimeProfilePoolRenewRequest,
+): Promise<RuntimeProfilePoolRenew> {
+  return invoke<RuntimeProfilePoolRenew>("runtime_profile_pool_renew", { request })
 }
 
 export function runtimeProfilePoolList(
