@@ -6,11 +6,14 @@ import { Label } from "@/components/ui/label"
 import {
   runtimeProfileCreate,
   runtimeProfileList,
+  runtimeProfileProbe,
   runtimeProfileUpdate,
   type RuntimeProfileApiMode,
   type RuntimeProfileAuthStyle,
   type RuntimeProfileCreateRequest,
   type RuntimeProfileKind,
+  type RuntimeProfileProbeDraftRequest,
+  type RuntimeProfileProbeResult,
   type RuntimeProfileRecord,
   type RuntimeProfileUpdateRequest,
 } from "@/commands/runtime-db"
@@ -18,14 +21,12 @@ import {
   profileSecretDelete,
   profileSecretWrite,
 } from "@/commands/profile-secrets"
-import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/lib/connection-tests"
-import type { LlmConfig } from "@/stores/wiki-store"
-import { AZURE_OPENAI_API_VERSION } from "@/lib/azure-openai"
 import { LLM_PRESETS } from "../llm-presets"
 
-const DEFAULT_CONTEXT_SIZE = 131072
-const DEFAULT_OLLAMA_URL = "http://localhost:11434"
 const MAX_PROFILE_CONCURRENCY = 128
+// Keep these version strings aligned with src-tauri/src/commands/runtime_db.rs.
+const PROFILE_PROBE_CAPABILITY_VERSION = "profile-probe.v1"
+const STALE_PROFILE_CAPABILITY_VERSION = "spec-4-pr1"
 
 export const PROFILE_TASK_FAMILY_OPTIONS = [
   "chat",
@@ -70,19 +71,16 @@ export interface ModelProfileDraft {
   clearSecret: boolean
 }
 
-type SmokeConfigResult =
-  | { ok: true; config: LlmConfig }
-  | { ok: false; result: ProviderTestResult }
-
 type LoadState =
   | { kind: "loading" }
   | { kind: "ready" }
   | { kind: "error"; message: string }
 
-type TestState =
+type ProbeState =
   | { kind: "idle" }
-  | { kind: "running"; label: string }
-  | { kind: "done"; result: ProviderTestResult }
+  | { kind: "running" }
+  | { kind: "done"; result: RuntimeProfileProbeResult }
+  | { kind: "error"; message: string }
 
 function presetForProviderId(providerId: string) {
   return LLM_PRESETS.find((preset) => preset.id === providerId)
@@ -170,98 +168,6 @@ export function taskFamiliesForRender(values: string[]): string[] {
   return [...known, ...unknown]
 }
 
-/** Maps a profile draft into the legacy LlmConfig shape used by PR2 smoke tests. */
-export function smokeConfigFromDraft(draft: ModelProfileDraft): SmokeConfigResult {
-  const rawSecret = draft.rawSecret.trim()
-  if (!draft.modelId.trim()) {
-    return { ok: false, result: { ok: false, message: "Model id is required for this smoke test." } }
-  }
-  if (draft.authStyle !== "none" && draft.authStyle !== "oauth-local-cli" && !rawSecret) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        message: "Enter a raw secret in this draft to run a PR2 smoke test. Stored-secret probes arrive in PR3.",
-      },
-    }
-  }
-
-  const preset = presetForProviderId(draft.providerId)
-  const provider = preset?.provider
-  const base: Omit<LlmConfig, "provider"> = {
-    apiKey: rawSecret,
-    model: draft.modelId.trim(),
-    ollamaUrl: DEFAULT_OLLAMA_URL,
-    customEndpoint: draft.endpoint.trim(),
-    maxContextSize: DEFAULT_CONTEXT_SIZE,
-    reasoning: { mode: "off" },
-  }
-
-  if (draft.apiMode === "local-cli") {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        message: "Local CLI profile smoke tests use the existing provider test, not the PR2 raw-secret profile smoke path.",
-      },
-    }
-  }
-  if (draft.apiMode === "google-generate-content") {
-    if (provider !== "google") {
-      return { ok: false, result: { ok: false, message: "This profile is not mapped to a Google smoke-test provider." } }
-    }
-    return { ok: true, config: { ...base, provider: "google" } }
-  }
-  if (draft.apiMode === "anthropic-messages") {
-    if (provider === "anthropic") {
-      return { ok: true, config: { ...base, provider: "anthropic" } }
-    }
-    // Keep Anthropic-compatible gateways ahead of the generic custom fallback.
-    return {
-      ok: true,
-      config: {
-        ...base,
-        provider: "custom",
-        apiMode: "anthropic_messages",
-      },
-    }
-  }
-  if (provider === "openai") return { ok: true, config: { ...base, provider: "openai" } }
-  if (provider === "azure") {
-    return {
-      ok: true,
-      config: {
-        ...base,
-        provider: "azure",
-        azureApiVersion: AZURE_OPENAI_API_VERSION,
-        azureModelFamily: "auto",
-      },
-    }
-  }
-  if (provider === "ollama") {
-    return {
-      ok: true,
-      config: {
-        ...base,
-        provider: "ollama",
-        apiKey: "",
-        ollamaUrl: draft.endpoint.trim() || DEFAULT_OLLAMA_URL,
-      },
-    }
-  }
-  if (provider === "custom" || draft.endpoint.trim()) {
-    return {
-      ok: true,
-      config: {
-        ...base,
-        provider: "custom",
-        apiMode: "chat_completions",
-      },
-    }
-  }
-  return { ok: false, result: { ok: false, message: "This profile cannot be smoke-tested by PR2." } }
-}
-
 function toCreateRequest(draft: ModelProfileDraft, secretRef?: string): RuntimeProfileCreateRequest {
   return {
     kind: draft.kind,
@@ -280,8 +186,10 @@ function toCreateRequest(draft: ModelProfileDraft, secretRef?: string): RuntimeP
 
 function toUpdateRequest(
   draft: ModelProfileDraft,
+  existing: RuntimeProfileRecord,
   secretRef?: string,
 ): RuntimeProfileUpdateRequest {
+  const resetCapability = profileProbeInputsChanged(draft, existing, secretRef)
   return {
     profileId: draft.profileId ?? "",
     displayName: draft.displayName.trim(),
@@ -296,7 +204,52 @@ function toUpdateRequest(
     enabled: draft.enabled,
     taskFamilies: normalizedTaskFamilies(draft.taskFamilies),
     maxConcurrency: maybeNumber(draft.maxConcurrency),
+    ...(resetCapability
+      ? {
+          capabilityStatus: "unknown" as const,
+          capabilityJson: "{}",
+          capabilityVersion: STALE_PROFILE_CAPABILITY_VERSION,
+          capabilityCheckedAtMs: 0,
+          clearLastCapabilityError: true,
+        }
+      : {}),
   }
+}
+
+function normalizedEndpoint(value: string | null | undefined): string | null {
+  const trimmed = (value ?? "").trim()
+  return trimmed || null
+}
+
+function profileProbeInputsChanged(
+  draft: ModelProfileDraft,
+  existing: RuntimeProfileRecord,
+  newSecretRef?: string,
+): boolean {
+  // Provider changes flow through model/endpoint/API/auth defaults, which are the probe inputs.
+  const nextSecretRef = draft.clearSecret && !newSecretRef
+    ? null
+    : newSecretRef ?? draft.secretRef ?? null
+  return existing.modelId !== draft.modelId.trim()
+    || normalizedEndpoint(existing.endpoint) !== normalizedEndpoint(draft.endpoint)
+    || existing.apiMode !== draft.apiMode
+    || existing.authStyle !== draft.authStyle
+    || (existing.secretRef ?? null) !== nextSecretRef
+}
+
+function probeDraftRequest(draft: ModelProfileDraft): RuntimeProfileProbeDraftRequest {
+  return {
+    kind: draft.kind,
+    providerId: draft.providerId.trim(),
+    modelId: draft.modelId.trim(),
+    endpoint: normalizedEndpoint(draft.endpoint),
+    apiMode: draft.apiMode,
+    authStyle: draft.authStyle,
+  }
+}
+
+function hasFreshCapability(profile: RuntimeProfileRecord | undefined): boolean {
+  return profile?.capabilityVersion === PROFILE_PROBE_CAPABILITY_VERSION
 }
 
 /** Saves a profile draft and applies best-effort secret cleanup for failed writes or replacement. */
@@ -312,7 +265,7 @@ export async function saveProfileDraft(
 
   try {
     const saved = existing
-      ? await runtimeProfileUpdate(toUpdateRequest(draft, newRef))
+      ? await runtimeProfileUpdate(toUpdateRequest(draft, existing, newRef))
       : await runtimeProfileCreate(toCreateRequest(draft, newRef))
     if (newRef && oldRef) {
       await profileSecretDelete({ secretRef: oldRef }).catch(() => undefined)
@@ -335,7 +288,7 @@ export function ModelProfilesSection() {
   const [draft, setDraft] = useState<ModelProfileDraft>(() => createEmptyProfileDraft())
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" })
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
-  const [testState, setTestState] = useState<TestState>({ kind: "idle" })
+  const [probeState, setProbeState] = useState<ProbeState>({ kind: "idle" })
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.profileId === draft.profileId),
@@ -396,26 +349,46 @@ export function ModelProfilesSection() {
     }
   }
 
-  async function runSmoke(kind: "connection" | "function") {
-    const mapped = smokeConfigFromDraft(draft)
-    if (!mapped.ok) {
-      setTestState({ kind: "done", result: mapped.result })
-      return
+  async function runProbe() {
+    setProbeState({ kind: "running" })
+    const useStoredProfile = Boolean(
+      draft.profileId
+        && selectedProfile
+        && !draft.rawSecret.trim()
+        && !profileProbeInputsChanged(draft, selectedProfile),
+    )
+    try {
+      const result = useStoredProfile
+        // UI probes are explicit user re-tests, so they bypass backoff. Scheduler paths use force:false.
+        ? await runtimeProfileProbe({ profileId: draft.profileId, force: true })
+        : await runtimeProfileProbe({
+            draft: probeDraftRequest(draft),
+            rawSecret: draft.rawSecret.trim(),
+            force: true,
+          })
+      const updatedProfile = result.profile
+      if (updatedProfile) {
+        setProfiles((current) => current.map((profile) => (
+          profile.profileId === updatedProfile.profileId ? updatedProfile : profile
+        )))
+        setDraft(draftFromProfile(updatedProfile))
+      }
+      setProbeState({ kind: "done", result })
+    } catch (error) {
+      setProbeState({ kind: "error", message: errorMessage(error) })
     }
-    setTestState({
-      kind: "running",
-      label: kind === "connection"
-        ? t("settings.sections.llm.testingConnection")
-        : t("settings.sections.llm.testingFunction"),
-    })
-    const result = kind === "connection"
-      ? await testLlmConnection(mapped.config)
-      : await testLlmFunction(mapped.config)
-    setTestState({ kind: "done", result })
   }
 
   const allTaskFamilies = taskFamiliesForRender(draft.taskFamilies)
   const draftProviderIsKnown = Boolean(presetForProviderId(draft.providerId))
+  const selectedCapabilityIsFresh = Boolean(
+    selectedProfile
+      && hasFreshCapability(selectedProfile)
+      && !profileProbeInputsChanged(draft, selectedProfile),
+  )
+  const capabilityStatus = selectedCapabilityIsFresh
+    ? selectedProfile?.capabilityStatus
+    : "unknown"
 
   return (
     <div className="space-y-3 border-t pt-4" data-testid="model-profiles-section">
@@ -623,6 +596,41 @@ export function ModelProfilesSection() {
               )}
             </div>
 
+            <div className="space-y-1 rounded-md border px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{t("settings.sections.llm.profiles.capability")}</span>
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                  {capabilityStatus}
+                </span>
+                {!selectedCapabilityIsFresh && (
+                  <span className="text-muted-foreground">
+                    {t("settings.sections.llm.profiles.capabilityStale")}
+                  </span>
+                )}
+              </div>
+              {selectedCapabilityIsFresh && selectedProfile?.capabilityCheckedAtMs && (
+                <p className="text-muted-foreground">
+                  {t("settings.sections.llm.profiles.capabilityChecked", {
+                    time: new Date(selectedProfile.capabilityCheckedAtMs).toLocaleString(),
+                  })}
+                </p>
+              )}
+              {selectedCapabilityIsFresh && selectedProfile?.probeBackoffUntilMs && (
+                <p className="text-amber-700 dark:text-amber-300">
+                  {t("settings.sections.llm.profiles.capabilityBackoff", {
+                    time: new Date(selectedProfile.probeBackoffUntilMs).toLocaleString(),
+                  })}
+                </p>
+              )}
+              {selectedCapabilityIsFresh && selectedProfile?.lastCapabilityError && (
+                <p className="text-destructive">
+                  {t("settings.sections.llm.profiles.capabilityError", {
+                    message: selectedProfile.lastCapabilityError,
+                  })}
+                </p>
+              )}
+            </div>
+
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -634,34 +642,34 @@ export function ModelProfilesSection() {
               </button>
               <button
                 type="button"
-                data-testid="profile-smoke-connection"
-                onClick={() => void runSmoke("connection")}
-                disabled={testState.kind === "running"}
+                data-testid="profile-probe"
+                onClick={() => void runProbe()}
+                disabled={probeState.kind === "running"}
                 className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
               >
-                {t("settings.sections.llm.testConnection")}
-              </button>
-              <button
-                type="button"
-                data-testid="profile-smoke-function"
-                onClick={() => void runSmoke("function")}
-                disabled={testState.kind === "running"}
-                className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
-              >
-                {t("settings.sections.llm.testFunction")}
+                {t("settings.sections.llm.profiles.probe")}
               </button>
             </div>
             {saveMessage && <p className="text-xs text-muted-foreground">{saveMessage}</p>}
-            {testState.kind === "running" && <p className="text-xs text-muted-foreground">{testState.label}</p>}
-            {testState.kind === "done" && (
+            {probeState.kind === "running" && (
+              <p className="text-xs text-muted-foreground">
+                {t("settings.sections.llm.profiles.probing")}
+              </p>
+            )}
+            {probeState.kind === "error" && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {probeState.message}
+              </div>
+            )}
+            {probeState.kind === "done" && (
               <div
                 className={`rounded-md border px-3 py-2 text-xs ${
-                  testState.result.ok
+                  probeState.result.status !== "error"
                     ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
                     : "border-destructive/40 bg-destructive/5 text-destructive"
                 }`}
               >
-                {testState.result.message}
+                {probeState.result.message}
               </div>
             )}
           </div>

@@ -506,6 +506,13 @@
           "secretPlaceholder": "输入此 profile 的新密钥",
           "clearSecret": "清除已保存密钥",
           "saveProfile": "保存 profile",
+          "capability": "能力",
+          "capabilityStale": "尚未探测",
+          "capabilityChecked": "检查时间 {{time}}",
+          "capabilityBackoff": "{{time}} 后可重试",
+          "capabilityError": "探测失败：{{message}}",
+          "probe": "探测 profile",
+          "probing": "正在探测 profile…",
           "saved": "Profile 已保存。",
           "saveFailed": "保存失败：{{message}}"
         }

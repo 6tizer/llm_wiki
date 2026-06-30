@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Client;
 use rusqlite::{
     params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
 };
@@ -12,7 +15,8 @@ use uuid::Uuid;
 
 use crate::commands::file_sync::ProjectRootState;
 use crate::commands::profile_secrets::{
-    validate_profile_secret_ref, PROFILE_SECRET_REF_BYTES, PROFILE_SECRET_REF_SQL_GLOB,
+    read_profile_secret, validate_profile_secret_ref, OsSecretStore, SecretStore,
+    PROFILE_SECRET_REF_BYTES, PROFILE_SECRET_REF_SQL_GLOB,
 };
 use crate::panic_guard::run_guarded;
 
@@ -71,9 +75,14 @@ const MAX_PROFILE_TASK_FAMILY_BYTES: usize = 128;
 const MAX_PROFILE_CAPABILITY_JSON_BYTES: usize = 8192;
 const MAX_PROFILE_CAPABILITY_VERSION_BYTES: usize = 64;
 const MAX_PROFILE_CAPABILITY_ERROR_BYTES: usize = 4096;
+// Keep these version strings aligned with src/components/settings/sections/model-profiles-section.tsx.
 const DEFAULT_PROFILE_CAPABILITY_VERSION: &str = "spec-4-pr1";
+const PROFILE_PROBE_CAPABILITY_VERSION: &str = "profile-probe.v1";
 const DEFAULT_PROFILE_CAPABILITY_JSON: &str = "{}";
 const DEFAULT_PROFILE_STATUS: &str = "unknown";
+const PROFILE_PROBE_BACKOFF_MS: i64 = DEFAULT_RETRY_BACKOFF_MS;
+const PROFILE_PROBE_MAX_TOKENS: i64 = 8;
+const PROFILE_PROBE_TIMEOUT_SECS: u64 = 30;
 const MAX_PROFILE_CONCURRENCY: i64 = 128;
 const ACTIVE_LEASE_STATUS: &str = "active";
 const RELEASED_LEASE_STATUS: &str = "released";
@@ -594,6 +603,93 @@ pub struct RuntimeProfileList {
     profiles: Vec<RuntimeProfileRecord>,
 }
 
+/// Unsaved profile metadata used for one-request capability probes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileProbeDraftRequest {
+    kind: String,
+    provider_id: String,
+    model_id: String,
+    endpoint: Option<String>,
+    api_mode: String,
+    auth_style: String,
+}
+
+/// Request payload for checking stored or draft model profile capabilities.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileProbeRequest {
+    profile_id: Option<String>,
+    draft: Option<RuntimeProfileProbeDraftRequest>,
+    raw_secret: Option<String>,
+    force: Option<bool>,
+}
+
+/// Non-secret profile capability probe result returned to Tauri callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileProbeResult {
+    profile: Option<RuntimeProfileRecord>,
+    status: String,
+    capability_json: String,
+    capability_version: String,
+    checked_at_ms: i64,
+    backoff_until_ms: Option<i64>,
+    message: String,
+}
+
+impl std::fmt::Debug for RuntimeProfileProbeRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeProfileProbeRequest")
+            .field("profile_id", &self.profile_id)
+            .field("draft", &self.draft)
+            .field(
+                "raw_secret",
+                &self.raw_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("force", &self.force)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+struct RuntimeProfileProbeTarget {
+    profile_id: Option<String>,
+    kind: String,
+    provider_id: String,
+    model_id: String,
+    endpoint: Option<String>,
+    api_mode: String,
+    auth_style: String,
+    secret_value: String,
+}
+
+impl std::fmt::Debug for RuntimeProfileProbeTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeProfileProbeTarget")
+            .field("profile_id", &self.profile_id)
+            .field("kind", &self.kind)
+            .field("provider_id", &self.provider_id)
+            .field("model_id", &self.model_id)
+            .field("endpoint", &self.endpoint)
+            .field("api_mode", &self.api_mode)
+            .field("auth_style", &self.auth_style)
+            .field("secret_value", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeProfileProbeOutcome {
+    status: String,
+    capability_json: String,
+    message: String,
+    backoff_until_ms: Option<i64>,
+    last_capability_error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormalizedAffectedPath {
     display_key: String,
@@ -1056,6 +1152,34 @@ pub fn runtime_profile_status(
             request,
         )
     })
+}
+
+/// Probe stored or draft model profile capabilities without returning secrets.
+#[tauri::command]
+pub async fn runtime_profile_probe(
+    request: RuntimeProfileProbeRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileProbeResult, String> {
+    let (project_root, runtime_enabled, now) = run_guarded("runtime_profile_probe", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        Ok((project_root, runtime_enabled, now))
+    })?;
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(PROFILE_PROBE_TIMEOUT_SECS))
+        .build()
+        .map_err(|err| format!("profile-probe-client-failed: {err}"))?;
+    runtime_profile_probe_for_project_with_store(
+        project_root.as_deref(),
+        runtime_enabled,
+        request,
+        now,
+        &OsSecretStore,
+        &client,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -2531,6 +2655,743 @@ fn runtime_profile_status_for_project(
         return Err("profile-not-found: runtime model profile does not exist".to_string());
     }
     read_profile(&connection, &profile_id)
+}
+
+async fn runtime_profile_probe_for_project_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileProbeRequest,
+    now: i64,
+    store: &impl SecretStore,
+    client: &Client,
+) -> Result<RuntimeProfileProbeResult, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let force = request.force.unwrap_or(false);
+    let (cached, target) = resolve_profile_probe_target(project_root, request, now, force, store)?;
+    if let Some(result) = cached {
+        return Ok(result);
+    }
+
+    let target = target.expect("probe target should exist when no cached result is returned");
+    let outcome = probe_profile_target(client, &target, now).await;
+    let profile = if let Some(profile_id) = target.profile_id {
+        Some(apply_profile_probe_outcome(
+            project_root,
+            &profile_id,
+            &outcome,
+            now,
+        )?)
+    } else {
+        None
+    };
+    Ok(runtime_profile_probe_result(profile, outcome, now))
+}
+
+fn runtime_profile_probe_result(
+    profile: Option<RuntimeProfileRecord>,
+    outcome: RuntimeProfileProbeOutcome,
+    now: i64,
+) -> RuntimeProfileProbeResult {
+    RuntimeProfileProbeResult {
+        profile,
+        status: outcome.status,
+        capability_json: outcome.capability_json,
+        capability_version: PROFILE_PROBE_CAPABILITY_VERSION.to_string(),
+        checked_at_ms: now,
+        backoff_until_ms: outcome.backoff_until_ms,
+        message: outcome.message,
+    }
+}
+
+fn resolve_profile_probe_target(
+    project_root: &Path,
+    request: RuntimeProfileProbeRequest,
+    now: i64,
+    force: bool,
+    store: &impl SecretStore,
+) -> Result<
+    (
+        Option<RuntimeProfileProbeResult>,
+        Option<RuntimeProfileProbeTarget>,
+    ),
+    String,
+> {
+    match (request.profile_id, request.draft) {
+        (Some(profile_id), None) => {
+            let profile_id = normalize_profile_text(
+                "invalid-profile-id",
+                "profileId",
+                &profile_id,
+                MAX_PROFILE_ID_BYTES,
+            )?;
+            let connection = open_profile_runtime_locked(project_root)?;
+            let profile = read_profile(&connection, &profile_id)?;
+            if !force
+                && profile.capability_version == PROFILE_PROBE_CAPABILITY_VERSION
+                && profile
+                    .probe_backoff_until_ms
+                    .is_some_and(|backoff| backoff > now)
+            {
+                let message = profile
+                    .last_capability_error
+                    .clone()
+                    .unwrap_or_else(|| "Probe is waiting for retry backoff.".to_string());
+                return Ok((
+                    Some(RuntimeProfileProbeResult {
+                        profile: Some(profile.clone()),
+                        status: profile.capability_status.clone(),
+                        capability_json: profile.capability_json.clone(),
+                        capability_version: profile.capability_version.clone(),
+                        checked_at_ms: profile.capability_checked_at_ms.unwrap_or(0),
+                        backoff_until_ms: profile.probe_backoff_until_ms,
+                        message,
+                    }),
+                    None,
+                ));
+            }
+            let secret_value = match profile_secret_required(&profile.auth_style) {
+                true => {
+                    let secret_ref = profile.secret_ref.as_deref().ok_or_else(|| {
+                        "profile-probe-missing-secret: stored profile has no secretRef".to_string()
+                    })?;
+                    read_profile_secret(store, secret_ref)?
+                }
+                false => String::new(),
+            };
+            Ok((
+                None,
+                Some(RuntimeProfileProbeTarget {
+                    profile_id: Some(profile.profile_id),
+                    kind: profile.kind,
+                    provider_id: profile.provider_id,
+                    model_id: profile.model_id,
+                    endpoint: profile.endpoint,
+                    api_mode: profile.api_mode,
+                    auth_style: profile.auth_style,
+                    secret_value,
+                }),
+            ))
+        }
+        (None, Some(draft)) => Ok((
+            None,
+            Some(probe_target_from_draft(draft, request.raw_secret)?),
+        )),
+        _ => Err(
+            "invalid-profile-probe-request: provide exactly one of profileId or draft".to_string(),
+        ),
+    }
+}
+
+fn probe_target_from_draft(
+    draft: RuntimeProfileProbeDraftRequest,
+    raw_secret: Option<String>,
+) -> Result<RuntimeProfileProbeTarget, String> {
+    let kind = normalize_profile_kind(&draft.kind)?.to_string();
+    let provider_id = normalize_profile_text(
+        "invalid-provider-id",
+        "providerId",
+        &draft.provider_id,
+        MAX_PROFILE_PROVIDER_BYTES,
+    )?;
+    let model_id = normalize_profile_text(
+        "invalid-model-id",
+        "modelId",
+        &draft.model_id,
+        MAX_PROFILE_MODEL_BYTES,
+    )?;
+    let endpoint = normalize_optional_profile_text(
+        draft.endpoint,
+        "invalid-endpoint",
+        "endpoint",
+        MAX_PROFILE_ENDPOINT_BYTES,
+    )?;
+    let api_mode = normalize_profile_api_mode(&draft.api_mode)?.to_string();
+    let auth_style = normalize_profile_auth_style(&draft.auth_style)?.to_string();
+    let secret_value = if profile_secret_required(&auth_style) {
+        raw_secret
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                "profile-probe-missing-secret: draft probes require rawSecret".to_string()
+            })?
+            .to_string()
+    } else {
+        String::new()
+    };
+    Ok(RuntimeProfileProbeTarget {
+        profile_id: None,
+        kind,
+        provider_id,
+        model_id,
+        endpoint,
+        api_mode,
+        auth_style,
+        secret_value,
+    })
+}
+
+fn profile_secret_required(auth_style: &str) -> bool {
+    matches!(auth_style, "bearer" | "x-api-key" | "api-key")
+}
+
+fn apply_profile_probe_outcome(
+    project_root: &Path,
+    profile_id: &str,
+    outcome: &RuntimeProfileProbeOutcome,
+    now: i64,
+) -> Result<RuntimeProfileRecord, String> {
+    let status = normalize_profile_capability_status(&outcome.status)?;
+    let capability_json = normalize_profile_json(
+        "invalid-capability-json",
+        "capabilityJson",
+        &outcome.capability_json,
+        MAX_PROFILE_CAPABILITY_JSON_BYTES,
+    )?;
+    let capability_version = normalize_profile_text(
+        "invalid-capability-version",
+        "capabilityVersion",
+        PROFILE_PROBE_CAPABILITY_VERSION,
+        MAX_PROFILE_CAPABILITY_VERSION_BYTES,
+    )?;
+    let backoff = outcome
+        .backoff_until_ms
+        .map(|value| {
+            normalize_non_negative_ms("invalid-probe-backoff", "probeBackoffUntilMs", value)
+        })
+        .transpose()?;
+    let last_error = outcome
+        .last_capability_error
+        .clone()
+        .map(|value| {
+            normalize_profile_text(
+                "invalid-capability-error",
+                "lastCapabilityError",
+                &value,
+                MAX_PROFILE_CAPABILITY_ERROR_BYTES,
+            )
+        })
+        .transpose()?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_profile_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        read_profile_tx(&tx, profile_id)?;
+        tx.execute(
+            "UPDATE runtime_model_profiles
+             SET capability_status = ?2,
+                 capability_json = ?3,
+                 capability_version = ?4,
+                 capability_checked_at_ms = ?5,
+                 probe_backoff_until_ms = ?6,
+                 last_capability_error = ?7,
+                 updated_at_ms = ?5
+             WHERE profile_id = ?1",
+            params![
+                profile_id,
+                status,
+                capability_json,
+                capability_version,
+                now,
+                backoff,
+                last_error,
+            ],
+        )
+        .map_err(|err| format!("profile-probe-cache-update-failed: {err}"))?;
+        let profile = read_profile_tx(&tx, profile_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(profile)
+    })
+}
+
+async fn probe_profile_target(
+    client: &Client,
+    target: &RuntimeProfileProbeTarget,
+    now: i64,
+) -> RuntimeProfileProbeOutcome {
+    match target.api_mode.as_str() {
+        "anthropic-messages" => probe_anthropic_messages(client, target, now).await,
+        "openai-chat-completions" => probe_openai_chat(client, target, now).await,
+        "google-generate-content" => probe_google_generate_content(client, target, now).await,
+        _ => unsupported_probe_outcome(target, now, "Local CLI profiles are not HTTP-probed."),
+    }
+}
+
+async fn probe_anthropic_messages(
+    client: &Client,
+    target: &RuntimeProfileProbeTarget,
+    now: i64,
+) -> RuntimeProfileProbeOutcome {
+    let url = anthropic_messages_url(target.endpoint.as_deref());
+    let headers = probe_headers(
+        "anthropic-messages",
+        &target.auth_style,
+        &target.secret_value,
+    );
+    let message_body = serde_json::json!({
+        "model": target.model_id,
+        "max_tokens": PROFILE_PROBE_MAX_TOKENS,
+        "system": "Reply with OK.",
+        "messages": [{ "role": "user", "content": "Reply OK." }]
+    });
+    let message = post_probe_json(client, &url, headers.clone(), message_body, false).await;
+    if !message.ok {
+        return failed_primary_probe_outcome(target, now, message.message);
+    }
+
+    let stream_body = serde_json::json!({
+        "model": target.model_id,
+        "max_tokens": PROFILE_PROBE_MAX_TOKENS,
+        "stream": true,
+        "messages": [{ "role": "user", "content": "Reply OK." }]
+    });
+    let stream = post_probe_json(client, &url, headers.clone(), stream_body, true).await;
+    let tool_body = serde_json::json!({
+        "model": target.model_id,
+        "max_tokens": PROFILE_PROBE_MAX_TOKENS,
+        "tools": [{
+            "name": "profile_probe_tool",
+            "description": "A no-op tool used only to check tool schema support.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        }],
+        "messages": [{ "role": "user", "content": "Reply OK." }]
+    });
+    let tool = post_probe_json(client, &url, headers, tool_body, false).await;
+    let status = if stream.ok && tool.ok {
+        "supported"
+    } else {
+        "limited"
+    };
+    let message = if status == "supported" {
+        "Probe succeeded: messages, streaming, and tool schema are supported.".to_string()
+    } else {
+        "Probe completed with limited capabilities.".to_string()
+    };
+    probe_outcome(
+        now,
+        status,
+        message,
+        None,
+        capability_json(
+            target,
+            serde_json::json!({
+                "messages": message_check(true, None),
+                "streaming": message_check(stream.ok, stream.error_code),
+                "toolUse": message_check(tool.ok, tool.error_code),
+                "systemPrompt": message_check(true, None)
+            }),
+            true,
+            stream.ok && tool.ok,
+            serde_json::json!({ "maxOutputTokens": PROFILE_PROBE_MAX_TOKENS }),
+            "unknown",
+        ),
+    )
+}
+
+async fn probe_openai_chat(
+    client: &Client,
+    target: &RuntimeProfileProbeTarget,
+    now: i64,
+) -> RuntimeProfileProbeOutcome {
+    let url = openai_chat_url(target.endpoint.as_deref());
+    let body = serde_json::json!({
+        "model": target.model_id,
+        "max_tokens": PROFILE_PROBE_MAX_TOKENS,
+        "messages": [{ "role": "user", "content": "Reply OK." }]
+    });
+    let result = post_probe_json(
+        client,
+        &url,
+        probe_headers(
+            "openai-chat-completions",
+            &target.auth_style,
+            &target.secret_value,
+        ),
+        body,
+        false,
+    )
+    .await;
+    if !result.ok {
+        return failed_primary_probe_outcome(target, now, result.message);
+    }
+    let status = if target.kind == "agent-run" {
+        "limited"
+    } else {
+        "supported"
+    };
+    probe_outcome(
+        now,
+        status,
+        "Probe succeeded: chat completions model-call is supported.".to_string(),
+        None,
+        capability_json(
+            target,
+            serde_json::json!({
+                "messages": message_check(true, None),
+                "streaming": message_check(false, Some("not-probed".to_string())),
+                "toolUse": message_check(false, Some("not-probed".to_string())),
+                "systemPrompt": message_check(false, Some("not-probed".to_string()))
+            }),
+            true,
+            false,
+            serde_json::json!({ "maxOutputTokens": PROFILE_PROBE_MAX_TOKENS }),
+            "unsupported",
+        ),
+    )
+}
+
+async fn probe_google_generate_content(
+    client: &Client,
+    target: &RuntimeProfileProbeTarget,
+    now: i64,
+) -> RuntimeProfileProbeOutcome {
+    let url = google_generate_content_url(target.endpoint.as_deref(), &target.model_id);
+    let body = serde_json::json!({
+        "contents": [{
+            "role": "user",
+            "parts": [{ "text": "Reply OK." }]
+        }]
+    });
+    let result = post_probe_json(
+        client,
+        &url,
+        probe_headers(
+            "google-generate-content",
+            &target.auth_style,
+            &target.secret_value,
+        ),
+        body,
+        false,
+    )
+    .await;
+    if !result.ok {
+        return failed_primary_probe_outcome(target, now, result.message);
+    }
+    let status = if target.kind == "agent-run" {
+        "limited"
+    } else {
+        "supported"
+    };
+    probe_outcome(
+        now,
+        status,
+        "Probe succeeded: generateContent model-call is supported.".to_string(),
+        None,
+        capability_json(
+            target,
+            serde_json::json!({
+                "messages": message_check(true, None),
+                "streaming": message_check(false, Some("not-probed".to_string())),
+                "toolUse": message_check(false, Some("not-probed".to_string())),
+                "systemPrompt": message_check(false, Some("not-probed".to_string()))
+            }),
+            true,
+            false,
+            serde_json::json!({ "maxOutputTokens": PROFILE_PROBE_MAX_TOKENS }),
+            "unsupported",
+        ),
+    )
+}
+
+fn unsupported_probe_outcome(
+    target: &RuntimeProfileProbeTarget,
+    now: i64,
+    message: &str,
+) -> RuntimeProfileProbeOutcome {
+    probe_outcome(
+        now,
+        "unsupported",
+        message.to_string(),
+        None,
+        capability_json(
+            target,
+            serde_json::json!({
+                "messages": message_check(false, Some("unsupported-api-mode".to_string())),
+                "streaming": message_check(false, Some("unsupported-api-mode".to_string())),
+                "toolUse": message_check(false, Some("unsupported-api-mode".to_string())),
+                "systemPrompt": message_check(false, Some("unsupported-api-mode".to_string()))
+            }),
+            false,
+            false,
+            serde_json::json!({}),
+            "unsupported",
+        ),
+    )
+}
+
+fn failed_primary_probe_outcome(
+    target: &RuntimeProfileProbeTarget,
+    now: i64,
+    message: String,
+) -> RuntimeProfileProbeOutcome {
+    let safe_message = bounded_profile_probe_error(&message);
+    probe_outcome(
+        now,
+        "error",
+        safe_message.clone(),
+        Some(safe_message),
+        capability_json(
+            target,
+            serde_json::json!({
+                "messages": message_check(false, Some("primary-probe-failed".to_string())),
+                "streaming": message_check(false, Some("not-run".to_string())),
+                "toolUse": message_check(false, Some("not-run".to_string())),
+                "systemPrompt": message_check(false, Some("not-run".to_string()))
+            }),
+            false,
+            false,
+            serde_json::json!({}),
+            "unknown",
+        ),
+    )
+}
+
+fn probe_outcome(
+    now: i64,
+    status: &str,
+    message: String,
+    last_capability_error: Option<String>,
+    capability: serde_json::Value,
+) -> RuntimeProfileProbeOutcome {
+    RuntimeProfileProbeOutcome {
+        status: status.to_string(),
+        capability_json: capability.to_string(),
+        message,
+        backoff_until_ms: if status == "error" {
+            now.checked_add(PROFILE_PROBE_BACKOFF_MS)
+        } else {
+            None
+        },
+        last_capability_error,
+    }
+}
+
+fn capability_json(
+    target: &RuntimeProfileProbeTarget,
+    checks: serde_json::Value,
+    model_call_supported: bool,
+    agent_run_supported: bool,
+    context: serde_json::Value,
+    sdk_state: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "version": PROFILE_PROBE_CAPABILITY_VERSION,
+        "apiMode": target.api_mode,
+        "providerId": target.provider_id,
+        "modelId": target.model_id,
+        "authStyle": target.auth_style,
+        "endpointKind": endpoint_kind(target.endpoint.as_deref()),
+        "checks": checks,
+        "modelCallSupported": model_call_supported,
+        "agentRunSupported": agent_run_supported,
+        "thinking": "unknown",
+        "tokenCounting": "unknown",
+        "context": context,
+        "claudeAgentSdk": {
+            "contextManagement": sdk_state,
+            "checkpointing": sdk_state,
+            "betaHeaders": sdk_state
+        }
+    })
+}
+
+#[derive(Debug)]
+struct ProbeHttpResult {
+    ok: bool,
+    message: String,
+    error_code: Option<String>,
+}
+
+async fn post_probe_json(
+    client: &Client,
+    url: &str,
+    headers: HeaderMap,
+    body: serde_json::Value,
+    expect_stream: bool,
+) -> ProbeHttpResult {
+    let response = client.post(url).headers(headers).json(&body).send().await;
+    let response = match response {
+        Ok(response) => response,
+        Err(_) => {
+            return ProbeHttpResult {
+                ok: false,
+                message: "profile-probe-network-failed: request failed".to_string(),
+                error_code: Some("network-failed".to_string()),
+            };
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        return ProbeHttpResult {
+            ok: false,
+            message: format!("profile-probe-http-failed: provider returned {status}"),
+            error_code: Some(format!("http-{}", status.as_u16())),
+        };
+    }
+    if !expect_stream {
+        return ProbeHttpResult {
+            ok: true,
+            message: "ok".to_string(),
+            error_code: None,
+        };
+    }
+    let text = match response.text().await {
+        Ok(text) => text,
+        Err(_) => {
+            return ProbeHttpResult {
+                ok: false,
+                message: "profile-probe-stream-read-failed: response stream failed".to_string(),
+                error_code: Some("stream-read-failed".to_string()),
+            };
+        }
+    };
+    let ok = text.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("event:") || line.starts_with("data:")
+    });
+    ProbeHttpResult {
+        ok,
+        message: if ok {
+            "ok".to_string()
+        } else {
+            "profile-probe-stream-format-failed: response was not SSE-like".to_string()
+        },
+        error_code: if ok {
+            None
+        } else {
+            Some("stream-format-failed".to_string())
+        },
+    }
+}
+
+fn probe_headers(api_mode: &str, auth_style: &str, secret_value: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if api_mode == "anthropic-messages" {
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    }
+    let Ok(secret) = HeaderValue::from_str(secret_value) else {
+        return headers;
+    };
+    match (api_mode, auth_style) {
+        (_, "none") | (_, "oauth-local-cli") => {}
+        ("anthropic-messages", "x-api-key") => {
+            headers.insert("x-api-key", secret);
+        }
+        ("google-generate-content", "api-key" | "x-api-key") => {
+            headers.insert("x-goog-api-key", secret);
+        }
+        (_, "x-api-key") => {
+            headers.insert("x-api-key", secret);
+        }
+        _ => {
+            let bearer = format!("Bearer {secret_value}");
+            if let Ok(value) = HeaderValue::from_str(&bearer) {
+                headers.insert(AUTHORIZATION, value);
+            }
+        }
+    }
+    headers
+}
+
+fn anthropic_messages_url(endpoint: Option<&str>) -> String {
+    // Keep these cases aligned with src/lib/llm-providers.ts buildAnthropicUrl.
+    let base = endpoint_base(endpoint, "https://api.anthropic.com");
+    if base.ends_with("/messages") {
+        base.to_string()
+    } else if has_version_suffix(base) {
+        format!("{base}/messages")
+    } else {
+        format!("{base}/v1/messages")
+    }
+}
+
+fn openai_chat_url(endpoint: Option<&str>) -> String {
+    let base = endpoint_base(endpoint, "https://api.openai.com");
+    if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else if has_version_suffix(base) {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    }
+}
+
+fn google_generate_content_url(endpoint: Option<&str>, model_id: &str) -> String {
+    let base = endpoint_base(endpoint, "https://generativelanguage.googleapis.com/v1beta");
+    if base.ends_with(":generateContent") {
+        base.to_string()
+    } else {
+        format!(
+            "{base}/models/{}:generateContent",
+            encode_url_path_segment(model_id)
+        )
+    }
+}
+
+fn encode_url_path_segment(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn endpoint_base<'a>(endpoint: Option<&'a str>, default: &'a str) -> &'a str {
+    endpoint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default)
+        .trim_end_matches('/')
+}
+
+fn has_version_suffix(value: &str) -> bool {
+    let Some(segment) = value.rsplit('/').next() else {
+        return false;
+    };
+    let Some(digits) = segment.strip_prefix('v') else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|value| value.is_ascii_digit())
+}
+
+fn endpoint_kind(endpoint: Option<&str>) -> &'static str {
+    match endpoint.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value)
+            if value.starts_with("http://127.0.0.1") || value.starts_with("http://localhost") =>
+        {
+            "local"
+        }
+        Some(_) => "custom",
+        None => "default",
+    }
+}
+
+fn message_check(supported: bool, error_code: Option<String>) -> serde_json::Value {
+    serde_json::json!({
+        "supported": supported,
+        "errorCode": error_code
+    })
+}
+
+fn bounded_profile_probe_error(message: &str) -> String {
+    if message.len() <= MAX_PROFILE_CAPABILITY_ERROR_BYTES {
+        return message.to_string();
+    }
+    let mut end = MAX_PROFILE_CAPABILITY_ERROR_BYTES;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    message[..end].to_string()
 }
 
 fn runtime_commit_budget_claim_for_project(
@@ -4939,7 +5800,11 @@ fn path_to_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
+    use std::sync::Mutex;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn temp_project(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -4973,6 +5838,44 @@ mod tests {
                 },
             )
             .expect("read migration row")
+    }
+
+    #[derive(Default)]
+    struct TestSecretStore {
+        values: Mutex<HashMap<String, String>>,
+    }
+
+    impl TestSecretStore {
+        fn insert(&self, secret_ref: String, secret_value: &str) {
+            self.values
+                .lock()
+                .expect("lock secret store")
+                .insert(secret_ref, secret_value.to_string());
+        }
+    }
+
+    impl SecretStore for TestSecretStore {
+        fn write(&self, secret_ref: &str, secret_value: &str) -> Result<(), String> {
+            self.insert(secret_ref.to_string(), secret_value);
+            Ok(())
+        }
+
+        fn read(&self, secret_ref: &str) -> Result<String, String> {
+            self.values
+                .lock()
+                .expect("lock secret store")
+                .get(secret_ref)
+                .cloned()
+                .ok_or_else(|| "profile-secret-not-found: test secret missing".to_string())
+        }
+
+        fn delete(&self, secret_ref: &str) -> Result<(), String> {
+            self.values
+                .lock()
+                .expect("lock secret store")
+                .remove(secret_ref);
+            Ok(())
+        }
     }
 
     #[test]
@@ -5360,6 +6263,71 @@ mod tests {
             task_families: vec!["summarize".to_string(), "tag".to_string()],
             max_concurrency: Some(2),
         }
+    }
+
+    fn anthropic_profile_create_request(
+        profile_id: &str,
+        endpoint: &str,
+    ) -> RuntimeProfileCreateRequest {
+        RuntimeProfileCreateRequest {
+            provider_id: "anthropic".to_string(),
+            model_id: "claude-test".to_string(),
+            endpoint: Some(endpoint.to_string()),
+            api_mode: "anthropic-messages".to_string(),
+            auth_style: "x-api-key".to_string(),
+            ..profile_create_request(profile_id)
+        }
+    }
+
+    fn stored_probe_request(profile_id: &str, force: bool) -> RuntimeProfileProbeRequest {
+        RuntimeProfileProbeRequest {
+            profile_id: Some(profile_id.to_string()),
+            draft: None,
+            raw_secret: None,
+            force: Some(force),
+        }
+    }
+
+    fn setup_anthropic_probe_profile(
+        label: &str,
+        endpoint: &str,
+    ) -> (PathBuf, TestSecretStore, Client) {
+        let project = temp_project(label);
+        fs::create_dir_all(&project).expect("create temp project");
+        let created = runtime_profile_create_for_project(
+            Some(&project),
+            true,
+            anthropic_profile_create_request("profile-1", endpoint),
+            100,
+        )
+        .expect("create profile");
+        let store = TestSecretStore::default();
+        store.insert(created.secret_ref.expect("secret ref"), "stored-secret");
+        let client = Client::builder().build().expect("client");
+        (project, store, client)
+    }
+
+    #[test]
+    fn profile_probe_debug_redacts_raw_secret_values() {
+        let request = RuntimeProfileProbeRequest {
+            profile_id: None,
+            draft: None,
+            raw_secret: Some("debug-secret".to_string()),
+            force: Some(true),
+        };
+        let target = RuntimeProfileProbeTarget {
+            profile_id: None,
+            kind: "model-call".to_string(),
+            provider_id: "openai".to_string(),
+            model_id: "gpt-test".to_string(),
+            endpoint: None,
+            api_mode: "openai-chat-completions".to_string(),
+            auth_style: "bearer".to_string(),
+            secret_value: "debug-secret".to_string(),
+        };
+
+        assert!(!format!("{request:?}").contains("debug-secret"));
+        assert!(!format!("{target:?}").contains("debug-secret"));
     }
 
     fn profile_update_request(profile_id: &str) -> RuntimeProfileUpdateRequest {
@@ -6250,6 +7218,342 @@ mod tests {
         assert!(cleared.endpoint.is_none());
         assert!(cleared.secret_ref.is_none());
         assert!(cleared.last_capability_error.is_none());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn profile_probe_persists_supported_anthropic_capabilities_without_secret_values() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "stored-secret"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("event: message_start\ndata: {}\n"),
+            )
+            .mount(&server)
+            .await;
+        let (project, store, client) =
+            setup_anthropic_probe_profile("profile-probe-supported", &server.uri());
+
+        let result = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", false),
+            200,
+            &store,
+            &client,
+        )
+        .await
+        .expect("probe profile");
+
+        assert_eq!(result.status, "supported");
+        assert_eq!(result.capability_version, PROFILE_PROBE_CAPABILITY_VERSION);
+        assert_eq!(result.backoff_until_ms, None);
+        let serialized = serde_json::to_string(&result).expect("serialize probe result");
+        assert!(!serialized.contains("stored-secret"));
+        assert!(!serialized.contains("Authorization"));
+        let profile = result.profile.expect("updated profile");
+        assert_eq!(profile.capability_status, "supported");
+        assert_eq!(profile.capability_version, PROFILE_PROBE_CAPABILITY_VERSION);
+        assert_eq!(profile.capability_checked_at_ms, Some(200));
+        assert_eq!(profile.probe_backoff_until_ms, None);
+        assert_eq!(profile.last_capability_error, None);
+        assert!(!result.capability_json.contains("stored-secret"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn profile_probe_marks_messages_only_anthropic_as_limited() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .mount(&server)
+            .await;
+        let (project, store, client) =
+            setup_anthropic_probe_profile("profile-probe-limited", &server.uri());
+
+        let result = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", true),
+            200,
+            &store,
+            &client,
+        )
+        .await
+        .expect("probe profile");
+
+        assert_eq!(result.status, "limited");
+        assert!(result
+            .capability_json
+            .contains("\"agentRunSupported\":false"));
+        assert_eq!(result.backoff_until_ms, None);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn profile_probe_auth_failure_sets_error_and_retry_backoff() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let (project, store, client) =
+            setup_anthropic_probe_profile("profile-probe-auth-failure", &server.uri());
+
+        let result = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", false),
+            200,
+            &store,
+            &client,
+        )
+        .await
+        .expect("probe profile");
+
+        assert_eq!(result.status, "error");
+        assert_eq!(
+            result.backoff_until_ms,
+            Some(200 + PROFILE_PROBE_BACKOFF_MS)
+        );
+        let profile = result.profile.expect("updated profile");
+        assert_eq!(profile.capability_status, "error");
+        assert_eq!(
+            profile.probe_backoff_until_ms,
+            Some(200 + PROFILE_PROBE_BACKOFF_MS)
+        );
+        assert!(profile
+            .last_capability_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("401"));
+        assert!(!profile
+            .last_capability_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("stored-secret"));
+        let cached = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", false),
+            201,
+            &store,
+            &client,
+        )
+        .await
+        .expect("cached backoff result");
+        assert_eq!(cached.checked_at_ms, 200);
+        assert_eq!(cached.status, "error");
+        let serialized = serde_json::to_string(&cached).expect("serialize cached result");
+        assert!(!serialized.contains("stored-secret"));
+        assert!(!serialized.contains("Authorization"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn profile_probe_draft_openai_and_google_paths_do_not_persist_or_expose_secret() {
+        let openai = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer draft-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .mount(&openai)
+            .await;
+        let google = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/models/gemini%2Ftest:generateContent"))
+            .and(header("x-goog-api-key", "draft-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .mount(&google)
+            .await;
+        let client = Client::builder().build().expect("client");
+
+        let openai_result = runtime_profile_probe_for_project_with_store(
+            Some(Path::new("/tmp")),
+            true,
+            RuntimeProfileProbeRequest {
+                profile_id: None,
+                draft: Some(RuntimeProfileProbeDraftRequest {
+                    kind: "model-call".to_string(),
+                    provider_id: "openai".to_string(),
+                    model_id: "gpt-test".to_string(),
+                    endpoint: Some(openai.uri()),
+                    api_mode: "openai-chat-completions".to_string(),
+                    auth_style: "bearer".to_string(),
+                }),
+                raw_secret: Some("draft-secret".to_string()),
+                force: Some(true),
+            },
+            200,
+            &TestSecretStore::default(),
+            &client,
+        )
+        .await
+        .expect("probe openai draft");
+        assert_eq!(openai_result.status, "supported");
+        assert!(openai_result.profile.is_none());
+        assert!(!serde_json::to_string(&openai_result)
+            .expect("serialize openai result")
+            .contains("draft-secret"));
+
+        let google_result = runtime_profile_probe_for_project_with_store(
+            Some(Path::new("/tmp")),
+            true,
+            RuntimeProfileProbeRequest {
+                profile_id: None,
+                draft: Some(RuntimeProfileProbeDraftRequest {
+                    kind: "model-call".to_string(),
+                    provider_id: "google".to_string(),
+                    model_id: "gemini/test".to_string(),
+                    endpoint: Some(google.uri()),
+                    api_mode: "google-generate-content".to_string(),
+                    auth_style: "api-key".to_string(),
+                }),
+                raw_secret: Some("draft-secret".to_string()),
+                force: Some(true),
+            },
+            200,
+            &TestSecretStore::default(),
+            &client,
+        )
+        .await
+        .expect("probe google draft");
+        assert_eq!(google_result.status, "supported");
+        assert!(google_result.profile.is_none());
+        assert!(!serde_json::to_string(&google_result)
+            .expect("serialize google result")
+            .contains("draft-secret"));
+    }
+
+    #[tokio::test]
+    async fn profile_probe_saved_and_draft_no_auth_do_not_require_secret_refs() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .mount(&server)
+            .await;
+        let project = temp_project("profile-probe-no-auth");
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut create = profile_create_request("profile-1");
+        create.endpoint = Some(server.uri());
+        create.auth_style = "none".to_string();
+        create.secret_ref = None;
+        runtime_profile_create_for_project(Some(&project), true, create, 100)
+            .expect("create no-auth profile");
+        let client = Client::builder().build().expect("client");
+
+        let stored = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", false),
+            200,
+            &TestSecretStore::default(),
+            &client,
+        )
+        .await
+        .expect("probe saved no-auth profile");
+        assert_eq!(stored.status, "supported");
+
+        let draft = runtime_profile_probe_for_project_with_store(
+            Some(Path::new("/tmp")),
+            true,
+            RuntimeProfileProbeRequest {
+                profile_id: None,
+                draft: Some(RuntimeProfileProbeDraftRequest {
+                    kind: "model-call".to_string(),
+                    provider_id: "openai".to_string(),
+                    model_id: "gpt-test".to_string(),
+                    endpoint: Some(server.uri()),
+                    api_mode: "openai-chat-completions".to_string(),
+                    auth_style: "none".to_string(),
+                }),
+                raw_secret: None,
+                force: Some(true),
+            },
+            200,
+            &TestSecretStore::default(),
+            &client,
+        )
+        .await
+        .expect("probe draft no-auth profile");
+        assert_eq!(draft.status, "supported");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn profile_probe_local_cli_returns_unsupported_without_backoff() {
+        let project = temp_project("profile-probe-local-cli");
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut create = profile_create_request("profile-1");
+        create.provider_id = "claude-code".to_string();
+        create.model_id = "claude-code".to_string();
+        create.api_mode = "local-cli".to_string();
+        create.auth_style = "oauth-local-cli".to_string();
+        create.secret_ref = None;
+        let created = runtime_profile_create_for_project(Some(&project), true, create, 100)
+            .expect("create profile");
+        assert!(created.secret_ref.is_none());
+        let client = Client::builder().build().expect("client");
+
+        let result = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", false),
+            200,
+            &TestSecretStore::default(),
+            &client,
+        )
+        .await
+        .expect("probe local cli");
+
+        assert_eq!(result.status, "unsupported");
+        assert_eq!(result.backoff_until_ms, None);
+        let profile = result.profile.expect("updated profile");
+        assert_eq!(profile.capability_status, "unsupported");
+        assert_eq!(profile.probe_backoff_until_ms, None);
+        assert!(!serde_json::to_string(&profile)
+            .expect("serialize local profile")
+            .contains("stored-secret"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn profile_probe_ignores_old_version_backoff_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("event: message_start\ndata: {}\n"),
+            )
+            .mount(&server)
+            .await;
+        let (project, store, client) =
+            setup_anthropic_probe_profile("profile-probe-old-version", &server.uri());
+        let mut stale = profile_update_request("profile-1");
+        stale.probe_backoff_until_ms = Some(999_999);
+        stale.last_capability_error = Some("old backoff".to_string());
+        runtime_profile_update_for_project(Some(&project), true, stale, 150)
+            .expect("seed stale backoff");
+        let result = runtime_profile_probe_for_project_with_store(
+            Some(&project),
+            true,
+            stored_probe_request("profile-1", false),
+            200,
+            &store,
+            &client,
+        )
+        .await
+        .expect("probe ignores old version backoff");
+
+        assert_eq!(result.status, "supported");
+        let profile = result.profile.expect("updated profile");
+        assert_eq!(profile.capability_version, PROFILE_PROBE_CAPABILITY_VERSION);
+        assert_eq!(profile.probe_backoff_until_ms, None);
+        assert_eq!(profile.last_capability_error, None);
         let _ = fs::remove_dir_all(project);
     }
 
