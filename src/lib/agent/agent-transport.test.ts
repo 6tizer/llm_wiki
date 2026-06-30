@@ -73,12 +73,35 @@ import { rewindAgentFiles, streamAgent } from "./agent-transport";
 beforeEach(() => {
 	vi.clearAllMocks();
 	tauriMocks.reset();
-	tauriMocks.invoke.mockResolvedValue(undefined);
+	tauriMocks.invoke.mockImplementation(
+		async (command: string): Promise<unknown> => {
+			if (command === "runtime_profile_pool_list") {
+				return {
+					enabled: false,
+					status: "disabled",
+					activeClaims: [],
+					circuitBreakers: [],
+				};
+			}
+			if (command === "runtime_profile_pool_release") {
+				return { claim: { claimId: "claim-agent" }, circuitBreaker: null };
+			}
+			return undefined;
+		},
+	);
 	appToolMocks.runAgentAppTool.mockResolvedValue({
 		ok: true,
 		result: { value: "ok" },
 	});
 });
+
+function latestAgentSpawnPayload(): { args: { streamId: string } & Record<string, unknown> } {
+	const call = tauriMocks.invoke.mock.calls.find(
+		([command]) => command === "agent_spawn",
+	);
+	expect(call).toBeTruthy();
+	return call?.[1] as { args: { streamId: string } & Record<string, unknown> };
+}
 
 describe("streamAgent", () => {
 	it("calls onStreamStart with the generated stream id", async () => {
@@ -142,6 +165,314 @@ describe("streamAgent", () => {
 			stderr: "",
 		});
 		await stream;
+	});
+
+	it("keeps the legacy Agent config path when runtime profile pool is disabled", async () => {
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent(
+			"run agent",
+			{
+				apiKey: "legacy-key",
+				baseUrl: "https://legacy.example",
+				model: "legacy-model",
+				projectPath: "/tmp/wiki",
+			},
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
+		});
+		expect(tauriMocks.invoke).toHaveBeenCalledWith(
+			"runtime_profile_pool_list",
+			{ request: { kind: "agent-run", taskFamily: "agent" } },
+		);
+		const payload = latestAgentSpawnPayload();
+		expect(payload.args).toMatchObject({
+			apiKey: "legacy-key",
+			baseUrl: "https://legacy.example",
+			model: "legacy-model",
+		});
+		expect(payload.args.agentProfileId).toBeUndefined();
+		expect(payload.args.agentProfileClaimId).toBeUndefined();
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+	});
+
+	it("keeps the legacy Agent config path when no project path is available", async () => {
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent(
+			"run agent",
+			{
+				apiKey: "legacy-key",
+				baseUrl: "https://legacy.example",
+				model: "legacy-model",
+			},
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
+		});
+		expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+			"runtime_profile_pool_list",
+			expect.anything(),
+		);
+		const payload = latestAgentSpawnPayload();
+		expect(payload.args).toMatchObject({
+			apiKey: "legacy-key",
+			baseUrl: "https://legacy.example",
+			model: "legacy-model",
+		});
+		expect(payload.args.agentProfileId).toBeUndefined();
+		expect(payload.args.agentProfileClaimId).toBeUndefined();
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+	});
+
+	it("claims an Agent-run profile and strips legacy provider secrets before spawn", async () => {
+		tauriMocks.invoke.mockImplementation(
+			async (command: string): Promise<unknown> => {
+				if (command === "runtime_profile_pool_list") {
+					return {
+						enabled: true,
+						status: "healthy",
+						activeClaims: [],
+						circuitBreakers: [],
+					};
+				}
+				if (command === "runtime_profile_pool_claim") {
+					return {
+						claimId: "claim-agent",
+						profileId: "profile-agent",
+						expiresAtMs: 1_200_000,
+						claim: {
+							claimId: "claim-agent",
+							profileId: "profile-agent",
+							kind: "agent-run",
+							taskFamily: "agent",
+							holder: "agent:stream",
+							acquiredAtMs: 1,
+							expiresAtMs: 1_200_000,
+							status: "active",
+						},
+					};
+				}
+				return undefined;
+			},
+		);
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent(
+			"run agent",
+			{
+				apiKey: "legacy-key",
+				baseUrl: "https://legacy.example",
+				model: "legacy-model",
+				projectPath: "/tmp/wiki",
+			},
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
+		});
+		const payload = latestAgentSpawnPayload();
+		expect(payload.args.agentProfileId).toBe("profile-agent");
+		expect(payload.args.agentProfileClaimId).toBe("claim-agent");
+		expect(payload.args.apiKey).toBeUndefined();
+		expect(payload.args.baseUrl).toBeUndefined();
+		expect(payload.args.model).toBeUndefined();
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+		expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+			"runtime_profile_pool_release",
+			expect.anything(),
+		);
+	});
+
+	it("reports profile_unavailable when runtime profile claim fails", async () => {
+		tauriMocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "runtime_profile_pool_list") {
+				return {
+					enabled: true,
+					status: "healthy",
+					activeClaims: [],
+					circuitBreakers: [],
+				};
+			}
+			if (command === "runtime_profile_pool_claim") {
+				throw new Error("no-eligible-profile: no profile pool capacity is available");
+			}
+			return undefined;
+		});
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamAgent(
+			"run agent",
+			{ projectPath: "/tmp/wiki", apiKey: "legacy-key" },
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+			"agent_spawn",
+			expect.anything(),
+		);
+		expect(callbacks.onError).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "profile_unavailable",
+			}),
+		);
+	});
+
+	it("releases a claimed profile if agent_spawn fails before Rust accepts it", async () => {
+		tauriMocks.invoke.mockImplementation(
+			async (command: string): Promise<unknown> => {
+				if (command === "runtime_profile_pool_list") {
+					return {
+						enabled: true,
+						status: "healthy",
+						activeClaims: [],
+						circuitBreakers: [],
+					};
+				}
+				if (command === "runtime_profile_pool_claim") {
+					return {
+						claimId: "claim-agent",
+						profileId: "profile-agent",
+						expiresAtMs: 1_200_000,
+						claim: { claimId: "claim-agent" },
+					};
+				}
+				if (command === "agent_spawn") {
+					throw new Error("spawn failed");
+				}
+				if (command === "runtime_profile_pool_release") {
+					return { claim: { claimId: "claim-agent" }, circuitBreaker: null };
+				}
+				return undefined;
+			},
+		);
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamAgent(
+			"run agent",
+			{ projectPath: "/tmp/wiki", apiKey: "legacy-key" },
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).toHaveBeenCalledWith(
+			"runtime_profile_pool_release",
+			{
+				request: expect.objectContaining({
+					claimId: "claim-agent",
+					outcome: "error",
+				}),
+			},
+		);
+		expect(callbacks.onError).toHaveBeenCalledWith(expect.any(Error));
+	});
+
+	it("swallows stale untransferred profile release errors", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		tauriMocks.invoke.mockImplementation(
+			async (command: string): Promise<unknown> => {
+				if (command === "runtime_profile_pool_list") {
+					return {
+						enabled: true,
+						status: "healthy",
+						activeClaims: [],
+						circuitBreakers: [],
+					};
+				}
+				if (command === "runtime_profile_pool_claim") {
+					return {
+						claimId: "claim-agent",
+						profileId: "profile-agent",
+						expiresAtMs: 1_200_000,
+						claim: { claimId: "claim-agent" },
+					};
+				}
+				if (command === "agent_spawn") {
+					throw new Error("spawn failed");
+				}
+				if (command === "runtime_profile_pool_release") {
+					throw new Error("claim-inactive: profile pool claim is not active");
+				}
+				return undefined;
+			},
+		);
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		await streamAgent(
+			"run agent",
+			{ projectPath: "/tmp/wiki", apiKey: "legacy-key" },
+			callbacks,
+		);
+
+		expect(tauriMocks.invoke).toHaveBeenCalledWith(
+			"runtime_profile_pool_release",
+			expect.anything(),
+		);
+		expect(warnSpy).not.toHaveBeenCalled();
+		expect(callbacks.onError).toHaveBeenCalledWith(expect.any(Error));
+		warnSpy.mockRestore();
 	});
 
 	it("swallows stale listener cleanup errors when a stream finishes", async () => {
@@ -580,12 +911,13 @@ describe("streamAgent", () => {
 		);
 
 		await vi.waitFor(() => {
-			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
 		});
 
-		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
-			args: { streamId: string };
-		};
+		const payload = latestAgentSpawnPayload();
 		const changed = {
 			path: "wiki/entities/example.md",
 			operation: "update",

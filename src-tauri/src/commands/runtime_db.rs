@@ -88,6 +88,7 @@ const PROFILE_PROBE_MAX_TOKENS: i64 = 8;
 const PROFILE_PROBE_TIMEOUT_SECS: u64 = 30;
 const MAX_PROFILE_CONCURRENCY: i64 = 128;
 const MIN_PROFILE_POOL_TTL_MS: i64 = 1_000;
+// Keep this aligned with AGENT_PROFILE_CLAIM_TTL_MS in src/lib/agent/agent-transport.ts.
 const MAX_PROFILE_POOL_TTL_MS: i64 = 1_200_000;
 const MAX_PROFILE_POOL_BREAKER_MS: i64 = 3_600_000;
 const ACTIVE_LEASE_STATUS: &str = "active";
@@ -104,6 +105,10 @@ const EVENT_APPENDED_NAME: &str = "job-runtime:event-appended";
 const PROGRESS_APPENDED_NAME: &str = "job-runtime:progress-appended";
 const PROFILE_POOL_CLAIMED_NAME: &str = "profile-pool:claimed";
 const PROFILE_POOL_RELEASED_NAME: &str = "profile-pool:released";
+pub(crate) const PROFILE_CLAIM_INACTIVE_PREFIX: &str = "claim-inactive:";
+const PROFILE_CLAIM_INACTIVE_ERROR: &str = "claim-inactive: profile pool claim is not active";
+// Rust uses this after agent_spawn has accepted claim ownership.
+const AGENT_PROFILE_RELEASE_REASON: &str = "agent-run-cleanup";
 const PENDING_ARTIFACT_STATUS: &str = "pending";
 const COMMITTED_ARTIFACT_STATUS: &str = "committed";
 const FAILED_ARTIFACT_STATUS: &str = "failed";
@@ -671,6 +676,14 @@ pub struct RuntimeProfilePoolReleaseRequest {
     error: Option<String>,
 }
 
+/// Request payload for renewing one active profile-pool claim.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfilePoolRenewRequest {
+    claim_id: String,
+    ttl_ms: Option<i64>,
+}
+
 /// Request payload for listing profile-pool observability rows.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -727,6 +740,16 @@ pub struct RuntimeProfilePoolRelease {
     circuit_breaker: Option<RuntimeProfileCircuitBreakerRecord>,
 }
 
+/// Response payload for a renewed profile-pool claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfilePoolRenew {
+    claim_id: String,
+    profile_id: String,
+    expires_at_ms: i64,
+    claim: RuntimeProfileClaimRecord,
+}
+
 /// Snapshot response for active profile claims and open circuit breakers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -735,6 +758,28 @@ pub struct RuntimeProfilePoolList {
     status: RuntimeDbHealthState,
     active_claims: Vec<RuntimeProfileClaimRecord>,
     circuit_breakers: Vec<RuntimeProfileCircuitBreakerRecord>,
+}
+
+/// Sidecar-ready Agent profile config. This is crate-internal and may contain a
+/// secret value, so it must never be exposed as a Tauri command response.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct AgentRunProfileConfig {
+    pub(crate) profile_id: String,
+    pub(crate) model_id: String,
+    pub(crate) endpoint: Option<String>,
+    pub(crate) secret_value: Option<String>,
+}
+
+impl std::fmt::Debug for AgentRunProfileConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentRunProfileConfig")
+            .field("profile_id", &self.profile_id)
+            .field("model_id", &self.model_id)
+            .field("endpoint", &self.endpoint)
+            .field("secret_value", &self.secret_value.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for RuntimeProfileProbeRequest {
@@ -816,6 +861,10 @@ fn read_work_runtime_flag_value() -> Option<String> {
 
 fn resolve_work_runtime_enabled(adapter_flag_value: Option<String>) -> bool {
     parse_work_runtime_enabled(adapter_flag_value.as_deref())
+}
+
+pub(crate) fn work_runtime_enabled_from_env() -> bool {
+    resolve_work_runtime_enabled(read_work_runtime_flag_value())
 }
 
 /// Return runtime DB health/status.
@@ -1311,6 +1360,25 @@ pub fn runtime_profile_pool_release(
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
         runtime_profile_pool_release_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// Renew one active profile-pool claim for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_pool_renew(
+    request: RuntimeProfilePoolRenewRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfilePoolRenew, String> {
+    run_guarded("runtime_profile_pool_renew", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_profile_pool_renew_for_project(
             project_root.as_deref(),
             runtime_enabled,
             request,
@@ -3072,7 +3140,7 @@ fn runtime_profile_pool_release_for_project(
         let mut connection = open_profile_pool_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
         let active = read_active_profile_claim_by_id_tx(&tx, &claim_id, now)?
-            .ok_or_else(|| "claim-inactive: profile pool claim is not active".to_string())?;
+            .ok_or_else(|| PROFILE_CLAIM_INACTIVE_ERROR.to_string())?;
 
         let breaker_until = match outcome {
             "success" => {
@@ -3133,7 +3201,7 @@ fn runtime_profile_pool_release_for_project(
             )
             .map_err(|err| format!("profile-pool-release-update-failed: {err}"))?;
         if updated != 1 {
-            return Err("claim-inactive: profile pool claim is not active".to_string());
+            return Err(PROFILE_CLAIM_INACTIVE_ERROR.to_string());
         }
 
         let released = read_profile_claim_tx(&tx, &claim_id)?;
@@ -3175,6 +3243,181 @@ fn runtime_profile_pool_release_for_project(
             claim: released,
             circuit_breaker,
         })
+    })
+}
+
+pub(crate) fn release_agent_profile_claim_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    claim_id: &str,
+    outcome: &str,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let now = now_ms()?;
+    let release = RuntimeProfilePoolReleaseRequest {
+        claim_id: claim_id.to_string(),
+        outcome: outcome.to_string(),
+        retry_after_ms: None,
+        circuit_open_ms: None,
+        reason: Some(AGENT_PROFILE_RELEASE_REASON.to_string()),
+        error: error.map(str::to_string),
+    };
+    match runtime_profile_pool_release_for_project(project_root, enabled, release, now) {
+        Ok(_) => Ok(()),
+        Err(err) if profile_claim_inactive_error(&err) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) fn renew_agent_profile_claim_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    claim_id: &str,
+) -> Result<RuntimeProfilePoolRenew, String> {
+    let now = now_ms()?;
+    runtime_profile_pool_renew_for_project(
+        project_root,
+        enabled,
+        RuntimeProfilePoolRenewRequest {
+            claim_id: claim_id.to_string(),
+            ttl_ms: Some(MAX_PROFILE_POOL_TTL_MS),
+        },
+        now,
+    )
+}
+
+fn runtime_profile_pool_renew_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfilePoolRenewRequest,
+    now: i64,
+) -> Result<RuntimeProfilePoolRenew, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let claim_id = normalize_profile_text(
+        "invalid-claim-id",
+        "claimId",
+        &request.claim_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+    let ttl_ms = normalize_profile_pool_ttl(request.ttl_ms)?;
+    let expires_at_ms = checked_profile_pool_deadline(now, ttl_ms, "invalid-ttl")?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_profile_pool_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        expire_profile_claims_tx(&tx, now)?;
+        let active = read_active_profile_claim_by_id_tx(&tx, &claim_id, now)?
+            .ok_or_else(|| PROFILE_CLAIM_INACTIVE_ERROR.to_string())?;
+        let updated = tx
+            .execute(
+                "UPDATE runtime_profile_claims
+                 SET expires_at_ms = ?2
+                 WHERE claim_id = ?1
+                   AND status = ?3
+                   AND released_at_ms IS NULL
+                   AND expires_at_ms > ?4",
+                params![claim_id, expires_at_ms, ACTIVE_CLAIM_STATUS, now],
+            )
+            .map_err(|err| format!("profile-pool-renew-update-failed: {err}"))?;
+        if updated != 1 {
+            return Err(PROFILE_CLAIM_INACTIVE_ERROR.to_string());
+        }
+        let claim = read_profile_claim_tx(&tx, &claim_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeProfilePoolRenew {
+            claim_id,
+            profile_id: active.profile_id,
+            expires_at_ms,
+            claim,
+        })
+    })
+}
+
+pub(crate) fn resolve_agent_run_profile_for_project_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    profile_id: &str,
+    claim_id: &str,
+    store: &impl SecretStore,
+) -> Result<AgentRunProfileConfig, String> {
+    let now = now_ms()?;
+    resolve_agent_run_profile_for_project_at_with_store(
+        project_root,
+        enabled,
+        profile_id,
+        claim_id,
+        now,
+        store,
+    )
+}
+
+fn resolve_agent_run_profile_for_project_at_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    profile_id: &str,
+    claim_id: &str,
+    now: i64,
+    store: &impl SecretStore,
+) -> Result<AgentRunProfileConfig, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let profile_id = normalize_profile_text(
+        "invalid-profile-id",
+        "profileId",
+        profile_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+    let claim_id = normalize_profile_text(
+        "invalid-claim-id",
+        "claimId",
+        claim_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+
+    let (profile, claim) = with_runtime_writer(|| {
+        let mut connection = open_profile_pool_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        expire_profile_claims_tx(&tx, now)?;
+        let claim = read_active_profile_claim_by_id_tx(&tx, &claim_id, now)?
+            .ok_or_else(|| PROFILE_CLAIM_INACTIVE_ERROR.to_string())?;
+        if claim.profile_id != profile_id {
+            return Err(
+                "profile-claim-mismatch: profileId does not match the active claim".to_string(),
+            );
+        }
+        if claim.kind != "agent-run" || claim.task_family != "agent" {
+            return Err("profile-unsupported: claim is not for an agent-run profile".to_string());
+        }
+        let profile = read_profile_tx(&tx, &profile_id)?;
+        if !profile_pool_profile_base_eligible(&tx, &profile, "agent-run", "agent", now)? {
+            return Err(
+                "profile-unsupported: profile is not eligible for Agent-run sidecar use"
+                    .to_string(),
+            );
+        }
+        tx.commit().map_err(tx_err)?;
+        Ok((profile, claim))
+    })?;
+
+    if profile.profile_id != claim.profile_id {
+        return Err(
+            "profile-claim-mismatch: profileId does not match the active claim".to_string(),
+        );
+    }
+
+    let secret_value = if profile_secret_required(&profile.auth_style) {
+        let secret_ref = profile.secret_ref.as_deref().ok_or_else(|| {
+            "profile-missing-secret: stored Agent-run profile has no secretRef".to_string()
+        })?;
+        Some(read_profile_secret(store, secret_ref)?)
+    } else {
+        None
+    };
+
+    Ok(AgentRunProfileConfig {
+        profile_id: profile.profile_id,
+        model_id: profile.model_id,
+        endpoint: profile.endpoint,
+        secret_value,
     })
 }
 
@@ -5055,6 +5298,10 @@ fn normalize_profile_pool_outcome(raw: &str) -> Result<&'static str, String> {
     }
 }
 
+fn profile_claim_inactive_error(err: &str) -> bool {
+    err.starts_with(PROFILE_CLAIM_INACTIVE_PREFIX)
+}
+
 fn normalize_preferred_profile_ids(value: Option<Vec<String>>) -> Result<Vec<String>, String> {
     let mut ids = Vec::new();
     for raw in value.unwrap_or_default() {
@@ -5102,9 +5349,8 @@ fn redact_profile_pool_text(value: &str) -> String {
                 || lower.contains(":sk-")
                 || lower.contains("\"sk-")
                 || lower.contains("'sk-");
-            let has_bearer = lower == "bearer"
-                || lower.starts_with("bearer:")
-                || lower.starts_with("bearer=");
+            let has_bearer =
+                lower == "bearer" || lower.starts_with("bearer:") || lower.starts_with("bearer=");
             let has_authorization = lower == "authorization"
                 || lower.starts_with("authorization:")
                 || lower.starts_with("authorization=");
@@ -5155,6 +5401,20 @@ fn profile_pool_profile_eligible(
     task_family: &str,
     now: i64,
 ) -> Result<bool, String> {
+    if !profile_pool_profile_base_eligible(tx, profile, kind, task_family, now)? {
+        return Ok(false);
+    }
+    let active_count = active_profile_claim_count_tx(tx, &profile.profile_id, now)?;
+    Ok(active_count < profile.max_concurrency)
+}
+
+fn profile_pool_profile_base_eligible(
+    tx: &Transaction<'_>,
+    profile: &RuntimeProfileRecord,
+    kind: &str,
+    task_family: &str,
+    now: i64,
+) -> Result<bool, String> {
     if !profile.enabled
         || profile.kind != kind
         || !profile
@@ -5171,8 +5431,7 @@ fn profile_pool_profile_eligible(
     {
         return Ok(false);
     }
-    let active_count = active_profile_claim_count_tx(tx, &profile.profile_id, now)?;
-    Ok(active_count < profile.max_concurrency)
+    Ok(true)
 }
 
 fn capability_json_supports_kind(capability_json: &str, kind: &str) -> bool {
@@ -6987,6 +7246,22 @@ mod tests {
         }
     }
 
+    struct FailingReadSecretStore;
+
+    impl SecretStore for FailingReadSecretStore {
+        fn write(&self, _secret_ref: &str, _secret_value: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn read(&self, _secret_ref: &str) -> Result<String, String> {
+            Err("profile-secret-read-failed: test keychain locked".to_string())
+        }
+
+        fn delete(&self, _secret_ref: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn runtime_db_path_is_project_scoped() {
         assert_eq!(
@@ -7518,6 +7793,26 @@ mod tests {
         }
     }
 
+    fn agent_profile_pool_claim_request(
+        claim_id: &str,
+        preferred_profile_ids: Vec<&str>,
+    ) -> RuntimeProfilePoolClaimRequest {
+        RuntimeProfilePoolClaimRequest {
+            claim_id: Some(claim_id.to_string()),
+            kind: "agent-run".to_string(),
+            task_family: "agent".to_string(),
+            holder: "agent:stream-1".to_string(),
+            job_id: None,
+            ttl_ms: Some(MAX_PROFILE_POOL_TTL_MS),
+            preferred_profile_ids: Some(
+                preferred_profile_ids
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        }
+    }
+
     fn profile_pool_release_request(
         claim_id: &str,
         outcome: &str,
@@ -7530,6 +7825,26 @@ mod tests {
             reason: None,
             error: None,
         }
+    }
+
+    fn create_agent_profile_pool_profile(project: &Path, profile_id: &str) -> RuntimeProfileRecord {
+        let mut create = anthropic_profile_create_request(profile_id, "https://agent.example/v1");
+        create.kind = "agent-run".to_string();
+        create.task_families = vec!["agent".to_string()];
+        create.max_concurrency = Some(1);
+        let created = runtime_profile_create_for_project(Some(project), true, create, 100)
+            .expect("create agent profile");
+        let mut update = profile_update_request(profile_id);
+        update.capability_status = Some("supported".to_string());
+        update.capability_json = Some(profile_pool_capability_json(
+            serde_json::json!(true),
+            serde_json::json!(true),
+        ));
+        update.capability_version = Some(PROFILE_PROBE_CAPABILITY_VERSION.to_string());
+        update.capability_checked_at_ms = Some(150);
+        runtime_profile_update_for_project(Some(project), true, update, 150)
+            .expect("mark agent profile capable");
+        created
     }
 
     fn write_staging_file(project_root: &Path, relative_path: &str, contents: &[u8]) -> PathBuf {
@@ -9146,6 +9461,244 @@ mod tests {
     }
 
     #[test]
+    fn profile_pool_renew_extends_active_claim_and_rejects_inactive_claims() {
+        let project = temp_project("profile-pool-renew");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        let mut claim = profile_pool_claim_request("claim-1", vec![]);
+        claim.ttl_ms = Some(1_000);
+        runtime_profile_pool_claim_for_project(Some(&project), true, claim, 200)
+            .expect("claim profile");
+
+        let renewed = runtime_profile_pool_renew_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolRenewRequest {
+                claim_id: "claim-1".to_string(),
+                ttl_ms: Some(10_000),
+            },
+            800,
+        )
+        .expect("renew active claim");
+        assert_eq!(renewed.claim_id, "claim-1");
+        assert_eq!(renewed.profile_id, "profile-1");
+        assert_eq!(renewed.expires_at_ms, 10_800);
+        assert_eq!(renewed.claim.expires_at_ms, 10_800);
+
+        runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-1", "success"),
+            900,
+        )
+        .expect("release claim");
+        let released = runtime_profile_pool_renew_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolRenewRequest {
+                claim_id: "claim-1".to_string(),
+                ttl_ms: Some(10_000),
+            },
+            1_000,
+        )
+        .expect_err("released claim is inactive");
+        assert!(released.starts_with("claim-inactive"));
+
+        let mut expired_claim = profile_pool_claim_request("claim-2", vec![]);
+        expired_claim.ttl_ms = Some(1_000);
+        runtime_profile_pool_claim_for_project(Some(&project), true, expired_claim, 2_000)
+            .expect("claim second profile slot");
+        let expired = runtime_profile_pool_renew_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolRenewRequest {
+                claim_id: "claim-2".to_string(),
+                ttl_ms: Some(10_000),
+            },
+            3_000,
+        )
+        .expect_err("expired claim is inactive");
+        assert!(expired.starts_with("claim-inactive"));
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn agent_run_profile_resolver_uses_active_agent_claim_and_reads_secret() {
+        let project = temp_project("agent-profile-resolver");
+        fs::create_dir_all(&project).expect("create temp project");
+        let profile = create_agent_profile_pool_profile(&project, "profile-agent");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            200,
+        )
+        .expect("claim agent profile");
+
+        let store = TestSecretStore::default();
+        store.insert(profile.secret_ref.expect("secret ref"), "agent-secret");
+        let resolved = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            300,
+            &store,
+        )
+        .expect("resolve agent profile");
+
+        assert_eq!(resolved.profile_id, "profile-agent");
+        assert_eq!(resolved.model_id, "claude-test");
+        assert_eq!(
+            resolved.endpoint.as_deref(),
+            Some("https://agent.example/v1")
+        );
+        assert_eq!(resolved.secret_value.as_deref(), Some("agent-secret"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn agent_run_profile_resolver_rejects_wrong_claim_and_missing_secret() {
+        let project = temp_project("agent-profile-resolver-rejects");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_agent_profile_pool_profile(&project, "profile-agent");
+        create_profile_pool_profile(
+            &project,
+            "profile-model",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-model", vec!["profile-model"]),
+            200,
+        )
+        .expect("claim model profile");
+        let store = TestSecretStore::default();
+
+        let wrong_kind = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-model",
+            "claim-model",
+            250,
+            &store,
+        )
+        .expect_err("model-call claim is rejected");
+        assert!(wrong_kind.starts_with("profile-unsupported"));
+
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            300,
+        )
+        .expect("claim agent profile");
+        let missing_secret = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            350,
+            &store,
+        )
+        .expect_err("missing stored secret is rejected");
+        assert!(missing_secret.starts_with("profile-secret-not-found"));
+
+        let read_failed = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            360,
+            &FailingReadSecretStore,
+        )
+        .expect_err("secret store read failure is rejected");
+        assert!(read_failed.starts_with("profile-secret-read-failed"));
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn agent_run_profile_resolver_rechecks_pool_eligibility_after_claim() {
+        let project = temp_project("agent-profile-resolver-eligibility");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_agent_profile_pool_profile(&project, "profile-agent");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            200,
+        )
+        .expect("claim agent profile");
+
+        let mut unsupported = profile_update_request("profile-agent");
+        unsupported.capability_status = Some("unsupported".to_string());
+        runtime_profile_update_for_project(Some(&project), true, unsupported, 250)
+            .expect("mark claimed profile unsupported");
+        let rejected = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            300,
+            &TestSecretStore::default(),
+        )
+        .expect_err("claimed profile is rechecked");
+        assert!(rejected.starts_with("profile-unsupported"));
+        let _ = fs::remove_dir_all(project);
+
+        let project = temp_project("agent-profile-resolver-circuit");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_agent_profile_pool_profile(&project, "profile-agent");
+        let mut capacity = profile_update_request("profile-agent");
+        capacity.max_concurrency = Some(2);
+        runtime_profile_update_for_project(Some(&project), true, capacity, 180)
+            .expect("raise agent profile capacity");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            200,
+        )
+        .expect("claim agent profile");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-breaker", vec!["profile-agent"]),
+            220,
+        )
+        .expect("claim breaker profile");
+        let mut release = profile_pool_release_request("claim-breaker", "rate-limited");
+        release.retry_after_ms = Some(5_000);
+        runtime_profile_pool_release_for_project(Some(&project), true, release, 240)
+            .expect("open profile circuit");
+
+        let rejected = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            300,
+            &TestSecretStore::default(),
+        )
+        .expect_err("claimed profile circuit is rechecked");
+        assert!(rejected.starts_with("profile-unsupported"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
     fn profile_pool_breaker_bounds_and_sanitization_are_enforced() {
         let project = temp_project("profile-pool-breaker-bounds");
         fs::create_dir_all(&project).expect("create temp project");
@@ -9185,9 +9738,8 @@ mod tests {
             "authorization: secret apiKey=abc {} sk-secret",
             "e".repeat(MAX_PROFILE_POOL_REASON_BYTES + 128)
         ));
-        let released =
-            runtime_profile_pool_release_for_project(Some(&project), true, release, 300)
-                .expect("sanitized release");
+        let released = runtime_profile_pool_release_for_project(Some(&project), true, release, 300)
+            .expect("sanitized release");
         let breaker = released.circuit_breaker.expect("breaker");
         let reason = breaker.reason.expect("reason");
         let error = breaker.error.expect("error");
@@ -9350,8 +9902,8 @@ mod tests {
 
     #[test]
     fn profile_pool_serde_contract_uses_camel_case_fields() {
-        let claim_request: RuntimeProfilePoolClaimRequest = serde_json::from_value(
-            serde_json::json!({
+        let claim_request: RuntimeProfilePoolClaimRequest =
+            serde_json::from_value(serde_json::json!({
                 "claimId": "claim-1",
                 "kind": "model-call",
                 "taskFamily": "summarize",
@@ -9359,29 +9911,25 @@ mod tests {
                 "jobId": "job-1",
                 "ttlMs": 30_000,
                 "preferredProfileIds": ["profile-2", "profile-1"]
-            }),
-        )
-        .expect("deserialize claim request");
+            }))
+            .expect("deserialize claim request");
         assert_eq!(
             claim_request.preferred_profile_ids,
             Some(vec!["profile-2".to_string(), "profile-1".to_string()])
         );
-        let release_request: RuntimeProfilePoolReleaseRequest = serde_json::from_value(
-            serde_json::json!({
+        let release_request: RuntimeProfilePoolReleaseRequest =
+            serde_json::from_value(serde_json::json!({
                 "claimId": "claim-1",
                 "outcome": "rate-limited",
                 "retryAfterMs": 60_000,
                 "reason": "provider 429"
-            }),
-        )
-        .expect("deserialize release request");
+            }))
+            .expect("deserialize release request");
         assert_eq!(release_request.retry_after_ms, Some(60_000));
-        let unknown = serde_json::from_value::<RuntimeProfilePoolListRequest>(
-            serde_json::json!({
-                "kind": "model-call",
-                "unknownField": true
-            }),
-        )
+        let unknown = serde_json::from_value::<RuntimeProfilePoolListRequest>(serde_json::json!({
+            "kind": "model-call",
+            "unknownField": true
+        }))
         .expect_err("deny unknown list fields");
         assert!(unknown.to_string().contains("unknown field"));
 

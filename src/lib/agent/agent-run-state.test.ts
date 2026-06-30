@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
+  AgentRunError,
+  agentErrorI18nKey,
+  agentErrorKindFromError,
   agentRunPhaseI18nKey,
   agentProviderNeedsApiKey,
   classifyAgentError,
@@ -39,6 +42,11 @@ describe("agent run state helpers", () => {
   it("classifies preflight failures", () => {
     expect(getAgentPreflightError(null, llmConfig())).toBe("unavailable")
     expect(getAgentPreflightError(project, llmConfig({ apiKey: "" }))).toBe("missing_api_key")
+    expect(
+      getAgentPreflightError(project, llmConfig({ apiKey: "" }), {
+        deferApiKeyCheck: true,
+      }),
+    ).toBeNull()
     expect(getAgentPreflightError(project, llmConfig({ provider: "custom", apiKey: "" }))).toBeNull()
     expect(getAgentPreflightError(project, llmConfig({ provider: "ollama", apiKey: "" }))).toBeNull()
   })
@@ -52,7 +60,17 @@ describe("agent run state helpers", () => {
     expect(classifyAgentError("Permission request timed out: wiki_write")).toBe("failed")
     expect(classifyAgentError("Reached maximum number of turns (10)")).toBe("max_turns_exceeded")
     expect(classifyAgentError("ANTHROPIC_API_KEY is missing")).toBe("missing_api_key")
+    expect(classifyAgentError("profile-secret-not-found: test secret missing")).toBe("missing_api_key")
+    expect(classifyAgentError("no-eligible-profile: no profile pool capacity is available")).toBe("profile_unavailable")
     expect(classifyAgentError("boom")).toBe("failed")
+  })
+
+  it("prefers typed Agent run errors over string classification", () => {
+    const err = new AgentRunError("profile_unavailable", "provider timeout")
+
+    expect(agentErrorKindFromError(err)).toBe("profile_unavailable")
+    expect(agentErrorKindFromError(new Error("Request timeout"))).toBe("timeout")
+    expect(agentErrorI18nKey("profile_unavailable")).toBe("agent.error.profileUnavailable")
   })
 
   it("maps run phases to loading i18n keys", () => {

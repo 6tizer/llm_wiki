@@ -270,6 +270,8 @@ export interface AgentTransportOptions {
 	title?: string;
 	apiKey?: string;
 	baseUrl?: string;
+	agentProfileId?: string;
+	agentProfileClaimId?: string;
 	permissionPolicy?: AgentPermissionPolicy;
 	projectId?: string;
 	projectPath?: string;

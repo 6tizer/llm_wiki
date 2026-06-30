@@ -9,6 +9,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+	runtimeProfilePoolClaim,
+	runtimeProfilePoolList,
+	runtimeProfilePoolRelease,
+	type RuntimeProfilePoolClaim,
+} from "@/commands/runtime-db";
+import { AgentRunError } from "./agent-run-state";
 import { runAgentAppTool } from "./agent-app-tools";
 import { isSdkCompactSummaryMessage } from "./agent-summary";
 import type {
@@ -50,6 +57,8 @@ type InvokePayload = Record<string, unknown> & {
 	title?: string;
 	apiKey?: string;
 	baseUrl?: string;
+	agentProfileId?: string;
+	agentProfileClaimId?: string;
 	permissionPolicy?: AgentPermissionPolicy;
 	projectId?: string;
 	projectPath?: string;
@@ -97,6 +106,84 @@ type InvokePayload = Record<string, unknown> & {
 		path: string;
 	}>;
 };
+
+// Keep this aligned with MAX_PROFILE_POOL_TTL_MS in src-tauri/src/commands/runtime_db.rs.
+const AGENT_PROFILE_CLAIM_TTL_MS = 1_200_000;
+// Keep this aligned with PROFILE_CLAIM_INACTIVE_PREFIX in runtime_db.rs.
+const PROFILE_CLAIM_INACTIVE_PREFIX = "claim-inactive:";
+// TS uses this only before Rust accepts profile claim ownership.
+const AGENT_PROFILE_SPAWN_FAILED_REASON = "agent-spawn-failed";
+
+function errorMessage(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	if (err === null) return "null error thrown";
+	if (err === undefined) return "undefined error thrown";
+	return String(err);
+}
+
+function isRuntimeDisabledError(err: unknown): boolean {
+	return errorMessage(err).startsWith("runtime-disabled:");
+}
+
+function profileUnavailable(message: string): AgentRunError {
+	return new AgentRunError("profile_unavailable", `profile-unavailable: ${message}`);
+}
+
+async function claimAgentProfileForRun(
+	streamId: string,
+	options: AgentTransportOptions,
+): Promise<RuntimeProfilePoolClaim | null> {
+	if (!options.projectPath) return null;
+	let pool;
+	try {
+		pool = await runtimeProfilePoolList({
+			kind: "agent-run",
+			taskFamily: "agent",
+		});
+	} catch (err) {
+		if (isRuntimeDisabledError(err)) return null;
+		throw profileUnavailable(errorMessage(err));
+	}
+	if (!pool.enabled) return null;
+	if (pool.status !== "healthy") {
+		throw profileUnavailable(`profile pool is ${pool.status}`);
+	}
+	try {
+		return await runtimeProfilePoolClaim({
+			kind: "agent-run",
+			taskFamily: "agent",
+			holder: `agent:${streamId}`,
+			ttlMs: AGENT_PROFILE_CLAIM_TTL_MS,
+			preferredProfileIds: options.agentProfileId
+				? [options.agentProfileId]
+				: undefined,
+		});
+	} catch (err) {
+		if (isRuntimeDisabledError(err)) return null;
+		throw profileUnavailable(errorMessage(err));
+	}
+}
+
+async function releaseUntransferredAgentProfileClaim(
+	claimId: string,
+	err: unknown,
+): Promise<void> {
+	try {
+		await runtimeProfilePoolRelease({
+			claimId,
+			outcome: "error",
+			error: errorMessage(err),
+			reason: AGENT_PROFILE_SPAWN_FAILED_REASON,
+		});
+	} catch (releaseErr) {
+		if (!errorMessage(releaseErr).startsWith(PROFILE_CLAIM_INACTIVE_PREFIX)) {
+			console.warn(
+				"[agent-transport] failed to release untransferred profile claim:",
+				releaseErr,
+			);
+		}
+	}
+}
 
 function extractText(content: SDKContentBlock[]): string {
 	return content
@@ -196,6 +283,7 @@ export async function streamAgent(
 	let unlistenData: UnlistenFn | undefined;
 	let unlistenDone: UnlistenFn | undefined;
 	let finished = false;
+	let profileClaimTransferredToRust = false;
 
 	const cleanup = () => {
 		const offData = unlistenData;
@@ -426,31 +514,48 @@ export async function streamAgent(
 			return;
 		}
 
+		const profileClaim = await claimAgentProfileForRun(streamId, options);
+		if (finished || signal?.aborted) {
+			if (profileClaim) {
+				await releaseUntransferredAgentProfileClaim(profileClaim.claimId, "aborted");
+			}
+			cleanup();
+			return;
+		}
+
 		const payload: InvokePayload = {
 			streamId,
 			prompt,
 			...options,
 		};
+		if (profileClaim) {
+			delete payload.apiKey;
+			delete payload.baseUrl;
+			delete payload.model;
+			payload.agentProfileId = profileClaim.profileId;
+			payload.agentProfileClaimId = profileClaim.claimId;
+		}
 		try {
 			await invoke("agent_spawn", { args: payload });
+			profileClaimTransferredToRust = Boolean(profileClaim);
 		} catch (invokeErr) {
 			console.error("[agent-transport] invoke FAILED:", invokeErr);
+			if (profileClaim && !profileClaimTransferredToRust) {
+				await releaseUntransferredAgentProfileClaim(
+					profileClaim.claimId,
+					invokeErr,
+				);
+			}
 			throw invokeErr;
 		}
 	} catch (err) {
 		console.error("[agent-transport] error:", err);
 		finishWith(() => {
-			let message: string;
-			if (err instanceof Error) {
-				message = err.message;
-			} else if (err === null) {
-				message = "null error thrown";
-			} else if (err === undefined) {
-				message = "undefined error thrown";
-			} else {
-				message = String(err);
+			if (err instanceof AgentRunError) {
+				callbacks.onError(err);
+				return;
 			}
-			callbacks.onError(new Error(message));
+			callbacks.onError(new Error(errorMessage(err)));
 		});
 	} finally {
 		signal?.removeEventListener("abort", abortListener);

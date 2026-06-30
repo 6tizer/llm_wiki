@@ -23,8 +23,12 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 
 use crate::api_server;
+use crate::commands::file_sync::ProjectRootState;
+use crate::commands::profile_secrets::OsSecretStore;
+use crate::commands::runtime_db;
 
 const SIDECAR_PLACEHOLDER_PREFIX: &[u8] = b"Placeholder for Tauri resource validation.";
+const AGENT_PROFILE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
 
 fn redact_url_userinfo_for_log(url: &str) -> String {
     let authority_start = url.find("://").map(|scheme_end| scheme_end + 3).unwrap_or(0);
@@ -51,6 +55,13 @@ pub struct AgentState {
 struct AgentProcess {
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
+}
+
+#[derive(Clone)]
+struct AgentProfileClaimOwner {
+    project_root: Option<PathBuf>,
+    runtime_enabled: bool,
+    claim_id: String,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -86,6 +97,8 @@ pub struct AgentSpawnArgs {
     title: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
+    agent_profile_id: Option<String>,
+    agent_profile_claim_id: Option<String>,
     permission_policy: Option<String>,
     project_id: Option<String>,
     project_path: Option<String>,
@@ -281,12 +294,101 @@ fn inject_internal_api_token(args: &mut AgentSpawnArgs) -> Option<String> {
     None
 }
 
+fn apply_agent_profile_config(
+    args: &mut AgentSpawnArgs,
+    project_root: Option<&Path>,
+    runtime_enabled: bool,
+) -> Result<Option<AgentProfileClaimOwner>, String> {
+    if args.agent_profile_id.is_none() && args.agent_profile_claim_id.is_none() {
+        return Ok(None);
+    }
+
+    let (Some(profile_id), Some(claim_id)) = (
+        args.agent_profile_id.as_deref(),
+        args.agent_profile_claim_id.as_deref(),
+    ) else {
+        return Err(
+            "agent-profile-invalid: agentProfileId and agentProfileClaimId are both required"
+                .to_string(),
+        );
+    };
+
+    let config = runtime_db::resolve_agent_run_profile_for_project_with_store(
+        project_root,
+        runtime_enabled,
+        profile_id,
+        claim_id,
+        &OsSecretStore,
+    )?;
+    let owner = AgentProfileClaimOwner {
+        project_root: project_root.map(Path::to_path_buf),
+        runtime_enabled,
+        claim_id: claim_id.to_string(),
+    };
+    args.model = Some(config.model_id);
+    args.base_url = config.endpoint;
+    args.api_key = config.secret_value;
+    Ok(Some(owner))
+}
+
+fn start_agent_profile_claim_renewer(owner: AgentProfileClaimOwner) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(AGENT_PROFILE_RENEW_INTERVAL).await;
+            if let Err(err) = runtime_db::renew_agent_profile_claim_for_project(
+                owner.project_root.as_deref(),
+                owner.runtime_enabled,
+                &owner.claim_id,
+            ) {
+                eprintln!(
+                    "[agent_spawn] profile claim renew failed for {}: {}",
+                    owner.claim_id, err
+                );
+                if err.starts_with(runtime_db::PROFILE_CLAIM_INACTIVE_PREFIX) {
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn release_agent_profile_claim(owner: &AgentProfileClaimOwner, exit_code: i32, stderr: &str) {
+    let outcome = if exit_code == 0 { "success" } else { "error" };
+    let error = if exit_code == 0 {
+        None
+    } else {
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            Some("agent sidecar exited before success".to_string())
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+    if let Err(err) = runtime_db::release_agent_profile_claim_for_project(
+        owner.project_root.as_deref(),
+        owner.runtime_enabled,
+        &owner.claim_id,
+        outcome,
+        error.as_deref(),
+    ) {
+        eprintln!(
+            "[agent_spawn] profile claim release failed for {}: {}",
+            owner.claim_id, err
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn agent_spawn(
     app: AppHandle,
     state: State<'_, AgentState>,
+    root_state: State<'_, ProjectRootState>,
     mut args: AgentSpawnArgs,
 ) -> Result<(), String> {
+    let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
+    let project_root = root_state.get();
+    let profile_claim_owner =
+        apply_agent_profile_config(&mut args, project_root.as_deref(), runtime_enabled)?;
     let logged_base_url = args.base_url.as_deref().map(redact_url_userinfo_for_log);
     eprintln!(
         "[agent_spawn] stream_id={}, model={:?}, base_url={:?}",
@@ -362,6 +464,10 @@ pub async fn agent_spawn(
     let app_for_task = app.clone();
     let stream_id_task = stream_id.clone();
     let internal_api_token_task = internal_api_token.clone();
+    let profile_claim_owner_task = profile_claim_owner.clone();
+    let profile_renew_task = profile_claim_owner
+        .clone()
+        .map(start_agent_profile_claim_renewer);
     let topic = format!("agent:{stream_id}");
     let done_topic = format!("agent:{stream_id}:done");
 
@@ -412,6 +518,12 @@ pub async fn agent_spawn(
 
         if let Some(token) = internal_api_token_task {
             api_server::revoke_agent_internal_api_token(&token);
+        }
+        if let Some(task) = profile_renew_task {
+            task.abort();
+        }
+        if let Some(owner) = profile_claim_owner_task.as_ref() {
+            release_agent_profile_claim(owner, exit_code, &stderr_output);
         }
 
         let done_payload = serde_json::json!({
@@ -707,6 +819,8 @@ mod tests {
             title: None,
             api_key: None,
             base_url: None,
+            agent_profile_id: None,
+            agent_profile_claim_id: None,
             permission_policy: None,
             project_id: None,
             project_path: None,
@@ -760,6 +874,31 @@ mod tests {
         assert!(options.get("intentOverride").is_none());
         assert!(options.get("title").is_none());
         assert!(options.get("apiKey").is_none());
+    }
+
+    #[test]
+    fn agent_profile_claim_fields_are_not_serialized_to_sidecar_request() {
+        let mut args = args_with_optional_fields_none();
+        args.agent_profile_id = Some("profile-agent".to_string());
+        args.agent_profile_claim_id = Some("claim-agent".to_string());
+        args.model = Some("claude-test".to_string());
+        args.api_key = Some("resolved-secret".to_string());
+
+        let request = build_agent_request(args);
+        let value: Value = serde_json::to_value(request).unwrap();
+        let text = serde_json::to_string(&value).unwrap();
+
+        assert!(!text.contains("agentProfileId"));
+        assert!(!text.contains("agentProfileClaimId"));
+        let options = value.get("options").unwrap();
+        assert_eq!(
+            options.get("model").and_then(Value::as_str),
+            Some("claude-test")
+        );
+        assert_eq!(
+            options.get("apiKey").and_then(Value::as_str),
+            Some("resolved-secret")
+        );
     }
 
     #[test]
