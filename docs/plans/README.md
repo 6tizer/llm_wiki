@@ -1,6 +1,6 @@
 # Plans Index
 
-> 类型：计划索引 | 更新：2026-06-29 | owner：LLM Wiki commander / planner
+> 类型：计划索引 | 更新：2026-06-30 | owner：LLM Wiki commander / planner
 
 ## 当前有效计划
 
