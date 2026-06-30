@@ -1,23 +1,23 @@
 # SPEC-4 Remaining PRs Implementation Plan
 
-> Type: execution plan | Status: active | Owner: Commander | Current branch: `codex/spec-4-pr5-agent-run-adapter` | Current main: `f0d3a49 feat: add profile pool scheduler claims` | Run: `bc558559-9178-4dda-ad0e-dccaa5701cdf`
+> Type: execution plan | Status: completed | Owner: Commander | Completed on main: `285214c feat: wire agent runs to runtime profiles` | Final run: `bc558559-9178-4dda-ad0e-dccaa5701cdf`
 
 ## Decision
 
-Continue SPEC-4 as three implementation PRs:
+SPEC-4 remaining implementation completed as three implementation PRs:
 
 1. PR3 Capability Probe. Completed by PR #219 at `9dff202`.
 2. PR4 Scheduler Profile Pool. Completed by PR #220 at `f0d3a49`.
-3. PR5 Agent-run Adapter. Current.
+3. PR5 Agent-run Adapter. Completed by PR #221 at `285214c`.
 
-Merge standard for every remaining PR:
+Merge standard used for every remaining PR:
 
 - no unresolved P0/P1/P2;
 - every scoped P3 found by that PR's gates is fixed in the same PR;
 - CI is green;
 - Commander may merge once the findings gate and CI gate both pass.
 
-PR4 and PR5 must get their own detailed PR plans when each PR starts. This document records the researched route, boundaries, and cross-PR risks so the sequence stays stable.
+PR4 and PR5 received their own detailed PR plans when each PR started. This document remains as the completed researched route, boundaries, and cross-PR risk record.
 
 ## Current Facts
 
@@ -25,6 +25,7 @@ PR4 and PR5 must get their own detailed PR plans when each PR starts. This docum
 - PR2 merged via #218 at `500cb3c`; it added Settings profile management and secret write/delete boundaries.
 - PR3 merged via #219 at `9dff202`; it added stored/draft capability probes, `profile-probe.v1` cache semantics, and Settings probe UI wiring.
 - PR4 merged via #220 at `f0d3a49`; it added profile pool claim/release/list APIs, active profile claims, retry-after/circuit-break records, max-concurrency eligibility, and TS wrappers.
+- PR5 merged via #221 at `285214c`; it wired Agent runs to runtime `agent-run` profile claims with Rust-side secret resolution, renewal/release ownership, legacy fallback, typed `profile_unavailable`, and Agent preflight compatibility for runtime profiles.
 - `runtime_model_profiles` already has `capability_status`, `capability_json`, `capability_version`, `capability_checked_at_ms`, `probe_backoff_until_ms`, and `last_capability_error`.
 - `profile_secrets.rs` has `read_profile_secret`, but there is intentionally no frontend read command.
 - Settings profile tests now cover stored-profile and draft profile probes without exposing stored secret values.
@@ -103,11 +104,11 @@ PR4 non-goals:
 
 ## PR5: Agent-run Adapter
 
-Status: current.
+Status: completed by PR #221 at `285214c`.
 
 Detailed plan: [`pr5-agent-run-adapter-plan.md`](./pr5-agent-run-adapter-plan.md).
 
-Planned scope:
+Completed scope:
 
 - When work runtime is enabled, claim an eligible `agent-run` / `agent` profile through the PR4 profile pool before spawning the sidecar. When work runtime is disabled, preserve the current legacy global-config Agent path.
 - Add per-run Agent profile resolution: frontend passes a non-secret profile/claim reference, not raw secrets.
