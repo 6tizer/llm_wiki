@@ -37,7 +37,8 @@
 | [SPEC-4/pr1-profile-schema-storage-plan.md](./SPEC-4/pr1-profile-schema-storage-plan.md) | SPEC-4 PR1 执行计划：Profile schema、runtime storage、OS secret reference、Core Runtime profile contract。 | merged |
 | [SPEC-4/pr2-settings-profiles-plan.md](./SPEC-4/pr2-settings-profiles-plan.md) | SPEC-4 PR2 执行计划：Settings profile create/edit/test、task-family capability、secret write boundary。 | merged |
 | [SPEC-4/remaining-prs-implementation-plan.md](./SPEC-4/remaining-prs-implementation-plan.md) | SPEC-4 余下 PR3-PR5 实施路线：Capability Probe、Scheduler Profile Pool、Agent-run Adapter。 | active |
-| [SPEC-4/pr3-capability-probe-plan.md](./SPEC-4/pr3-capability-probe-plan.md) | SPEC-4 PR3 执行计划：stored-profile capability probe、cache/backoff、Settings probe UI。 | in progress |
+| [SPEC-4/pr3-capability-probe-plan.md](./SPEC-4/pr3-capability-probe-plan.md) | SPEC-4 PR3 执行计划：stored-profile capability probe、cache/backoff、Settings probe UI。 | merged |
+| [SPEC-4/pr4-scheduler-profile-pool-plan.md](./SPEC-4/pr4-scheduler-profile-pool-plan.md) | SPEC-4 PR4 执行计划：profile pool selector、claims、concurrency、retry-after/circuit-break。 | in progress |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
@@ -75,7 +76,7 @@
 
 ## Current Execution Order
 
-截至 2026-07-01，当前 main/head 基线为 `500cb3c feat: add settings model profiles (#218)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#216 完成 PR1-PR6，SPEC-4 PR1 已由 #217 完成，SPEC-4 PR2 已由 #218 完成。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
+截至 2026-07-01，当前 main/head 基线为 `9dff202 feat: add model profile capability probe (#219)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#216 完成 PR1-PR6，SPEC-4 PR1 已由 #217 完成，SPEC-4 PR2 已由 #218 完成，SPEC-4 PR3 已由 #219 完成。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
 
 已完成 OKF/KW 基线证据：
 
@@ -89,7 +90,7 @@
 8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
 9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
 
-Next execution sequence：SPEC-1、SPEC-2、SPEC-3 已完成，SPEC-4 PR1 和 PR2 已合并。当前执行 SPEC-4 PR3 Capability Probe；之后按 PR4 Scheduler Profile Pool、PR5 Agent-run Adapter 推进。每个后续 PR 开始时再落对应详细计划，并按合并标准要求无 unresolved P0/P1/P2、修复该 PR 已发现全部 scoped P3、CI green 后由 Commander 合并。SPEC-5/6 在 runtime + commit + profile contracts 可用后推进。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
+Next execution sequence：SPEC-1、SPEC-2、SPEC-3 已完成，SPEC-4 PR1、PR2、PR3 已合并。当前执行 SPEC-4 PR4 Scheduler Profile Pool；之后按 PR5 Agent-run Adapter 推进。每个后续 PR 开始时再落对应详细计划，并按合并标准要求无 unresolved P0/P1/P2、修复该 PR 已发现全部 scoped P3、CI green 后由 Commander 合并。SPEC-5/6 在 runtime + commit + profile contracts 可用后推进。SPEC-7 PR1（SDK alignment）可并行准备；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
 
 当前主线不跳过 SPEC-2 直接进入 Phase 7 / Unified Agentic Chat 完整实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR，可按依赖规则并行准备。
 

@@ -39,6 +39,8 @@ const DERIVED_STALE_MARKERS_FAMILY: &str = "derived-stale-markers";
 const DERIVED_STALE_MARKERS_VERSION: i64 = 1;
 const PROFILE_STATUS_FAMILY: &str = "profile-status";
 const PROFILE_STATUS_VERSION: i64 = 1;
+const PROFILE_POOL_FAMILY: &str = "profile-pool";
+const PROFILE_POOL_VERSION: i64 = 1;
 const WORK_RUNTIME_ENABLED_ENV: &str = "LLM_WIKI_CORE_WORK_RUNTIME_ENABLED";
 const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 const DEFAULT_PRIORITY: i64 = 0;
@@ -75,6 +77,7 @@ const MAX_PROFILE_TASK_FAMILY_BYTES: usize = 128;
 const MAX_PROFILE_CAPABILITY_JSON_BYTES: usize = 8192;
 const MAX_PROFILE_CAPABILITY_VERSION_BYTES: usize = 64;
 const MAX_PROFILE_CAPABILITY_ERROR_BYTES: usize = 4096;
+const MAX_PROFILE_POOL_REASON_BYTES: usize = 1024;
 // Keep these version strings aligned with src/components/settings/sections/model-profiles-section.tsx.
 const DEFAULT_PROFILE_CAPABILITY_VERSION: &str = "spec-4-pr1";
 const PROFILE_PROBE_CAPABILITY_VERSION: &str = "profile-probe.v1";
@@ -84,6 +87,9 @@ const PROFILE_PROBE_BACKOFF_MS: i64 = DEFAULT_RETRY_BACKOFF_MS;
 const PROFILE_PROBE_MAX_TOKENS: i64 = 8;
 const PROFILE_PROBE_TIMEOUT_SECS: u64 = 30;
 const MAX_PROFILE_CONCURRENCY: i64 = 128;
+const MIN_PROFILE_POOL_TTL_MS: i64 = 1_000;
+const MAX_PROFILE_POOL_TTL_MS: i64 = 1_200_000;
+const MAX_PROFILE_POOL_BREAKER_MS: i64 = 3_600_000;
 const ACTIVE_LEASE_STATUS: &str = "active";
 const RELEASED_LEASE_STATUS: &str = "released";
 const EXPIRED_LEASE_STATUS: &str = "expired";
@@ -96,6 +102,8 @@ const RELEASED_CLAIM_STATUS: &str = "released";
 const EXPIRED_CLAIM_STATUS: &str = "expired";
 const EVENT_APPENDED_NAME: &str = "job-runtime:event-appended";
 const PROGRESS_APPENDED_NAME: &str = "job-runtime:progress-appended";
+const PROFILE_POOL_CLAIMED_NAME: &str = "profile-pool:claimed";
+const PROFILE_POOL_RELEASED_NAME: &str = "profile-pool:released";
 const PENDING_ARTIFACT_STATUS: &str = "pending";
 const COMMITTED_ARTIFACT_STATUS: &str = "committed";
 const FAILED_ARTIFACT_STATUS: &str = "failed";
@@ -636,6 +644,97 @@ pub struct RuntimeProfileProbeResult {
     checked_at_ms: i64,
     backoff_until_ms: Option<i64>,
     message: String,
+}
+
+/// Request payload for claiming one eligible profile-pool slot.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfilePoolClaimRequest {
+    claim_id: Option<String>,
+    kind: String,
+    task_family: String,
+    holder: String,
+    job_id: Option<String>,
+    ttl_ms: Option<i64>,
+    preferred_profile_ids: Option<Vec<String>>,
+}
+
+/// Request payload for releasing one active profile-pool claim.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfilePoolReleaseRequest {
+    claim_id: String,
+    outcome: String,
+    retry_after_ms: Option<i64>,
+    circuit_open_ms: Option<i64>,
+    reason: Option<String>,
+    error: Option<String>,
+}
+
+/// Request payload for listing profile-pool observability rows.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfilePoolListRequest {
+    kind: Option<String>,
+    task_family: Option<String>,
+    job_id: Option<String>,
+}
+
+/// Snapshot of one profile-pool claim. It never contains secret values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileClaimRecord {
+    claim_id: String,
+    profile_id: String,
+    kind: String,
+    task_family: String,
+    job_id: Option<String>,
+    holder: String,
+    acquired_at_ms: i64,
+    expires_at_ms: i64,
+    released_at_ms: Option<i64>,
+    status: String,
+}
+
+/// Snapshot of one profile circuit breaker. It never contains secret values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileCircuitBreakerRecord {
+    profile_id: String,
+    status: String,
+    reason: Option<String>,
+    error: Option<String>,
+    opened_at_ms: i64,
+    open_until_ms: i64,
+    updated_at_ms: i64,
+}
+
+/// Response payload for a successful profile-pool claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfilePoolClaim {
+    claim_id: String,
+    profile_id: String,
+    expires_at_ms: i64,
+    claim: RuntimeProfileClaimRecord,
+}
+
+/// Response payload for a profile-pool release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfilePoolRelease {
+    claim: RuntimeProfileClaimRecord,
+    circuit_breaker: Option<RuntimeProfileCircuitBreakerRecord>,
+}
+
+/// Snapshot response for active profile claims and open circuit breakers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfilePoolList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    active_claims: Vec<RuntimeProfileClaimRecord>,
+    circuit_breakers: Vec<RuntimeProfileCircuitBreakerRecord>,
 }
 
 impl std::fmt::Debug for RuntimeProfileProbeRequest {
@@ -1182,6 +1281,66 @@ pub async fn runtime_profile_probe(
     .await
 }
 
+/// Claim one eligible profile-pool slot for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_pool_claim(
+    request: RuntimeProfilePoolClaimRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfilePoolClaim, String> {
+    run_guarded("runtime_profile_pool_claim", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_profile_pool_claim_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// Release one active profile-pool claim for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_pool_release(
+    request: RuntimeProfilePoolReleaseRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfilePoolRelease, String> {
+    run_guarded("runtime_profile_pool_release", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_profile_pool_release_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// List active profile-pool claims and open circuit breakers for observability.
+#[tauri::command]
+pub fn runtime_profile_pool_list(
+    request: Option<RuntimeProfilePoolListRequest>,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfilePoolList, String> {
+    run_guarded("runtime_profile_pool_list", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let now = now_ms()?;
+        runtime_profile_pool_list_for_project(
+            root_state.get().as_deref(),
+            runtime_enabled,
+            request.unwrap_or(RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            }),
+            now,
+        )
+    })
+}
+
 #[cfg(test)]
 fn runtime_db_health_with_fallback(
     explicit_root: Option<PathBuf>,
@@ -1452,6 +1611,13 @@ fn open_profile_runtime_locked(project_root: &Path) -> Result<Connection, String
     initialize_runtime_db_locked(project_root)?;
     let connection = open_runtime_connection(&runtime_db_path(project_root))?;
     initialize_profile_schema(&connection)?;
+    Ok(connection)
+}
+
+fn open_profile_pool_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+    let connection = open_events_progress_runtime_locked(project_root)?;
+    initialize_profile_schema(&connection)?;
+    initialize_profile_pool_schema(&connection)?;
     Ok(connection)
 }
 
@@ -1854,6 +2020,92 @@ fn initialize_profile_schema(connection: &Connection) -> Result<(), String> {
         })?;
 
     record_migration_family(connection, PROFILE_STATUS_FAMILY, PROFILE_STATUS_VERSION)
+}
+
+fn initialize_profile_pool_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_profile_claims (
+                    claim_id TEXT PRIMARY KEY CHECK(
+                        length(CAST(claim_id AS BLOB)) > 0
+                        AND length(CAST(claim_id AS BLOB)) <= {MAX_PROFILE_ID_BYTES}
+                    ),
+                    profile_id TEXT NOT NULL CHECK(
+                        length(CAST(profile_id AS BLOB)) > 0
+                        AND length(CAST(profile_id AS BLOB)) <= {MAX_PROFILE_ID_BYTES}
+                    ),
+                    kind TEXT NOT NULL CHECK(kind IN ('model-call', 'agent-run')),
+                    task_family TEXT NOT NULL CHECK(
+                        length(CAST(task_family AS BLOB)) > 0
+                        AND length(CAST(task_family AS BLOB)) <= {MAX_PROFILE_TASK_FAMILY_BYTES}
+                    ),
+                    job_id TEXT,
+                    holder TEXT NOT NULL CHECK(length(CAST(holder AS BLOB)) > 0),
+                    acquired_at_ms INTEGER NOT NULL CHECK(acquired_at_ms >= 0),
+                    expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms >= 0),
+                    released_at_ms INTEGER CHECK(released_at_ms IS NULL OR released_at_ms >= 0),
+                    status TEXT NOT NULL CHECK(status IN ('active', 'released', 'expired')),
+                    FOREIGN KEY(profile_id) REFERENCES runtime_model_profiles(profile_id),
+                    FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime profile claims table: {err}"))?;
+
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_profile_circuit_breakers (
+                    profile_id TEXT PRIMARY KEY CHECK(
+                        length(CAST(profile_id AS BLOB)) > 0
+                        AND length(CAST(profile_id AS BLOB)) <= {MAX_PROFILE_ID_BYTES}
+                    ),
+                    status TEXT NOT NULL CHECK(status IN ('rate-limited', 'error')),
+                    reason TEXT CHECK(
+                        reason IS NULL
+                        OR length(CAST(reason AS BLOB)) <= {MAX_PROFILE_POOL_REASON_BYTES}
+                    ),
+                    error TEXT CHECK(
+                        error IS NULL
+                        OR length(CAST(error AS BLOB)) <= {MAX_PROFILE_POOL_REASON_BYTES}
+                    ),
+                    opened_at_ms INTEGER NOT NULL CHECK(opened_at_ms >= 0),
+                    open_until_ms INTEGER NOT NULL CHECK(open_until_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    FOREIGN KEY(profile_id) REFERENCES runtime_model_profiles(profile_id)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime profile circuit breakers table: {err}")
+        })?;
+
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_profile_claims_active_idx
+             ON runtime_profile_claims(profile_id, status, expires_at_ms)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime profile active claim index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_profile_claims_job_idx
+             ON runtime_profile_claims(job_id, status)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime profile claim job index: {err}"))?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_profile_breakers_open_idx
+             ON runtime_profile_circuit_breakers(open_until_ms, profile_id)",
+            [],
+        )
+        .map_err(|err| format!("Failed to initialize runtime profile breaker index: {err}"))?;
+
+    record_migration_family(connection, PROFILE_POOL_FAMILY, PROFILE_POOL_VERSION)
 }
 
 fn record_migration_family(
@@ -2655,6 +2907,352 @@ fn runtime_profile_status_for_project(
         return Err("profile-not-found: runtime model profile does not exist".to_string());
     }
     read_profile(&connection, &profile_id)
+}
+
+fn runtime_profile_pool_claim_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfilePoolClaimRequest,
+    now: i64,
+) -> Result<RuntimeProfilePoolClaim, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let kind = normalize_profile_kind(&request.kind)?.to_string();
+    let task_family = normalize_profile_text(
+        "invalid-task-family",
+        "taskFamily",
+        &request.task_family,
+        MAX_PROFILE_TASK_FAMILY_BYTES,
+    )?;
+    let holder = normalize_profile_text(
+        "invalid-holder",
+        "holder",
+        &request.holder,
+        MAX_PROFILE_DISPLAY_NAME_BYTES,
+    )?;
+    let claim_id = match request.claim_id {
+        Some(claim_id) => normalize_profile_text(
+            "invalid-claim-id",
+            "claimId",
+            &claim_id,
+            MAX_PROFILE_ID_BYTES,
+        )?,
+        None => Uuid::new_v4().to_string(),
+    };
+    let job_id = normalize_optional_filter("invalid-job-id", "jobId", request.job_id)?;
+    let ttl_ms = normalize_profile_pool_ttl(request.ttl_ms)?;
+    let expires_at_ms = checked_profile_pool_deadline(now, ttl_ms, "invalid-ttl")?;
+    let preferred_profile_ids = normalize_preferred_profile_ids(request.preferred_profile_ids)?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_profile_pool_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        ensure_profile_claim_id_available_tx(&tx, &claim_id)?;
+        if let Some(job_id) = job_id.as_deref() {
+            ensure_job_exists(&tx, job_id)?;
+        }
+        expire_profile_claims_tx(&tx, now)?;
+
+        let profiles = read_profiles(&tx)?;
+        let mut eligible = Vec::new();
+        for profile in profiles {
+            if profile_pool_profile_eligible(&tx, &profile, &kind, &task_family, now)? {
+                eligible.push(profile);
+            }
+        }
+        let selected = select_profile_pool_candidate(&eligible, &preferred_profile_ids)
+            .ok_or_else(|| {
+                "no-eligible-profile: no profile pool capacity is available".to_string()
+            })?;
+
+        tx.execute(
+            "INSERT INTO runtime_profile_claims (
+                claim_id,
+                profile_id,
+                kind,
+                task_family,
+                job_id,
+                holder,
+                acquired_at_ms,
+                expires_at_ms,
+                status
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                claim_id,
+                selected.profile_id,
+                kind,
+                task_family,
+                job_id,
+                holder,
+                now,
+                expires_at_ms,
+                ACTIVE_CLAIM_STATUS
+            ],
+        )
+        .map_err(|err| format!("profile-pool-claim-insert-failed: {err}"))?;
+
+        let event_id = if let Some(job_id) = job_id.as_deref() {
+            let payload = profile_pool_claim_event_payload(
+                &claim_id,
+                &selected.profile_id,
+                &kind,
+                &task_family,
+                &holder,
+                expires_at_ms,
+            )?;
+            Some(insert_runtime_event_tx(
+                &tx,
+                None,
+                job_id,
+                PROFILE_POOL_CLAIMED_NAME,
+                &payload,
+                now,
+            )?)
+        } else {
+            None
+        };
+        if let Some(job_id) = job_id.as_deref() {
+            let payload = profile_pool_progress_payload(
+                &claim_id,
+                &selected.profile_id,
+                "claimed",
+                expires_at_ms,
+                None,
+            )?;
+            upsert_runtime_progress_tx(
+                &tx,
+                job_id,
+                &profile_pool_progress_key(&claim_id),
+                &payload,
+                now,
+                event_id.as_deref(),
+            )?;
+        }
+
+        let claim = read_profile_claim_tx(&tx, &claim_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeProfilePoolClaim {
+            claim_id,
+            profile_id: selected.profile_id.clone(),
+            expires_at_ms,
+            claim,
+        })
+    })
+}
+
+fn runtime_profile_pool_release_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfilePoolReleaseRequest,
+    now: i64,
+) -> Result<RuntimeProfilePoolRelease, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let claim_id = normalize_profile_text(
+        "invalid-claim-id",
+        "claimId",
+        &request.claim_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+    let outcome = normalize_profile_pool_outcome(&request.outcome)?;
+    let retry_after_ms = request
+        .retry_after_ms
+        .map(|value| {
+            normalize_profile_pool_breaker_duration("invalid-retry-after", "retryAfterMs", value)
+        })
+        .transpose()?;
+    let circuit_open_ms = request
+        .circuit_open_ms
+        .map(|value| {
+            normalize_profile_pool_breaker_duration("invalid-circuit-open", "circuitOpenMs", value)
+        })
+        .transpose()?;
+    let reason = sanitize_profile_pool_optional_text(request.reason)?;
+    let error = sanitize_profile_pool_optional_text(request.error)?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_profile_pool_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let active = read_active_profile_claim_by_id_tx(&tx, &claim_id, now)?
+            .ok_or_else(|| "claim-inactive: profile pool claim is not active".to_string())?;
+
+        let breaker_until = match outcome {
+            "success" => {
+                clear_profile_circuit_breaker_tx(&tx, &active.profile_id)?;
+                None
+            }
+            "rate-limited" => {
+                let retry_after_ms = retry_after_ms.ok_or_else(|| {
+                    "invalid-retry-after: retryAfterMs is required for rate-limited releases"
+                        .to_string()
+                })?;
+                let open_until_ms =
+                    checked_profile_pool_deadline(now, retry_after_ms, "invalid-retry-after")?;
+                upsert_profile_circuit_breaker_tx(
+                    &tx,
+                    &active.profile_id,
+                    "rate-limited",
+                    reason.as_deref(),
+                    error.as_deref(),
+                    now,
+                    open_until_ms,
+                )?;
+                Some(open_until_ms)
+            }
+            "error" => {
+                if let Some(circuit_open_ms) = circuit_open_ms {
+                    let open_until_ms = checked_profile_pool_deadline(
+                        now,
+                        circuit_open_ms,
+                        "invalid-circuit-open",
+                    )?;
+                    upsert_profile_circuit_breaker_tx(
+                        &tx,
+                        &active.profile_id,
+                        "error",
+                        reason.as_deref(),
+                        error.as_deref(),
+                        now,
+                        open_until_ms,
+                    )?;
+                    Some(open_until_ms)
+                } else {
+                    None
+                }
+            }
+            _ => unreachable!("normalized profile pool outcome"),
+        };
+
+        let updated = tx
+            .execute(
+                "UPDATE runtime_profile_claims
+                 SET status = ?2,
+                     released_at_ms = ?3
+                 WHERE claim_id = ?1
+                   AND status = ?4
+                   AND expires_at_ms > ?3",
+                params![claim_id, RELEASED_CLAIM_STATUS, now, ACTIVE_CLAIM_STATUS],
+            )
+            .map_err(|err| format!("profile-pool-release-update-failed: {err}"))?;
+        if updated != 1 {
+            return Err("claim-inactive: profile pool claim is not active".to_string());
+        }
+
+        let released = read_profile_claim_tx(&tx, &claim_id)?;
+        let circuit_breaker = read_profile_circuit_breaker_optional_tx(&tx, &active.profile_id)?;
+        if let Some(job_id) = active.job_id.as_deref() {
+            let payload = profile_pool_release_event_payload(
+                &released,
+                outcome,
+                breaker_until,
+                reason.as_deref(),
+            )?;
+            let event_id = insert_runtime_event_tx(
+                &tx,
+                None,
+                job_id,
+                PROFILE_POOL_RELEASED_NAME,
+                &payload,
+                now,
+            )?;
+            let progress_payload = profile_pool_progress_payload(
+                &released.claim_id,
+                &released.profile_id,
+                outcome,
+                released.expires_at_ms,
+                breaker_until,
+            )?;
+            upsert_runtime_progress_tx(
+                &tx,
+                job_id,
+                &profile_pool_progress_key(&released.claim_id),
+                &progress_payload,
+                now,
+                Some(&event_id),
+            )?;
+        }
+
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeProfilePoolRelease {
+            claim: released,
+            circuit_breaker,
+        })
+    })
+}
+
+fn runtime_profile_pool_list_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfilePoolListRequest,
+    now: i64,
+) -> Result<RuntimeProfilePoolList, String> {
+    if !enabled {
+        return Ok(RuntimeProfilePoolList {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            active_claims: Vec::new(),
+            circuit_breakers: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeProfilePoolList {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            active_claims: Vec::new(),
+            circuit_breakers: Vec::new(),
+        });
+    };
+    let kind = request
+        .kind
+        .as_deref()
+        .map(normalize_profile_kind)
+        .transpose()?;
+    let task_family = request
+        .task_family
+        .map(|value| {
+            normalize_profile_text(
+                "invalid-task-family",
+                "taskFamily",
+                &value,
+                MAX_PROFILE_TASK_FAMILY_BYTES,
+            )
+        })
+        .transpose()?;
+    let job_id = normalize_optional_filter("invalid-job-id", "jobId", request.job_id)?;
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeProfilePoolList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            active_claims: Vec::new(),
+            circuit_breakers: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("profile-pool-list-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_profile_claims")?
+        || !table_exists(&connection, "runtime_profile_circuit_breakers")?
+    {
+        return Ok(RuntimeProfilePoolList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            active_claims: Vec::new(),
+            circuit_breakers: Vec::new(),
+        });
+    }
+    Ok(RuntimeProfilePoolList {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        active_claims: read_active_profile_claims(
+            &connection,
+            now,
+            kind,
+            task_family.as_deref(),
+            job_id.as_deref(),
+        )?,
+        circuit_breakers: read_open_profile_circuit_breakers(&connection, now)?,
+    })
 }
 
 async fn runtime_profile_probe_for_project_with_store(
@@ -4418,6 +5016,258 @@ fn normalize_profile_concurrency(value: Option<i64>) -> Result<i64, String> {
     }
 }
 
+fn normalize_profile_pool_ttl(ttl_ms: Option<i64>) -> Result<i64, String> {
+    let ttl_ms = ttl_ms.unwrap_or(DEFAULT_LEASE_TTL_MS);
+    if (MIN_PROFILE_POOL_TTL_MS..=MAX_PROFILE_POOL_TTL_MS).contains(&ttl_ms) {
+        Ok(ttl_ms)
+    } else {
+        Err(format!(
+            "invalid-ttl: ttlMs must be between {MIN_PROFILE_POOL_TTL_MS} and {MAX_PROFILE_POOL_TTL_MS}"
+        ))
+    }
+}
+
+fn normalize_profile_pool_breaker_duration(
+    code: &str,
+    field: &str,
+    value: i64,
+) -> Result<i64, String> {
+    if (1..=MAX_PROFILE_POOL_BREAKER_MS).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!(
+            "{code}: {field} must be between 1 and {MAX_PROFILE_POOL_BREAKER_MS}"
+        ))
+    }
+}
+
+fn checked_profile_pool_deadline(now: i64, duration_ms: i64, code: &str) -> Result<i64, String> {
+    now.checked_add(duration_ms)
+        .ok_or_else(|| format!("{code}: profile pool deadline overflow"))
+}
+
+fn normalize_profile_pool_outcome(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "success" => Ok("success"),
+        "rate-limited" => Ok("rate-limited"),
+        "error" => Ok("error"),
+        _ => Err("invalid-outcome: outcome must be success, rate-limited, or error".to_string()),
+    }
+}
+
+fn normalize_preferred_profile_ids(value: Option<Vec<String>>) -> Result<Vec<String>, String> {
+    let mut ids = Vec::new();
+    for raw in value.unwrap_or_default() {
+        let Ok(profile_id) = normalize_profile_text(
+            "invalid-profile-id",
+            "preferredProfileIds",
+            &raw,
+            MAX_PROFILE_ID_BYTES,
+        ) else {
+            continue;
+        };
+        if !ids.contains(&profile_id) {
+            ids.push(profile_id);
+        }
+    }
+    Ok(ids)
+}
+
+fn sanitize_profile_pool_optional_text(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let normalized = value
+        .chars()
+        .map(|value| if value.is_control() { ' ' } else { value })
+        .collect::<String>();
+    let trimmed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(truncate_profile_pool_text(&redact_profile_pool_text(
+        &trimmed,
+    ))))
+}
+
+fn redact_profile_pool_text(value: &str) -> String {
+    let mut redact_next = false;
+    value
+        .split_whitespace()
+        .map(|token| {
+            let lower = token.to_ascii_lowercase();
+            let has_secret_ref = lower.contains("llm-wiki-profile-secret:");
+            let has_sk_secret = lower.starts_with("sk-")
+                || lower.contains("=sk-")
+                || lower.contains(":sk-")
+                || lower.contains("\"sk-")
+                || lower.contains("'sk-");
+            let has_bearer = lower == "bearer"
+                || lower.starts_with("bearer:")
+                || lower.starts_with("bearer=");
+            let has_authorization = lower == "authorization"
+                || lower.starts_with("authorization:")
+                || lower.starts_with("authorization=");
+            let has_api_key = lower == "x-api-key"
+                || lower == "api-key"
+                || lower == "apikey"
+                || lower == "api_key"
+                || lower.starts_with("x-api-key:")
+                || lower.starts_with("x-api-key=")
+                || lower.starts_with("api-key:")
+                || lower.starts_with("api-key=")
+                || lower.starts_with("apikey:")
+                || lower.starts_with("apikey=")
+                || lower.starts_with("api_key:")
+                || lower.starts_with("api_key=");
+            let redacted = redact_next
+                || has_secret_ref
+                || has_sk_secret
+                || has_bearer
+                || has_authorization
+                || has_api_key;
+            redact_next = has_bearer || has_authorization || has_api_key;
+            if redacted {
+                "[REDACTED]"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn truncate_profile_pool_text(value: &str) -> String {
+    if value.len() <= MAX_PROFILE_POOL_REASON_BYTES {
+        return value.to_string();
+    }
+    let mut end = MAX_PROFILE_POOL_REASON_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
+}
+
+fn profile_pool_profile_eligible(
+    tx: &Transaction<'_>,
+    profile: &RuntimeProfileRecord,
+    kind: &str,
+    task_family: &str,
+    now: i64,
+) -> Result<bool, String> {
+    if !profile.enabled
+        || profile.kind != kind
+        || !profile
+            .task_families
+            .iter()
+            .any(|value| value == task_family)
+        || profile.capability_version != PROFILE_PROBE_CAPABILITY_VERSION
+        || !matches!(profile.capability_status.as_str(), "supported" | "limited")
+        || !capability_json_supports_kind(&profile.capability_json, kind)
+        || profile
+            .probe_backoff_until_ms
+            .is_some_and(|value| value > now)
+        || profile_circuit_breaker_open_tx(tx, &profile.profile_id, now)?
+    {
+        return Ok(false);
+    }
+    let active_count = active_profile_claim_count_tx(tx, &profile.profile_id, now)?;
+    Ok(active_count < profile.max_concurrency)
+}
+
+fn capability_json_supports_kind(capability_json: &str, kind: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(capability_json) else {
+        return false;
+    };
+    match kind {
+        "model-call" => value
+            .get("modelCallSupported")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "agent-run" => value
+            .get("agentRunSupported")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn select_profile_pool_candidate<'a>(
+    eligible: &'a [RuntimeProfileRecord],
+    preferred_profile_ids: &[String],
+) -> Option<&'a RuntimeProfileRecord> {
+    for preferred_profile_id in preferred_profile_ids {
+        if let Some(profile) = eligible
+            .iter()
+            .find(|profile| &profile.profile_id == preferred_profile_id)
+        {
+            return Some(profile);
+        }
+    }
+    eligible.first()
+}
+
+fn profile_pool_progress_key(claim_id: &str) -> String {
+    format!("profile-pool:{claim_id}")
+}
+
+fn profile_pool_claim_event_payload(
+    claim_id: &str,
+    profile_id: &str,
+    kind: &str,
+    task_family: &str,
+    holder: &str,
+    expires_at_ms: i64,
+) -> Result<String, String> {
+    profile_pool_payload(serde_json::json!({
+        "claimId": claim_id,
+        "profileId": profile_id,
+        "kind": kind,
+        "taskFamily": task_family,
+        "holder": holder,
+        "expiresAtMs": expires_at_ms
+    }))
+}
+
+fn profile_pool_release_event_payload(
+    claim: &RuntimeProfileClaimRecord,
+    outcome: &str,
+    breaker_until_ms: Option<i64>,
+    reason: Option<&str>,
+) -> Result<String, String> {
+    profile_pool_payload(serde_json::json!({
+        "claimId": claim.claim_id,
+        "profileId": claim.profile_id,
+        "kind": claim.kind,
+        "taskFamily": claim.task_family,
+        "outcome": outcome,
+        "breakerUntilMs": breaker_until_ms,
+        "reason": reason
+    }))
+}
+
+fn profile_pool_progress_payload(
+    claim_id: &str,
+    profile_id: &str,
+    status: &str,
+    expires_at_ms: i64,
+    breaker_until_ms: Option<i64>,
+) -> Result<String, String> {
+    profile_pool_payload(serde_json::json!({
+        "claimId": claim_id,
+        "profileId": profile_id,
+        "status": status,
+        "expiresAtMs": expires_at_ms,
+        "breakerUntilMs": breaker_until_ms
+    }))
+}
+
+fn profile_pool_payload(value: serde_json::Value) -> Result<String, String> {
+    let payload = value.to_string();
+    require_event_payload(&payload)?;
+    Ok(payload)
+}
+
 fn normalize_profile_json(
     code: &str,
     field: &str,
@@ -4757,6 +5607,113 @@ fn ensure_claim_id_available(tx: &Transaction<'_>, claim_id: &str) -> Result<(),
     } else {
         Err("claim-id-conflict: commit budget claim id already exists".to_string())
     }
+}
+
+fn ensure_profile_claim_id_available_tx(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+) -> Result<(), String> {
+    let existing = tx
+        .query_row(
+            "SELECT COUNT(*)
+             FROM runtime_profile_claims
+             WHERE claim_id = ?1",
+            [claim_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("profile-pool-claim-id-check-failed: {err}"))?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err("claim-id-conflict: profile pool claim id already exists".to_string())
+    }
+}
+
+fn expire_profile_claims_tx(tx: &Transaction<'_>, now: i64) -> Result<(), String> {
+    tx.execute(
+        "UPDATE runtime_profile_claims
+         SET status = ?2
+         WHERE status = ?1 AND expires_at_ms <= ?3",
+        params![ACTIVE_CLAIM_STATUS, EXPIRED_CLAIM_STATUS, now],
+    )
+    .map_err(|err| format!("profile-pool-expire-claims-failed: {err}"))?;
+    Ok(())
+}
+
+fn active_profile_claim_count_tx(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    now: i64,
+) -> Result<i64, String> {
+    tx.query_row(
+        "SELECT COUNT(*)
+         FROM runtime_profile_claims
+         WHERE profile_id = ?1
+           AND status = ?2
+           AND expires_at_ms > ?3",
+        params![profile_id, ACTIVE_CLAIM_STATUS, now],
+        |row| row.get(0),
+    )
+    .map_err(|err| format!("profile-pool-active-count-failed: {err}"))
+}
+
+fn profile_circuit_breaker_open_tx(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    now: i64,
+) -> Result<bool, String> {
+    tx.query_row(
+        "SELECT 1
+         FROM runtime_profile_circuit_breakers
+         WHERE profile_id = ?1 AND open_until_ms > ?2
+         LIMIT 1",
+        params![profile_id, now],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .map_err(|err| format!("profile-pool-breaker-check-failed: {err}"))
+}
+
+fn clear_profile_circuit_breaker_tx(tx: &Transaction<'_>, profile_id: &str) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM runtime_profile_circuit_breakers WHERE profile_id = ?1",
+        [profile_id],
+    )
+    .map_err(|err| format!("profile-pool-breaker-clear-failed: {err}"))?;
+    Ok(())
+}
+
+fn upsert_profile_circuit_breaker_tx(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    status: &str,
+    reason: Option<&str>,
+    error: Option<&str>,
+    now: i64,
+    open_until_ms: i64,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT INTO runtime_profile_circuit_breakers (
+            profile_id,
+            status,
+            reason,
+            error,
+            opened_at_ms,
+            open_until_ms,
+            updated_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5)
+         ON CONFLICT(profile_id) DO UPDATE SET
+            status = excluded.status,
+            reason = excluded.reason,
+            error = excluded.error,
+            opened_at_ms = excluded.opened_at_ms,
+            open_until_ms = excluded.open_until_ms,
+            updated_at_ms = excluded.updated_at_ms",
+        params![profile_id, status, reason, error, now, open_until_ms],
+    )
+    .map_err(|err| format!("profile-pool-breaker-upsert-failed: {err}"))?;
+    Ok(())
 }
 
 fn ensure_job_exists(tx: &Transaction<'_>, job_id: &str) -> Result<(), String> {
@@ -5447,6 +6404,100 @@ fn read_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRecord>, S
         .map_err(|err| format!("profiles-read-failed: {err}"))
 }
 
+fn read_profile_claim_tx(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+) -> Result<RuntimeProfileClaimRecord, String> {
+    tx.query_row(
+        &profile_claim_select_sql("WHERE claim_id = ?1"),
+        [claim_id],
+        map_profile_claim_row,
+    )
+    .map_err(|err| format!("profile-pool-claim-read-failed: {err}"))
+}
+
+fn read_active_profile_claim_by_id_tx(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+    now: i64,
+) -> Result<Option<RuntimeProfileClaimRecord>, String> {
+    tx.query_row(
+        &profile_claim_select_sql(
+            "WHERE claim_id = ?1 AND status = 'active' AND expires_at_ms > ?2",
+        ),
+        params![claim_id, now],
+        map_profile_claim_row,
+    )
+    .optional()
+    .map_err(|err| format!("profile-pool-claim-read-failed: {err}"))
+}
+
+fn read_active_profile_claims(
+    connection: &Connection,
+    now: i64,
+    kind: Option<&str>,
+    task_family: Option<&str>,
+    job_id: Option<&str>,
+) -> Result<Vec<RuntimeProfileClaimRecord>, String> {
+    let mut filters = vec!["status = ?", "expires_at_ms > ?"];
+    let mut values: Vec<Box<dyn ToSql>> =
+        vec![Box::new(ACTIVE_CLAIM_STATUS.to_string()), Box::new(now)];
+    if let Some(kind) = kind {
+        filters.push("kind = ?");
+        values.push(Box::new(kind.to_string()));
+    }
+    if let Some(task_family) = task_family {
+        filters.push("task_family = ?");
+        values.push(Box::new(task_family.to_string()));
+    }
+    if let Some(job_id) = job_id {
+        filters.push("job_id = ?");
+        values.push(Box::new(job_id.to_string()));
+    }
+    let suffix = format!(
+        "WHERE {} ORDER BY acquired_at_ms ASC, claim_id ASC",
+        filters.join(" AND ")
+    );
+    let params = values.iter().map(|value| value.as_ref());
+    let mut statement = connection
+        .prepare(&profile_claim_select_sql(&suffix))
+        .map_err(|err| format!("profile-pool-claims-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map(params_from_iter(params), map_profile_claim_row)
+        .map_err(|err| format!("profile-pool-claims-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("profile-pool-claims-read-failed: {err}"))
+}
+
+fn read_profile_circuit_breaker_optional_tx(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+) -> Result<Option<RuntimeProfileCircuitBreakerRecord>, String> {
+    tx.query_row(
+        &profile_circuit_breaker_select_sql("WHERE profile_id = ?1"),
+        [profile_id],
+        map_profile_circuit_breaker_row,
+    )
+    .optional()
+    .map_err(|err| format!("profile-pool-breaker-read-failed: {err}"))
+}
+
+fn read_open_profile_circuit_breakers(
+    connection: &Connection,
+    now: i64,
+) -> Result<Vec<RuntimeProfileCircuitBreakerRecord>, String> {
+    let mut statement = connection
+        .prepare(&profile_circuit_breaker_select_sql(
+            "WHERE open_until_ms > ?1 ORDER BY open_until_ms ASC, profile_id ASC",
+        ))
+        .map_err(|err| format!("profile-pool-breakers-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([now], map_profile_circuit_breaker_row)
+        .map_err(|err| format!("profile-pool-breakers-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("profile-pool-breakers-read-failed: {err}"))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
     connection
         .query_row(
@@ -5608,6 +6659,35 @@ fn profile_select_sql(suffix: &str) -> String {
     )
 }
 
+fn profile_claim_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT claim_id,
+                profile_id,
+                kind,
+                task_family,
+                job_id,
+                holder,
+                acquired_at_ms,
+                expires_at_ms,
+                released_at_ms,
+                status
+         FROM runtime_profile_claims {suffix}"
+    )
+}
+
+fn profile_circuit_breaker_select_sql(suffix: &str) -> String {
+    format!(
+        "SELECT profile_id,
+                status,
+                reason,
+                error,
+                opened_at_ms,
+                open_until_ms,
+                updated_at_ms
+         FROM runtime_profile_circuit_breakers {suffix}"
+    )
+}
+
 fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
     Ok(RuntimeJobRecord {
         job_id: row.get(0)?,
@@ -5753,6 +6833,35 @@ fn map_profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeProfileRe
     })
 }
 
+fn map_profile_claim_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeProfileClaimRecord> {
+    Ok(RuntimeProfileClaimRecord {
+        claim_id: row.get(0)?,
+        profile_id: row.get(1)?,
+        kind: row.get(2)?,
+        task_family: row.get(3)?,
+        job_id: row.get(4)?,
+        holder: row.get(5)?,
+        acquired_at_ms: row.get(6)?,
+        expires_at_ms: row.get(7)?,
+        released_at_ms: row.get(8)?,
+        status: row.get(9)?,
+    })
+}
+
+fn map_profile_circuit_breaker_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RuntimeProfileCircuitBreakerRecord> {
+    Ok(RuntimeProfileCircuitBreakerRecord {
+        profile_id: row.get(0)?,
+        status: row.get(1)?,
+        reason: row.get(2)?,
+        error: row.get(3)?,
+        opened_at_ms: row.get(4)?,
+        open_until_ms: row.get(5)?,
+        updated_at_ms: row.get(6)?,
+    })
+}
+
 fn parse_profile_task_families(value: String) -> rusqlite::Result<Vec<String>> {
     serde_json::from_str(&value).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(err))
@@ -5802,7 +6911,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::fs;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Barrier, Mutex};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -6352,6 +7461,74 @@ mod tests {
             probe_backoff_until_ms: None,
             last_capability_error: None,
             clear_last_capability_error: None,
+        }
+    }
+
+    fn profile_pool_capability_json(
+        model_call: serde_json::Value,
+        agent_run: serde_json::Value,
+    ) -> String {
+        serde_json::json!({
+            "modelCallSupported": model_call,
+            "agentRunSupported": agent_run
+        })
+        .to_string()
+    }
+
+    fn create_profile_pool_profile(
+        project: &Path,
+        profile_id: &str,
+        kind: &str,
+        enabled: bool,
+        max_concurrency: i64,
+        capability_json: String,
+    ) {
+        let mut create = profile_create_request(profile_id);
+        create.kind = kind.to_string();
+        create.enabled = Some(enabled);
+        create.max_concurrency = Some(max_concurrency);
+        runtime_profile_create_for_project(Some(project), true, create, 100)
+            .expect("create pool profile");
+        let mut update = profile_update_request(profile_id);
+        update.capability_status = Some("supported".to_string());
+        update.capability_json = Some(capability_json);
+        update.capability_version = Some(PROFILE_PROBE_CAPABILITY_VERSION.to_string());
+        update.capability_checked_at_ms = Some(150);
+        runtime_profile_update_for_project(Some(project), true, update, 150)
+            .expect("mark pool profile capable");
+    }
+
+    fn profile_pool_claim_request(
+        claim_id: &str,
+        preferred_profile_ids: Vec<&str>,
+    ) -> RuntimeProfilePoolClaimRequest {
+        RuntimeProfilePoolClaimRequest {
+            claim_id: Some(claim_id.to_string()),
+            kind: "model-call".to_string(),
+            task_family: "summarize".to_string(),
+            holder: "tester:worker-a".to_string(),
+            job_id: None,
+            ttl_ms: Some(10_000),
+            preferred_profile_ids: Some(
+                preferred_profile_ids
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        }
+    }
+
+    fn profile_pool_release_request(
+        claim_id: &str,
+        outcome: &str,
+    ) -> RuntimeProfilePoolReleaseRequest {
+        RuntimeProfilePoolReleaseRequest {
+            claim_id: claim_id.to_string(),
+            outcome: outcome.to_string(),
+            retry_after_ms: None,
+            circuit_open_ms: None,
+            reason: None,
+            error: None,
         }
     }
 
@@ -7595,6 +8772,696 @@ mod tests {
             runtime_profile_update_for_project(Some(&project), true, bad_json, 200)
                 .expect_err("invalid capability JSON rejected");
         assert!(bad_json_error.starts_with("invalid-capability-json"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_list_disabled_no_project_and_missing_tables_are_no_touch() {
+        let disabled = runtime_profile_pool_list_for_project(
+            None,
+            false,
+            RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            },
+            100,
+        )
+        .expect("disabled list");
+        assert_eq!(disabled.status, RuntimeDbHealthState::Disabled);
+        assert!(disabled.active_claims.is_empty());
+
+        let no_project = runtime_profile_pool_list_for_project(
+            None,
+            true,
+            RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            },
+            100,
+        )
+        .expect("no-project list");
+        assert_eq!(no_project.status, RuntimeDbHealthState::NoProject);
+
+        let project = temp_project("profile-pool-missing-tables");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_profile_create_for_project(
+            Some(&project),
+            true,
+            profile_create_request("profile-1"),
+            100,
+        )
+        .expect("create profile schema only");
+
+        let list = runtime_profile_pool_list_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            },
+            200,
+        )
+        .expect("missing pool tables list");
+        assert!(list.active_claims.is_empty());
+        assert!(!migration_family_exists(&project, PROFILE_POOL_FAMILY));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_claim_uses_preferred_order_and_skips_ineligible_ids() {
+        let project = temp_project("profile-pool-preferred");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-2",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-disabled",
+            "model-call",
+            false,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-ineligible",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(false), serde_json::json!(false)),
+        );
+
+        let claimed = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request(
+                "claim-1",
+                vec![
+                    "missing",
+                    "profile-disabled",
+                    "profile-ineligible",
+                    "profile-2",
+                    "profile-2",
+                    "profile-1",
+                ],
+            ),
+            200,
+        )
+        .expect("claim preferred profile");
+
+        assert_eq!(claimed.profile_id, "profile-2");
+        assert!(migration_family_exists(&project, PROFILE_POOL_FAMILY));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_rejects_bad_capability_facts_without_hard_parse_errors() {
+        let project = temp_project("profile-pool-capability-facts");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-missing",
+            "model-call",
+            true,
+            1,
+            "{}".to_string(),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-non-bool",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!("true"), serde_json::json!(false)),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-false",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(false), serde_json::json!(false)),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-malformed",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_model_profiles
+                 SET capability_json = '{bad json}'
+                 WHERE profile_id = 'profile-malformed'",
+                [],
+            )
+            .expect("seed malformed capability json");
+        drop(connection);
+
+        let error = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-1", vec![]),
+            200,
+        )
+        .expect_err("bad capability facts are ineligible");
+
+        assert!(error.starts_with("no-eligible-profile"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_capacity_uses_claim_time_sweep_and_list_filters_expired_active_claims() {
+        let project = temp_project("profile-pool-capacity");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        let mut first = profile_pool_claim_request("claim-1", vec![]);
+        first.ttl_ms = Some(1_000);
+        runtime_profile_pool_claim_for_project(Some(&project), true, first, 200)
+            .expect("first claim");
+
+        let exhausted = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-2", vec![]),
+            300,
+        )
+        .expect_err("capacity exhausted");
+        assert!(exhausted.starts_with("no-eligible-profile"));
+
+        let listed_before_sweep = runtime_profile_pool_list_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            },
+            1_300,
+        )
+        .expect("list filters expired active claim");
+        assert!(listed_before_sweep.active_claims.is_empty());
+
+        let claimed = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-2", vec![]),
+            1_300,
+        )
+        .expect("expired claim no longer consumes capacity");
+        assert_eq!(claimed.profile_id, "profile-1");
+
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let old_status: String = connection
+            .query_row(
+                "SELECT status FROM runtime_profile_claims WHERE claim_id = 'claim-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read expired claim status");
+        assert_eq!(old_status, EXPIRED_CLAIM_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_release_sets_and_clears_circuit_breakers() {
+        let project = temp_project("profile-pool-breaker");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-1", vec![]),
+            200,
+        )
+        .expect("claim");
+        let mut release = profile_pool_release_request("claim-1", "rate-limited");
+        release.retry_after_ms = Some(5_000);
+        release.reason = Some("provider returned 429 sk-secret".to_string());
+        let released = runtime_profile_pool_release_for_project(Some(&project), true, release, 300)
+            .expect("release rate limited");
+        let breaker = released.circuit_breaker.expect("breaker");
+        assert_eq!(breaker.status, "rate-limited");
+        assert_eq!(breaker.open_until_ms, 5_300);
+        assert!(!breaker.reason.unwrap_or_default().contains("sk-secret"));
+
+        let blocked = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-2", vec![]),
+            400,
+        )
+        .expect_err("breaker blocks profile");
+        assert!(blocked.starts_with("no-eligible-profile"));
+
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-2", vec![]),
+            5_400,
+        )
+        .expect("expired breaker no longer blocks");
+        let success = runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-2", "success"),
+            5_500,
+        )
+        .expect("success clears breaker");
+        assert!(success.circuit_breaker.is_none());
+        let list = runtime_profile_pool_list_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            },
+            5_600,
+        )
+        .expect("list after clear");
+        assert!(list.circuit_breakers.is_empty());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_claim_and_release_invariants_are_strict() {
+        let project = temp_project("profile-pool-invariants");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            2,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-1", vec![]),
+            200,
+        )
+        .expect("claim");
+        let duplicate = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-1", vec![]),
+            250,
+        )
+        .expect_err("duplicate claim rejected");
+        assert!(duplicate.starts_with("claim-id-conflict"));
+
+        runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-1", "success"),
+            300,
+        )
+        .expect("release once");
+        let released_again = runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-1", "success"),
+            350,
+        )
+        .expect_err("already released is inactive");
+        assert!(released_again.starts_with("claim-inactive"));
+
+        let unknown = runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("missing", "success"),
+            350,
+        )
+        .expect_err("unknown is inactive");
+        assert!(unknown.starts_with("claim-inactive"));
+
+        let invalid_duration = RuntimeProfilePoolReleaseRequest {
+            claim_id: "claim-1".to_string(),
+            outcome: "error".to_string(),
+            retry_after_ms: None,
+            circuit_open_ms: Some(MAX_PROFILE_POOL_BREAKER_MS + 1),
+            reason: None,
+            error: None,
+        };
+        let duration_error =
+            runtime_profile_pool_release_for_project(Some(&project), true, invalid_duration, 400)
+                .expect_err("invalid duration rejected");
+        assert!(duration_error.starts_with("invalid-circuit-open"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_breaker_bounds_and_sanitization_are_enforced() {
+        let project = temp_project("profile-pool-breaker-bounds");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-1", vec![]),
+            200,
+        )
+        .expect("claim");
+
+        for invalid_retry_after_ms in [-1, 0, MAX_PROFILE_POOL_BREAKER_MS + 1, i64::MAX] {
+            let mut release = profile_pool_release_request("claim-1", "rate-limited");
+            release.retry_after_ms = Some(invalid_retry_after_ms);
+            let error =
+                runtime_profile_pool_release_for_project(Some(&project), true, release, 300)
+                    .expect_err("invalid retryAfterMs is rejected before release");
+            assert!(error.starts_with("invalid-retry-after"));
+        }
+        assert!(checked_profile_pool_deadline(i64::MAX, 1, "invalid-circuit-open").is_err());
+
+        let mut release = profile_pool_release_request("claim-1", "rate-limited");
+        release.retry_after_ms = Some(5_000);
+        release.reason = Some(format!(
+            "provider 429 bearer abc key=sk-embedded {}",
+            "r".repeat(MAX_PROFILE_POOL_REASON_BYTES + 128)
+        ));
+        release.error = Some(format!(
+            "authorization: secret apiKey=abc {} sk-secret",
+            "e".repeat(MAX_PROFILE_POOL_REASON_BYTES + 128)
+        ));
+        let released =
+            runtime_profile_pool_release_for_project(Some(&project), true, release, 300)
+                .expect("sanitized release");
+        let breaker = released.circuit_breaker.expect("breaker");
+        let reason = breaker.reason.expect("reason");
+        let error = breaker.error.expect("error");
+        assert!(reason.len() <= MAX_PROFILE_POOL_REASON_BYTES);
+        assert!(error.len() <= MAX_PROFILE_POOL_REASON_BYTES);
+        assert!(!reason.contains("bearer"));
+        assert!(!reason.contains("abc"));
+        assert!(!reason.contains("sk-embedded"));
+        assert!(!error.contains("authorization:"));
+        assert!(!error.contains("apiKey"));
+        assert!(!error.contains("sk-secret"));
+        assert_eq!(
+            redact_profile_pool_text("flask-error api-key-not-configured"),
+            "flask-error api-key-not-configured"
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_concurrent_claims_do_not_exceed_capacity() {
+        let project = temp_project("profile-pool-concurrent");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+
+        let shared_project = Arc::new(project.clone());
+        let barrier = Arc::new(Barrier::new(4));
+        let handles = (0..4)
+            .map(|index| {
+                let project = Arc::clone(&shared_project);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    runtime_profile_pool_claim_for_project(
+                        Some(project.as_path()),
+                        true,
+                        profile_pool_claim_request(&format!("claim-{index}"), vec![]),
+                        200,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("claim thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .all(|error| error.starts_with("no-eligible-profile")));
+
+        let list = runtime_profile_pool_list_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolListRequest {
+                kind: None,
+                task_family: None,
+                job_id: None,
+            },
+            300,
+        )
+        .expect("list active claims");
+        assert_eq!(list.active_claims.len(), 1);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_job_linkage_rolls_back_when_audit_writes_fail() {
+        let project = temp_project("profile-pool-audit-rollback");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            2,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        let connection =
+            open_events_progress_runtime_locked(&project).expect("initialize audit tables");
+        drop(connection);
+
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "CREATE TRIGGER reject_profile_pool_events
+                 BEFORE INSERT ON runtime_events
+                 WHEN NEW.event_name = 'profile-pool:claimed'
+                 BEGIN
+                    SELECT RAISE(ABORT, 'forced event failure');
+                 END",
+                [],
+            )
+            .expect("create event trigger");
+        drop(connection);
+        let mut linked = profile_pool_claim_request("claim-event-fails", vec![]);
+        linked.job_id = Some("job-1".to_string());
+        let claim_error = runtime_profile_pool_claim_for_project(Some(&project), true, linked, 200)
+            .expect_err("event failure rolls claim back");
+        assert!(claim_error.starts_with("event-insert-failed"));
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let claim_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_profile_claims WHERE claim_id = 'claim-event-fails'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read claim count");
+        assert_eq!(claim_count, 0);
+        connection
+            .execute("DROP TRIGGER reject_profile_pool_events", [])
+            .expect("drop event trigger");
+        drop(connection);
+
+        let mut linked = profile_pool_claim_request("claim-progress-fails", vec![]);
+        linked.job_id = Some("job-1".to_string());
+        runtime_profile_pool_claim_for_project(Some(&project), true, linked, 300)
+            .expect("claim before progress trigger");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "CREATE TRIGGER reject_profile_pool_progress
+                 BEFORE INSERT ON runtime_progress
+                 WHEN NEW.progress_key LIKE 'profile-pool:%'
+                 BEGIN
+                    SELECT RAISE(ABORT, 'forced progress failure');
+                 END",
+                [],
+            )
+            .expect("create progress trigger");
+        drop(connection);
+        let release_error = runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-progress-fails", "success"),
+            400,
+        )
+        .expect_err("progress failure rolls release back");
+        assert!(release_error.starts_with("progress-upsert-failed"));
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM runtime_profile_claims WHERE claim_id = 'claim-progress-fails'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read claim status");
+        assert_eq!(status, ACTIVE_CLAIM_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_serde_contract_uses_camel_case_fields() {
+        let claim_request: RuntimeProfilePoolClaimRequest = serde_json::from_value(
+            serde_json::json!({
+                "claimId": "claim-1",
+                "kind": "model-call",
+                "taskFamily": "summarize",
+                "holder": "worker-1",
+                "jobId": "job-1",
+                "ttlMs": 30_000,
+                "preferredProfileIds": ["profile-2", "profile-1"]
+            }),
+        )
+        .expect("deserialize claim request");
+        assert_eq!(
+            claim_request.preferred_profile_ids,
+            Some(vec!["profile-2".to_string(), "profile-1".to_string()])
+        );
+        let release_request: RuntimeProfilePoolReleaseRequest = serde_json::from_value(
+            serde_json::json!({
+                "claimId": "claim-1",
+                "outcome": "rate-limited",
+                "retryAfterMs": 60_000,
+                "reason": "provider 429"
+            }),
+        )
+        .expect("deserialize release request");
+        assert_eq!(release_request.retry_after_ms, Some(60_000));
+        let unknown = serde_json::from_value::<RuntimeProfilePoolListRequest>(
+            serde_json::json!({
+                "kind": "model-call",
+                "unknownField": true
+            }),
+        )
+        .expect_err("deny unknown list fields");
+        assert!(unknown.to_string().contains("unknown field"));
+
+        let serialized = serde_json::to_value(RuntimeProfilePoolList {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            active_claims: Vec::new(),
+            circuit_breakers: Vec::new(),
+        })
+        .expect("serialize list response");
+        assert!(serialized.get("activeClaims").is_some());
+        assert!(serialized.get("circuitBreakers").is_some());
+        assert!(serialized.get("active_claims").is_none());
+    }
+
+    #[test]
+    fn profile_pool_job_linkage_writes_events_and_progress_only_when_requested() {
+        let project = temp_project("profile-pool-job-linkage");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create job");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            2,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        let mut linked = profile_pool_claim_request("claim-linked", vec![]);
+        linked.job_id = Some("job-1".to_string());
+        runtime_profile_pool_claim_for_project(Some(&project), true, linked, 200)
+            .expect("linked claim");
+        runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-linked", "success"),
+            300,
+        )
+        .expect("linked release");
+
+        let timeline = runtime_timeline_list_for_project(
+            Some(&project),
+            true,
+            timeline_request(Some("job-1")),
+        )
+        .expect("timeline");
+        assert_eq!(timeline.events.len(), 2);
+        assert_eq!(timeline.events[0].event_name, PROFILE_POOL_CLAIMED_NAME);
+        assert_eq!(timeline.events[1].event_name, PROFILE_POOL_RELEASED_NAME);
+        let progress = runtime_progress_list_for_project(
+            Some(&project),
+            true,
+            progress_list_request(Some("job-1")),
+        )
+        .expect("progress");
+        assert_eq!(progress.progress.len(), 1);
+        assert_eq!(
+            progress.progress[0].progress_key,
+            "profile-pool:claim-linked"
+        );
+
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-unlinked", vec![]),
+            400,
+        )
+        .expect("unlinked claim");
+        runtime_profile_pool_release_for_project(
+            Some(&project),
+            true,
+            profile_pool_release_request("claim-unlinked", "success"),
+            500,
+        )
+        .expect("unlinked release");
+        let timeline_after =
+            runtime_timeline_list_for_project(Some(&project), true, timeline_request(None))
+                .expect("timeline after unlinked");
+        assert_eq!(timeline_after.events.len(), 2);
         let _ = fs::remove_dir_all(project);
     }
 

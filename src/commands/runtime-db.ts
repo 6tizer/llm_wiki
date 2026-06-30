@@ -260,6 +260,75 @@ export interface RuntimeProfileList {
   profiles: RuntimeProfileRecord[]
 }
 
+export type RuntimeProfilePoolReleaseOutcome = "success" | "rate-limited" | "error"
+
+export interface RuntimeProfilePoolClaimRequest {
+  claimId?: string | null
+  kind: RuntimeProfileKind
+  taskFamily: string
+  holder: string
+  jobId?: string | null
+  ttlMs?: number | null
+  preferredProfileIds?: string[] | null
+}
+
+export interface RuntimeProfilePoolReleaseRequest {
+  claimId: string
+  outcome: RuntimeProfilePoolReleaseOutcome
+  retryAfterMs?: number | null
+  circuitOpenMs?: number | null
+  reason?: string | null
+  error?: string | null
+}
+
+export interface RuntimeProfilePoolListRequest {
+  kind?: RuntimeProfileKind | null
+  taskFamily?: string | null
+  jobId?: string | null
+}
+
+export interface RuntimeProfileClaimRecord {
+  claimId: string
+  profileId: string
+  kind: RuntimeProfileKind
+  taskFamily: string
+  jobId?: string | null
+  holder: string
+  acquiredAtMs: number
+  expiresAtMs: number
+  releasedAtMs?: number | null
+  status: string
+}
+
+export interface RuntimeProfileCircuitBreakerRecord {
+  profileId: string
+  status: "rate-limited" | "error"
+  reason?: string | null
+  error?: string | null
+  openedAtMs: number
+  openUntilMs: number
+  updatedAtMs: number
+}
+
+export interface RuntimeProfilePoolClaim {
+  claimId: string
+  profileId: string
+  expiresAtMs: number
+  claim: RuntimeProfileClaimRecord
+}
+
+export interface RuntimeProfilePoolRelease {
+  claim: RuntimeProfileClaimRecord
+  circuitBreaker?: RuntimeProfileCircuitBreakerRecord | null
+}
+
+export interface RuntimeProfilePoolList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  activeClaims: RuntimeProfileClaimRecord[]
+  circuitBreakers: RuntimeProfileCircuitBreakerRecord[]
+}
+
 export interface RuntimeProfileProbeResult {
   profile?: RuntimeProfileRecord | null
   status: RuntimeProfileCapabilityStatus
@@ -358,6 +427,24 @@ export function runtimeProfileProbe(
   request: RuntimeProfileProbeRequest,
 ): Promise<RuntimeProfileProbeResult> {
   return invoke<RuntimeProfileProbeResult>("runtime_profile_probe", { request })
+}
+
+export function runtimeProfilePoolClaim(
+  request: RuntimeProfilePoolClaimRequest,
+): Promise<RuntimeProfilePoolClaim> {
+  return invoke<RuntimeProfilePoolClaim>("runtime_profile_pool_claim", { request })
+}
+
+export function runtimeProfilePoolRelease(
+  request: RuntimeProfilePoolReleaseRequest,
+): Promise<RuntimeProfilePoolRelease> {
+  return invoke<RuntimeProfilePoolRelease>("runtime_profile_pool_release", { request })
+}
+
+export function runtimeProfilePoolList(
+  request: RuntimeProfilePoolListRequest = {},
+): Promise<RuntimeProfilePoolList> {
+  return invoke<RuntimeProfilePoolList>("runtime_profile_pool_list", { request })
 }
 
 export function runtimeJobCancel(jobId: string): Promise<RuntimeJobRecord> {
