@@ -197,6 +197,18 @@ describe("OKF export", () => {
     expect(fsMock.writes.get("/out/wiki/sources/paper.md")).toContain("type: summary")
   })
 
+  it("does not synthesize root index or overview pages when they are absent", async () => {
+    setWikiFiles({
+      "wiki/sources/paper.md": "---\ntype: source\ntitle: Paper\n---\n\n# Paper",
+    })
+
+    const bundle = await buildOkfExportBundle("/project")
+
+    expect(bundle.files.map((file) => file.relativePath)).toEqual([
+      "wiki/sources/paper.md",
+    ])
+  })
+
   it("ignores files outside the project wiki tree", async () => {
     setWikiFiles({
       "wiki/sources/paper.md": "---\ntype: source\ntitle: Paper\n---\n\n# Paper",

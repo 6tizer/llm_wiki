@@ -68,6 +68,27 @@ describe("validateOkfBundle", () => {
     expect(result.warnings).toEqual([])
   })
 
+  it("does not require root index or overview pages", async () => {
+    setWikiFiles({
+      "wiki/sources/page.md": [
+        "---",
+        "type: source",
+        "title: Page",
+        "---",
+        "",
+        "# Page",
+      ].join("\n"),
+    })
+
+    const result = await validateOkfBundle("/project")
+
+    expect(result.ok).toBe(true)
+    expect(result.errors).toEqual([])
+    expect(result.pages.map((page) => page.relativePath)).toEqual([
+      "wiki/sources/page.md",
+    ])
+  })
+
   it("reports missing type and missing title on non-structural pages", async () => {
     setWikiFiles({
       "wiki/concepts/missing-type.md": "---\ntitle: Missing Type\n---\n\n# Missing Type",

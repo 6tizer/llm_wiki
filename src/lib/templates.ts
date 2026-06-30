@@ -14,7 +14,7 @@ const BASE_SCHEMA_TYPES = `| entity | wiki/entities/ | Named things (people, too
 | query | wiki/queries/ | Open questions under active investigation |
 | comparison | wiki/comparisons/ | Side-by-side analysis of related entities |
 | synthesis | wiki/synthesis/ | Cross-cutting summaries and conclusions |
-| overview | wiki/ | High-level project summary (one per project) |`
+| overview | wiki/ | Optional project synthesis or user-authored summary |`
 
 const BASE_NAMING = `- Files: \`kebab-case.md\`
 - Entities: match official name where possible (e.g., \`openai.md\`, \`gpt-4.md\`)
@@ -43,7 +43,7 @@ url: ""
 venue: ""
 \`\`\``
 
-const BASE_INDEX_FORMAT = `\`wiki/index.md\` lists all pages grouped by type. Each entry:
+const BASE_INDEX_FORMAT = `Root \`wiki/index.md\` is optional. When generated or user-authored, it is an export/directory view that lists useful pages grouped by type. Each entry:
 \`\`\`
 - [[page-slug]] — one-line description
 \`\`\``
@@ -56,7 +56,7 @@ const BASE_LOG_FORMAT = `\`wiki/log.md\` records activity in reverse chronologic
 \`\`\``
 
 const BASE_CROSSREF = `- Use \`[[page-slug]]\` syntax to link between wiki pages
-- Every entity and concept should appear in \`wiki/index.md\`
+- Use frontmatter \`related:\` fields and inline wikilinks to connect entity and concept pages
 - Queries link to the sources and concepts they draw on
 - Synthesis pages cite all contributing sources via \`related:\``
 
