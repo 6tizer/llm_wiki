@@ -706,6 +706,173 @@ describe("markdown commit operation", () => {
     expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
   })
 
+  it("routes conflicts to repair before audit and records the repair job id", async () => {
+    const calls: string[] = []
+    const io = adapters({
+      readCommittedMarkdown: vi.fn(async () => "current"),
+      routeConflictRepair: vi.fn(async () => {
+        calls.push("repair")
+        return { repairJobId: "repair-1" }
+      }),
+      appendCommitEvent: vi.fn(async () => {
+        calls.push("event")
+        return { eventId: "event-1" }
+      }),
+      recordDerivedStaleMarkers: vi.fn(async () => undefined),
+      cleanupCommittedArtifact: vi.fn(async () => {
+        calls.push("cleanup")
+      }),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact({
+          operationIntent: "update",
+          baseHash: fakeHash("old"),
+          sourceKind: "ingest",
+        }),
+        holder: "tester:1",
+        markerOperations: [{ layer: "embedding", affectedPath: "wiki/Page.md" }],
+      },
+      io,
+    )
+
+    expect(result).toMatchObject({
+      result: "conflicted",
+      repairJobId: "repair-1",
+      eventId: "event-1",
+    })
+    expect(calls).toEqual(["repair", "event"])
+    expect(io.routeConflictRepair).toHaveBeenCalledWith({
+      artifactId: "artifact-1",
+      jobId: "job-1",
+      artifactPath: "job-1/artifact.md",
+      artifactHash: fakeHash("staged"),
+      targetPath: "wiki/Page.md",
+      operationIntent: "update",
+      result: "conflicted",
+      baseHash: fakeHash("old"),
+      currentHash: fakeHash("current"),
+      affectedPaths: ["wiki/Page.md"],
+      sourceKind: "ingest",
+      conflictReason:
+        "commit-conflict: update target does not match the expected base hash",
+    })
+    expect(io.appendCommitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: "conflicted",
+        repairJobId: "repair-1",
+      }),
+    )
+    expect(io.recordDerivedStaleMarkers).not.toHaveBeenCalled()
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("still appends conflict audit events when repair routing fails", async () => {
+    const io = adapters({
+      readCommittedMarkdown: vi.fn(async () => "current"),
+      routeConflictRepair: vi.fn(async () => {
+        throw new Error("repair queue failed")
+      }),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+      cleanupCommittedArtifact: vi.fn(async () => undefined),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact({
+          operationIntent: "update",
+          baseHash: fakeHash("old"),
+        }),
+        holder: "tester:1",
+      },
+      io,
+    )
+
+    expect(result).toMatchObject({
+      result: "conflicted",
+      repairJobId: null,
+      repairError: "repair queue failed",
+      eventId: "event-1",
+    })
+    expect(io.appendCommitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: "conflicted",
+        repairJobId: null,
+        repairError: "repair queue failed",
+      }),
+    )
+    expect(io.cleanupCommittedArtifact).not.toHaveBeenCalled()
+  })
+
+  it("does not route repair for committed outcomes", async () => {
+    const io = adapters({
+      routeConflictRepair: vi.fn(async () => ({ repairJobId: "repair-1" })),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+    })
+
+    const result = await commitMarkdownArtifact(
+      { artifact: artifact(), holder: "tester:1" },
+      io,
+    )
+
+    expect(result.result).toBe("committed")
+    expect(io.routeConflictRepair).not.toHaveBeenCalled()
+  })
+
+  it("does not route repair for merged outcomes", async () => {
+    const io = adapters({
+      readCommittedMarkdown: vi.fn(async () => "current"),
+      routeConflictRepair: vi.fn(async () => ({ repairJobId: "repair-1" })),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact({
+          operationIntent: "append",
+          baseHash: fakeHash("current"),
+        }),
+        holder: "tester:1",
+      },
+      io,
+    )
+
+    expect(result.result).toBe("merged")
+    expect(io.routeConflictRepair).not.toHaveBeenCalled()
+    expect(io.cleanupCommittedArtifact).toHaveBeenCalledWith("artifact-1")
+  })
+
+
+  it("bounds repair routing errors before audit", async () => {
+    const longError = "x".repeat(1100)
+    const io = adapters({
+      readCommittedMarkdown: vi.fn(async () => "current"),
+      routeConflictRepair: vi.fn(async () => {
+        throw new Error(longError)
+      }),
+      appendCommitEvent: vi.fn(async () => ({ eventId: "event-1" })),
+    })
+
+    const result = await commitMarkdownArtifact(
+      {
+        artifact: artifact({
+          operationIntent: "update",
+          baseHash: fakeHash("old"),
+        }),
+        holder: "tester:1",
+      },
+      io,
+    )
+
+    expect(result.repairError).toHaveLength(1024)
+    expect(io.appendCommitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repairError: "x".repeat(1024),
+      }),
+    )
+  })
+
   it("appends rejected audit events after a failed write without markers or cleanup", async () => {
     const io = adapters({
       writeCommittedMarkdownAtomic: vi.fn(async () => {

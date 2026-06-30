@@ -6,9 +6,11 @@ import {
   runtimeCommitBudgetRelease,
   runtimeEventAppend,
   runtimeJobCancel,
+  runtimeJobCreate,
   runtimeJobList,
   runtimeJobPause,
   runtimeJobResume,
+  runtimeStagingArtifactRecord,
   runtimeStagingArtifactCommitSuccess,
 } from "./runtime-db"
 
@@ -30,6 +32,29 @@ describe("runtime-db commands", () => {
     await expect(runtimeJobList()).resolves.toBe(response)
 
     expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_job_list")
+  })
+
+  it("sends runtime job create payloads", async () => {
+    const response = { jobId: "repair-1" }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeJobCreate({
+        kind: "markdown-conflict-repair",
+        payload: "{\"kind\":\"markdown-conflict-repair\"}",
+        maxAttempts: 3,
+        priority: 5,
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_job_create", {
+      request: {
+        kind: "markdown-conflict-repair",
+        payload: "{\"kind\":\"markdown-conflict-repair\"}",
+        maxAttempts: 3,
+        priority: 5,
+      },
+    })
   })
 
   it("sends cancel, pause, and resume request payloads by job id only", async () => {
@@ -141,6 +166,36 @@ describe("runtime-db commands", () => {
       "runtime_staging_artifact_commit_success",
       {
         request: { artifactId: "artifact-1" },
+      },
+    )
+  })
+
+  it("sends staging artifact record payloads", async () => {
+    const response = { artifactId: "artifact-1", status: "failed" }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeStagingArtifactRecord({
+        artifactId: "artifact-1",
+        jobId: "job-1",
+        artifactPath: "job-1/artifact.md",
+        artifactHash: "sha256:artifact",
+        status: "failed",
+        lastError: "commit-conflict: base hash mismatch",
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      "runtime_staging_artifact_record",
+      {
+        request: {
+          artifactId: "artifact-1",
+          jobId: "job-1",
+          artifactPath: "job-1/artifact.md",
+          artifactHash: "sha256:artifact",
+          status: "failed",
+          lastError: "commit-conflict: base hash mismatch",
+        },
       },
     )
   })
