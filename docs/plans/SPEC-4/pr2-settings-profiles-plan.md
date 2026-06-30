@@ -1,6 +1,6 @@
 # SPEC-4 PR2 Plan: Settings Profiles UI + Secret Write Boundary
 
-> Type: PR execution plan | Status: in progress | Owner: Commander | Branch: `codex/spec-4-pr2-settings-profiles` | Primary issue: #185 | Run: `84f61d0e-bf5c-4431-afee-87f6b0430e40`
+> Type: PR execution plan | Status: merged via PR #218 | Owner: Commander | Branch: `codex/spec-4-pr2-settings-profiles` | Primary issue: #185 | Run: `84f61d0e-bf5c-4431-afee-87f6b0430e40`
 
 ## Goal
 

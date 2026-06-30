@@ -506,6 +506,13 @@
           "secretPlaceholder": "Enter a new secret for this profile",
           "clearSecret": "Clear saved secret",
           "saveProfile": "Save profile",
+          "capability": "Capability",
+          "capabilityStale": "not probed",
+          "capabilityChecked": "Checked {{time}}",
+          "capabilityBackoff": "Retry after {{time}}",
+          "capabilityError": "Probe failed: {{message}}",
+          "probe": "Probe profile",
+          "probing": "Probing profile…",
           "saved": "Profile saved.",
           "saveFailed": "Save failed: {{message}}"
         }

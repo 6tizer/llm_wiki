@@ -12,6 +12,7 @@ import {
   runtimeJobResume,
   runtimeProfileCreate,
   runtimeProfileList,
+  runtimeProfileProbe,
   runtimeProfileStatus,
   runtimeProfileUpdate,
   runtimeStagingArtifactRecord,
@@ -280,10 +281,19 @@ describe("runtime-db commands", () => {
   it("sends runtime profile create, update, list, and status payloads", async () => {
     const created = { profileId: "profile-1", capabilityStatus: "unknown" }
     const updated = { profileId: "profile-1", capabilityStatus: "limited" }
+    const probe = {
+      status: "supported",
+      capabilityJson: "{\"modelCallSupported\":true}",
+      capabilityVersion: "profile-probe.v1",
+      checkedAtMs: 123,
+      backoffUntilMs: null,
+      message: "Probe succeeded.",
+    }
     const list = { enabled: true, status: "healthy", profiles: [updated] }
     tauriMocks.invoke
       .mockResolvedValueOnce(created)
       .mockResolvedValueOnce(updated)
+      .mockResolvedValueOnce(probe)
       .mockResolvedValueOnce(list)
       .mockResolvedValueOnce(updated)
 
@@ -310,6 +320,12 @@ describe("runtime-db commands", () => {
         capabilityJson: "{\"reason\":\"manual\"}",
       }),
     ).resolves.toBe(updated)
+    await expect(
+      runtimeProfileProbe({
+        profileId: "profile-1",
+        force: true,
+      }),
+    ).resolves.toBe(probe)
     await expect(runtimeProfileList()).resolves.toBe(list)
     await expect(runtimeProfileStatus({ profileId: "profile-1" })).resolves.toBe(updated)
 
@@ -336,8 +352,14 @@ describe("runtime-db commands", () => {
         capabilityJson: "{\"reason\":\"manual\"}",
       },
     })
-    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_profile_list")
-    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_status", {
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_profile_probe", {
+      request: {
+        profileId: "profile-1",
+        force: true,
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_list")
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(5, "runtime_profile_status", {
       request: { profileId: "profile-1" },
     })
   })

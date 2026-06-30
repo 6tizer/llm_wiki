@@ -215,6 +215,22 @@ export interface RuntimeProfileStatusRequest {
   profileId: string
 }
 
+export interface RuntimeProfileProbeDraftRequest {
+  kind: RuntimeProfileKind
+  providerId: string
+  modelId: string
+  endpoint?: string | null
+  apiMode: RuntimeProfileApiMode
+  authStyle: RuntimeProfileAuthStyle
+}
+
+export interface RuntimeProfileProbeRequest {
+  profileId?: string | null
+  draft?: RuntimeProfileProbeDraftRequest | null
+  rawSecret?: string | null
+  force?: boolean | null
+}
+
 export interface RuntimeProfileRecord {
   profileId: string
   kind: RuntimeProfileKind
@@ -242,6 +258,16 @@ export interface RuntimeProfileList {
   enabled: boolean
   status: RuntimeDbHealthState
   profiles: RuntimeProfileRecord[]
+}
+
+export interface RuntimeProfileProbeResult {
+  profile?: RuntimeProfileRecord | null
+  status: RuntimeProfileCapabilityStatus
+  capabilityJson: string
+  capabilityVersion: string
+  checkedAtMs: number
+  backoffUntilMs?: number | null
+  message: string
 }
 
 export function runtimeJobList(): Promise<RuntimeJobList> {
@@ -326,6 +352,12 @@ export function runtimeProfileStatus(
   request: RuntimeProfileStatusRequest,
 ): Promise<RuntimeProfileRecord> {
   return invoke<RuntimeProfileRecord>("runtime_profile_status", { request })
+}
+
+export function runtimeProfileProbe(
+  request: RuntimeProfileProbeRequest,
+): Promise<RuntimeProfileProbeResult> {
+  return invoke<RuntimeProfileProbeResult>("runtime_profile_probe", { request })
 }
 
 export function runtimeJobCancel(jobId: string): Promise<RuntimeJobRecord> {

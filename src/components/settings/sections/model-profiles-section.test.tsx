@@ -8,7 +8,6 @@ import {
   createEmptyProfileDraft,
   ModelProfilesSection,
   saveProfileDraft,
-  smokeConfigFromDraft,
   taskFamiliesForRender,
   type ModelProfileDraft,
 } from "./model-profiles-section"
@@ -17,6 +16,7 @@ import type { RuntimeProfileRecord } from "@/commands/runtime-db"
 const runtimeDbMocks = vi.hoisted(() => ({
   runtimeProfileCreate: vi.fn(),
   runtimeProfileList: vi.fn(),
+  runtimeProfileProbe: vi.fn(),
   runtimeProfileUpdate: vi.fn(),
 }))
 
@@ -25,14 +25,8 @@ const secretMocks = vi.hoisted(() => ({
   profileSecretDelete: vi.fn(),
 }))
 
-const connectionMocks = vi.hoisted(() => ({
-  testLlmConnection: vi.fn(),
-  testLlmFunction: vi.fn(),
-}))
-
 vi.mock("@/commands/runtime-db", () => runtimeDbMocks)
 vi.mock("@/commands/profile-secrets", () => secretMocks)
-vi.mock("@/lib/connection-tests", () => connectionMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -55,7 +49,7 @@ function runtimeProfile(
     maxConcurrency: 1,
     capabilityStatus: "unknown",
     capabilityJson: "{}",
-    capabilityVersion: "profiles.v1",
+    capabilityVersion: "spec-4-pr1",
     capabilityCheckedAtMs: null,
     probeBackoffUntilMs: null,
     lastCapabilityError: null,
@@ -129,7 +123,11 @@ describe("ModelProfilesSection helpers", () => {
   })
 
   it("keeps the old secret attached when replacement profile update fails", async () => {
-    const existing = runtimeProfile()
+    const existing = runtimeProfile({
+      capabilityStatus: "supported",
+      capabilityVersion: "profile-probe.v1",
+      lastCapabilityError: "old error",
+    })
     const draft: ModelProfileDraft = {
       ...createEmptyProfileDraft(),
       profileId: existing.profileId,
@@ -166,6 +164,13 @@ describe("ModelProfilesSection helpers", () => {
     runtimeDbMocks.runtimeProfileUpdate.mockImplementation(async (request) => {
       calls.push("update")
       expect(request.clearSecretRef).toBe(true)
+      expect(request).toMatchObject({
+        capabilityStatus: "unknown",
+        capabilityJson: "{}",
+        capabilityVersion: "spec-4-pr1",
+        capabilityCheckedAtMs: 0,
+        clearLastCapabilityError: true,
+      })
       return runtimeProfile({ secretRef: null })
     })
 
@@ -176,29 +181,10 @@ describe("ModelProfilesSection helpers", () => {
     expect(calls).toEqual(["update", "delete"])
   })
 
-  it("uses raw draft secrets for smoke tests and preserves unknown task families", () => {
+  it("preserves unknown task families in render options", () => {
     const draft = createEmptyProfileDraft("custom")
-    draft.apiMode = "anthropic-messages"
-    draft.endpoint = "https://gateway.example/v1"
-    draft.modelId = "claude-compatible"
-    draft.rawSecret = "draft-only-secret"
 
-    const mapped = smokeConfigFromDraft(draft)
-    expect(mapped.ok).toBe(true)
-    if (mapped.ok) {
-      expect(mapped.config).toMatchObject({
-        provider: "custom",
-        apiKey: "draft-only-secret",
-        customEndpoint: "https://gateway.example/v1",
-        apiMode: "anthropic_messages",
-      })
-    }
-
-    draft.rawSecret = ""
-    const noRaw = smokeConfigFromDraft(draft)
-    expect(noRaw.ok).toBe(false)
-    if (!noRaw.ok) expect(noRaw.result.message).toContain("Stored-secret probes arrive in PR3")
-
+    expect(draft.providerId).toBe("custom")
     expect(taskFamiliesForRender(["chat", "future-family"])).toContain("future-family")
   })
 
@@ -252,12 +238,23 @@ describe("ModelProfilesSection UI", () => {
     })
     runtimeDbMocks.runtimeProfileCreate.mockResolvedValue(runtimeProfile({ profileId: "profile-new" }))
     runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile())
+    runtimeDbMocks.runtimeProfileProbe.mockResolvedValue({
+      profile: runtimeProfile({
+        capabilityStatus: "supported",
+        capabilityVersion: "profile-probe.v1",
+        capabilityCheckedAtMs: 123,
+      }),
+      status: "supported",
+      capabilityJson: "{\"modelCallSupported\":true}",
+      capabilityVersion: "profile-probe.v1",
+      checkedAtMs: 123,
+      backoffUntilMs: null,
+      message: "Probe succeeded.",
+    })
     secretMocks.profileSecretWrite.mockResolvedValue({
       secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
     })
     secretMocks.profileSecretDelete.mockResolvedValue({ ok: true })
-    connectionMocks.testLlmConnection.mockResolvedValue({ ok: true, message: "connected" })
-    connectionMocks.testLlmFunction.mockResolvedValue({ ok: true, message: "ok" })
   })
 
   it("loads profiles and keeps unknown task family values visible", async () => {
@@ -346,6 +343,121 @@ describe("ModelProfilesSection UI", () => {
         maxConcurrency: 1,
       }),
     )
+
+    unmount(root)
+  })
+
+  it("marks cached capability stale after unsaved probe input edits", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          capabilityStatus: "supported",
+          capabilityVersion: "profile-probe.v1",
+          capabilityCheckedAtMs: 123,
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    expect(container.textContent).toContain("supported")
+
+    const model = container.querySelector<HTMLInputElement>("[data-testid='profile-model']")
+    if (!model) throw new Error("profile model input not found")
+    await input(model, "gpt-new")
+
+    expect(container.textContent).toContain("not probed")
+    expect(container.textContent).not.toContain("supported")
+
+    unmount(root)
+  })
+
+  it("resets cached capability fields when saved probe inputs change", async () => {
+    const existing = runtimeProfile({
+      capabilityStatus: "supported",
+      capabilityVersion: "profile-probe.v1",
+      capabilityCheckedAtMs: 123,
+      lastCapabilityError: "old error",
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [existing],
+    })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(runtimeProfile({
+      modelId: "gpt-new",
+      capabilityStatus: "unknown",
+      capabilityVersion: "spec-4-pr1",
+      capabilityCheckedAtMs: 0,
+      lastCapabilityError: null,
+    }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const model = container.querySelector<HTMLInputElement>("[data-testid='profile-model']")
+    const save = container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")
+    if (!model || !save) throw new Error("profile edit form not found")
+
+    await input(model, "gpt-new")
+    await click(save)
+
+    expect(runtimeDbMocks.runtimeProfileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "gpt-new",
+        capabilityStatus: "unknown",
+        capabilityJson: "{}",
+        capabilityVersion: "spec-4-pr1",
+        capabilityCheckedAtMs: 0,
+        clearLastCapabilityError: true,
+      }),
+    )
+
+    unmount(root)
+  })
+
+  it("probes saved profiles by profileId without reading stored secrets in the UI", async () => {
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const probe = container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")
+    if (!probe) throw new Error("profile probe button not found")
+    await click(probe)
+
+    expect(runtimeDbMocks.runtimeProfileProbe).toHaveBeenCalledWith({
+      profileId: "profile-1",
+      force: true,
+    })
+    expect(container.textContent).toContain("Probe succeeded.")
+
+    unmount(root)
+  })
+
+  it("probes unsaved drafts with a one-request raw secret", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const secret = container.querySelector<HTMLInputElement>("[data-testid='profile-secret']")
+    const probe = container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")
+    if (!secret || !probe) throw new Error("profile probe form not found")
+
+    await input(secret, "draft-only-secret")
+    await click(probe)
+
+    expect(runtimeDbMocks.runtimeProfileProbe).toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        providerId: "openai",
+        modelId: "gpt-4o",
+      }),
+      rawSecret: "draft-only-secret",
+      force: true,
+    })
 
     unmount(root)
   })
