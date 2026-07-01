@@ -17,8 +17,8 @@
 
 - App：`[DEV] LLM Wiki Agent`
 - Work Runtime：已用 `LLM_WIKI_CORE_WORK_RUNTIME_ENABLED=true pnpm tauri dev` 启动。
-- 测试项目：`/Users/mac-mini/wiki-migration/NotionDB导出/test`
-- Runtime DB：`/Users/mac-mini/wiki-migration/NotionDB导出/test/.llm-wiki/runtime/runtime.db`
+- 测试项目：本机 Dev fixture 项目（具体本机路径不入库）。
+- Runtime DB：`<dev-project>/.llm-wiki/runtime/runtime.db`
 
 ## 发现的问题
 

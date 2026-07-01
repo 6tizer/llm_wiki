@@ -1,6 +1,6 @@
 # SPEC-6: Derived Knowledge Rebuild / 派生知识异步化
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#189 | 依赖：SPEC-1、SPEC-2、SPEC-3
+> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#189 | 依赖：SPEC-1、SPEC-2、SPEC-3 | 执行顺序：SPEC-5 commit/profile/runtime 使用路径稳定后推进
 
 ## 目标与成功标准
 

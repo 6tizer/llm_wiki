@@ -1,6 +1,6 @@
 # SPEC-5: Parallel Knowledge Pipeline / 批量编译加速
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#191 | 依赖：SPEC-1、SPEC-2、SPEC-3、SPEC-4
+> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#191 | 依赖：SPEC-1、SPEC-2、SPEC-3、SPEC-4 | 执行顺序：SPEC-4-FIX PR1-PR3 完成后进入
 
 ## 目标与成功标准
 
@@ -25,6 +25,7 @@
 - repair/review jobs 处理冲突、低置信度、schema 不合格、write failure。
 - Agent-run Profile 用于异常修复，不默认一篇文档一个 Agent session。
 - Model-call Profile 用于批量 prepare；worker pool 不直接依赖单活 legacy provider。
+- `model-call` profile pool 基座来自 SPEC-4 PR4；本 SPEC 只消费 profile assignment，不重新定义 profile eligibility / claim / circuit-break 规则。
 - map-reduce 长文分析允许 chunk 级部分成功；失败 chunk 产出 partial draft + repair job，而不是拖死整个 batch。
 
 ## 预期 PR 拆分
