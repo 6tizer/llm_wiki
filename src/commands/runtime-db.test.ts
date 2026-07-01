@@ -11,6 +11,7 @@ import {
   runtimeJobPause,
   runtimeJobResume,
   runtimeProfileCreate,
+  runtimeProfileDelete,
   runtimeProfileList,
   runtimeProfilePoolClaim,
   runtimeProfilePoolList,
@@ -281,7 +282,7 @@ describe("runtime-db commands", () => {
     )
   })
 
-  it("sends runtime profile create, update, list, and status payloads", async () => {
+  it("sends runtime profile create, update, list, status, and delete payloads", async () => {
     const created = { profileId: "profile-1", capabilityStatus: "unknown" }
     const updated = { profileId: "profile-1", capabilityStatus: "limited" }
     const probe = {
@@ -293,12 +294,18 @@ describe("runtime-db commands", () => {
       message: "Probe succeeded.",
     }
     const list = { enabled: true, status: "healthy", profiles: [updated] }
+    const deleted = {
+      profileId: "profile-1",
+      deletedAtMs: 456,
+      secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
+    }
     tauriMocks.invoke
       .mockResolvedValueOnce(created)
       .mockResolvedValueOnce(updated)
       .mockResolvedValueOnce(probe)
       .mockResolvedValueOnce(list)
       .mockResolvedValueOnce(updated)
+      .mockResolvedValueOnce(deleted)
 
     await expect(
       runtimeProfileCreate({
@@ -331,6 +338,7 @@ describe("runtime-db commands", () => {
     ).resolves.toBe(probe)
     await expect(runtimeProfileList()).resolves.toBe(list)
     await expect(runtimeProfileStatus({ profileId: "profile-1" })).resolves.toBe(updated)
+    await expect(runtimeProfileDelete({ profileId: "profile-1" })).resolves.toBe(deleted)
 
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_profile_create", {
       request: {
@@ -363,6 +371,9 @@ describe("runtime-db commands", () => {
     })
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_list")
     expect(tauriMocks.invoke).toHaveBeenNthCalledWith(5, "runtime_profile_status", {
+      request: { profileId: "profile-1" },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(6, "runtime_profile_delete", {
       request: { profileId: "profile-1" },
     })
   })

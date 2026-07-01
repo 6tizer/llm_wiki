@@ -581,6 +581,22 @@ pub struct RuntimeProfileStatusRequest {
     profile_id: String,
 }
 
+/// Request payload for soft-deleting one stored model profile.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileDeleteRequest {
+    profile_id: String,
+}
+
+/// Response payload for a soft-deleted model profile. It never contains a secret value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileDeleteResult {
+    profile_id: String,
+    deleted_at_ms: i64,
+    secret_ref: Option<String>,
+}
+
 /// Snapshot of one stored model profile. It never contains a secret value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1271,6 +1287,20 @@ pub fn runtime_profile_update(
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
         runtime_profile_update_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// Soft-delete one stored model profile for the currently-open project.
+#[tauri::command]
+pub fn runtime_profile_delete(
+    request: RuntimeProfileDeleteRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileDeleteResult, String> {
+    run_guarded("runtime_profile_delete", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_profile_delete_for_project(project_root.as_deref(), runtime_enabled, request, now)
     })
 }
 
@@ -2063,12 +2093,21 @@ fn initialize_profile_schema(connection: &Connection) -> Result<(), String> {
                         OR length(CAST(last_capability_error AS BLOB)) <= {MAX_PROFILE_CAPABILITY_ERROR_BYTES}
                     ),
                     created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
-                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= 0)
                 )"
             ),
             [],
         )
         .map_err(|err| format!("Failed to initialize runtime model profiles table: {err}"))?;
+    ensure_column_exists(
+        connection,
+        "runtime_model_profiles",
+        "deleted_at_ms",
+        "ALTER TABLE runtime_model_profiles
+         ADD COLUMN deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= 0)",
+        "runtime model profile deleted_at_ms",
+    )?;
 
     connection
         .execute(
@@ -2085,6 +2124,15 @@ fn initialize_profile_schema(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|err| {
             format!("Failed to initialize runtime model profiles status index: {err}")
+        })?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_model_profiles_visible_idx
+             ON runtime_model_profiles(deleted_at_ms, kind, enabled, updated_at_ms, profile_id)",
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime model profiles visibility index: {err}")
         })?;
 
     record_migration_family(connection, PROFILE_STATUS_FAMILY, PROFILE_STATUS_VERSION)
@@ -2756,7 +2804,7 @@ fn runtime_profile_update_for_project(
     with_runtime_writer(|| {
         let mut connection = open_profile_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
-        let existing = read_profile_tx(&tx, &profile_id)?;
+        let existing = read_visible_profile_tx(&tx, &profile_id)?;
         let display_name = normalize_profile_text_update(
             request.display_name,
             existing.display_name,
@@ -2899,9 +2947,53 @@ fn runtime_profile_update_for_project(
             ],
         )
         .map_err(|err| format!("profile-update-failed: {err}"))?;
-        let profile = read_profile_tx(&tx, &profile_id)?;
+        let profile = read_visible_profile_tx(&tx, &profile_id)?;
         tx.commit().map_err(tx_err)?;
         Ok(profile)
+    })
+}
+
+fn runtime_profile_delete_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileDeleteRequest,
+    now: i64,
+) -> Result<RuntimeProfileDeleteResult, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let profile_id = normalize_profile_text(
+        "invalid-profile-id",
+        "profileId",
+        &request.profile_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+
+    with_runtime_writer(|| {
+        let mut connection = open_profile_pool_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        expire_profile_claims_tx(&tx, now)?;
+        let secret_ref = read_visible_profile_secret_ref_tx(&tx, &profile_id)?;
+        let active_claims = active_profile_claim_count_tx(&tx, &profile_id, now)?;
+        if active_claims > 0 {
+            return Err("profile-delete-blocked: active profile claim exists".to_string());
+        }
+        let changed = tx
+            .execute(
+                "UPDATE runtime_model_profiles
+                 SET deleted_at_ms = ?2,
+                     updated_at_ms = ?2
+                 WHERE profile_id = ?1 AND deleted_at_ms IS NULL",
+                params![profile_id, now],
+            )
+            .map_err(|err| format!("profile-delete-failed: {err}"))?;
+        if changed == 0 {
+            return Err("profile-not-found: runtime model profile does not exist".to_string());
+        }
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeProfileDeleteResult {
+            profile_id,
+            deleted_at_ms: now,
+            secret_ref,
+        })
     })
 }
 
@@ -2946,7 +3038,7 @@ fn runtime_profile_list_for_project(
     Ok(RuntimeProfileList {
         enabled: true,
         status: RuntimeDbHealthState::Healthy,
-        profiles: read_profiles(&connection)?,
+        profiles: read_visible_profiles(&connection)?,
     })
 }
 
@@ -2974,7 +3066,7 @@ fn runtime_profile_status_for_project(
     if !table_exists(&connection, "runtime_model_profiles")? {
         return Err("profile-not-found: runtime model profile does not exist".to_string());
     }
-    read_profile(&connection, &profile_id)
+    read_visible_profile(&connection, &profile_id)
 }
 
 fn runtime_profile_pool_claim_for_project(
@@ -3020,7 +3112,7 @@ fn runtime_profile_pool_claim_for_project(
         }
         expire_profile_claims_tx(&tx, now)?;
 
-        let profiles = read_profiles(&tx)?;
+        let profiles = read_visible_profiles_tx(&tx)?;
         let mut eligible = Vec::new();
         for profile in profiles {
             if profile_pool_profile_eligible(&tx, &profile, &kind, &task_family, now)? {
@@ -3387,7 +3479,7 @@ fn resolve_agent_run_profile_for_project_at_with_store(
         if claim.kind != "agent-run" || claim.task_family != "agent" {
             return Err("profile-unsupported: claim is not for an agent-run profile".to_string());
         }
-        let profile = read_profile_tx(&tx, &profile_id)?;
+        let profile = read_visible_profile_tx(&tx, &profile_id)?;
         if !profile_pool_profile_base_eligible(&tx, &profile, "agent-run", "agent", now)? {
             return Err(
                 "profile-unsupported: profile is not eligible for Agent-run sidecar use"
@@ -3566,7 +3658,7 @@ fn resolve_profile_probe_target(
                 MAX_PROFILE_ID_BYTES,
             )?;
             let connection = open_profile_runtime_locked(project_root)?;
-            let profile = read_profile(&connection, &profile_id)?;
+            let profile = read_visible_profile(&connection, &profile_id)?;
             if !force
                 && profile.capability_version == PROFILE_PROBE_CAPABILITY_VERSION
                 && profile
@@ -3717,7 +3809,7 @@ fn apply_profile_probe_outcome(
     with_runtime_writer(|| {
         let mut connection = open_profile_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
-        read_profile_tx(&tx, profile_id)?;
+        read_visible_profile_tx(&tx, profile_id)?;
         tx.execute(
             "UPDATE runtime_model_profiles
              SET capability_status = ?2,
@@ -3739,7 +3831,7 @@ fn apply_profile_probe_outcome(
             ],
         )
         .map_err(|err| format!("profile-probe-cache-update-failed: {err}"))?;
-        let profile = read_profile_tx(&tx, profile_id)?;
+        let profile = read_visible_profile_tx(&tx, profile_id)?;
         tx.commit().map_err(tx_err)?;
         Ok(profile)
     })
@@ -6641,13 +6733,44 @@ fn read_profile(connection: &Connection, profile_id: &str) -> Result<RuntimeProf
         .map_err(|err| format!("profile-read-failed: {err}"))
 }
 
-fn read_profile_tx(tx: &Transaction<'_>, profile_id: &str) -> Result<RuntimeProfileRecord, String> {
+fn read_visible_profile(
+    connection: &Connection,
+    profile_id: &str,
+) -> Result<RuntimeProfileRecord, String> {
+    // List/status may inspect an old runtime DB read-only before any writer has migrated it.
+    if !column_exists(connection, "runtime_model_profiles", "deleted_at_ms")? {
+        return read_profile(connection, profile_id);
+    }
+    connection
+        .query_row(
+            &profile_select_sql("WHERE profile_id = ?1 AND deleted_at_ms IS NULL"),
+            [profile_id],
+            map_profile_row,
+        )
+        .optional()
+        .map_err(|err| format!("profile-read-failed: {err}"))
+        .and_then(|profile| {
+            profile.ok_or_else(|| {
+                "profile-not-found: runtime model profile does not exist".to_string()
+            })
+        })
+}
+
+fn read_visible_profile_tx(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+) -> Result<RuntimeProfileRecord, String> {
+    // Writer transactions run after schema initialization, so deleted_at_ms is guaranteed.
     tx.query_row(
-        &profile_select_sql("WHERE profile_id = ?1"),
+        &profile_select_sql("WHERE profile_id = ?1 AND deleted_at_ms IS NULL"),
         [profile_id],
         map_profile_row,
     )
+    .optional()
     .map_err(|err| format!("profile-read-failed: {err}"))
+    .and_then(|profile| {
+        profile.ok_or_else(|| "profile-not-found: runtime model profile does not exist".to_string())
+    })
 }
 
 fn read_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRecord>, String> {
@@ -6661,6 +6784,53 @@ fn read_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRecord>, S
         .map_err(|err| format!("profiles-read-failed: {err}"))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("profiles-read-failed: {err}"))
+}
+
+fn read_visible_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRecord>, String> {
+    // List/status may inspect an old runtime DB read-only before any writer has migrated it.
+    if !column_exists(connection, "runtime_model_profiles", "deleted_at_ms")? {
+        return read_profiles(connection);
+    }
+    let mut statement = connection
+        .prepare(&profile_select_sql(
+            "WHERE deleted_at_ms IS NULL ORDER BY updated_at_ms ASC, profile_id ASC",
+        ))
+        .map_err(|err| format!("profiles-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([], map_profile_row)
+        .map_err(|err| format!("profiles-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("profiles-read-failed: {err}"))
+}
+
+fn read_visible_profiles_tx(tx: &Transaction<'_>) -> Result<Vec<RuntimeProfileRecord>, String> {
+    // Writer transactions run after schema initialization, so deleted_at_ms is guaranteed.
+    let mut statement = tx
+        .prepare(&profile_select_sql(
+            "WHERE deleted_at_ms IS NULL ORDER BY updated_at_ms ASC, profile_id ASC",
+        ))
+        .map_err(|err| format!("profiles-read-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([], map_profile_row)
+        .map_err(|err| format!("profiles-read-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("profiles-read-failed: {err}"))
+}
+
+fn read_visible_profile_secret_ref_tx(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+) -> Result<Option<String>, String> {
+    tx.query_row(
+        "SELECT secret_ref
+         FROM runtime_model_profiles
+         WHERE profile_id = ?1 AND deleted_at_ms IS NULL",
+        [profile_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|err| format!("profile-read-failed: {err}"))?
+    .ok_or_else(|| "profile-not-found: runtime model profile does not exist".to_string())
 }
 
 fn read_profile_claim_tx(
@@ -6770,6 +6940,34 @@ fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
         .optional()
         .map(|value| value.is_some())
         .map_err(|err| format!("table-exists-check-failed: {err}"))
+}
+
+fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            &format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1 LIMIT 1"),
+            [column],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(|err| format!("column-exists-check-failed: {err}"))
+}
+
+fn ensure_column_exists(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    alter_sql: &str,
+    label: &str,
+) -> Result<(), String> {
+    if column_exists(connection, table, column)? {
+        return Ok(());
+    }
+    connection
+        .execute(alter_sql, [])
+        .map_err(|err| format!("Failed to add {label} column: {err}"))?;
+    Ok(())
 }
 
 fn job_select_sql(suffix: &str) -> String {
@@ -8498,6 +8696,98 @@ mod tests {
     }
 
     #[test]
+    fn runtime_profile_list_reads_legacy_profile_table_without_deleted_marker() {
+        let project = temp_project("profile-list-legacy-no-deleted-column");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_db_health_for_project(Some(&project), true).expect("create base runtime db");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "CREATE TABLE runtime_model_profiles (
+                    profile_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    endpoint TEXT,
+                    api_mode TEXT NOT NULL,
+                    auth_style TEXT NOT NULL,
+                    secret_ref TEXT,
+                    enabled INTEGER NOT NULL,
+                    task_families_json TEXT NOT NULL,
+                    max_concurrency INTEGER NOT NULL,
+                    capability_status TEXT NOT NULL,
+                    capability_json TEXT NOT NULL,
+                    capability_version TEXT NOT NULL,
+                    capability_checked_at_ms INTEGER,
+                    probe_backoff_until_ms INTEGER,
+                    last_capability_error TEXT,
+                    created_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                )",
+                [],
+            )
+            .expect("create legacy profile table");
+        connection
+            .execute(
+                "INSERT INTO runtime_model_profiles (
+                    profile_id,
+                    kind,
+                    display_name,
+                    provider_id,
+                    model_id,
+                    endpoint,
+                    api_mode,
+                    auth_style,
+                    secret_ref,
+                    enabled,
+                    task_families_json,
+                    max_concurrency,
+                    capability_status,
+                    capability_json,
+                    capability_version,
+                    capability_checked_at_ms,
+                    probe_backoff_until_ms,
+                    last_capability_error,
+                    created_at_ms,
+                    updated_at_ms
+                ) VALUES (
+                    ?1, 'model-call', 'Legacy profile', 'openai', 'gpt-4.1',
+                    NULL, 'openai-chat-completions', 'bearer', NULL, 1,
+                    '[\"chat\"]', 1, 'unknown', '{}', ?2,
+                    NULL, NULL, NULL, 100, 100
+                )",
+                params!["profile-legacy", DEFAULT_PROFILE_CAPABILITY_VERSION],
+            )
+            .expect("insert legacy profile");
+        assert!(
+            !column_exists(&connection, "runtime_model_profiles", "deleted_at_ms")
+                .expect("check missing deleted marker")
+        );
+        drop(connection);
+
+        let list = runtime_profile_list_for_project(Some(&project), true)
+            .expect("legacy profile list works read-only");
+        assert_eq!(list.profiles.len(), 1);
+        assert_eq!(list.profiles[0].profile_id, "profile-legacy");
+        let status = runtime_profile_status_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileStatusRequest {
+                profile_id: "profile-legacy".to_string(),
+            },
+        )
+        .expect("legacy profile status works read-only");
+        assert_eq!(status.display_name, "Legacy profile");
+        let connection = Connection::open(runtime_db_path(&project)).expect("reopen runtime db");
+        assert!(
+            !column_exists(&connection, "runtime_model_profiles", "deleted_at_ms")
+                .expect("read-only paths did not migrate")
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
     fn profile_schema_preserves_existing_higher_migration_version() {
         let project = temp_project("profile-higher-version");
         fs::create_dir_all(&project).expect("create temp project");
@@ -8649,6 +8939,165 @@ mod tests {
         )
         .expect("profile status");
         assert_eq!(status, updated);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn runtime_profile_delete_blocks_active_claims_without_soft_deleting() {
+        let project = temp_project("profile-delete-active-claim");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-1", vec!["profile-1"]),
+            200,
+        )
+        .expect("claim profile");
+
+        let error = runtime_profile_delete_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileDeleteRequest {
+                profile_id: "profile-1".to_string(),
+            },
+            300,
+        )
+        .expect_err("active claim blocks delete");
+
+        assert!(error.contains("profile-delete-blocked"));
+        let status = runtime_profile_status_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileStatusRequest {
+                profile_id: "profile-1".to_string(),
+            },
+        )
+        .expect("profile remains visible");
+        assert_eq!(status.profile_id, "profile-1");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let deleted_at: Option<i64> = connection
+            .query_row(
+                "SELECT deleted_at_ms FROM runtime_model_profiles WHERE profile_id = ?1",
+                ["profile-1"],
+                |row| row.get(0),
+            )
+            .expect("read deleted marker");
+        assert_eq!(deleted_at, None);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn runtime_profile_delete_sweeps_expired_claims_and_filters_default_reads() {
+        let project = temp_project("profile-delete-expired-claim");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-1",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        let mut claim = profile_pool_claim_request("claim-1", vec!["profile-1"]);
+        claim.ttl_ms = Some(1_000);
+        runtime_profile_pool_claim_for_project(Some(&project), true, claim, 200)
+            .expect("claim profile");
+
+        let deleted = runtime_profile_delete_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileDeleteRequest {
+                profile_id: "profile-1".to_string(),
+            },
+            1_300,
+        )
+        .expect("delete after claim expiry");
+
+        assert_eq!(deleted.profile_id, "profile-1");
+        assert_eq!(deleted.deleted_at_ms, 1_300);
+        assert_eq!(
+            deleted.secret_ref.as_deref(),
+            Some(profile_secret_ref("profile-1").as_str())
+        );
+        let list = runtime_profile_list_for_project(Some(&project), true).expect("list profiles");
+        assert!(list.profiles.is_empty());
+        let status_error = runtime_profile_status_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileStatusRequest {
+                profile_id: "profile-1".to_string(),
+            },
+        )
+        .expect_err("deleted profile is hidden from status");
+        assert!(status_error.contains("profile-not-found"));
+        let claim_error = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            profile_pool_claim_request("claim-2", vec!["profile-1"]),
+            1_350,
+        )
+        .expect_err("deleted profile cannot be claimed");
+        assert!(claim_error.contains("no-eligible-profile"));
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let (claim_count, claim_status): (i64, String) = connection
+            .query_row(
+                "SELECT COUNT(*), MAX(status)
+                 FROM runtime_profile_claims
+                 WHERE profile_id = ?1",
+                ["profile-1"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read historical claim");
+        assert_eq!(claim_count, 1);
+        assert_eq!(claim_status, EXPIRED_CLAIM_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn runtime_profile_deleted_agent_profile_is_not_resolved_for_active_claim() {
+        let project = temp_project("profile-delete-agent-resolver");
+        fs::create_dir_all(&project).expect("create temp project");
+        let created = create_agent_profile_pool_profile(&project, "profile-1");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-1", vec!["profile-1"]),
+            200,
+        )
+        .expect("claim agent profile");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_model_profiles
+                 SET deleted_at_ms = ?2, updated_at_ms = ?2
+                 WHERE profile_id = ?1",
+                params!["profile-1", 250_i64],
+            )
+            .expect("mark profile deleted");
+        drop(connection);
+        let store = TestSecretStore::default();
+        store.insert(created.secret_ref.expect("secret ref"), "stored-secret");
+
+        let error = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-1",
+            "claim-1",
+            300,
+            &store,
+        )
+        .expect_err("deleted profile is not resolved");
+
+        assert!(error.contains("profile-not-found"));
+        assert!(!error.contains("stored-secret"));
         let _ = fs::remove_dir_all(project);
     }
 

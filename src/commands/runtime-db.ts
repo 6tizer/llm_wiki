@@ -215,6 +215,16 @@ export interface RuntimeProfileStatusRequest {
   profileId: string
 }
 
+export interface RuntimeProfileDeleteRequest {
+  profileId: string
+}
+
+export interface RuntimeProfileDeleteResult {
+  profileId: string
+  deletedAtMs: number
+  secretRef?: string | null
+}
+
 export interface RuntimeProfileProbeDraftRequest {
   kind: RuntimeProfileKind
   providerId: string
@@ -433,6 +443,12 @@ export function runtimeProfileStatus(
   request: RuntimeProfileStatusRequest,
 ): Promise<RuntimeProfileRecord> {
   return invoke<RuntimeProfileRecord>("runtime_profile_status", { request })
+}
+
+export function runtimeProfileDelete(
+  request: RuntimeProfileDeleteRequest,
+): Promise<RuntimeProfileDeleteResult> {
+  return invoke<RuntimeProfileDeleteResult>("runtime_profile_delete", { request })
 }
 
 export function runtimeProfileProbe(

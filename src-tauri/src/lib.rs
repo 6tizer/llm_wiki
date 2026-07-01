@@ -448,6 +448,7 @@ pub fn run() {
             commands::runtime_db::runtime_job_retry,
             commands::runtime_db::runtime_job_resume,
             commands::runtime_db::runtime_profile_create,
+            commands::runtime_db::runtime_profile_delete,
             commands::runtime_db::runtime_profile_list,
             commands::runtime_db::runtime_profile_pool_claim,
             commands::runtime_db::runtime_profile_pool_list,
