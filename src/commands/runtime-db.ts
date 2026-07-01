@@ -103,6 +103,18 @@ export interface RuntimeStagingArtifactRecordRequest {
   lastError?: string | null
 }
 
+export interface RuntimeStagingArtifactListRequest {
+  jobId?: string | null
+  status?: string | null
+  limit?: number | null
+}
+
+export interface RuntimeStagingArtifactList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  artifacts: RuntimeStagingArtifactRecord[]
+}
+
 export interface RuntimeEventAppendRequest {
   jobId?: string | null
   eventId?: string | null
@@ -115,6 +127,36 @@ export interface RuntimeEventRecord {
   eventName: string
   payload: string
   createdAtMs: number
+}
+
+export interface RuntimeTimelineListRequest {
+  jobId?: string | null
+  limit?: number | null
+}
+
+export interface RuntimeTimelineList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  events: RuntimeEventRecord[]
+}
+
+export interface RuntimeProgressListRequest {
+  jobId?: string | null
+  limit?: number | null
+}
+
+export interface RuntimeProgressRecord {
+  jobId: string
+  progressKey: string
+  payload: string
+  updatedAtMs: number
+  lastEventId?: string | null
+}
+
+export interface RuntimeProgressList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  progress: RuntimeProgressRecord[]
 }
 
 export interface RuntimeDerivedStaleMarkerRecordRequest {
@@ -406,10 +448,30 @@ export function runtimeStagingArtifactRecord(
   })
 }
 
+export function runtimeStagingArtifactList(
+  request: RuntimeStagingArtifactListRequest = {},
+): Promise<RuntimeStagingArtifactList> {
+  return invoke<RuntimeStagingArtifactList>("runtime_staging_artifact_list", {
+    request,
+  })
+}
+
 export function runtimeEventAppend(
   request: RuntimeEventAppendRequest,
 ): Promise<RuntimeEventRecord> {
   return invoke<RuntimeEventRecord>("runtime_event_append", { request })
+}
+
+export function runtimeTimelineList(
+  request: RuntimeTimelineListRequest = {},
+): Promise<RuntimeTimelineList> {
+  return invoke<RuntimeTimelineList>("runtime_timeline_list", { request })
+}
+
+export function runtimeProgressList(
+  request: RuntimeProgressListRequest = {},
+): Promise<RuntimeProgressList> {
+  return invoke<RuntimeProgressList>("runtime_progress_list", { request })
 }
 
 export function runtimeDerivedStaleMarkerRecord(
