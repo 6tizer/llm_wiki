@@ -481,6 +481,8 @@ There's an issue with the selected model (deepseek-v4-flash).
 
 ## 建议统一修复拆分
 
+注：本节保留手测后的原始拆分建议。当前 roadmap 已按上方“消化路由”收敛为：Profile lifecycle / Settings/Profile IA / Agent-run compatibility 进入 SPEC-4-FIX；Runtime Diagnostics / 可观察性回灌 SPEC-5/6/7/8，不作为 SPEC-4-FIX 的第 4 个 PR。
+
 建议拆 4 个小 PR，避免把 DB 删除、Settings IA、Agent control plane 和 diagnostics 混在一个大 diff 里：
 
 1. **PR A：Profile 管理补全**
