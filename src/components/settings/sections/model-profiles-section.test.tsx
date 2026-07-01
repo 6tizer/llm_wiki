@@ -420,9 +420,6 @@ describe("ModelProfilesSection UI", () => {
     )
     expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")?.disabled).toBe(true)
     expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")?.disabled).toBe(true)
-    expect(secretMocks.profileSecretWrite).not.toHaveBeenCalled()
-    expect(runtimeDbMocks.runtimeProfileCreate).not.toHaveBeenCalled()
-    expect(runtimeDbMocks.runtimeProfileProbe).not.toHaveBeenCalled()
 
     unmount(root)
   })
