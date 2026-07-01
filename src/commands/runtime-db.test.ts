@@ -19,8 +19,11 @@ import {
   runtimeProfileProbe,
   runtimeProfileStatus,
   runtimeProfileUpdate,
+  runtimeProgressList,
   runtimeStagingArtifactRecord,
   runtimeStagingArtifactCommitSuccess,
+  runtimeStagingArtifactList,
+  runtimeTimelineList,
 } from "./runtime-db"
 
 const tauriMocks = vi.hoisted(() => ({
@@ -209,6 +212,30 @@ describe("runtime-db commands", () => {
     )
   })
 
+  it("sends staging artifact list payloads with exact Rust serde fields", async () => {
+    const response = { enabled: true, status: "healthy", artifacts: [] }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeStagingArtifactList({
+        jobId: "job-1",
+        status: "pending",
+        limit: 25,
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      "runtime_staging_artifact_list",
+      {
+        request: {
+          jobId: "job-1",
+          status: "pending",
+          limit: 25,
+        },
+      },
+    )
+  })
+
   it("sends runtime event append payloads", async () => {
     const response = { eventId: "event-1", createdAtMs: 123 }
     tauriMocks.invoke.mockResolvedValue(response)
@@ -228,6 +255,49 @@ describe("runtime-db commands", () => {
         payload: "{\"kind\":\"markdown-commit\"}",
       },
     })
+  })
+
+  it("sends runtime timeline and progress list payloads with exact Rust serde fields", async () => {
+    const timeline = { enabled: true, status: "healthy", events: [] }
+    const progress = { enabled: true, status: "healthy", progress: [] }
+    tauriMocks.invoke.mockResolvedValueOnce(timeline).mockResolvedValueOnce(progress)
+
+    await expect(runtimeTimelineList({ jobId: "job-1", limit: 10 })).resolves.toBe(
+      timeline,
+    )
+    await expect(runtimeProgressList({ jobId: "job-1", limit: 20 })).resolves.toBe(
+      progress,
+    )
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_timeline_list", {
+      request: { jobId: "job-1", limit: 10 },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_progress_list", {
+      request: { jobId: "job-1", limit: 20 },
+    })
+  })
+
+  it("uses empty request objects for runtime read-only list wrappers", async () => {
+    tauriMocks.invoke
+      .mockResolvedValueOnce({ enabled: true, status: "healthy", events: [] })
+      .mockResolvedValueOnce({ enabled: true, status: "healthy", progress: [] })
+      .mockResolvedValueOnce({ enabled: true, status: "healthy", artifacts: [] })
+
+    await runtimeTimelineList()
+    await runtimeProgressList()
+    await runtimeStagingArtifactList()
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_timeline_list", {
+      request: {},
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_progress_list", {
+      request: {},
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "runtime_staging_artifact_list",
+      { request: {} },
+    )
   })
 
   it("sends derived stale marker record and list payloads", async () => {

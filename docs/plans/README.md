@@ -47,6 +47,7 @@
 | [SPEC-4-FIX/pr3-agent-run-profile-compatibility-plan.md](./SPEC-4-FIX/pr3-agent-run-profile-compatibility-plan.md) | SPEC-4-FIX PR3 执行计划：Agent-run profile SDK model alias、auth env 映射、SDK compatibility diagnostic。 | merged |
 | [spec-1-4-post-test-findings.md](./spec-1-4-post-test-findings.md) | SPEC-1 到 SPEC-4 完成后 Dev App 手测问题证据；已被 SPEC-4-FIX 和 SPEC-5/6/7/8 回灌消费。 | evidence / consumed |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
+| [SPEC-5/pr1-batch-planner-plan.md](./SPEC-5/pr1-batch-planner-plan.md) | SPEC-5 PR1 执行计划：Batch planner、batched prepare plan、runtime diagnostics wrapper/snapshot。 | planned |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | planned |
