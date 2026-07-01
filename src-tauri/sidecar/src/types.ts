@@ -28,6 +28,7 @@ export interface AgentRequest {
 		intentOverride?: string;
 		apiKey?: string;
 		baseUrl?: string;
+		agentProfileAuthStyle?: "none" | "bearer" | "x-api-key" | "api-key" | "oauth-local-cli";
 		persistSession?: boolean;
 		title?: string;
 		allowedTools?: string[];

@@ -31,7 +31,10 @@ const SIDECAR_PLACEHOLDER_PREFIX: &[u8] = b"Placeholder for Tauri resource valid
 const AGENT_PROFILE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
 
 fn redact_url_userinfo_for_log(url: &str) -> String {
-    let authority_start = url.find("://").map(|scheme_end| scheme_end + 3).unwrap_or(0);
+    let authority_start = url
+        .find("://")
+        .map(|scheme_end| scheme_end + 3)
+        .unwrap_or(0);
     let rest = &url[authority_start..];
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..authority_end];
@@ -97,6 +100,7 @@ pub struct AgentSpawnArgs {
     title: Option<String>,
     api_key: Option<String>,
     base_url: Option<String>,
+    agent_profile_auth_style: Option<String>,
     agent_profile_id: Option<String>,
     agent_profile_claim_id: Option<String>,
     permission_policy: Option<String>,
@@ -163,6 +167,8 @@ struct AgentRequestOptions {
     api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_profile_auth_style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -251,6 +257,7 @@ fn build_agent_request(args: AgentSpawnArgs) -> AgentRequest {
             title: args.title,
             api_key: args.api_key,
             base_url: args.base_url,
+            agent_profile_auth_style: args.agent_profile_auth_style,
             permission_policy: args.permission_policy,
             project_id: args.project_id,
             project_path: args.project_path,
@@ -294,6 +301,10 @@ fn inject_internal_api_token(args: &mut AgentSpawnArgs) -> Option<String> {
     None
 }
 
+fn sanitize_agent_stderr_for_frontend(stderr: &str) -> String {
+    runtime_db::sanitize_profile_pool_text_for_log(stderr)
+}
+
 fn apply_agent_profile_config(
     args: &mut AgentSpawnArgs,
     project_root: Option<&Path>,
@@ -325,8 +336,9 @@ fn apply_agent_profile_config(
         runtime_enabled,
         claim_id: claim_id.to_string(),
     };
-    args.model = Some(config.model_id);
+    args.model = Some(config.agent_sdk_model_id);
     args.base_url = config.endpoint;
+    args.agent_profile_auth_style = Some(config.auth_style);
     args.api_key = config.secret_value;
     Ok(Some(owner))
 }
@@ -525,10 +537,11 @@ pub async fn agent_spawn(
         if let Some(owner) = profile_claim_owner_task.as_ref() {
             release_agent_profile_claim(owner, exit_code, &stderr_output);
         }
+        let frontend_stderr = sanitize_agent_stderr_for_frontend(&stderr_output);
 
         let done_payload = serde_json::json!({
             "code": exit_code,
-            "stderr": stderr_output,
+            "stderr": frontend_stderr,
         });
         let _ = app_for_task.emit(&done_topic, &done_payload);
     });
@@ -663,6 +676,22 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_agent_stderr_for_frontend_redacts_profile_secrets() {
+        let redacted = super::sanitize_agent_stderr_for_frontend(
+            "selected model failed\n\
+             ANTHROPIC_AUTH_TOKEN=profile-token\n\
+             authorization: gateway-token\n\
+             {\"apiKey\":\"json-token\"}",
+        );
+
+        assert!(redacted.contains("selected model failed"));
+        assert!(!redacted.contains("profile-token"));
+        assert!(!redacted.contains("gateway-token"));
+        assert!(!redacted.contains("json-token"));
+        assert!(!redacted.contains("apiKey"));
+    }
+
+    #[test]
     fn agent_request_serializes_checkpoint_and_sandbox_options() {
         let mut args = args_with_optional_fields_none();
         args.enable_file_checkpointing = Some(true);
@@ -794,10 +823,7 @@ mod tests {
             redact_url_userinfo_for_log("https://api.example.com/v1"),
             "https://api.example.com/v1"
         );
-        assert_eq!(
-            redact_url_userinfo_for_log("user:token@host"),
-            "***@host"
-        );
+        assert_eq!(redact_url_userinfo_for_log("user:token@host"), "***@host");
     }
 
     fn args_with_optional_fields_none() -> AgentSpawnArgs {
@@ -819,6 +845,7 @@ mod tests {
             title: None,
             api_key: None,
             base_url: None,
+            agent_profile_auth_style: None,
             agent_profile_id: None,
             agent_profile_claim_id: None,
             permission_policy: None,
@@ -883,6 +910,7 @@ mod tests {
         args.agent_profile_claim_id = Some("claim-agent".to_string());
         args.model = Some("claude-test".to_string());
         args.api_key = Some("resolved-secret".to_string());
+        args.agent_profile_auth_style = Some("x-api-key".to_string());
 
         let request = build_agent_request(args);
         let value: Value = serde_json::to_value(request).unwrap();
@@ -898,6 +926,10 @@ mod tests {
         assert_eq!(
             options.get("apiKey").and_then(Value::as_str),
             Some("resolved-secret")
+        );
+        assert_eq!(
+            options.get("agentProfileAuthStyle").and_then(Value::as_str),
+            Some("x-api-key")
         );
     }
 

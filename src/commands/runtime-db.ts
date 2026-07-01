@@ -179,6 +179,7 @@ export interface RuntimeProfileCreateRequest {
   displayName: string
   providerId: string
   modelId: string
+  agentSdkModelId?: string | null
   endpoint?: string | null
   apiMode: RuntimeProfileApiMode
   authStyle: RuntimeProfileAuthStyle
@@ -193,6 +194,8 @@ export interface RuntimeProfileUpdateRequest {
   displayName?: string | null
   providerId?: string | null
   modelId?: string | null
+  agentSdkModelId?: string | null
+  clearAgentSdkModelId?: boolean | null
   endpoint?: string | null
   clearEndpoint?: boolean | null
   apiMode?: RuntimeProfileApiMode | null
@@ -229,6 +232,7 @@ export interface RuntimeProfileProbeDraftRequest {
   kind: RuntimeProfileKind
   providerId: string
   modelId: string
+  agentSdkModelId?: string | null
   endpoint?: string | null
   apiMode: RuntimeProfileApiMode
   authStyle: RuntimeProfileAuthStyle
@@ -247,6 +251,7 @@ export interface RuntimeProfileRecord {
   displayName: string
   providerId: string
   modelId: string
+  agentSdkModelId?: string | null
   endpoint?: string | null
   apiMode: RuntimeProfileApiMode
   authStyle: RuntimeProfileAuthStyle

@@ -499,6 +499,7 @@
           "displayName": "Display name",
           "provider": "Provider preset",
           "kind": "Profile kind",
+          "agentSdkModel": "Agent SDK model alias",
           "authStyle": "Auth style",
           "maxConcurrency": "Max concurrency",
           "enabled": "Enabled for runtime selection",

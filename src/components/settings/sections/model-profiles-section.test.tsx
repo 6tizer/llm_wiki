@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
 import {
   createEmptyProfileDraft,
+  draftFromProfile,
   ModelProfilesSection,
   saveProfileDraft,
   taskFamiliesForRender,
@@ -41,6 +42,7 @@ function runtimeProfile(
     displayName: "Primary profile",
     providerId: "openai",
     modelId: "gpt-4.1",
+    agentSdkModelId: null,
     endpoint: null,
     apiMode: "openai-chat-completions",
     authStyle: "bearer",
@@ -236,6 +238,68 @@ describe("ModelProfilesSection helpers", () => {
     expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ maxConcurrency: 1 }),
+    )
+  })
+
+  it("sends agent SDK model aliases in create payloads", async () => {
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValue(runtimeProfile({
+      kind: "agent-run",
+      agentSdkModelId: "deepseek-chat",
+    }))
+    const draft = createEmptyProfileDraft()
+    draft.kind = "agent-run"
+    draft.agentSdkModelId = "deepseek-chat"
+
+    await expect(saveProfileDraft(draft, undefined)).resolves.toMatchObject({
+      agentSdkModelId: "deepseek-chat",
+    })
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSdkModelId: "deepseek-chat" }),
+    )
+  })
+
+  it("does not send SDK alias clear flags for plain model-call updates", async () => {
+    const existing = runtimeProfile({ kind: "model-call", agentSdkModelId: null })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile())
+
+    await saveProfileDraft(draftFromProfile(existing), existing)
+
+    expect(runtimeDbMocks.runtimeProfileUpdate).toHaveBeenCalledWith(
+      expect.not.objectContaining({ clearAgentSdkModelId: expect.any(Boolean) }),
+    )
+  })
+
+  it("clears stale SDK aliases from model-call updates when one already exists", async () => {
+    const existing = runtimeProfile({ kind: "model-call", agentSdkModelId: "stale-alias" })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile({ agentSdkModelId: null }))
+
+    await saveProfileDraft(draftFromProfile(existing), existing)
+
+    expect(runtimeDbMocks.runtimeProfileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSdkModelId: null,
+        clearAgentSdkModelId: true,
+      }),
+    )
+  })
+
+  it("clears SDK aliases when switching agent-run profiles back to model-call", async () => {
+    const existing = runtimeProfile({ kind: "agent-run", agentSdkModelId: "deepseek-chat" })
+    const draft = {
+      ...draftFromProfile(existing),
+      kind: "model-call" as const,
+      agentSdkModelId: "",
+    }
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile({ agentSdkModelId: null }))
+
+    await saveProfileDraft(draft, existing)
+
+    expect(runtimeDbMocks.runtimeProfileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSdkModelId: null,
+        clearAgentSdkModelId: true,
+      }),
     )
   })
 })
@@ -523,6 +587,20 @@ describe("ModelProfilesSection UI", () => {
     unmount(root)
   })
 
+  it("hides Agent SDK model alias for model-call profiles", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile({ kind: "model-call" })],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    expect(container.querySelector("[data-testid='profile-agent-sdk-model']")).toBeNull()
+
+    unmount(root)
+  })
+
   it("marks cached capability stale after unsaved probe input edits", async () => {
     runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
       enabled: true,
@@ -550,8 +628,35 @@ describe("ModelProfilesSection UI", () => {
     unmount(root)
   })
 
+  it("marks cached capability stale after unsaved SDK model edits", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          capabilityStatus: "supported",
+          capabilityVersion: "profile-probe.v1",
+          capabilityCheckedAtMs: 123,
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const sdkModel = container.querySelector<HTMLInputElement>("[data-testid='profile-agent-sdk-model']")
+    if (!sdkModel) throw new Error("profile agent sdk model input not found")
+    await input(sdkModel, "deepseek-chat")
+
+    expect(container.textContent).toContain("not probed")
+    expect(container.textContent).not.toContain("supported")
+
+    unmount(root)
+  })
+
   it("resets cached capability fields when saved probe inputs change", async () => {
     const existing = runtimeProfile({
+      kind: "agent-run",
       capabilityStatus: "supported",
       capabilityVersion: "profile-probe.v1",
       capabilityCheckedAtMs: 123,
@@ -563,7 +668,9 @@ describe("ModelProfilesSection UI", () => {
       profiles: [existing],
     })
     runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(runtimeProfile({
+      kind: "agent-run",
       modelId: "gpt-new",
+      agentSdkModelId: "deepseek-chat",
       capabilityStatus: "unknown",
       capabilityVersion: "spec-4-pr1",
       capabilityCheckedAtMs: 0,
@@ -573,15 +680,18 @@ describe("ModelProfilesSection UI", () => {
     await flush()
 
     const model = container.querySelector<HTMLInputElement>("[data-testid='profile-model']")
+    const sdkModel = container.querySelector<HTMLInputElement>("[data-testid='profile-agent-sdk-model']")
     const save = container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")
-    if (!model || !save) throw new Error("profile edit form not found")
+    if (!model || !sdkModel || !save) throw new Error("profile edit form not found")
 
     await input(model, "gpt-new")
+    await input(sdkModel, "deepseek-chat")
     await click(save)
 
     expect(runtimeDbMocks.runtimeProfileUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         modelId: "gpt-new",
+        agentSdkModelId: "deepseek-chat",
         capabilityStatus: "unknown",
         capabilityJson: "{}",
         capabilityVersion: "spec-4-pr1",

@@ -1,6 +1,6 @@
 # SPEC-4-FIX PR2: Settings/Profile IA Plan
 
-> Type: PR implementation plan | Status: active | Issue: #229 | Branch: `codex/spec-4-fix-pr2-settings-profile-ia` | Run: `b2d44c1a-e478-4558-881b-79803e215902`
+> Type: PR implementation plan | Status: merged via #230 | Issue: #229 | Branch: `codex/spec-4-fix-pr2-settings-profile-ia` | Run: `b2d44c1a-e478-4558-881b-79803e215902`
 
 ## Goal
 

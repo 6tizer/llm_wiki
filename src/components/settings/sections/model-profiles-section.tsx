@@ -62,6 +62,7 @@ export interface ModelProfileDraft {
   displayName: string
   providerId: string
   modelId: string
+  agentSdkModelId: string
   endpoint: string
   apiMode: RuntimeProfileApiMode
   authStyle: RuntimeProfileAuthStyle
@@ -131,6 +132,7 @@ export function createEmptyProfileDraft(providerId = "openai"): ModelProfileDraf
     displayName: preset?.label ?? "Model profile",
     providerId: preset?.id ?? providerId,
     modelId: preset?.defaultModel ?? "",
+    agentSdkModelId: "",
     endpoint: preset?.baseUrl ?? "",
     apiMode: defaultApiModeForProvider(preset?.id ?? providerId),
     authStyle: defaultAuthStyleForProvider(preset?.id ?? providerId),
@@ -151,6 +153,7 @@ export function draftFromProfile(profile: RuntimeProfileRecord): ModelProfileDra
     displayName: profile.displayName,
     providerId: profile.providerId,
     modelId: profile.modelId,
+    agentSdkModelId: profile.agentSdkModelId ?? "",
     endpoint: profile.endpoint ?? "",
     apiMode: profile.apiMode,
     authStyle: profile.authStyle,
@@ -171,11 +174,13 @@ export function taskFamiliesForRender(values: string[]): string[] {
 }
 
 function toCreateRequest(draft: ModelProfileDraft, secretRef?: string): RuntimeProfileCreateRequest {
+  const agentSdkModelId = agentSdkModelIdForAgentRun(draft)
   return {
     kind: draft.kind,
     displayName: draft.displayName.trim(),
     providerId: draft.providerId.trim(),
     modelId: draft.modelId.trim(),
+    agentSdkModelId: agentSdkModelId || null,
     endpoint: draft.endpoint.trim() || null,
     apiMode: draft.apiMode,
     authStyle: draft.authStyle,
@@ -192,11 +197,16 @@ function toUpdateRequest(
   secretRef?: string,
 ): RuntimeProfileUpdateRequest {
   const resetCapability = profileProbeInputsChanged(draft, existing, secretRef)
+  const agentSdkModelId = agentSdkModelIdForAgentRun(draft)
   return {
     profileId: draft.profileId ?? "",
     displayName: draft.displayName.trim(),
     providerId: draft.providerId.trim(),
     modelId: draft.modelId.trim(),
+    agentSdkModelId: agentSdkModelId || null,
+    ...(existing.agentSdkModelId || draft.kind === "agent-run"
+      ? { clearAgentSdkModelId: agentSdkModelId.length === 0 }
+      : {}),
     endpoint: draft.endpoint.trim() || null,
     clearEndpoint: draft.endpoint.trim().length === 0,
     apiMode: draft.apiMode,
@@ -223,6 +233,10 @@ function normalizedEndpoint(value: string | null | undefined): string | null {
   return trimmed || null
 }
 
+function agentSdkModelIdForAgentRun(draft: ModelProfileDraft): string {
+  return draft.kind === "agent-run" ? draft.agentSdkModelId.trim() : ""
+}
+
 function profileProbeInputsChanged(
   draft: ModelProfileDraft,
   existing: RuntimeProfileRecord,
@@ -232,7 +246,11 @@ function profileProbeInputsChanged(
   const nextSecretRef = draft.clearSecret && !newSecretRef
     ? null
     : newSecretRef ?? draft.secretRef ?? null
+  const existingAgentSdkModelId = existing.kind === "agent-run" ? existing.agentSdkModelId ?? "" : ""
+  const nextAgentSdkModelId = agentSdkModelIdForAgentRun(draft)
   return existing.modelId !== draft.modelId.trim()
+    || existing.kind !== draft.kind
+    || existingAgentSdkModelId !== nextAgentSdkModelId
     || normalizedEndpoint(existing.endpoint) !== normalizedEndpoint(draft.endpoint)
     || existing.apiMode !== draft.apiMode
     || existing.authStyle !== draft.authStyle
@@ -240,10 +258,12 @@ function profileProbeInputsChanged(
 }
 
 function probeDraftRequest(draft: ModelProfileDraft): RuntimeProfileProbeDraftRequest {
+  const agentSdkModelId = agentSdkModelIdForAgentRun(draft)
   return {
     kind: draft.kind,
     providerId: draft.providerId.trim(),
     modelId: draft.modelId.trim(),
+    agentSdkModelId: agentSdkModelId || null,
     endpoint: normalizedEndpoint(draft.endpoint),
     apiMode: draft.apiMode,
     authStyle: draft.authStyle,
@@ -341,6 +361,7 @@ export function ModelProfilesSection() {
     updateDraft({
       providerId,
       modelId: next.modelId,
+      agentSdkModelId: next.agentSdkModelId,
       endpoint: next.endpoint,
       apiMode: next.apiMode,
       authStyle: next.authStyle,
@@ -553,6 +574,16 @@ export function ModelProfilesSection() {
                   onChange={(event) => updateDraft({ modelId: event.target.value })}
                 />
               </div>
+              {draft.kind === "agent-run" && (
+                <div className="space-y-1.5">
+                  <Label>{t("settings.sections.llm.profiles.agentSdkModel")}</Label>
+                  <Input
+                    data-testid="profile-agent-sdk-model"
+                    value={draft.agentSdkModelId}
+                    onChange={(event) => updateDraft({ agentSdkModelId: event.target.value })}
+                  />
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label>{t("settings.sections.llm.endpoint")}</Label>
                 <Input
@@ -567,7 +598,13 @@ export function ModelProfilesSection() {
                   data-testid="profile-kind"
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
                   value={draft.kind}
-                  onChange={(event) => updateDraft({ kind: event.target.value as RuntimeProfileKind })}
+                  onChange={(event) => {
+                    const kind = event.target.value as RuntimeProfileKind
+                    updateDraft({
+                      kind,
+                      ...(kind === "agent-run" ? {} : { agentSdkModelId: "" }),
+                    })
+                  }}
                 >
                   {PROFILE_KIND_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
                 </select>

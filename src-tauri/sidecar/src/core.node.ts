@@ -120,6 +120,107 @@ test("query request preserves provided maxTurns", async () => {
 	assert.equal(capturedInput?.options?.maxTurns, 44);
 });
 
+async function captureAgentProfileEnv(
+	options: Partial<AgentRequest["options"]>,
+	baseEnv: Record<string, string | undefined> = {},
+): Promise<Record<string, string | undefined> | undefined> {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: baseEnv,
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			...options,
+		},
+	});
+
+	return capturedInput?.options?.env;
+}
+
+test("agent profile bearer auth uses ANTHROPIC_AUTH_TOKEN", async () => {
+	const env = await captureAgentProfileEnv({
+		agentProfileAuthStyle: "bearer",
+		apiKey: "bearer-token",
+		model: "deepseek-chat",
+	}, {
+		ANTHROPIC_API_KEY: "ambient-api-key",
+		ANTHROPIC_AUTH_TOKEN: "ambient-auth-token",
+	});
+
+	assert.equal(env?.ANTHROPIC_AUTH_TOKEN, "bearer-token");
+	assert.equal(env?.ANTHROPIC_API_KEY, undefined);
+	assert.equal(env?.ANTHROPIC_MODEL, "deepseek-chat");
+});
+
+test("agent profile x-api-key auth uses ANTHROPIC_API_KEY", async () => {
+	const env = await captureAgentProfileEnv({
+		agentProfileAuthStyle: "x-api-key",
+		apiKey: "api-key-token",
+		model: "claude-code-alias",
+	}, {
+		ANTHROPIC_API_KEY: "ambient-api-key",
+		ANTHROPIC_AUTH_TOKEN: "ambient-auth-token",
+	});
+
+	assert.equal(env?.ANTHROPIC_API_KEY, "api-key-token");
+	assert.equal(env?.ANTHROPIC_AUTH_TOKEN, undefined);
+	assert.equal(env?.ANTHROPIC_MODEL, "claude-code-alias");
+});
+
+test("agent profile api-key auth uses ANTHROPIC_API_KEY", async () => {
+	const env = await captureAgentProfileEnv({
+		agentProfileAuthStyle: "api-key",
+		apiKey: "api-key-token",
+		model: "claude-code-alias",
+	}, {
+		ANTHROPIC_API_KEY: "ambient-api-key",
+		ANTHROPIC_AUTH_TOKEN: "ambient-auth-token",
+	});
+
+	assert.equal(env?.ANTHROPIC_API_KEY, "api-key-token");
+	assert.equal(env?.ANTHROPIC_AUTH_TOKEN, undefined);
+	assert.equal(env?.ANTHROPIC_MODEL, "claude-code-alias");
+});
+
+test("agent profile no-auth styles do not inject Anthropic secret env", async () => {
+	for (const agentProfileAuthStyle of ["none", "oauth-local-cli"] as const) {
+		const env = await captureAgentProfileEnv({
+			agentProfileAuthStyle,
+			apiKey: undefined,
+			model: "claude-code-alias",
+		}, {
+			ANTHROPIC_API_KEY: "ambient-api-key",
+			ANTHROPIC_AUTH_TOKEN: "ambient-auth-token",
+		});
+
+		assert.equal(env?.ANTHROPIC_API_KEY, undefined);
+		assert.equal(env?.ANTHROPIC_AUTH_TOKEN, undefined);
+		assert.equal(env?.ANTHROPIC_MODEL, "claude-code-alias");
+	}
+});
+
+test("agent profile unknown auth style keeps legacy API key mapping", async () => {
+	const env = await captureAgentProfileEnv({
+		agentProfileAuthStyle: "legacy-unknown" as AgentRequest["options"]["agentProfileAuthStyle"],
+		apiKey: "legacy-token",
+	}, {
+		ANTHROPIC_AUTH_TOKEN: "ambient-auth-token",
+	});
+
+	assert.equal(env?.ANTHROPIC_API_KEY, "legacy-token");
+	assert.equal(env?.ANTHROPIC_AUTH_TOKEN, undefined);
+});
+
 test("query request forwards bundled Claude executable path when configured", async () => {
 	let capturedInput: Parameters<QueryFn>[0] | undefined;
 	const queryFn: QueryFn = async function* (input) {
