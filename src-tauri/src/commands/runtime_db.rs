@@ -171,6 +171,15 @@ pub struct RuntimeJobClaimRequest {
     lease_id: Option<String>,
 }
 
+/// Request payload for claiming the next queued runtime job of one kind.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeJobClaimByKindRequest {
+    holder: String,
+    lease_id: Option<String>,
+    kind: String,
+}
+
 /// Request payload for active-lease job operations.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -943,6 +952,25 @@ pub fn runtime_job_claim(
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
         runtime_job_claim_for_project(project_root.as_deref(), runtime_enabled, request, now)
+    })
+}
+
+/// Claim the next queued runtime job for a specific job kind.
+#[tauri::command]
+pub fn runtime_job_claim_by_kind(
+    request: RuntimeJobClaimByKindRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeJobClaim, String> {
+    run_guarded("runtime_job_claim_by_kind", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_job_claim_by_kind_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
     })
 }
 
@@ -2326,23 +2354,40 @@ fn runtime_job_claim_for_project(
     request: RuntimeJobClaimRequest,
     now: i64,
 ) -> Result<RuntimeJobClaim, String> {
+    runtime_job_claim_matching_kind_for_project(project_root, enabled, request, None, now)
+}
+
+fn runtime_job_claim_by_kind_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeJobClaimByKindRequest,
+    now: i64,
+) -> Result<RuntimeJobClaim, String> {
+    let kind = require_non_empty("invalid-kind", "kind", &request.kind)?.to_string();
+    runtime_job_claim_matching_kind_for_project(
+        project_root,
+        enabled,
+        RuntimeJobClaimRequest {
+            holder: request.holder,
+            lease_id: request.lease_id,
+        },
+        Some(kind),
+        now,
+    )
+}
+
+fn runtime_job_claim_matching_kind_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeJobClaimRequest,
+    kind_filter: Option<String>,
+    now: i64,
+) -> Result<RuntimeJobClaim, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
     with_runtime_writer(|| {
         let mut connection = open_job_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
-        let job_id: String = tx
-            .query_row(
-                "SELECT job_id
-                 FROM runtime_jobs
-                 WHERE state = 'queued'
-                 ORDER BY priority DESC, queued_at_ms ASC, created_at_ms ASC
-                 LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|err| format!("job-claim-select-failed: {err}"))?
-            .ok_or_else(|| "no-queued-job: no queued runtime job is available".to_string())?;
+        let job_id = select_queued_job_id_tx(&tx, kind_filter.as_deref())?;
 
         ensure_no_active_lease(&tx, &job_id)?;
         tx.execute(
@@ -2384,6 +2429,32 @@ fn runtime_job_claim_for_project(
         tx.commit().map_err(tx_err)?;
         Ok(RuntimeJobClaim { job, lease })
     })
+}
+
+fn select_queued_job_id_tx(
+    tx: &Transaction<'_>,
+    kind_filter: Option<&str>,
+) -> Result<String, String> {
+    let mut sql = String::from(
+        "SELECT job_id
+         FROM runtime_jobs
+         WHERE state = 'queued'",
+    );
+    let kind_value = kind_filter.map(str::to_string);
+    let mut sql_params: Vec<&dyn ToSql> = Vec::new();
+    if let Some(kind) = kind_value.as_ref() {
+        sql.push_str(" AND kind = ?1");
+        sql_params.push(kind);
+    }
+    sql.push_str(
+        " ORDER BY priority DESC, queued_at_ms ASC, created_at_ms ASC
+          LIMIT 1",
+    );
+    let result = tx
+        .query_row(&sql, params_from_iter(sql_params), |row| row.get(0))
+        .optional()
+        .map_err(|err| format!("job-claim-select-failed: {err}"))?;
+    result.ok_or_else(|| "no-queued-job: no queued runtime job is available".to_string())
 }
 
 fn runtime_job_heartbeat_for_project(
@@ -7859,10 +7930,36 @@ mod tests {
         }
     }
 
+    fn create_request_with_kind(
+        job_id: &str,
+        kind: &str,
+        priority: i64,
+    ) -> RuntimeJobCreateRequest {
+        RuntimeJobCreateRequest {
+            job_id: Some(job_id.to_string()),
+            kind: kind.to_string(),
+            payload: "{}".to_string(),
+            max_attempts: None,
+            priority: Some(priority),
+        }
+    }
+
     fn claim_request(holder: &str, lease_id: &str) -> RuntimeJobClaimRequest {
         RuntimeJobClaimRequest {
             holder: holder.to_string(),
             lease_id: Some(lease_id.to_string()),
+        }
+    }
+
+    fn claim_by_kind_request(
+        holder: &str,
+        lease_id: &str,
+        kind: &str,
+    ) -> RuntimeJobClaimByKindRequest {
+        RuntimeJobClaimByKindRequest {
+            holder: holder.to_string(),
+            lease_id: Some(lease_id.to_string()),
+            kind: kind.to_string(),
         }
     }
 
@@ -12684,6 +12781,156 @@ mod tests {
         let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
         assert_eq!(list.jobs.len(), 1);
         assert_eq!(list.leases[0].status, RELEASED_LEASE_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_only_claims_requested_job_kind() {
+        let project = temp_project("job-claim-by-kind");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-other-high", "compile-page", 100),
+            100,
+        )
+        .expect("create high-priority other job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-prepare-low", "bulk-knowledge-prepare", 10),
+            110,
+        )
+        .expect("create lower-priority prepare job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-prepare-high", "bulk-knowledge-prepare", 20),
+            120,
+        )
+        .expect("create higher-priority prepare job");
+
+        let scoped = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request("worker-a", "lease-scoped", "bulk-knowledge-prepare"),
+            200,
+        )
+        .expect("claim prepare job");
+        assert_eq!(scoped.job.job_id, "job-prepare-high");
+        assert_eq!(scoped.job.kind, "bulk-knowledge-prepare");
+
+        let unscoped = runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-b", "lease-unscoped"),
+            220,
+        )
+        .expect("unscoped claim still sees global priority");
+        assert_eq!(unscoped.job.job_id, "job-other-high");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_rejects_missing_or_invalid_kind_without_changing_unscoped_claim() {
+        let project = temp_project("job-claim-by-kind-missing");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-other", "compile-page", 100),
+            100,
+        )
+        .expect("create non-prepare job");
+
+        let missing = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request("worker-a", "lease-missing", "bulk-knowledge-prepare"),
+            200,
+        )
+        .expect_err("missing kind has no queued job");
+        assert!(missing.starts_with("no-queued-job"));
+
+        let invalid = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request("worker-a", "lease-invalid", "  "),
+            200,
+        )
+        .expect_err("empty kind is rejected");
+        assert!(invalid.starts_with("invalid-kind"));
+
+        let unscoped = runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request("worker-b", "lease-unscoped"),
+            220,
+        )
+        .expect("unscoped claim remains available");
+        assert_eq!(unscoped.job.job_id, "job-other");
+
+        let unknown = serde_json::from_value::<RuntimeJobClaimByKindRequest>(serde_json::json!({
+            "holder": "worker-a",
+            "leaseId": "lease-unknown",
+            "kind": "bulk-knowledge-prepare",
+            "unknownField": true
+        }))
+        .expect_err("scoped claim rejects unknown fields");
+        assert!(unknown.to_string().contains("unknown field"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_rejects_inconsistent_active_lease_on_matching_job() {
+        let project = temp_project("job-claim-by-kind-active-lease");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-prepare-active", "bulk-knowledge-prepare", 100),
+            100,
+        )
+        .expect("create prepare job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-prepare-next", "bulk-knowledge-prepare", 10),
+            110,
+        )
+        .expect("create next prepare job");
+        with_runtime_writer(|| {
+            let connection = open_job_runtime_locked(&project)?;
+            connection
+                .execute(
+                    "INSERT INTO runtime_job_leases (
+                        lease_id,
+                        job_id,
+                        holder,
+                        acquired_at_ms,
+                        heartbeat_at_ms,
+                        expires_at_ms,
+                        status
+                    ) VALUES ('lease-active', 'job-prepare-active', 'worker-old', 150, 150, 1000, 'active')",
+                    [],
+                )
+                .expect("insert inconsistent active lease");
+            Ok(())
+        })
+        .expect("seed active lease succeeds");
+
+        let error = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request("worker-new", "lease-new", "bulk-knowledge-prepare"),
+            200,
+        )
+        .expect_err("matching active lease is rejected");
+        assert!(error.starts_with("active-lease-exists"));
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert!(list.jobs.iter().all(|job| job.state == "queued"));
+        assert_eq!(list.leases.len(), 1);
         let _ = fs::remove_dir_all(project);
     }
 

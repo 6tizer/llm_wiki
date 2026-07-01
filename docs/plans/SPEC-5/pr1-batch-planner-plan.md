@@ -1,6 +1,6 @@
 # SPEC-5 PR1: Batch Planner / Batched Prepare Plan
 
-> 类型：PR 执行计划 | 状态：planned / architect PASS after recheck | issue：#235 | tracking：#191 | branch：`codex/spec-5-pr1-batch-planner`
+> 类型：PR 执行计划 | 状态：merged via #236 | issue：#235 | tracking：#191 | branch：`codex/spec-5-pr1-batch-planner`
 
 ## Summary
 

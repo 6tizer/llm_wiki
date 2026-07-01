@@ -439,6 +439,7 @@ pub fn run() {
             commands::runtime_db::runtime_event_append,
             commands::runtime_db::runtime_job_cancel,
             commands::runtime_db::runtime_job_claim,
+            commands::runtime_db::runtime_job_claim_by_kind,
             commands::runtime_db::runtime_job_complete,
             commands::runtime_db::runtime_job_create,
             commands::runtime_db::runtime_job_fail,
