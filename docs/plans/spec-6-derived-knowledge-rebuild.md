@@ -15,6 +15,7 @@
 - 用户可手动 rebuild 指定 derived layer。
 - search/graph/derived layer 尚未 ready 时，UI 必须明确显示 stale/building 状态；搜索可 fallback 到 committed Markdown keyword/file search，不能假装 vector/graph 已完整。
 - derived state 通过 Core Runtime status API 暴露，供当前 Tauri/React shell 和未来 Swift shell 复用。
+- UI 必须有明确入口展示 `dirty`、`building`、`stale`、`ready`、`failed`，可放在 Runtime Diagnostics、搜索/图谱状态面板或对应 derived layer 设置页，但不能只依赖命令行验证。
 
 ## 关键设计决策
 
@@ -33,7 +34,7 @@
 3. Graph/search/materialized metadata rebuild job 化。
 4. Taxonomy/synthesis rebuild job 化。
 5. Optional index export / overview synthesis command。
-6. UI 状态：dirty、building、stale、ready、failed。
+6. UI 状态：dirty、building、stale、ready、failed，包含手动 rebuild 入口和 fallback search 状态说明。
 
 ## 验证策略
 
@@ -41,6 +42,7 @@
 - fake worker tests 覆盖 retry/cancel/resume。
 - integration fixture：commit Markdown 后 UI 可见正文，derived state 异步更新。
 - 确认 ingest 不再等待 embedding/overview/index 完成才结束。
+- UI / diagnostics tests 覆盖 stale/building/ready/failed 状态、manual rebuild、fallback keyword/file search。
 
 ## Gate 结论摘要
 
