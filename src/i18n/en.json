@@ -414,6 +414,7 @@
     "languageHint": "Interface language (wiki content follows source material language)",
     "categories": {
       "llm": "LLM Models",
+      "modelProfiles": "Model Profiles",
       "embedding": "Embeddings",
       "multimodal": "Image Captioning",
       "webSearch": "External Information Sources",
@@ -436,7 +437,7 @@
     "sections": {
       "llm": {
         "title": "LLM Models",
-        "description": "One row per vendor. Toggling one on automatically turns off the others. Changes save instantly; each vendor's API key is stored independently so switching doesn't lose data.",
+        "description": "Legacy/default provider configuration. Only one provider is active here at a time for older fallback paths; runtime Model Profiles can hold multiple schedulable model records.",
         "expand": "Expand config",
         "collapse": "Collapse",
         "toggleOff": "Click to deactivate",
@@ -795,7 +796,7 @@
       },
       "knowledgeAgents": {
         "title": "Knowledge Agents",
-        "description": "Project-level switches for the Knowledge Wiki workflow agents.",
+        "description": "LLM Wiki local, project-level workflow agents for compilation, linting, repair, synthesis, tagging, and QA capture.",
         "noProject": "Open a project first to edit Knowledge Agents.",
         "loading": "Loading Knowledge Agents...",
         "enabled": "Enabled",
@@ -818,7 +819,7 @@
       },
       "tagTaxonomy": {
         "title": "Tag Taxonomy",
-        "description": "Project-level taxonomy sidecar for Knowledge Wiki tags. Preview scans only read wiki pages; apply writes only `.llm-wiki/tag-taxonomy.json`.",
+        "description": "LLM Wiki local tag governance. Preview only reads wiki pages; apply writes only `.llm-wiki/tag-taxonomy.json`.",
         "noProject": "Open a project first to manage tag taxonomy.",
         "loading": "Loading tag taxonomy...",
         "loadFailed": "Tag taxonomy could not be loaded.",
@@ -857,7 +858,7 @@
       },
       "synthesis": {
         "title": "Synthesis",
-        "description": "Preview only reads wiki pages. Generate writes a selected candidate to `wiki/synthesis` after synthesis frontmatter validation.",
+        "description": "LLM Wiki local synthesis discovery. Preview only reads wiki pages; generate writes a selected candidate to `wiki/synthesis` after frontmatter validation.",
         "noProject": "Open a project first to discover synthesis topics.",
         "dimension": "Dimension",
         "minClusterSize": "Min pages",

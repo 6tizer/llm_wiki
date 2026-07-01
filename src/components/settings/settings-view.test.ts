@@ -93,26 +93,45 @@ describe("settings platform categories", () => {
     expect(getSettingsCategories(false).some((category) => category.id === "general")).toBe(false)
   })
 
+  it("places Model Profiles directly after LLM Models", () => {
+    expect(getSettingsCategories(true).map((category) => category.id).slice(0, 2)).toEqual([
+      "llm",
+      "model-profiles",
+    ])
+  })
+
   it("falls back when active category is not available", () => {
     const nonMacCategories = getSettingsCategories(false)
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
     expect(coerceSettingsCategory("general", nonMacCategories)).toBe("llm")
-    expect(coerceSettingsCategory("knowledge-agents", nonMacCategories)).toBe("knowledge-agents")
-    expect(coerceSettingsCategory("taxonomy", nonMacCategories)).toBe("taxonomy")
-    expect(coerceSettingsCategory("synthesis", nonMacCategories)).toBe("synthesis")
-    expect(nonMacCategories.some((category) => category.id === "knowledge-agents")).toBe(true)
-    expect(nonMacCategories.some((category) => category.id === "taxonomy")).toBe(true)
-    expect(nonMacCategories.some((category) => category.id === "synthesis")).toBe(true)
+    for (const id of ["model-profiles", "knowledge-agents", "taxonomy", "synthesis"] as const) {
+      expect(coerceSettingsCategory(id, nonMacCategories)).toBe(id)
+      expect(nonMacCategories.some((category) => category.id === id)).toBe(true)
+    }
   })
 })
 
 describe("SettingsView category rendering", () => {
+  it("renders ModelProfilesSection after clicking the Model Profiles sidebar category", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    const modelProfilesButton = container.querySelector("[data-testid='settings-category-model-profiles']")
+    if (!modelProfilesButton) throw new Error("model profiles category button not found")
+
+    await click(modelProfilesButton)
+    await flush()
+
+    expect(container.textContent).toContain("Mock Model Profiles Section")
+
+    unmount(root)
+  })
+
   it("renders SynthesisSection after clicking the synthesis sidebar category", async () => {
     const { container, root } = renderSettingsView()
     await flush()
 
-    const synthesisButton = [...container.querySelectorAll("button")]
-      .find((button) => button.textContent?.includes("Synthesis"))
+    const synthesisButton = container.querySelector("[data-testid='settings-category-synthesis']")
     if (!synthesisButton) throw new Error("synthesis category button not found")
 
     await click(synthesisButton)
@@ -167,6 +186,10 @@ describe("settings app preference save flow", () => {
 })
 
 describe("settings global Save bar visibility", () => {
+  it("hides for Model Profiles because runtime profiles persist inline", () => {
+    expect(shouldShowGlobalSettingsSaveBar("model-profiles")).toBe(false)
+  })
+
   it("hides for Knowledge Agents because it persists inline", () => {
     expect(shouldShowGlobalSettingsSaveBar("knowledge-agents")).toBe(false)
   })
