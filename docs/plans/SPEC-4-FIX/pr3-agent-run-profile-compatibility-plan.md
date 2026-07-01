@@ -1,6 +1,6 @@
 # SPEC-4-FIX PR3: Agent-run Profile Compatibility Plan
 
-> Type: PR implementation plan | Status: active | Issue: #231 | Branch: `codex/spec-4-fix-pr3-agent-profile-compat` | Run: `8418656b-358e-4294-9610-4f1c74b64aae`
+> Type: PR implementation plan | Status: merged via #232 | Issue: #231 | Branch: `codex/spec-4-fix-pr3-agent-profile-compat` | Run: `8418656b-358e-4294-9610-4f1c74b64aae`
 
 ## Goal
 

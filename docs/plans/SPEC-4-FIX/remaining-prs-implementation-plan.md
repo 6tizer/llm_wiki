@@ -1,14 +1,14 @@
 # SPEC-4-FIX Remaining PRs Implementation Plan
 
-> Type: execution plan | Status: planned | Owner: Commander | Baseline: `103bd3b fix: clarify agent profile availability` | Source: [`../spec-4-fix-model-profiles-closeout.md`](../spec-4-fix-model-profiles-closeout.md) and [`../spec-1-4-post-test-findings.md`](../spec-1-4-post-test-findings.md)
+> Type: execution plan | Status: completed via #228, #230, #232 | Owner: Commander | Baseline: `103bd3b fix: clarify agent profile availability` | Source: [`../spec-4-fix-model-profiles-closeout.md`](../spec-4-fix-model-profiles-closeout.md) and [`../spec-1-4-post-test-findings.md`](../spec-1-4-post-test-findings.md)
 
 ## Decision
 
-Execute SPEC-4-FIX as three focused implementation PRs before SPEC-5 starts:
+SPEC-4-FIX was executed as three focused implementation PRs before SPEC-5 starts:
 
-1. PR1 Profile lifecycle.
-2. PR2 Settings/Profile IA.
-3. PR3 Agent-run profile compatibility minimum.
+1. PR1 Profile lifecycle: merged via #228.
+2. PR2 Settings/Profile IA: merged via #230.
+3. PR3 Agent-run profile compatibility minimum: merged via #232.
 
 Each implementation PR must get its own GitHub issue before coding starts, then bind that issue to a fresh agent-loop run. Do not reuse the docs planning PR as implementation evidence.
 

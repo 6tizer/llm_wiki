@@ -1,6 +1,6 @@
 # SPEC-4-FIX: Model Profiles Closeout
 
-> 类型：阶段 SPEC | 状态：planned / ready for PR split | 覆盖：SPEC-1 到 SPEC-4 完成后 Dev App 手测问题 | 依赖：SPEC-1、SPEC-2、SPEC-3、SPEC-4
+> 类型：阶段 SPEC | 状态：completed via #228, #230, #232 | 覆盖：SPEC-1 到 SPEC-4 完成后 Dev App 手测问题 | 依赖：SPEC-1、SPEC-2、SPEC-3、SPEC-4
 
 ## 目标与成功标准
 
