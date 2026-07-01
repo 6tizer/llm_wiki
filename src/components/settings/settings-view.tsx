@@ -124,6 +124,7 @@ const CATEGORIES: Category[] = [
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
+// These sections own their persistence instead of writing through SettingsDraft.
 const INLINE_PERSIST_SETTINGS_CATEGORIES = new Set<CategoryId>([
   "about",
   "llm",
@@ -717,6 +718,7 @@ export function SettingsView() {
                 type="button"
                 onClick={() => setActive(c.id)}
                 aria-current={isActive ? "page" : undefined}
+                data-testid={`settings-category-${c.id}`}
                 className={`group mb-0 flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm transition-colors md:mb-0.5 md:w-full md:gap-2.5 ${
                   isActive
                     ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/70"

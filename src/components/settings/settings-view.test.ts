@@ -116,8 +116,7 @@ describe("SettingsView category rendering", () => {
     const { container, root } = renderSettingsView()
     await flush()
 
-    const modelProfilesButton = [...container.querySelectorAll("button")]
-      .find((button) => button.textContent?.includes("Model Profiles"))
+    const modelProfilesButton = container.querySelector("[data-testid='settings-category-model-profiles']")
     if (!modelProfilesButton) throw new Error("model profiles category button not found")
 
     await click(modelProfilesButton)
@@ -132,8 +131,7 @@ describe("SettingsView category rendering", () => {
     const { container, root } = renderSettingsView()
     await flush()
 
-    const synthesisButton = [...container.querySelectorAll("button")]
-      .find((button) => button.textContent?.includes("Synthesis"))
+    const synthesisButton = container.querySelector("[data-testid='settings-category-synthesis']")
     if (!synthesisButton) throw new Error("synthesis category button not found")
 
     await click(synthesisButton)

@@ -796,7 +796,7 @@
       },
       "knowledgeAgents": {
         "title": "Knowledge Agents",
-        "description": "LLM Wiki project-level workflow agents for compilation, linting, repair, synthesis, tagging, and QA capture.",
+        "description": "LLM Wiki local, project-level workflow agents for compilation, linting, repair, synthesis, tagging, and QA capture.",
         "noProject": "Open a project first to edit Knowledge Agents.",
         "loading": "Loading Knowledge Agents...",
         "enabled": "Enabled",
