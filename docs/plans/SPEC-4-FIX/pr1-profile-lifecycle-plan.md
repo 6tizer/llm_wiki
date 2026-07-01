@@ -1,6 +1,6 @@
 # SPEC-4-FIX PR1: Profile Lifecycle Plan
 
-> Type: PR implementation plan | Status: active | Issue: #227 | Branch: `codex/spec-4-fix-pr1-profile-lifecycle` | Run: `cfb4239b-9c67-4135-acc4-55ec1689a2dd`
+> Type: PR implementation plan | Status: merged via #228 | Issue: #227 | Branch: `codex/spec-4-fix-pr1-profile-lifecycle` | Run: `cfb4239b-9c67-4135-acc4-55ec1689a2dd`
 
 ## Scope
 

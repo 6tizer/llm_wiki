@@ -462,7 +462,7 @@ export function ModelProfilesSection() {
     : null
 
   return (
-    <div className="space-y-3 border-t pt-4" data-testid="model-profiles-section">
+    <div className="space-y-3" data-testid="model-profiles-section">
       <div>
         <h3 className="text-base font-semibold">{t("settings.sections.llm.profiles.title")}</h3>
         <p className="mt-1 text-xs text-muted-foreground">

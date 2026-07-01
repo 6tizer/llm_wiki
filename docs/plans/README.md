@@ -42,6 +42,8 @@
 | [SPEC-4/pr5-agent-run-adapter-plan.md](./SPEC-4/pr5-agent-run-adapter-plan.md) | SPEC-4 PR5 执行计划：Agent-run profile claim、Rust-side secret resolution、per-run sidecar env/config injection。 | merged |
 | [spec-4-fix-model-profiles-closeout.md](./spec-4-fix-model-profiles-closeout.md) | SPEC-4 完成后 Profile lifecycle、Settings/Profile IA、Agent-run profile compatibility 收口。 | planned |
 | [SPEC-4-FIX/remaining-prs-implementation-plan.md](./SPEC-4-FIX/remaining-prs-implementation-plan.md) | SPEC-4-FIX PR1-PR3 连续执行计划：Profile lifecycle、Settings/Profile IA、Agent-run compatibility。 | planned |
+| [SPEC-4-FIX/pr1-profile-lifecycle-plan.md](./SPEC-4-FIX/pr1-profile-lifecycle-plan.md) | SPEC-4-FIX PR1 执行计划：runtime profile soft delete、active claim block、visible profile filtering、UI 删除入口。 | merged |
+| [SPEC-4-FIX/pr2-settings-profile-ia-plan.md](./SPEC-4-FIX/pr2-settings-profile-ia-plan.md) | SPEC-4-FIX PR2 执行计划：Model Profiles 同级 Settings 入口、LLM 模型 legacy/default 文案、本地扩展归属。 | active |
 | [spec-1-4-post-test-findings.md](./spec-1-4-post-test-findings.md) | SPEC-1 到 SPEC-4 完成后 Dev App 手测问题证据；已被 SPEC-4-FIX 和 SPEC-5/6/7/8 回灌消费。 | evidence / consumed |
 | [spec-5-parallel-knowledge-pipeline.md](./spec-5-parallel-knowledge-pipeline.md) | #191 批量 prepare / commit / repair 的并行知识编译管线。 | planned |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建。 | planned |
@@ -94,7 +96,7 @@
 8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
 9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
 
-Next execution sequence：SPEC-1、SPEC-2、SPEC-3、SPEC-4 已完成。当前下一候选改为 SPEC-4-FIX PR1-PR3，按 [`SPEC-4-FIX/remaining-prs-implementation-plan.md`](./SPEC-4-FIX/remaining-prs-implementation-plan.md) 先收口 Profile lifecycle、Settings/Profile IA、Agent-run profile compatibility，再进入 SPEC-5 PR1 Parallel Knowledge Pipeline；每个后续 PR 开始时再落对应详细计划，并按合并标准要求无 unresolved P0/P1/P2、修复该 PR 已发现全部 scoped P3、CI green 后由 Commander 合并。SPEC-6 在 SPEC-5 commit/profile/runtime 使用路径稳定后推进。SPEC-7 PR1（SDK alignment）可并行准备，但不得替代 SPEC-4-FIX PR3 的 Agent-run profile 最小兼容收口；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
+Next execution sequence：SPEC-1、SPEC-2、SPEC-3、SPEC-4 已完成，SPEC-4-FIX PR1 已由 #228 完成。当前下一候选为 SPEC-4-FIX PR2-PR3，按 [`SPEC-4-FIX/remaining-prs-implementation-plan.md`](./SPEC-4-FIX/remaining-prs-implementation-plan.md) 继续收口 Settings/Profile IA、Agent-run profile compatibility，再进入 SPEC-5 PR1 Parallel Knowledge Pipeline；每个后续 PR 开始时再落对应详细计划，并按合并标准要求无 unresolved P0/P1/P2、修复该 PR 已发现全部 scoped P3、CI green 后由 Commander 合并。SPEC-6 在 SPEC-5 commit/profile/runtime 使用路径稳定后推进。SPEC-7 PR1（SDK alignment）可并行准备，但不得替代 SPEC-4-FIX PR3 的 Agent-run profile 最小兼容收口；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8 的 core boundary 和关键 runtime API 稳定后才进入实现。
 
 当前主线不跳过 SPEC-2 直接进入 Phase 7 / Unified Agentic Chat 完整实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR，可按依赖规则并行准备。
 

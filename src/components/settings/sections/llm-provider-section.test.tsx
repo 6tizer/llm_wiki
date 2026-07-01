@@ -2,14 +2,10 @@
 
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import "@/i18n"
 import { useWikiStore } from "@/stores/wiki-store"
 import { LlmProviderSection } from "./llm-provider-section"
-
-vi.mock("./model-profiles-section", () => ({
-  ModelProfilesSection: () => <div data-testid="model-profiles-entry" />,
-}))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -40,10 +36,12 @@ describe("LlmProviderSection", () => {
     })
   })
 
-  it("renders the runtime model profiles entry inside the LLM settings section", () => {
+  it("does not render the runtime model profiles entry inside the LLM settings section", () => {
     const { container, root } = renderSection()
 
-    expect(container.querySelector("[data-testid='model-profiles-entry']")).not.toBeNull()
+    expect(container.textContent).toContain("LLM Models")
+    expect(container.textContent).not.toContain("New profile")
+    expect(container.textContent).not.toContain("Display name")
 
     unmount(root)
   })

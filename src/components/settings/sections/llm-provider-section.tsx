@@ -11,7 +11,6 @@ import { resolveConfig } from "../preset-resolver"
 import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
 import { AZURE_OPENAI_API_VERSION } from "@/lib/azure-openai"
 import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/lib/connection-tests"
-import { ModelProfilesSection } from "./model-profiles-section"
 
 export function LlmProviderSection() {
   const { t } = useTranslation()
@@ -89,8 +88,6 @@ export function LlmProviderSection() {
           />
         ))}
       </div>
-
-      <ModelProfilesSection />
     </div>
   )
 }

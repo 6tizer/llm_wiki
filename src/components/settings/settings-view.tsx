@@ -19,6 +19,7 @@ import {
   BrainCircuit,
   Tags,
   GitMerge,
+  Layers,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -35,6 +36,7 @@ import { activateThemePreference, readThemeMirror, type AppTheme } from "@/lib/t
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { LlmProviderSection } from "./sections/llm-provider-section"
+import { ModelProfilesSection } from "./sections/model-profiles-section"
 import { EmbeddingSection } from "./sections/embedding-section"
 import { MultimodalSection } from "./sections/multimodal-section"
 import { WebSearchSection } from "./sections/web-search-section"
@@ -62,6 +64,7 @@ import {
 
 export type CategoryId =
   | "llm"
+  | "model-profiles"
   | "embedding"
   | "multimodal"
   | "web-search"
@@ -100,6 +103,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: "llm", labelKey: "settings.categories.llm", icon: Bot },
+  { id: "model-profiles", labelKey: "settings.categories.modelProfiles", icon: Layers },
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
   { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
@@ -119,6 +123,15 @@ const CATEGORIES: Category[] = [
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
+
+const INLINE_PERSIST_SETTINGS_CATEGORIES = new Set<CategoryId>([
+  "about",
+  "llm",
+  "model-profiles",
+  "knowledge-agents",
+  "taxonomy",
+  "synthesis",
+])
 
 export function isMacLikeRuntime(
   navigatorLike: RuntimeNavigatorLike =
@@ -147,11 +160,7 @@ export function coerceSettingsCategory(
 
 /** Returns whether the shared Settings draft Save bar should be shown. */
 export function shouldShowGlobalSettingsSaveBar(activeCategory: CategoryId): boolean {
-  return activeCategory !== "about" &&
-    activeCategory !== "llm" &&
-    activeCategory !== "knowledge-agents" &&
-    activeCategory !== "taxonomy" &&
-    activeCategory !== "synthesis"
+  return !INLINE_PERSIST_SETTINGS_CATEGORIES.has(activeCategory)
 }
 
 export function initialDraft(
@@ -641,6 +650,8 @@ export function SettingsView() {
         // configs + active preset) and persists directly — it bypasses
         // the shared draft / global Save button.
         return <LlmProviderSection />
+      case "model-profiles":
+        return <ModelProfilesSection />
       case "embedding":
         return <EmbeddingSection draft={draft} setDraft={setDraft} />
       case "multimodal":
