@@ -49,7 +49,7 @@
 
 ## Gate 结论摘要
 
-本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR 必须重新审查当前三入口代码迁移、SDK rewind 顺序、Agent-capable fallback、QA fixture owner 边界和 Swift shell re-entry compatibility。
+本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的 PR Gate 结论统一摘要。实现 PR 必须重新审查当前三入口代码迁移、SDK rewind 顺序、Agent-capable fallback、QA fixture owner 边界和 Swift shell re-entry compatibility。
 
 ## Non-goals / Follow-up
 

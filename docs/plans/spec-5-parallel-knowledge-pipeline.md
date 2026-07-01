@@ -48,7 +48,7 @@
 
 ## Gate 结论摘要
 
-本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR 必须重新审查 fault injection、resume/idempotency、partial map-reduce、commit-layer integration、model-call profile routing 和 shell-neutral progress/diagnostics API。
+本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的 PR Gate 结论统一摘要。实现 PR 必须重新审查 fault injection、resume/idempotency、partial map-reduce、commit-layer integration、model-call profile routing 和 shell-neutral progress/diagnostics API。
 
 ## Non-goals / Follow-up
 

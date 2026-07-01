@@ -42,7 +42,7 @@
 
 ## Gate 结论摘要
 
-本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR 必须重新审查 #182 是否仍可复现、`autoIngestImpl` characterization tests 是否先合并、QA fixture 与 SPEC-7 的 owner 边界，以及 SPEC-1 cleanup 是否无行为变化。
+本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的 PR Gate 结论统一摘要。实现 PR 必须重新审查 #182 是否仍可复现、`autoIngestImpl` characterization tests 是否先合并、QA fixture 与 SPEC-7 的 owner 边界，以及 SPEC-1 cleanup 是否无行为变化。
 
 ## Non-goals / Follow-up
 
