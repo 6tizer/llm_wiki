@@ -10,7 +10,7 @@
 
 - #183 的非安全维护尾项被拆成低风险 PR。
 - #182 的 GitNexus TSX scope warning 有明确 root-cause 或非阻塞记录。
-- QA fixture 入口/可重复性工具支撑 SPEC-7 的 Agent 场景回归；具体 Agent 场景 owner 仍是 SPEC-7。
+- QA fixture 入口/可重复性工具支撑 SPEC-7 的 Agent 场景回归，至少覆盖 permission、profile unavailable、SDK model rejected、resource limit、timeline；具体 Agent 场景 owner 仍是 SPEC-7。
 - 维护 PR 不混入 runtime / provider / commit layer 行为变化。
 - 维护 PR 支撑 SPEC-1 shell/core boundary：逐步清理 `App.tsx` bootstrap side effects、Zustand business coupling、Tauri plugin-store coupling。
 
@@ -30,7 +30,7 @@
 4. P2-8/P2-11：在 characterization tests 保护下拆 `autoIngestImpl`。
 5. P2-9：`runAgentAppToolHandler` handler map 重构。
 6. #182：先强制重建复现 GitNexus TSX warning；再决定 workaround / upstream note / close as resolved。
-7. #86 QA fixture infrastructure：提供 dev-only 入口和可重复性工具；SPEC-7 负责具体 Agent 场景覆盖。
+7. #86 QA fixture infrastructure：提供 dev-only 入口和可重复性工具；支持稳定触发 permission、profile unavailable、SDK model rejected、resource limit、timeline；SPEC-7 负责具体 Agent 场景覆盖。
 8. SPEC-1 cleanup candidates：拆 `App.tsx` 非 UI bootstrap、store/runtime state 混用、Tauri store 直接耦合；每项独立 PR，必须证明 behavior unchanged。
 
 ## 验证策略
@@ -38,11 +38,11 @@
 - 每个维护 PR 单独 focused tests + lint + diff check + GitNexus detect。
 - 重构 PR 必须证明 behavior unchanged。
 - GitNexus warning PR 必须记录 analyzer result before/after。
-- QA fixture PR 必须有 repeatable UI test 或 dev-only entry。
+- QA fixture PR 必须有 repeatable UI test 或 dev-only entry，且不得把真实 SDK secrets、jsonl 私有路径或 provider API key 写入快照。
 
 ## Gate 结论摘要
 
-本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR 必须重新审查 #182 是否仍可复现、`autoIngestImpl` characterization tests 是否先合并、QA fixture 与 SPEC-7 的 owner 边界，以及 SPEC-1 cleanup 是否无行为变化。
+本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的 PR Gate 结论统一摘要。实现 PR 必须重新审查 #182 是否仍可复现、`autoIngestImpl` characterization tests 是否先合并、QA fixture 与 SPEC-7 的 owner 边界，以及 SPEC-1 cleanup 是否无行为变化。
 
 ## Non-goals / Follow-up
 

@@ -1,6 +1,6 @@
 # SPEC-6: Derived Knowledge Rebuild / 派生知识异步化
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#189 | 依赖：SPEC-1、SPEC-2、SPEC-3
+> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#189 | 依赖：SPEC-1、SPEC-2、SPEC-3 | 执行顺序：SPEC-5 commit/profile/runtime 使用路径稳定后推进
 
 ## 目标与成功标准
 
@@ -15,6 +15,7 @@
 - 用户可手动 rebuild 指定 derived layer。
 - search/graph/derived layer 尚未 ready 时，UI 必须明确显示 stale/building 状态；搜索可 fallback 到 committed Markdown keyword/file search，不能假装 vector/graph 已完整。
 - derived state 通过 Core Runtime status API 暴露，供当前 Tauri/React shell 和未来 Swift shell 复用。
+- UI 必须有明确入口展示 `dirty`、`building`、`stale`、`ready`、`failed`，可放在 Runtime Diagnostics、搜索/图谱状态面板或对应 derived layer 设置页，但不能只依赖命令行验证。
 
 ## 关键设计决策
 
@@ -33,7 +34,7 @@
 3. Graph/search/materialized metadata rebuild job 化。
 4. Taxonomy/synthesis rebuild job 化。
 5. Optional index export / overview synthesis command。
-6. UI 状态：dirty、building、stale、ready、failed。
+6. UI 状态：dirty、building、stale、ready、failed，包含手动 rebuild 入口和 fallback search 状态说明。
 
 ## 验证策略
 
@@ -41,10 +42,11 @@
 - fake worker tests 覆盖 retry/cancel/resume。
 - integration fixture：commit Markdown 后 UI 可见正文，derived state 异步更新。
 - 确认 ingest 不再等待 embedding/overview/index 完成才结束。
+- UI / diagnostics tests 覆盖 stale/building/ready/failed 状态、manual rebuild、fallback keyword/file search。
 
 ## Gate 结论摘要
 
-本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的统一 gate 摘要。实现 PR 必须重新审查 stale/building UI、fallback search、marker debounce、后台优先级和 shell-neutral derived status。
+本 SPEC 随当前 docs PR 通过 PR-level gate；详见 [SPEC-0](./spec-0-roadmap-baseline.md) 的 PR Gate 结论统一摘要。实现 PR 必须重新审查 stale/building UI、fallback search、marker debounce、后台优先级和 shell-neutral derived status。
 
 ## Non-goals / Follow-up
 
