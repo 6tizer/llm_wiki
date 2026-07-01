@@ -15,6 +15,7 @@ import type { RuntimeProfileRecord } from "@/commands/runtime-db"
 
 const runtimeDbMocks = vi.hoisted(() => ({
   runtimeProfileCreate: vi.fn(),
+  runtimeProfileDelete: vi.fn(),
   runtimeProfileList: vi.fn(),
   runtimeProfileProbe: vi.fn(),
   runtimeProfileUpdate: vi.fn(),
@@ -248,6 +249,11 @@ describe("ModelProfilesSection UI", () => {
       profiles: [runtimeProfile({ taskFamilies: ["chat", "future-family"] })],
     })
     runtimeDbMocks.runtimeProfileCreate.mockResolvedValue(runtimeProfile({ profileId: "profile-new" }))
+    runtimeDbMocks.runtimeProfileDelete.mockResolvedValue({
+      profileId: "profile-1",
+      deletedAtMs: 456,
+      secretRef: "llm-wiki-profile-secret:11111111-1111-4111-8111-111111111111",
+    })
     runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile())
     runtimeDbMocks.runtimeProfileProbe.mockResolvedValue({
       profile: runtimeProfile({
@@ -275,6 +281,55 @@ describe("ModelProfilesSection UI", () => {
     expect(container.textContent).toContain("Primary profile")
     expect(container.querySelector<HTMLInputElement>("[data-testid='profile-task-future-family']")?.checked).toBe(true)
 
+    unmount(root)
+  })
+
+  it("deletes the selected profile after confirmation and then cleans up its secret", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile(),
+        runtimeProfile({
+          profileId: "profile-2",
+          displayName: "Second profile",
+          secretRef: null,
+        }),
+      ],
+    })
+
+    await click(container.querySelector("[data-testid='profile-delete']") as HTMLButtonElement)
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Primary profile"))
+    expect(runtimeDbMocks.runtimeProfileDelete).toHaveBeenCalledWith({ profileId: "profile-1" })
+    expect(secretMocks.profileSecretDelete).toHaveBeenCalledWith({
+      secretRef: "llm-wiki-profile-secret:11111111-1111-4111-8111-111111111111",
+    })
+    expect(container.textContent).not.toContain("Primary profile")
+    expect(container.textContent).toContain("Second profile")
+
+    confirmSpy.mockRestore()
+    unmount(root)
+  })
+
+  it("does not delete profile secrets when DB delete fails", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    runtimeDbMocks.runtimeProfileDelete.mockRejectedValueOnce(new Error("active profile claim exists"))
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile()],
+    })
+
+    await click(container.querySelector("[data-testid='profile-delete']") as HTMLButtonElement)
+
+    expect(runtimeDbMocks.runtimeProfileDelete).toHaveBeenCalledWith({ profileId: "profile-1" })
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("active profile claim exists")
+    expect(container.textContent).toContain("Primary profile")
+
+    confirmSpy.mockRestore()
     unmount(root)
   })
 

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   runtimeProfileCreate,
+  runtimeProfileDelete,
   runtimeProfileList,
   runtimeProfileProbe,
   runtimeProfileUpdate,
@@ -300,6 +301,7 @@ export function ModelProfilesSection() {
   const [draft, setDraft] = useState<ModelProfileDraft>(() => createEmptyProfileDraft())
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" })
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [deleteMessage, setDeleteMessage] = useState<string | null>(null)
   const [probeState, setProbeState] = useState<ProbeState>({ kind: "idle" })
 
   const selectedProfile = useMemo(
@@ -348,6 +350,7 @@ export function ModelProfilesSection() {
 
   async function saveDraft() {
     setSaveMessage(null)
+    setDeleteMessage(null)
     if (runtimeUnavailableMessage) {
       setSaveMessage(runtimeUnavailableMessage)
       return
@@ -362,6 +365,36 @@ export function ModelProfilesSection() {
       setSaveMessage(t("settings.sections.llm.profiles.saved"))
     } catch (error) {
       setSaveMessage(t("settings.sections.llm.profiles.saveFailed", { message: errorMessage(error) }))
+    }
+  }
+
+  async function deleteSelectedProfile() {
+    setDeleteMessage(null)
+    setSaveMessage(null)
+    if (runtimeUnavailableMessage) {
+      setDeleteMessage(runtimeUnavailableMessage)
+      return
+    }
+    if (!selectedProfile) return
+    const confirmed = window.confirm(
+      t("settings.sections.llm.profiles.deleteConfirm", {
+        name: selectedProfile.displayName,
+      }),
+    )
+    if (!confirmed) return
+
+    try {
+      const result = await runtimeProfileDelete({ profileId: selectedProfile.profileId })
+      if (result.secretRef) {
+        await profileSecretDelete({ secretRef: result.secretRef }).catch(() => undefined)
+      }
+      const nextProfiles = profiles.filter((profile) => profile.profileId !== result.profileId)
+      setProfiles(nextProfiles)
+      setDraft(nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft())
+      setDeleteMessage(t("settings.sections.llm.profiles.deleted"))
+      setProbeState({ kind: "idle" })
+    } catch (error) {
+      setDeleteMessage(t("settings.sections.llm.profiles.deleteFailed", { message: errorMessage(error) }))
     }
   }
 
@@ -712,8 +745,20 @@ export function ModelProfilesSection() {
               >
                 {t("settings.sections.llm.profiles.probe")}
               </button>
+              {selectedProfile && (
+                <button
+                  type="button"
+                  data-testid="profile-delete"
+                  onClick={() => void deleteSelectedProfile()}
+                  disabled={Boolean(runtimeUnavailableMessage)}
+                  className="rounded-md border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/5 disabled:opacity-60"
+                >
+                  {t("settings.sections.llm.profiles.deleteProfile")}
+                </button>
+              )}
             </div>
             {saveMessage && <p className="text-xs text-muted-foreground">{saveMessage}</p>}
+            {deleteMessage && <p className="text-xs text-muted-foreground">{deleteMessage}</p>}
             {probeState.kind === "running" && (
               <p className="text-xs text-muted-foreground">
                 {t("settings.sections.llm.profiles.probing")}
