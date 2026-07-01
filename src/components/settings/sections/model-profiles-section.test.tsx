@@ -71,6 +71,17 @@ function renderProfiles(): { container: HTMLDivElement; root: Root } {
   return { container, root }
 }
 
+async function renderProfilesWithList(result: {
+  enabled: boolean
+  status: "disabled" | "healthy" | "no-project"
+  profiles: RuntimeProfileRecord[] | null
+}): Promise<{ container: HTMLDivElement; root: Root }> {
+  runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce(result)
+  const rendered = renderProfiles()
+  await flush()
+  return rendered
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve()
@@ -267,6 +278,86 @@ describe("ModelProfilesSection UI", () => {
     unmount(root)
   })
 
+  it("warns when an agent task profile is still model-call kind", async () => {
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile({ kind: "model-call", taskFamilies: ["agent"] })],
+    })
+
+    expect(container.querySelector("[data-testid='profile-agent-kind-warning']")?.textContent).toContain(
+      "agent-run",
+    )
+
+    unmount(root)
+  })
+
+  it("warns when an Agent-run profile uses a non-Anthropic API mode", async () => {
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          taskFamilies: ["agent"],
+          apiMode: "openai-chat-completions",
+        }),
+      ],
+    })
+
+    expect(container.querySelector("[data-testid='profile-agent-run-capability-warning']")?.textContent).toContain(
+      "Anthropic Messages",
+    )
+
+    unmount(root)
+  })
+
+  it("warns when a fresh Agent-run probe does not support Agent-run selection", async () => {
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          taskFamilies: ["agent"],
+          apiMode: "anthropic-messages",
+          capabilityStatus: "limited",
+          capabilityJson: "{\"modelCallSupported\":true,\"agentRunSupported\":false}",
+          capabilityVersion: "profile-probe.v1",
+        }),
+      ],
+    })
+
+    expect(container.querySelector("[data-testid='profile-agent-run-capability-warning']")?.textContent).toContain(
+      "agentRunSupported=true",
+    )
+
+    unmount(root)
+  })
+
+  it("warns when a fresh Agent-run probe omits Agent-run support", async () => {
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          taskFamilies: ["agent"],
+          apiMode: "anthropic-messages",
+          capabilityStatus: "limited",
+          capabilityJson: "{\"modelCallSupported\":true}",
+          capabilityVersion: "profile-probe.v1",
+        }),
+      ],
+    })
+
+    expect(container.querySelector("[data-testid='profile-agent-run-capability-warning']")?.textContent).toContain(
+      "agentRunSupported=true",
+    )
+
+    unmount(root)
+  })
+
   it("keeps unknown provider ids selected and preserves them on save", async () => {
     runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
       enabled: true,
@@ -304,17 +395,50 @@ describe("ModelProfilesSection UI", () => {
   })
 
   it("falls back to an empty draft when profile list returns a malformed profiles shape", async () => {
-    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+    const { container, root } = await renderProfilesWithList({
       enabled: true,
       status: "healthy",
       profiles: null,
     })
-    const { container, root } = renderProfiles()
-    await flush()
 
     expect(container.querySelector("[data-testid='model-profiles-section']")).not.toBeNull()
     expect(container.querySelector("[data-testid='profile-save']")).not.toBeNull()
     expect(container.textContent).not.toContain("Cannot read")
+
+    unmount(root)
+  })
+
+  it("disables save and probe when work runtime is disabled", async () => {
+    const { container, root } = await renderProfilesWithList({
+      enabled: false,
+      status: "disabled",
+      profiles: [],
+    })
+
+    expect(container.querySelector("[data-testid='profile-runtime-unavailable']")?.textContent).toContain(
+      "Work Runtime",
+    )
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")?.disabled).toBe(true)
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")?.disabled).toBe(true)
+    expect(secretMocks.profileSecretWrite).not.toHaveBeenCalled()
+    expect(runtimeDbMocks.runtimeProfileCreate).not.toHaveBeenCalled()
+    expect(runtimeDbMocks.runtimeProfileProbe).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("asks for a project instead of a runtime restart when no project is open", async () => {
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "no-project",
+      profiles: [],
+    })
+
+    const message = container.querySelector("[data-testid='profile-runtime-unavailable']")?.textContent ?? ""
+    expect(message).toContain("project")
+    expect(message).not.toContain("LLM_WIKI_CORE_WORK_RUNTIME_ENABLED")
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")?.disabled).toBe(true)
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")?.disabled).toBe(true)
 
     unmount(root)
   })

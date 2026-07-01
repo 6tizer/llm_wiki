@@ -275,7 +275,7 @@
     "error": {
       "unavailable": "Agent 不可用：当前未打开项目。",
       "missingApiKey": "Agent 需要 API key。请在设置中配置当前 provider。",
-      "profileUnavailable": "没有可用的 Agent-run Profile。请检查设置 > Model Profiles。",
+      "profileUnavailable": "没有可用的 Agent-run Profile。请在设置 > Model Profiles 查看 Agent Chat 兼容性提示。",
       "timeout": "Agent 已超时。你可以重试这次请求。",
       "maxTurnsExceeded": "Agent 已达到最大轮数。你可以拆分任务后继续，或在 Settings > Agent 调高最大轮数。",
       "failed": "Agent 失败：{{error}}"
@@ -515,7 +515,12 @@
           "probe": "探测 profile",
           "probing": "正在探测 profile…",
           "saved": "Profile 已保存。",
-          "saveFailed": "保存失败：{{message}}"
+          "saveFailed": "保存失败：{{message}}",
+          "runtimeUnavailableDisabled": "保存或探测 profile 前需要启用 Work Runtime。当前 runtime 状态：{{status}}。Dev 测试请用 LLM_WIKI_CORE_WORK_RUNTIME_ENABLED=true 重启。",
+          "runtimeUnavailableNoProject": "保存或探测 profile 前需要先打开项目。",
+          "agentKindWarning": "Agent Chat 只会使用 Profile 类型为 agent-run 的 profile。当前 profile 是 {{kind}}，不会被 Agent-run 选择。",
+          "agentRunApiModeWarning": "Agent-run 当前需要 Anthropic Messages 兼容 endpoint。OpenAI/Gemini profile 可以保存给 model-call 任务使用，但 Agent Chat 不会选择它。",
+          "agentRunCapabilityWarning": "这个 profile 的探测结果没有确认 Agent-run 支持。Agent Chat 只会选择 agentRunSupported=true 的 profile。"
         }
       },
       "embedding": {
