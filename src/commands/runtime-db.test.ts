@@ -6,7 +6,11 @@ import {
   runtimeCommitBudgetRelease,
   runtimeEventAppend,
   runtimeJobCancel,
+  runtimeJobClaimByKind,
+  runtimeJobComplete,
   runtimeJobCreate,
+  runtimeJobFail,
+  runtimeJobHeartbeat,
   runtimeJobList,
   runtimeJobPause,
   runtimeJobResume,
@@ -19,6 +23,7 @@ import {
   runtimeProfileProbe,
   runtimeProfileStatus,
   runtimeProfileUpdate,
+  runtimeProgressAppend,
   runtimeProgressList,
   runtimeStagingArtifactRecord,
   runtimeStagingArtifactCommitSuccess,
@@ -65,6 +70,64 @@ describe("runtime-db commands", () => {
         payload: "{\"kind\":\"markdown-conflict-repair\"}",
         maxAttempts: 3,
         priority: 5,
+      },
+    })
+  })
+
+  it("sends runtime job claim and lease lifecycle payloads", async () => {
+    const claim = {
+      job: { jobId: "job-1", kind: "bulk-knowledge-prepare" },
+      lease: { leaseId: "lease-1", jobId: "job-1" },
+    }
+    const complete = { jobId: "job-1", state: "completed" }
+    const failed = { jobId: "job-2", state: "retry-wait" }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(claim)
+      .mockResolvedValueOnce(claim)
+      .mockResolvedValueOnce(complete)
+      .mockResolvedValueOnce(failed)
+
+    await expect(
+      runtimeJobClaimByKind({
+        kind: "bulk-knowledge-prepare",
+        holder: "bulk-prepare:worker-1",
+        leaseId: "lease-1",
+      }),
+    ).resolves.toBe(claim)
+    await expect(
+      runtimeJobHeartbeat({ jobId: "job-1", leaseId: "lease-1" }),
+    ).resolves.toBe(claim)
+    await expect(
+      runtimeJobComplete({ jobId: "job-1", leaseId: "lease-1" }),
+    ).resolves.toBe(complete)
+    await expect(
+      runtimeJobFail({
+        jobId: "job-2",
+        leaseId: "lease-2",
+        error: "profile unavailable",
+        retryAfterMs: 123456,
+      }),
+    ).resolves.toBe(failed)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_job_claim_by_kind", {
+      request: {
+        kind: "bulk-knowledge-prepare",
+        holder: "bulk-prepare:worker-1",
+        leaseId: "lease-1",
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_job_heartbeat", {
+      request: { jobId: "job-1", leaseId: "lease-1" },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_job_complete", {
+      request: { jobId: "job-1", leaseId: "lease-1" },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_job_fail", {
+      request: {
+        jobId: "job-2",
+        leaseId: "lease-2",
+        error: "profile unavailable",
+        retryAfterMs: 123456,
       },
     })
   })
@@ -253,6 +316,43 @@ describe("runtime-db commands", () => {
         jobId: "job-1",
         eventId: "event-1",
         payload: "{\"kind\":\"markdown-commit\"}",
+      },
+    })
+  })
+
+  it("sends runtime progress append payloads with semantic payload in JSON", async () => {
+    const response = {
+      progress: {
+        jobId: "job-1",
+        progressKey: "bulk-prepare:worker:1",
+        payload: "{\"type\":\"bulk-prepare:job-claimed\"}",
+        updatedAtMs: 123,
+        lastEventId: "event-1",
+      },
+      event: {
+        eventId: "event-1",
+        eventName: "job-runtime:progress-appended",
+      },
+    }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeProgressAppend({
+        jobId: "job-1",
+        progressKey: "bulk-prepare:worker:1",
+        eventId: "event-1",
+        payload: "{\"type\":\"bulk-prepare:job-claimed\"}",
+        durable: true,
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_progress_append", {
+      request: {
+        jobId: "job-1",
+        progressKey: "bulk-prepare:worker:1",
+        eventId: "event-1",
+        payload: "{\"type\":\"bulk-prepare:job-claimed\"}",
+        durable: true,
       },
     })
   })

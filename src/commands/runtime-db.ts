@@ -38,6 +38,15 @@ export interface RuntimeJobCreateRequest {
   priority?: number | null
 }
 
+export interface RuntimeJobClaimRequest {
+  holder: string
+  leaseId?: string | null
+}
+
+export interface RuntimeJobClaimByKindRequest extends RuntimeJobClaimRequest {
+  kind: string
+}
+
 export interface RuntimeJobLeaseRecord {
   leaseId: string
   jobId: string
@@ -54,6 +63,21 @@ export interface RuntimeJobList {
   status: RuntimeDbHealthState
   jobs: RuntimeJobRecord[]
   leases: RuntimeJobLeaseRecord[]
+}
+
+export interface RuntimeJobClaim {
+  job: RuntimeJobRecord
+  lease: RuntimeJobLeaseRecord
+}
+
+export interface RuntimeJobLeaseRequest {
+  jobId: string
+  leaseId: string
+}
+
+export interface RuntimeJobFailRequest extends RuntimeJobLeaseRequest {
+  error?: string | null
+  retryAfterMs?: number | null
 }
 
 export type RuntimeCommitBudgetClaimRequest = MarkdownCommitBudgetClaimRequest
@@ -157,6 +181,19 @@ export interface RuntimeProgressList {
   enabled: boolean
   status: RuntimeDbHealthState
   progress: RuntimeProgressRecord[]
+}
+
+export interface RuntimeProgressAppendRequest {
+  jobId?: string | null
+  progressKey: string
+  eventId?: string | null
+  payload: string
+  durable?: boolean | null
+}
+
+export interface RuntimeProgressAppend {
+  progress: RuntimeProgressRecord
+  event?: RuntimeEventRecord | null
 }
 
 export interface RuntimeDerivedStaleMarkerRecordRequest {
@@ -418,6 +455,30 @@ export function runtimeJobCreate(
   return invoke<RuntimeJobRecord>("runtime_job_create", { request })
 }
 
+export function runtimeJobClaimByKind(
+  request: RuntimeJobClaimByKindRequest,
+): Promise<RuntimeJobClaim> {
+  return invoke<RuntimeJobClaim>("runtime_job_claim_by_kind", { request })
+}
+
+export function runtimeJobHeartbeat(
+  request: RuntimeJobLeaseRequest,
+): Promise<RuntimeJobClaim> {
+  return invoke<RuntimeJobClaim>("runtime_job_heartbeat", { request })
+}
+
+export function runtimeJobComplete(
+  request: RuntimeJobLeaseRequest,
+): Promise<RuntimeJobRecord> {
+  return invoke<RuntimeJobRecord>("runtime_job_complete", { request })
+}
+
+export function runtimeJobFail(
+  request: RuntimeJobFailRequest,
+): Promise<RuntimeJobRecord> {
+  return invoke<RuntimeJobRecord>("runtime_job_fail", { request })
+}
+
 export function runtimeCommitBudgetClaim(
   request: RuntimeCommitBudgetClaimRequest,
 ): Promise<RuntimeCommitBudgetClaim> {
@@ -472,6 +533,12 @@ export function runtimeProgressList(
   request: RuntimeProgressListRequest = {},
 ): Promise<RuntimeProgressList> {
   return invoke<RuntimeProgressList>("runtime_progress_list", { request })
+}
+
+export function runtimeProgressAppend(
+  request: RuntimeProgressAppendRequest,
+): Promise<RuntimeProgressAppend> {
+  return invoke<RuntimeProgressAppend>("runtime_progress_append", { request })
 }
 
 export function runtimeDerivedStaleMarkerRecord(
