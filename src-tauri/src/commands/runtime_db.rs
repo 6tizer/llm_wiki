@@ -71,6 +71,7 @@ const MAX_PROFILE_ID_BYTES: usize = 128;
 const MAX_PROFILE_DISPLAY_NAME_BYTES: usize = 256;
 const MAX_PROFILE_PROVIDER_BYTES: usize = 128;
 const MAX_PROFILE_MODEL_BYTES: usize = 256;
+const MAX_PROFILE_SDK_MODEL_BYTES: usize = 256;
 const MAX_PROFILE_ENDPOINT_BYTES: usize = 2048;
 const MAX_PROFILE_TASK_FAMILIES_BYTES: usize = 4096;
 const MAX_PROFILE_TASK_FAMILY_BYTES: usize = 128;
@@ -109,6 +110,8 @@ pub(crate) const PROFILE_CLAIM_INACTIVE_PREFIX: &str = "claim-inactive:";
 const PROFILE_CLAIM_INACTIVE_ERROR: &str = "claim-inactive: profile pool claim is not active";
 // Rust uses this after agent_spawn has accepted claim ownership.
 const AGENT_PROFILE_RELEASE_REASON: &str = "agent-run-cleanup";
+const AGENT_PROFILE_SDK_MODEL_REJECTED_REASON: &str = "agent-sdk-model-rejected";
+const AGENT_PROFILE_GATEWAY_AUTH_FAILED_REASON: &str = "gateway-auth-failed";
 const PENDING_ARTIFACT_STATUS: &str = "pending";
 const COMMITTED_ARTIFACT_STATUS: &str = "committed";
 const FAILED_ARTIFACT_STATUS: &str = "failed";
@@ -539,6 +542,7 @@ pub struct RuntimeProfileCreateRequest {
     display_name: String,
     provider_id: String,
     model_id: String,
+    agent_sdk_model_id: Option<String>,
     endpoint: Option<String>,
     api_mode: String,
     auth_style: String,
@@ -556,6 +560,8 @@ pub struct RuntimeProfileUpdateRequest {
     display_name: Option<String>,
     provider_id: Option<String>,
     model_id: Option<String>,
+    agent_sdk_model_id: Option<String>,
+    clear_agent_sdk_model_id: Option<bool>,
     endpoint: Option<String>,
     clear_endpoint: Option<bool>,
     api_mode: Option<String>,
@@ -606,6 +612,7 @@ pub struct RuntimeProfileRecord {
     display_name: String,
     provider_id: String,
     model_id: String,
+    agent_sdk_model_id: Option<String>,
     endpoint: Option<String>,
     api_mode: String,
     auth_style: String,
@@ -639,6 +646,7 @@ pub struct RuntimeProfileProbeDraftRequest {
     kind: String,
     provider_id: String,
     model_id: String,
+    agent_sdk_model_id: Option<String>,
     endpoint: Option<String>,
     api_mode: String,
     auth_style: String,
@@ -781,8 +789,10 @@ pub struct RuntimeProfilePoolList {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct AgentRunProfileConfig {
     pub(crate) profile_id: String,
-    pub(crate) model_id: String,
+    pub(crate) provider_model_id: String,
+    pub(crate) agent_sdk_model_id: String,
     pub(crate) endpoint: Option<String>,
+    pub(crate) auth_style: String,
     pub(crate) secret_value: Option<String>,
 }
 
@@ -791,9 +801,14 @@ impl std::fmt::Debug for AgentRunProfileConfig {
         formatter
             .debug_struct("AgentRunProfileConfig")
             .field("profile_id", &self.profile_id)
-            .field("model_id", &self.model_id)
+            .field("provider_model_id", &self.provider_model_id)
+            .field("agent_sdk_model_id", &self.agent_sdk_model_id)
             .field("endpoint", &self.endpoint)
-            .field("secret_value", &self.secret_value.as_ref().map(|_| "[REDACTED]"))
+            .field("auth_style", &self.auth_style)
+            .field(
+                "secret_value",
+                &self.secret_value.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -819,6 +834,7 @@ struct RuntimeProfileProbeTarget {
     kind: String,
     provider_id: String,
     model_id: String,
+    agent_sdk_model_id: Option<String>,
     endpoint: Option<String>,
     api_mode: String,
     auth_style: String,
@@ -833,6 +849,7 @@ impl std::fmt::Debug for RuntimeProfileProbeTarget {
             .field("kind", &self.kind)
             .field("provider_id", &self.provider_id)
             .field("model_id", &self.model_id)
+            .field("agent_sdk_model_id", &self.agent_sdk_model_id)
             .field("endpoint", &self.endpoint)
             .field("api_mode", &self.api_mode)
             .field("auth_style", &self.auth_style)
@@ -2041,6 +2058,13 @@ fn initialize_profile_schema(connection: &Connection) -> Result<(), String> {
                         length(CAST(model_id AS BLOB)) > 0
                         AND length(CAST(model_id AS BLOB)) <= {MAX_PROFILE_MODEL_BYTES}
                     ),
+                    agent_sdk_model_id TEXT CHECK(
+                        agent_sdk_model_id IS NULL
+                        OR (
+                            length(CAST(agent_sdk_model_id AS BLOB)) > 0
+                            AND length(CAST(agent_sdk_model_id AS BLOB)) <= {MAX_PROFILE_SDK_MODEL_BYTES}
+                        )
+                    ),
                     endpoint TEXT CHECK(
                         endpoint IS NULL
                         OR length(CAST(endpoint AS BLOB)) <= {MAX_PROFILE_ENDPOINT_BYTES}
@@ -2107,6 +2131,22 @@ fn initialize_profile_schema(connection: &Connection) -> Result<(), String> {
         "ALTER TABLE runtime_model_profiles
          ADD COLUMN deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= 0)",
         "runtime model profile deleted_at_ms",
+    )?;
+    ensure_column_exists(
+        connection,
+        "runtime_model_profiles",
+        "agent_sdk_model_id",
+        &format!(
+            "ALTER TABLE runtime_model_profiles
+             ADD COLUMN agent_sdk_model_id TEXT CHECK(
+                 agent_sdk_model_id IS NULL
+                 OR (
+                     length(CAST(agent_sdk_model_id AS BLOB)) > 0
+                     AND length(CAST(agent_sdk_model_id AS BLOB)) <= {MAX_PROFILE_SDK_MODEL_BYTES}
+                 )
+             )"
+        ),
+        "runtime model profile agent_sdk_model_id",
     )?;
 
     connection
@@ -2721,6 +2761,12 @@ fn runtime_profile_create_for_project(
         &request.model_id,
         MAX_PROFILE_MODEL_BYTES,
     )?;
+    let agent_sdk_model_id = normalize_optional_profile_text(
+        request.agent_sdk_model_id,
+        "invalid-agent-sdk-model-id",
+        "agentSdkModelId",
+        MAX_PROFILE_SDK_MODEL_BYTES,
+    )?;
     let endpoint = normalize_optional_profile_text(
         request.endpoint,
         "invalid-endpoint",
@@ -2744,6 +2790,7 @@ fn runtime_profile_create_for_project(
                     display_name,
                     provider_id,
                     model_id,
+                    agent_sdk_model_id,
                     endpoint,
                     api_mode,
                     auth_style,
@@ -2761,7 +2808,7 @@ fn runtime_profile_create_for_project(
                     updated_at_ms
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    ?11, ?12, ?13, ?14, ?15, NULL, NULL, NULL, ?16, ?16
+                    ?11, ?12, ?13, ?14, ?15, ?16, NULL, NULL, NULL, ?17, ?17
                 )",
                 params![
                     profile_id,
@@ -2769,6 +2816,7 @@ fn runtime_profile_create_for_project(
                     display_name,
                     provider_id,
                     model_id,
+                    agent_sdk_model_id,
                     endpoint,
                     api_mode,
                     auth_style,
@@ -2826,6 +2874,17 @@ fn runtime_profile_update_for_project(
             "modelId",
             MAX_PROFILE_MODEL_BYTES,
         )?;
+        let agent_sdk_model_id = if request.clear_agent_sdk_model_id.unwrap_or(false) {
+            None
+        } else {
+            normalize_optional_profile_text(
+                request.agent_sdk_model_id,
+                "invalid-agent-sdk-model-id",
+                "agentSdkModelId",
+                MAX_PROFILE_SDK_MODEL_BYTES,
+            )?
+            .or(existing.agent_sdk_model_id)
+        };
         let endpoint = if request.clear_endpoint.unwrap_or(false) {
             None
         } else {
@@ -2910,26 +2969,28 @@ fn runtime_profile_update_for_project(
              SET display_name = ?2,
                  provider_id = ?3,
                  model_id = ?4,
-                 endpoint = ?5,
-                 api_mode = ?6,
-                 auth_style = ?7,
-                 secret_ref = ?8,
-                 enabled = ?9,
-                 task_families_json = ?10,
-                 max_concurrency = ?11,
-                 capability_status = ?12,
-                 capability_json = ?13,
-                 capability_version = ?14,
-                 capability_checked_at_ms = ?15,
-                 probe_backoff_until_ms = ?16,
-                 last_capability_error = ?17,
-                 updated_at_ms = ?18
+                 agent_sdk_model_id = ?5,
+                 endpoint = ?6,
+                 api_mode = ?7,
+                 auth_style = ?8,
+                 secret_ref = ?9,
+                 enabled = ?10,
+                 task_families_json = ?11,
+                 max_concurrency = ?12,
+                 capability_status = ?13,
+                 capability_json = ?14,
+                 capability_version = ?15,
+                 capability_checked_at_ms = ?16,
+                 probe_backoff_until_ms = ?17,
+                 last_capability_error = ?18,
+                 updated_at_ms = ?19
              WHERE profile_id = ?1",
             params![
                 profile_id,
                 display_name,
                 provider_id,
                 model_id,
+                agent_sdk_model_id,
                 endpoint,
                 api_mode,
                 auth_style,
@@ -3346,12 +3407,17 @@ pub(crate) fn release_agent_profile_claim_for_project(
     error: Option<&str>,
 ) -> Result<(), String> {
     let now = now_ms()?;
+    let diagnostic = error.and_then(classify_agent_profile_error);
     let release = RuntimeProfilePoolReleaseRequest {
         claim_id: claim_id.to_string(),
         outcome: outcome.to_string(),
         retry_after_ms: None,
-        circuit_open_ms: None,
-        reason: Some(AGENT_PROFILE_RELEASE_REASON.to_string()),
+        circuit_open_ms: diagnostic.map(|_| DEFAULT_RETRY_BACKOFF_MS),
+        reason: Some(
+            diagnostic
+                .map(str::to_string)
+                .unwrap_or_else(|| AGENT_PROFILE_RELEASE_REASON.to_string()),
+        ),
         error: error.map(str::to_string),
     };
     match runtime_profile_pool_release_for_project(project_root, enabled, release, now) {
@@ -3359,6 +3425,57 @@ pub(crate) fn release_agent_profile_claim_for_project(
         Err(err) if profile_claim_inactive_error(&err) => Ok(()),
         Err(err) => Err(err),
     }
+}
+
+fn classify_agent_profile_error(error: &str) -> Option<&'static str> {
+    let normalized = error.to_ascii_lowercase();
+    // Claude Agent SDK reports unavailable model aliases with these stable fragments.
+    const SDK_MODEL_REJECTED_FRAGMENTS: &[&str] = &[
+        "selected model",
+        "model may not exist",
+        "not have access to it",
+        "run --model",
+    ];
+    // Gateway providers usually surface bad credentials as explicit HTTP auth failures.
+    const GATEWAY_AUTH_FAILED_FRAGMENTS: &[&str] = &[
+        "authentication failed",
+        "authentication error",
+        "authorization failed",
+        "auth failed",
+        "invalid api key",
+        "invalid x-api-key",
+    ];
+
+    if SDK_MODEL_REJECTED_FRAGMENTS
+        .iter()
+        .any(|fragment| normalized.contains(fragment))
+    {
+        return Some(AGENT_PROFILE_SDK_MODEL_REJECTED_REASON);
+    }
+    if GATEWAY_AUTH_FAILED_FRAGMENTS
+        .iter()
+        .any(|fragment| normalized.contains(fragment))
+        || contains_gateway_auth_status(&normalized)
+    {
+        return Some(AGENT_PROFILE_GATEWAY_AUTH_FAILED_REASON);
+    }
+    None
+}
+
+fn contains_gateway_auth_status(normalized_error: &str) -> bool {
+    const AUTH_STATUS_FRAGMENTS: &[&str] = &[
+        "http 401",
+        "http 403",
+        "status 401",
+        "status 403",
+        "status code 401",
+        "status code 403",
+        "401 unauthorized",
+        "403 forbidden",
+    ];
+    AUTH_STATUS_FRAGMENTS
+        .iter()
+        .any(|fragment| normalized_error.contains(fragment))
 }
 
 pub(crate) fn renew_agent_profile_claim_for_project(
@@ -3507,8 +3624,16 @@ fn resolve_agent_run_profile_for_project_at_with_store(
 
     Ok(AgentRunProfileConfig {
         profile_id: profile.profile_id,
-        model_id: profile.model_id,
+        agent_sdk_model_id: profile
+            .agent_sdk_model_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| profile.model_id.clone()),
+        provider_model_id: profile.model_id,
         endpoint: profile.endpoint,
+        auth_style: profile.auth_style,
         secret_value,
     })
 }
@@ -3698,6 +3823,7 @@ fn resolve_profile_probe_target(
                     kind: profile.kind,
                     provider_id: profile.provider_id,
                     model_id: profile.model_id,
+                    agent_sdk_model_id: profile.agent_sdk_model_id,
                     endpoint: profile.endpoint,
                     api_mode: profile.api_mode,
                     auth_style: profile.auth_style,
@@ -3732,6 +3858,12 @@ fn probe_target_from_draft(
         &draft.model_id,
         MAX_PROFILE_MODEL_BYTES,
     )?;
+    let agent_sdk_model_id = normalize_optional_profile_text(
+        draft.agent_sdk_model_id,
+        "invalid-agent-sdk-model-id",
+        "agentSdkModelId",
+        MAX_PROFILE_SDK_MODEL_BYTES,
+    )?;
     let endpoint = normalize_optional_profile_text(
         draft.endpoint,
         "invalid-endpoint",
@@ -3757,6 +3889,7 @@ fn probe_target_from_draft(
         kind,
         provider_id,
         model_id,
+        agent_sdk_model_id,
         endpoint,
         api_mode,
         auth_style,
@@ -4116,6 +4249,7 @@ fn capability_json(
         "apiMode": target.api_mode,
         "providerId": target.provider_id,
         "modelId": target.model_id,
+        "agentSdkModelId": target.agent_sdk_model_id,
         "authStyle": target.auth_style,
         "endpointKind": endpoint_kind(target.endpoint.as_deref()),
         "checks": checks,
@@ -5416,17 +5550,24 @@ fn sanitize_profile_pool_optional_text(value: Option<String>) -> Result<Option<S
     let Some(value) = value else {
         return Ok(None);
     };
+    let redacted = sanitize_profile_pool_text_for_log(&value);
+    if redacted.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(redacted))
+}
+
+/// Redacts profile-pool diagnostic text before it reaches logs or UI payloads.
+pub(crate) fn sanitize_profile_pool_text_for_log(value: &str) -> String {
     let normalized = value
         .chars()
         .map(|value| if value.is_control() { ' ' } else { value })
         .collect::<String>();
     let trimmed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     if trimmed.is_empty() {
-        return Ok(None);
+        return String::new();
     }
-    Ok(Some(truncate_profile_pool_text(&redact_profile_pool_text(
-        &trimmed,
-    ))))
+    truncate_profile_pool_text(&redact_profile_pool_text(&trimmed))
 }
 
 fn redact_profile_pool_text(value: &str) -> String {
@@ -5436,6 +5577,11 @@ fn redact_profile_pool_text(value: &str) -> String {
         .map(|token| {
             let lower = token.to_ascii_lowercase();
             let has_secret_ref = lower.contains("llm-wiki-profile-secret:");
+            let has_google_api_key = lower.starts_with("aiza")
+                || lower.contains("=aiza")
+                || lower.contains(":aiza")
+                || lower.contains("\"aiza")
+                || lower.contains("'aiza");
             let has_sk_secret = lower.starts_with("sk-")
                 || lower.contains("=sk-")
                 || lower.contains(":sk-")
@@ -5450,6 +5596,10 @@ fn redact_profile_pool_text(value: &str) -> String {
                 || lower == "api-key"
                 || lower == "apikey"
                 || lower == "api_key"
+                || lower == "x-goog-api-key"
+                || lower == "google_api_key"
+                || lower == "anthropic_api_key"
+                || lower == "anthropic_auth_token"
                 || lower.starts_with("x-api-key:")
                 || lower.starts_with("x-api-key=")
                 || lower.starts_with("api-key:")
@@ -5457,9 +5607,28 @@ fn redact_profile_pool_text(value: &str) -> String {
                 || lower.starts_with("apikey:")
                 || lower.starts_with("apikey=")
                 || lower.starts_with("api_key:")
-                || lower.starts_with("api_key=");
+                || lower.starts_with("api_key=")
+                || lower.starts_with("x-goog-api-key:")
+                || lower.starts_with("x-goog-api-key=")
+                || lower.starts_with("google_api_key:")
+                || lower.starts_with("google_api_key=")
+                || lower.starts_with("anthropic_api_key:")
+                || lower.starts_with("anthropic_api_key=")
+                || lower.starts_with("anthropic_auth_token:")
+                || lower.starts_with("anthropic_auth_token=")
+                || lower.contains("\"apikey\"")
+                || lower.contains("\"api_key\"")
+                || lower.contains("\"api-key\"")
+                || lower.contains("\"anthropic_api_key\"")
+                || lower.contains("\"anthropic_auth_token\"")
+                || lower.contains("'apikey'")
+                || lower.contains("'api_key'")
+                || lower.contains("'api-key'")
+                || lower.contains("'anthropic_api_key'")
+                || lower.contains("'anthropic_auth_token'");
             let redacted = redact_next
                 || has_secret_ref
+                || has_google_api_key
                 || has_sk_secret
                 || has_bearer
                 || has_authorization
@@ -6724,12 +6893,9 @@ fn read_derived_markers(
 }
 
 fn read_profile(connection: &Connection, profile_id: &str) -> Result<RuntimeProfileRecord, String> {
+    let select_sql = profile_select_sql_for_connection(connection, "WHERE profile_id = ?1")?;
     connection
-        .query_row(
-            &profile_select_sql("WHERE profile_id = ?1"),
-            [profile_id],
-            map_profile_row,
-        )
+        .query_row(&select_sql, [profile_id], map_profile_row)
         .map_err(|err| format!("profile-read-failed: {err}"))
 }
 
@@ -6741,12 +6907,12 @@ fn read_visible_profile(
     if !column_exists(connection, "runtime_model_profiles", "deleted_at_ms")? {
         return read_profile(connection, profile_id);
     }
+    let select_sql = profile_select_sql_for_connection(
+        connection,
+        "WHERE profile_id = ?1 AND deleted_at_ms IS NULL",
+    )?;
     connection
-        .query_row(
-            &profile_select_sql("WHERE profile_id = ?1 AND deleted_at_ms IS NULL"),
-            [profile_id],
-            map_profile_row,
-        )
+        .query_row(&select_sql, [profile_id], map_profile_row)
         .optional()
         .map_err(|err| format!("profile-read-failed: {err}"))
         .and_then(|profile| {
@@ -6774,10 +6940,12 @@ fn read_visible_profile_tx(
 }
 
 fn read_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRecord>, String> {
+    let select_sql = profile_select_sql_for_connection(
+        connection,
+        "ORDER BY updated_at_ms ASC, profile_id ASC",
+    )?;
     let mut statement = connection
-        .prepare(&profile_select_sql(
-            "ORDER BY updated_at_ms ASC, profile_id ASC",
-        ))
+        .prepare(&select_sql)
         .map_err(|err| format!("profiles-read-prepare-failed: {err}"))?;
     let rows = statement
         .query_map([], map_profile_row)
@@ -6791,10 +6959,12 @@ fn read_visible_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRe
     if !column_exists(connection, "runtime_model_profiles", "deleted_at_ms")? {
         return read_profiles(connection);
     }
+    let select_sql = profile_select_sql_for_connection(
+        connection,
+        "WHERE deleted_at_ms IS NULL ORDER BY updated_at_ms ASC, profile_id ASC",
+    )?;
     let mut statement = connection
-        .prepare(&profile_select_sql(
-            "WHERE deleted_at_ms IS NULL ORDER BY updated_at_ms ASC, profile_id ASC",
-        ))
+        .prepare(&select_sql)
         .map_err(|err| format!("profiles-read-prepare-failed: {err}"))?;
     let rows = statement
         .query_map([], map_profile_row)
@@ -7091,12 +7261,21 @@ fn derived_marker_select_sql(suffix: &str) -> String {
 }
 
 fn profile_select_sql(suffix: &str) -> String {
+    profile_select_sql_with_sdk_alias("agent_sdk_model_id", suffix)
+}
+
+fn legacy_profile_select_sql_without_sdk_alias(suffix: &str) -> String {
+    profile_select_sql_with_sdk_alias("NULL AS agent_sdk_model_id", suffix)
+}
+
+fn profile_select_sql_with_sdk_alias(sdk_alias_column: &str, suffix: &str) -> String {
     format!(
         "SELECT profile_id,
                 kind,
                 display_name,
                 provider_id,
                 model_id,
+                {sdk_alias_column},
                 endpoint,
                 api_mode,
                 auth_style,
@@ -7114,6 +7293,17 @@ fn profile_select_sql(suffix: &str) -> String {
                 updated_at_ms
          FROM runtime_model_profiles {suffix}"
     )
+}
+
+fn profile_select_sql_for_connection(
+    connection: &Connection,
+    suffix: &str,
+) -> Result<String, String> {
+    if column_exists(connection, "runtime_model_profiles", "agent_sdk_model_id")? {
+        Ok(profile_select_sql(suffix))
+    } else {
+        Ok(legacy_profile_select_sql_without_sdk_alias(suffix))
+    }
 }
 
 fn profile_claim_select_sql(suffix: &str) -> String {
@@ -7272,21 +7462,22 @@ fn map_profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeProfileRe
         display_name: row.get(2)?,
         provider_id: row.get(3)?,
         model_id: row.get(4)?,
-        endpoint: row.get(5)?,
-        api_mode: row.get(6)?,
-        auth_style: row.get(7)?,
-        secret_ref: row.get(8)?,
-        enabled: row.get::<_, i64>(9)? == 1,
-        task_families: parse_profile_task_families(row.get(10)?)?,
-        max_concurrency: row.get(11)?,
-        capability_status: row.get(12)?,
-        capability_json: row.get(13)?,
-        capability_version: row.get(14)?,
-        capability_checked_at_ms: row.get(15)?,
-        probe_backoff_until_ms: row.get(16)?,
-        last_capability_error: row.get(17)?,
-        created_at_ms: row.get(18)?,
-        updated_at_ms: row.get(19)?,
+        agent_sdk_model_id: row.get(5)?,
+        endpoint: row.get(6)?,
+        api_mode: row.get(7)?,
+        auth_style: row.get(8)?,
+        secret_ref: row.get(9)?,
+        enabled: row.get::<_, i64>(10)? == 1,
+        task_families: parse_profile_task_families(row.get(11)?)?,
+        max_concurrency: row.get(12)?,
+        capability_status: row.get(13)?,
+        capability_json: row.get(14)?,
+        capability_version: row.get(15)?,
+        capability_checked_at_ms: row.get(16)?,
+        probe_backoff_until_ms: row.get(17)?,
+        last_capability_error: row.get(18)?,
+        created_at_ms: row.get(19)?,
+        updated_at_ms: row.get(20)?,
     })
 }
 
@@ -7837,6 +8028,7 @@ mod tests {
             display_name: "GPT-4.1".to_string(),
             provider_id: "openai".to_string(),
             model_id: "gpt-4.1".to_string(),
+            agent_sdk_model_id: None,
             endpoint: None,
             api_mode: "openai-chat-completions".to_string(),
             auth_style: "bearer".to_string(),
@@ -7902,6 +8094,7 @@ mod tests {
             kind: "model-call".to_string(),
             provider_id: "openai".to_string(),
             model_id: "gpt-test".to_string(),
+            agent_sdk_model_id: None,
             endpoint: None,
             api_mode: "openai-chat-completions".to_string(),
             auth_style: "bearer".to_string(),
@@ -7918,6 +8111,8 @@ mod tests {
             display_name: None,
             provider_id: None,
             model_id: None,
+            agent_sdk_model_id: None,
+            clear_agent_sdk_model_id: None,
             endpoint: None,
             clear_endpoint: None,
             api_mode: None,
@@ -8696,6 +8891,49 @@ mod tests {
     }
 
     #[test]
+    fn runtime_profile_persists_agent_sdk_model_alias() {
+        let project = temp_project("profile-agent-sdk-alias");
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut create = profile_create_request("profile-1");
+        create.agent_sdk_model_id = Some("claude-code-alias".to_string());
+
+        let created =
+            runtime_profile_create_for_project(Some(&project), true, create, 100).expect("create");
+        assert_eq!(
+            created.agent_sdk_model_id.as_deref(),
+            Some("claude-code-alias")
+        );
+
+        let mut update = profile_update_request("profile-1");
+        update.agent_sdk_model_id = Some("deepseek-chat".to_string());
+        let updated = runtime_profile_update_for_project(Some(&project), true, update, 200)
+            .expect("update alias");
+        assert_eq!(updated.agent_sdk_model_id.as_deref(), Some("deepseek-chat"));
+
+        let listed = runtime_profile_list_for_project(Some(&project), true).expect("list");
+        assert_eq!(
+            listed.profiles[0].agent_sdk_model_id.as_deref(),
+            Some("deepseek-chat")
+        );
+        let status = runtime_profile_status_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileStatusRequest {
+                profile_id: "profile-1".to_string(),
+            },
+        )
+        .expect("status");
+        assert_eq!(status.agent_sdk_model_id.as_deref(), Some("deepseek-chat"));
+
+        let mut clear = profile_update_request("profile-1");
+        clear.clear_agent_sdk_model_id = Some(true);
+        let cleared = runtime_profile_update_for_project(Some(&project), true, clear, 300)
+            .expect("clear alias");
+        assert!(cleared.agent_sdk_model_id.is_none());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
     fn runtime_profile_list_reads_legacy_profile_table_without_deleted_marker() {
         let project = temp_project("profile-list-legacy-no-deleted-column");
         fs::create_dir_all(&project).expect("create temp project");
@@ -8764,12 +9002,17 @@ mod tests {
             !column_exists(&connection, "runtime_model_profiles", "deleted_at_ms")
                 .expect("check missing deleted marker")
         );
+        assert!(
+            !column_exists(&connection, "runtime_model_profiles", "agent_sdk_model_id")
+                .expect("check missing sdk alias")
+        );
         drop(connection);
 
         let list = runtime_profile_list_for_project(Some(&project), true)
             .expect("legacy profile list works read-only");
         assert_eq!(list.profiles.len(), 1);
         assert_eq!(list.profiles[0].profile_id, "profile-legacy");
+        assert!(list.profiles[0].agent_sdk_model_id.is_none());
         let status = runtime_profile_status_for_project(
             Some(&project),
             true,
@@ -8779,10 +9022,15 @@ mod tests {
         )
         .expect("legacy profile status works read-only");
         assert_eq!(status.display_name, "Legacy profile");
+        assert!(status.agent_sdk_model_id.is_none());
         let connection = Connection::open(runtime_db_path(&project)).expect("reopen runtime db");
         assert!(
             !column_exists(&connection, "runtime_model_profiles", "deleted_at_ms")
                 .expect("read-only paths did not migrate")
+        );
+        assert!(
+            !column_exists(&connection, "runtime_model_profiles", "agent_sdk_model_id")
+                .expect("read-only paths did not migrate sdk alias")
         );
         let _ = fs::remove_dir_all(project);
     }
@@ -9321,6 +9569,7 @@ mod tests {
                     kind: "model-call".to_string(),
                     provider_id: "openai".to_string(),
                     model_id: "gpt-test".to_string(),
+                    agent_sdk_model_id: None,
                     endpoint: Some(openai.uri()),
                     api_mode: "openai-chat-completions".to_string(),
                     auth_style: "bearer".to_string(),
@@ -9349,6 +9598,7 @@ mod tests {
                     kind: "model-call".to_string(),
                     provider_id: "google".to_string(),
                     model_id: "gemini/test".to_string(),
+                    agent_sdk_model_id: None,
                     endpoint: Some(google.uri()),
                     api_mode: "google-generate-content".to_string(),
                     auth_style: "api-key".to_string(),
@@ -9408,6 +9658,7 @@ mod tests {
                     kind: "model-call".to_string(),
                     provider_id: "openai".to_string(),
                     model_id: "gpt-test".to_string(),
+                    agent_sdk_model_id: None,
                     endpoint: Some(server.uri()),
                     api_mode: "openai-chat-completions".to_string(),
                     auth_style: "none".to_string(),
@@ -9984,6 +10235,10 @@ mod tests {
         let project = temp_project("agent-profile-resolver");
         fs::create_dir_all(&project).expect("create temp project");
         let profile = create_agent_profile_pool_profile(&project, "profile-agent");
+        let mut update = profile_update_request("profile-agent");
+        update.agent_sdk_model_id = Some("deepseek-chat".to_string());
+        runtime_profile_update_for_project(Some(&project), true, update, 175)
+            .expect("set agent sdk alias");
         runtime_profile_pool_claim_for_project(
             Some(&project),
             true,
@@ -10005,12 +10260,166 @@ mod tests {
         .expect("resolve agent profile");
 
         assert_eq!(resolved.profile_id, "profile-agent");
-        assert_eq!(resolved.model_id, "claude-test");
+        assert_eq!(resolved.provider_model_id, "claude-test");
+        assert_eq!(resolved.agent_sdk_model_id, "deepseek-chat");
         assert_eq!(
             resolved.endpoint.as_deref(),
             Some("https://agent.example/v1")
         );
+        assert_eq!(resolved.auth_style, "x-api-key");
         assert_eq!(resolved.secret_value.as_deref(), Some("agent-secret"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn agent_run_profile_resolver_falls_back_to_provider_model_without_sdk_alias() {
+        let project = temp_project("agent-profile-resolver-fallback");
+        fs::create_dir_all(&project).expect("create temp project");
+        let profile = create_agent_profile_pool_profile(&project, "profile-agent");
+        let now = now_ms().expect("now");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            now,
+        )
+        .expect("claim agent profile");
+
+        let store = TestSecretStore::default();
+        store.insert(profile.secret_ref.expect("secret ref"), "agent-secret");
+        let resolved = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            now + 1,
+            &store,
+        )
+        .expect("resolve agent profile");
+
+        assert_eq!(resolved.provider_model_id, "claude-test");
+        assert_eq!(resolved.agent_sdk_model_id, "claude-test");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn agent_run_profile_resolver_falls_back_when_sdk_alias_is_blank() {
+        let project = temp_project("agent-profile-resolver-blank-alias");
+        fs::create_dir_all(&project).expect("create temp project");
+        let profile = create_agent_profile_pool_profile(&project, "profile-agent");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_model_profiles
+                 SET agent_sdk_model_id = '   '
+                 WHERE profile_id = ?1",
+                ["profile-agent"],
+            )
+            .expect("write blank sdk alias fixture");
+        let now = now_ms().expect("now");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            now,
+        )
+        .expect("claim agent profile");
+
+        let store = TestSecretStore::default();
+        store.insert(profile.secret_ref.expect("secret ref"), "agent-secret");
+        let resolved = resolve_agent_run_profile_for_project_at_with_store(
+            Some(&project),
+            true,
+            "profile-agent",
+            "claim-agent",
+            now + 1,
+            &store,
+        )
+        .expect("resolve agent profile");
+
+        assert_eq!(resolved.provider_model_id, "claude-test");
+        assert_eq!(resolved.agent_sdk_model_id, "claude-test");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn agent_profile_error_classifier_distinguishes_sdk_and_gateway_failures() {
+        assert_eq!(
+            classify_agent_profile_error("There's an issue with the selected model. Run --model.",),
+            Some(AGENT_PROFILE_SDK_MODEL_REJECTED_REASON)
+        );
+        assert_eq!(
+            classify_agent_profile_error("gateway returned 401 unauthorized"),
+            Some(AGENT_PROFILE_GATEWAY_AUTH_FAILED_REASON)
+        );
+        assert_eq!(
+            classify_agent_profile_error("gateway connection failed on port 4019"),
+            None
+        );
+        assert_eq!(
+            classify_agent_profile_error("tool mentioned authentication prerequisites"),
+            None
+        );
+        assert_eq!(classify_agent_profile_error("process exited"), None);
+    }
+
+    #[test]
+    fn agent_run_profile_sdk_model_rejection_opens_circuit() {
+        let project = temp_project("agent-profile-sdk-rejected-circuit");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_agent_profile_pool_profile(&project, "profile-agent");
+        let now = now_ms().expect("now");
+        runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent", vec!["profile-agent"]),
+            now,
+        )
+        .expect("claim agent profile");
+
+        release_agent_profile_claim_for_project(
+            Some(&project),
+            true,
+            "claim-agent",
+            "error",
+            Some(
+                "There's an issue with the selected model (deepseek-v4-flash). \
+                 ANTHROPIC_AUTH_TOKEN=profile-token {\"apiKey\":\"json-token\"} \
+                 google=AIzaSyDummYKeyValue Run --model.",
+            ),
+        )
+        .expect("release rejected agent profile");
+        let list = runtime_profile_pool_list_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolListRequest {
+                kind: Some("agent-run".to_string()),
+                task_family: Some("agent".to_string()),
+                job_id: None,
+            },
+            now_ms().expect("now after release"),
+        )
+        .expect("list pool");
+        assert_eq!(list.circuit_breakers.len(), 1);
+        assert_eq!(
+            list.circuit_breakers[0].reason.as_deref(),
+            Some(AGENT_PROFILE_SDK_MODEL_REJECTED_REASON)
+        );
+        let breaker_error = list.circuit_breakers[0]
+            .error
+            .as_deref()
+            .unwrap_or_default();
+        assert!(!breaker_error.contains("profile-token"));
+        assert!(!breaker_error.contains("json-token"));
+        assert!(!breaker_error.contains("AIza"));
+        let blocked = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-next", vec!["profile-agent"]),
+            now_ms().expect("now before circuit expiry"),
+        )
+        .expect_err("circuit blocks immediate reuse");
+        assert!(blocked.starts_with("no-eligible-profile"));
         let _ = fs::remove_dir_all(project);
     }
 
@@ -10200,6 +10609,14 @@ mod tests {
         assert!(!error.contains("authorization:"));
         assert!(!error.contains("apiKey"));
         assert!(!error.contains("sk-secret"));
+        let agent_error = redact_profile_pool_text(
+            "ANTHROPIC_AUTH_TOKEN=profile-token ANTHROPIC_API_KEY env-token \
+             {\"apiKey\":\"json-token\"} google=AIzaSyDummYKeyValue",
+        );
+        assert!(!agent_error.contains("profile-token"));
+        assert!(!agent_error.contains("env-token"));
+        assert!(!agent_error.contains("json-token"));
+        assert!(!agent_error.contains("AIza"));
         assert_eq!(
             redact_profile_pool_text("flask-error api-key-not-configured"),
             "flask-error api-key-not-configured"

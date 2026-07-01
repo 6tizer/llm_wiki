@@ -65,6 +65,32 @@ export function appendIntentOverride(
 	return `${systemPrompt}\n\n${intentOverride}`;
 }
 
+function applyAgentProfileEnv(
+	env: Record<string, string | undefined>,
+	options: AgentRequest["options"],
+): void {
+	const authStyle = options.agentProfileAuthStyle;
+	if (!authStyle) {
+		if (options.apiKey) env.ANTHROPIC_API_KEY = options.apiKey;
+		return;
+	}
+	delete env.ANTHROPIC_API_KEY;
+	delete env.ANTHROPIC_AUTH_TOKEN;
+	if (options.model) env.ANTHROPIC_MODEL = options.model;
+	if (!options.apiKey) return;
+	switch (options.agentProfileAuthStyle) {
+		case "bearer":
+			env.ANTHROPIC_AUTH_TOKEN = options.apiKey;
+			break;
+		case "none":
+		case "oauth-local-cli":
+			break;
+		default:
+			env.ANTHROPIC_API_KEY = options.apiKey;
+			break;
+	}
+}
+
 function parseMaxTurnsExceeded(message: string): number | undefined {
 	const match = message.match(/Reached maximum number of turns \((\d+)\)/i);
 	if (!match) return undefined;
@@ -115,7 +141,7 @@ export function createRequestHandler({
 		activeQueries.set(req.streamId, abortController);
 
 		const env: Record<string, string | undefined> = { ...baseEnv };
-		if (req.options.apiKey) env.ANTHROPIC_API_KEY = req.options.apiKey;
+		applyAgentProfileEnv(env, req.options);
 		if (req.options.baseUrl) env.ANTHROPIC_BASE_URL = req.options.baseUrl;
 
 		try {

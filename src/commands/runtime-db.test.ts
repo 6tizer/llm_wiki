@@ -314,6 +314,7 @@ describe("runtime-db commands", () => {
         displayName: "GPT-4.1",
         providerId: "openai",
         modelId: "gpt-4.1",
+        agentSdkModelId: "deepseek-chat",
         apiMode: "openai-chat-completions",
         authStyle: "bearer",
         secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
@@ -325,6 +326,8 @@ describe("runtime-db commands", () => {
       runtimeProfileUpdate({
         profileId: "profile-1",
         clearSecretRef: true,
+        agentSdkModelId: null,
+        clearAgentSdkModelId: true,
         enabled: false,
         capabilityStatus: "limited",
         capabilityJson: "{\"reason\":\"manual\"}",
@@ -347,6 +350,7 @@ describe("runtime-db commands", () => {
         displayName: "GPT-4.1",
         providerId: "openai",
         modelId: "gpt-4.1",
+        agentSdkModelId: "deepseek-chat",
         apiMode: "openai-chat-completions",
         authStyle: "bearer",
         secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
@@ -358,6 +362,8 @@ describe("runtime-db commands", () => {
       request: {
         profileId: "profile-1",
         clearSecretRef: true,
+        agentSdkModelId: null,
+        clearAgentSdkModelId: true,
         enabled: false,
         capabilityStatus: "limited",
         capabilityJson: "{\"reason\":\"manual\"}",
