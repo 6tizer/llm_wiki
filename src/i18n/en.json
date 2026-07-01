@@ -275,7 +275,7 @@
     "error": {
       "unavailable": "Agent is unavailable: no project is open.",
       "missingApiKey": "Agent needs an API key. Configure the current provider in Settings.",
-      "profileUnavailable": "No Agent-run profile is available. Check Settings > Model Profiles.",
+      "profileUnavailable": "No Agent-run profile is available. Check Settings > Model Profiles for Agent Chat compatibility warnings.",
       "timeout": "Agent timed out. You can retry this request.",
       "maxTurnsExceeded": "Agent reached the max turn limit. Split the task and continue, or raise Max turns in Settings > Agent.",
       "failed": "Agent failed: {{error}}"
@@ -515,7 +515,12 @@
           "probe": "Probe profile",
           "probing": "Probing profile…",
           "saved": "Profile saved.",
-          "saveFailed": "Save failed: {{message}}"
+          "saveFailed": "Save failed: {{message}}",
+          "runtimeUnavailableDisabled": "Profiles require Work Runtime before saving or probing. Current runtime status: {{status}}. Restart dev with LLM_WIKI_CORE_WORK_RUNTIME_ENABLED=true.",
+          "runtimeUnavailableNoProject": "Profiles require an open project before saving or probing.",
+          "agentKindWarning": "Agent Chat only uses profiles whose kind is agent-run. This profile is {{kind}}, so it will not satisfy Agent-run selection.",
+          "agentRunApiModeWarning": "Agent-run currently requires an Anthropic Messages-compatible endpoint. Other endpoint modes can be saved for their supported tasks, but Agent Chat will not select them.",
+          "agentRunCapabilityWarning": "This profile probe did not confirm Agent-run support. Agent Chat only selects profiles whose probe reports agentRunSupported=true."
         }
       },
       "embedding": {

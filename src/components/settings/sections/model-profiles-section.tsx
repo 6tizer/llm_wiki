@@ -11,6 +11,7 @@ import {
   type RuntimeProfileApiMode,
   type RuntimeProfileAuthStyle,
   type RuntimeProfileCreateRequest,
+  type RuntimeDbHealthState,
   type RuntimeProfileKind,
   type RuntimeProfileProbeDraftRequest,
   type RuntimeProfileProbeResult,
@@ -73,7 +74,7 @@ export interface ModelProfileDraft {
 
 type LoadState =
   | { kind: "loading" }
-  | { kind: "ready" }
+  | { kind: "ready"; enabled: boolean; status: RuntimeDbHealthState }
   | { kind: "error"; message: string }
 
 type ProbeState =
@@ -252,6 +253,17 @@ function hasFreshCapability(profile: RuntimeProfileRecord | undefined): boolean 
   return profile?.capabilityVersion === PROFILE_PROBE_CAPABILITY_VERSION
 }
 
+function agentRunSupported(profile: RuntimeProfileRecord | undefined): boolean | null {
+  if (!profile || !hasFreshCapability(profile)) return null
+  try {
+    const parsed = JSON.parse(profile.capabilityJson) as Record<string, unknown>
+    const value = parsed.agentRunSupported
+    return typeof value === "boolean" ? value : null
+  } catch {
+    return null
+  }
+}
+
 /** Saves a profile draft and applies best-effort secret cleanup for failed writes or replacement. */
 export async function saveProfileDraft(
   draft: ModelProfileDraft,
@@ -303,7 +315,7 @@ export function ModelProfilesSection() {
       const nextProfiles = Array.isArray(result.profiles) ? result.profiles : []
       setProfiles(nextProfiles)
       setDraft(nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft())
-      setLoadState({ kind: "ready" })
+      setLoadState({ kind: "ready", enabled: Boolean(result.enabled), status: result.status })
     } catch (error) {
       if (!shouldApply()) return
       setLoadState({ kind: "error", message: errorMessage(error) })
@@ -336,6 +348,10 @@ export function ModelProfilesSection() {
 
   async function saveDraft() {
     setSaveMessage(null)
+    if (runtimeUnavailableMessage) {
+      setSaveMessage(runtimeUnavailableMessage)
+      return
+    }
     try {
       const saved = await saveProfileDraft(draft, selectedProfile)
       setProfiles((current) => {
@@ -350,6 +366,10 @@ export function ModelProfilesSection() {
   }
 
   async function runProbe() {
+    if (runtimeUnavailableMessage) {
+      setProbeState({ kind: "error", message: runtimeUnavailableMessage })
+      return
+    }
     setProbeState({ kind: "running" })
     const useStoredProfile = Boolean(
       draft.profileId
@@ -389,6 +409,24 @@ export function ModelProfilesSection() {
   const capabilityStatus = selectedCapabilityIsFresh
     ? selectedProfile?.capabilityStatus
     : "unknown"
+  const runtimeProfilesReady = loadState.kind === "ready"
+    && loadState.enabled
+    && loadState.status === "healthy"
+  const runtimeUnavailableMessage = loadState.kind === "ready" && !runtimeProfilesReady
+    ? loadState.status === "no-project"
+      ? t("settings.sections.llm.profiles.runtimeUnavailableNoProject")
+      : t("settings.sections.llm.profiles.runtimeUnavailableDisabled", { status: loadState.status })
+    : null
+  const agentKindWarning = draft.kind !== "agent-run" && draft.taskFamilies.includes("agent")
+    ? t("settings.sections.llm.profiles.agentKindWarning", { kind: draft.kind })
+    : null
+  const agentRunCapabilityWarning = draft.kind === "agent-run" && draft.taskFamilies.includes("agent")
+    ? draft.apiMode !== "anthropic-messages"
+      ? t("settings.sections.llm.profiles.agentRunApiModeWarning")
+      : selectedCapabilityIsFresh && agentRunSupported(selectedProfile) !== true
+        ? t("settings.sections.llm.profiles.agentRunCapabilityWarning")
+        : null
+    : null
 
   return (
     <div className="space-y-3 border-t pt-4" data-testid="model-profiles-section">
@@ -408,6 +446,14 @@ export function ModelProfilesSection() {
       {loadState.kind === "error" && (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {loadState.message}
+        </div>
+      )}
+      {runtimeUnavailableMessage && (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+          data-testid="profile-runtime-unavailable"
+        >
+          {runtimeUnavailableMessage}
         </div>
       )}
 
@@ -561,6 +607,22 @@ export function ModelProfilesSection() {
                   )
                 })}
               </div>
+              {agentKindWarning && (
+                <p
+                  className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+                  data-testid="profile-agent-kind-warning"
+                >
+                  {agentKindWarning}
+                </p>
+              )}
+              {agentRunCapabilityWarning && (
+                <p
+                  className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+                  data-testid="profile-agent-run-capability-warning"
+                >
+                  {agentRunCapabilityWarning}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2 rounded-md border p-3">
@@ -636,7 +698,8 @@ export function ModelProfilesSection() {
                 type="button"
                 data-testid="profile-save"
                 onClick={() => void saveDraft()}
-                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
+                disabled={Boolean(runtimeUnavailableMessage)}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
               >
                 {t("settings.sections.llm.profiles.saveProfile")}
               </button>
@@ -644,7 +707,7 @@ export function ModelProfilesSection() {
                 type="button"
                 data-testid="profile-probe"
                 onClick={() => void runProbe()}
-                disabled={probeState.kind === "running"}
+                disabled={probeState.kind === "running" || Boolean(runtimeUnavailableMessage)}
                 className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
               >
                 {t("settings.sections.llm.profiles.probe")}
