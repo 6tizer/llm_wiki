@@ -1,6 +1,6 @@
 # SPEC-5 PR3: Staging Artifact Parser / Validator
 
-> 类型：PR 执行计划 | 状态：implemented / PR-ready | issue：#239 | tracking：#191 | branch：`codex/spec-5-pr3-staging-validator` | run：`8cdcc964-0471-4385-92c5-450b2017bcde`
+> 类型：PR 执行计划 | 状态：merged via #240 | issue：#239 | tracking：#191 | branch：`codex/spec-5-pr3-staging-validator` | run：`8cdcc964-0471-4385-92c5-450b2017bcde`
 
 ## Summary
 

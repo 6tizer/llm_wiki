@@ -1,0 +1,600 @@
+import {
+  MARKDOWN_COMMIT_OPERATION_INTENTS,
+  type DerivedStaleMarkerLayer,
+  type DerivedStaleMarkerReason,
+  type MarkdownCommitOperationIntent,
+} from "@/core-runtime/contract"
+import {
+  commitMarkdownArtifact,
+  canonicalizeMarkdownContentForHash,
+  hashMarkdownContent,
+  type MarkdownCommitArtifact,
+  type MarkdownCommitAuditPayload,
+  type MarkdownCommitBudgetClaimReceipt,
+  type MarkdownCommitConflictRepairContext,
+  type MarkdownCommitOperationResult,
+} from "@/core-runtime/markdown-commit"
+import { normalizeCommitTargetPath } from "@/core-runtime/parallel-knowledge"
+import { fnv1a64Hex } from "@/core-runtime/stable-hash"
+import {
+  deleteFile,
+  fileExists,
+  readFile,
+  writeFileAtomic,
+} from "@/commands/fs"
+import { routeMarkdownConflictRepair } from "@/commands/markdown-commit-repair"
+import {
+  runtimeCommitBudgetClaim,
+  runtimeCommitBudgetRelease,
+  runtimeDerivedStaleMarkerRecord,
+  runtimeEventAppend,
+  runtimeProgressAppend,
+  runtimeStagingArtifactCommitSuccess,
+  runtimeStagingArtifactList,
+  runtimeStagingArtifactReadBody,
+  type RuntimeCommitBudgetClaimRequest,
+  type RuntimeDerivedStaleMarkerRecord,
+  type RuntimeEventRecord,
+  type RuntimeProgressAppend,
+  type RuntimeProgressAppendRequest,
+  type RuntimeResourceBudgetClaimRecord,
+  type RuntimeStagingArtifactList,
+  type RuntimeStagingArtifactReadBody,
+  type RuntimeStagingArtifactRecord,
+} from "@/commands/runtime-db"
+
+const DEFAULT_COMMIT_LIMIT = 100
+const DEFAULT_COMMIT_CONCURRENCY = 1
+const DEFAULT_COMMIT_BUDGET_TTL_MS = 120_000
+const COMMIT_DERIVED_STALE_MARKER_LAYERS = [
+  "embedding",
+  "graph",
+  "taxonomy",
+  "synthesis",
+] as const satisfies readonly DerivedStaleMarkerLayer[]
+const COMMIT_PROGRESS_PREFIX = "bulk-commit"
+const COMMIT_PATH_ALREADY_CLAIMED_PREFIX = "commit-path-already-claimed"
+
+export interface CommitIntegrationRuntimeAdapter {
+  listStagingArtifacts(): Promise<RuntimeStagingArtifactList>
+  readStagingArtifactBody(artifactId: string): Promise<RuntimeStagingArtifactReadBody>
+  claimBudget(
+    request: RuntimeCommitBudgetClaimRequest,
+  ): Promise<MarkdownCommitBudgetClaimReceipt>
+  releaseBudget(claimId: string): Promise<RuntimeResourceBudgetClaimRecord[]>
+  appendEvent(request: {
+    jobId: string
+    payload: MarkdownCommitAuditPayload
+  }): Promise<RuntimeEventRecord>
+  recordDerivedStaleMarker(request: {
+    markerId: string
+    layer: DerivedStaleMarkerLayer
+    affectedPath: string
+    inputHash: string | null
+    baseVersion: string
+    reason: DerivedStaleMarkerReason
+    sourceEventId: string
+  }): Promise<RuntimeDerivedStaleMarkerRecord>
+  markArtifactCommitted(artifactId: string): Promise<RuntimeStagingArtifactRecord>
+  routeConflictRepair(
+    context: MarkdownCommitConflictRepairContext,
+  ): Promise<{ repairJobId: string }>
+  appendProgress(request: RuntimeProgressAppendRequest): Promise<RuntimeProgressAppend>
+}
+
+export interface CommitIntegrationFileAdapter {
+  exists(path: string): Promise<boolean>
+  read(path: string): Promise<string>
+  writeAtomic(path: string, contents: string): Promise<void>
+  delete(path: string): Promise<void>
+}
+
+export interface CommitPendingStagingArtifactsOptions {
+  runtime?: CommitIntegrationRuntimeAdapter
+  files?: CommitIntegrationFileAdapter
+  holder?: string
+  limit?: number
+  concurrency?: number
+  ttlMs?: number
+  markerLayers?: readonly DerivedStaleMarkerLayer[]
+}
+
+export interface CommitPendingStagingArtifactsResult {
+  listedArtifacts: number
+  attemptedArtifacts: number
+  committed: number
+  merged: number
+  conflicted: number
+  rejected: number
+  skipped: number
+  retryable: number
+  repairJobs: number
+  cleanedArtifacts: number
+  markersRecorded: number
+  progressEvents: number
+  errors: string[]
+}
+
+const defaultRuntime: CommitIntegrationRuntimeAdapter = {
+  async listStagingArtifacts() {
+    return runtimeStagingArtifactList({
+      status: "pending",
+      limit: DEFAULT_COMMIT_LIMIT,
+    })
+  },
+  async readStagingArtifactBody(artifactId) {
+    return runtimeStagingArtifactReadBody({ artifactId })
+  },
+  claimBudget: runtimeCommitBudgetClaim,
+  releaseBudget: runtimeCommitBudgetRelease,
+  async appendEvent(request) {
+    return runtimeEventAppend({
+      jobId: request.jobId,
+      payload: JSON.stringify(request.payload),
+    })
+  },
+  recordDerivedStaleMarker: runtimeDerivedStaleMarkerRecord,
+  markArtifactCommitted: runtimeStagingArtifactCommitSuccess,
+  routeConflictRepair: routeMarkdownConflictRepair,
+  appendProgress: runtimeProgressAppend,
+}
+
+const defaultFiles: CommitIntegrationFileAdapter = {
+  exists: fileExists,
+  read: readFile,
+  writeAtomic: writeFileAtomic,
+  delete: deleteFile,
+}
+
+/** Commits pending bulk knowledge staging artifacts through the Markdown commit layer. */
+export async function commitPendingStagingArtifacts(
+  options: CommitPendingStagingArtifactsOptions = {},
+): Promise<CommitPendingStagingArtifactsResult> {
+  const runtime = options.runtime ?? defaultRuntime
+  const files = options.files ?? defaultFiles
+  const holder = options.holder ?? "bulk-commit"
+  const ttlMs = options.ttlMs ?? DEFAULT_COMMIT_BUDGET_TTL_MS
+  const markerLayers = options.markerLayers ?? COMMIT_DERIVED_STALE_MARKER_LAYERS
+  const result = emptyResult()
+
+  const listed = await runtime.listStagingArtifacts()
+  const artifacts = listed.artifacts.slice(0, normalizeLimit(options.limit))
+  result.listedArtifacts = artifacts.length
+
+  const activeResourceKeys = new Set<string>()
+  const concurrency = normalizeConcurrency(options.concurrency)
+  let cursor = 0
+
+  async function nextArtifact(): Promise<RuntimeStagingArtifactRecord | null> {
+    if (cursor >= artifacts.length) return null
+    const artifact = artifacts[cursor]
+    cursor += 1
+    return artifact ?? null
+  }
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      const record = await nextArtifact()
+      if (!record) return
+      await processRecord(record, {
+        runtime,
+        files,
+        holder,
+        ttlMs,
+        markerLayers,
+        activeResourceKeys,
+        result,
+      })
+    }
+  })
+
+  await Promise.all(workers)
+  return result
+}
+
+interface ProcessContext {
+  runtime: CommitIntegrationRuntimeAdapter
+  files: CommitIntegrationFileAdapter
+  holder: string
+  ttlMs: number
+  markerLayers: readonly DerivedStaleMarkerLayer[]
+  activeResourceKeys: Set<string>
+  result: CommitPendingStagingArtifactsResult
+}
+
+async function processRecord(
+  record: RuntimeStagingArtifactRecord,
+  context: ProcessContext,
+): Promise<void> {
+  const artifact = toCommitArtifact(record)
+  if (!artifact.ok) {
+    context.result.skipped += 1
+    context.result.errors.push(artifact.error)
+    return
+  }
+
+  const resourceKey = normalizeCommitTargetPath(artifact.value.targetPath).resourceKey
+  if (context.activeResourceKeys.has(resourceKey)) {
+    context.result.retryable += 1
+    await appendProgress(context, artifact.value, "retryable", {
+      reason: "same-path-already-scheduled",
+    })
+    return
+  }
+
+  context.activeResourceKeys.add(resourceKey)
+  try {
+    await commitArtifact(artifact.value, context)
+  } catch (error) {
+    const message = `commit-artifact-failed:${artifact.value.artifactId}: ${describeError(error)}`
+    context.result.errors.push(message)
+    await appendProgress(context, artifact.value, "error", { error: message })
+  } finally {
+    context.activeResourceKeys.delete(resourceKey)
+  }
+}
+
+async function commitArtifact(
+  artifact: MarkdownCommitArtifact,
+  context: ProcessContext,
+): Promise<void> {
+  context.result.attemptedArtifacts += 1
+  const commitResult = await commitMarkdownArtifact(
+    {
+      artifact,
+      holder: context.holder,
+      ttlMs: context.ttlMs,
+    },
+    buildCommitAdapters(context),
+  )
+
+  if (isRetryableBudgetRejection(commitResult)) {
+    context.result.retryable += 1
+    await appendProgress(context, artifact, "retryable", { error: commitResult.error })
+    return
+  }
+
+  const reconciled = await reconcileAlreadyCommitted(commitResult, artifact, context)
+  await finalizeCommitResult(artifact, reconciled, context)
+}
+
+function buildCommitAdapters(context: ProcessContext) {
+  return {
+    claimBudget: context.runtime.claimBudget,
+    async releaseBudget(claimId: string) {
+      await context.runtime.releaseBudget(claimId)
+    },
+    async readStagedArtifactBody(artifact: MarkdownCommitArtifact) {
+      const body = await context.runtime.readStagingArtifactBody(artifact.artifactId)
+      return body.markdown
+    },
+    async readCommittedMarkdown(targetPath: string) {
+      if (!(await context.files.exists(targetPath))) return null
+      return context.files.read(targetPath)
+    },
+    writeCommittedMarkdownAtomic: context.files.writeAtomic,
+    async deleteCommittedMarkdown(targetPath: string) {
+      if (await context.files.exists(targetPath)) {
+        await context.files.delete(targetPath)
+      }
+    },
+    cleanupCommittedArtifact: async () => undefined,
+    hashContent: hashMarkdownContent,
+  }
+}
+
+async function finalizeCommitResult(
+  artifact: MarkdownCommitArtifact,
+  commitResult: MarkdownCommitOperationResult,
+  context: ProcessContext,
+): Promise<void> {
+  if (commitResult.result === "conflicted") {
+    const routed = await routeConflict(artifact, commitResult, context)
+    context.result.conflicted += 1
+    if (routed.repairJobId) context.result.repairJobs += 1
+    await appendAuditEvent(context, artifact, routed)
+    await appendProgress(context, artifact, "conflicted", {
+      repairJobId: routed.repairJobId,
+      repairError: routed.repairError,
+    })
+    return
+  }
+
+  if (
+    commitResult.result === "committed" ||
+    commitResult.result === "merged" ||
+    isTerminalDeleteSkip(artifact, commitResult)
+  ) {
+    await appendEventMarkersAndCleanup(context, artifact, commitResult)
+    context.result[commitResult.result] += 1
+    return
+  }
+
+  context.result[commitResult.result] += 1
+  await appendAuditEvent(context, artifact, commitResult)
+  await appendProgress(context, artifact, commitResult.result, {
+    error: commitResult.error,
+  })
+}
+
+async function reconcileAlreadyCommitted(
+  commitResult: MarkdownCommitOperationResult,
+  artifact: MarkdownCommitArtifact,
+  context: ProcessContext,
+): Promise<MarkdownCommitOperationResult> {
+  if (commitResult.result !== "conflicted") {
+    return commitResult
+  }
+
+  if (commitResult.currentHash === commitResult.artifactHash) {
+    return {
+      ...commitResult,
+      result: "committed",
+      finalHash: commitResult.currentHash,
+      repairJobId: null,
+    }
+  }
+
+  if (artifact.operationIntent !== "append") {
+    return commitResult
+  }
+
+  const currentBody = await readExistingCommittedBody(context.files, artifact.targetPath)
+  if (currentBody === null) {
+    return commitResult
+  }
+  const stagedBody = await context.runtime.readStagingArtifactBody(artifact.artifactId)
+  if (!hasAppendBodyApplied(currentBody, stagedBody.markdown)) {
+    return commitResult
+  }
+
+  return {
+    ...commitResult,
+    result: "merged",
+    finalHash: commitResult.currentHash,
+    repairJobId: null,
+  }
+}
+
+async function readExistingCommittedBody(
+  files: CommitIntegrationFileAdapter,
+  targetPath: string,
+): Promise<string | null> {
+  if (!(await files.exists(targetPath))) return null
+  return files.read(targetPath)
+}
+
+function hasAppendBodyApplied(currentBody: string, stagedBody: string): boolean {
+  const stagedSegment = canonicalizeMarkdownContentForHash(stagedBody).replace(/^\n+/, "")
+  if (stagedSegment.length === 0) return false
+  return canonicalizeMarkdownContentForHash(currentBody).endsWith(stagedSegment)
+}
+
+function isTerminalDeleteSkip(
+  artifact: MarkdownCommitArtifact,
+  commitResult: MarkdownCommitOperationResult,
+): boolean {
+  return artifact.operationIntent === "delete" && commitResult.result === "skipped"
+}
+
+async function appendEventMarkersAndCleanup(
+  context: ProcessContext,
+  artifact: MarkdownCommitArtifact,
+  commitResult: MarkdownCommitOperationResult,
+): Promise<void> {
+  const event = await appendAuditEvent(context, artifact, commitResult)
+  await recordDerivedMarkers(context, artifact, commitResult, event.eventId)
+  await context.runtime.markArtifactCommitted(artifact.artifactId)
+  context.result.cleanedArtifacts += 1
+  await appendProgress(context, artifact, commitResult.result, {
+    eventId: event.eventId,
+  })
+}
+
+async function routeConflict(
+  artifact: MarkdownCommitArtifact,
+  commitResult: MarkdownCommitOperationResult,
+  context: ProcessContext,
+): Promise<MarkdownCommitOperationResult> {
+  try {
+    const receipt = await context.runtime.routeConflictRepair({
+      artifactId: artifact.artifactId,
+      jobId: artifact.jobId,
+      artifactPath: artifact.artifactPath,
+      artifactHash: artifact.artifactHash,
+      targetPath: artifact.targetPath,
+      operationIntent: artifact.operationIntent,
+      result: "conflicted",
+      baseHash: commitResult.baseHash,
+      currentHash: commitResult.currentHash,
+      affectedPaths: commitResult.affectedPaths,
+      sourceKind: artifact.sourceKind,
+      conflictReason: `commit-conflict: ${artifact.operationIntent} target does not match the expected base hash`,
+    })
+    return { ...commitResult, repairJobId: receipt.repairJobId }
+  } catch (error) {
+    return { ...commitResult, repairError: describeError(error) }
+  }
+}
+
+async function appendAuditEvent(
+  context: ProcessContext,
+  artifact: MarkdownCommitArtifact,
+  commitResult: MarkdownCommitOperationResult,
+): Promise<RuntimeEventRecord> {
+  return context.runtime.appendEvent({
+    jobId: artifact.jobId,
+    payload: {
+      kind: "markdown-commit",
+      artifactId: commitResult.artifactId,
+      artifactHash: commitResult.artifactHash,
+      targetPath: commitResult.targetPath,
+      operationIntent: commitResult.operationIntent,
+      result: commitResult.result,
+      baseHash: commitResult.baseHash,
+      currentHash: commitResult.currentHash,
+      finalHash: commitResult.finalHash,
+      affectedPaths: commitResult.affectedPaths,
+      repairJobId: commitResult.repairJobId,
+      ...(commitResult.repairError ? { repairError: commitResult.repairError } : {}),
+      sourceKind: artifact.sourceKind,
+    },
+  })
+}
+
+async function recordDerivedMarkers(
+  context: ProcessContext,
+  artifact: MarkdownCommitArtifact,
+  commitResult: MarkdownCommitOperationResult,
+  sourceEventId: string,
+): Promise<void> {
+  const reason = markerReason(artifact.operationIntent)
+  const inputHash = reason === "delete" ? null : requireFinalHash(commitResult)
+  const baseVersion = commitResult.currentHash ?? commitResult.baseHash ?? "genesis"
+
+  for (const layer of context.markerLayers) {
+    await context.runtime.recordDerivedStaleMarker({
+      markerId: deterministicMarkerId(sourceEventId, layer, artifact.targetPath),
+      layer,
+      affectedPath: artifact.targetPath,
+      inputHash,
+      baseVersion,
+      reason,
+      sourceEventId,
+    })
+    context.result.markersRecorded += 1
+  }
+}
+
+async function appendProgress(
+  context: ProcessContext,
+  artifact: MarkdownCommitArtifact,
+  status: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await context.runtime.appendProgress({
+      jobId: artifact.jobId,
+      progressKey: `${COMMIT_PROGRESS_PREFIX}:${artifact.artifactId}`,
+      durable: true,
+      payload: JSON.stringify({
+        type: `${COMMIT_PROGRESS_PREFIX}:${status}`,
+        artifactId: artifact.artifactId,
+        targetPath: artifact.targetPath,
+        status,
+        ...payload,
+      }),
+    })
+    context.result.progressEvents += 1
+  } catch (error) {
+    context.result.errors.push(`progress-append-failed: ${describeError(error)}`)
+  }
+}
+
+function toCommitArtifact(
+  record: RuntimeStagingArtifactRecord,
+): { ok: true; value: MarkdownCommitArtifact } | { ok: false; error: string } {
+  if (record.status !== "pending") {
+    return { ok: false, error: `staging-artifact-not-pending: ${record.artifactId}` }
+  }
+  if (!record.targetPath || !record.operationIntent || !record.sourceKind) {
+    return {
+      ok: false,
+      error: `staging-artifact-missing-commit-metadata: ${record.artifactId}`,
+    }
+  }
+  if (!isMarkdownCommitOperationIntent(record.operationIntent)) {
+    return {
+      ok: false,
+      error: `staging-artifact-operation-invalid: ${record.artifactId}`,
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      artifactId: record.artifactId,
+      jobId: record.jobId,
+      artifactPath: record.artifactPath,
+      artifactHash: record.artifactHash,
+      targetPath: record.targetPath,
+      baseHash: record.baseHash ?? null,
+      operationIntent: record.operationIntent,
+      sourceKind: record.sourceKind,
+      createdAtMs: record.createdAtMs,
+    },
+  }
+}
+
+function isRetryableBudgetRejection(result: MarkdownCommitOperationResult): boolean {
+  return (
+    result.result === "rejected" &&
+    typeof result.error === "string" &&
+    result.error.startsWith(COMMIT_PATH_ALREADY_CLAIMED_PREFIX)
+  )
+}
+
+function markerReason(
+  intent: MarkdownCommitOperationIntent,
+): DerivedStaleMarkerReason {
+  return intent === "delete" ? "delete" : "commit"
+}
+
+function requireFinalHash(result: MarkdownCommitOperationResult): string {
+  if (result.finalHash) return result.finalHash
+  throw new Error("derived-marker-final-hash-missing")
+}
+
+function deterministicMarkerId(
+  sourceEventId: string,
+  layer: DerivedStaleMarkerLayer,
+  affectedPath: string,
+): string {
+  return `derived-marker-${fnv1a64Hex(`${sourceEventId}\n${layer}\n${affectedPath}`)}`
+}
+
+function isMarkdownCommitOperationIntent(
+  raw: string,
+): raw is MarkdownCommitOperationIntent {
+  return MARKDOWN_COMMIT_OPERATION_INTENTS.includes(
+    raw as MarkdownCommitOperationIntent,
+  )
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  if (limit === undefined) return DEFAULT_COMMIT_LIMIT
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("bulk-commit-limit-invalid")
+  }
+  return limit
+}
+
+function normalizeConcurrency(concurrency = DEFAULT_COMMIT_CONCURRENCY): number {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error("bulk-commit-concurrency-invalid")
+  }
+  return concurrency
+}
+
+function emptyResult(): CommitPendingStagingArtifactsResult {
+  return {
+    listedArtifacts: 0,
+    attemptedArtifacts: 0,
+    committed: 0,
+    merged: 0,
+    conflicted: 0,
+    rejected: 0,
+    skipped: 0,
+    retryable: 0,
+    repairJobs: 0,
+    cleanedArtifacts: 0,
+    markersRecorded: 0,
+    progressEvents: 0,
+    errors: [],
+  }
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return String(error)
+}

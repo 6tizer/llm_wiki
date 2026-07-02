@@ -462,6 +462,22 @@ pub struct RuntimeStagingArtifactStoreRequest {
     markdown: String,
 }
 
+/// Request payload for reading one pending staging artifact body.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeStagingArtifactReadBodyRequest {
+    artifact_id: String,
+}
+
+/// Response payload for one pending staging artifact body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStagingArtifactReadBody {
+    artifact_id: String,
+    artifact_path: String,
+    markdown: String,
+}
+
 /// Request payload for marking a committed artifact and cleaning its staging file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1267,6 +1283,23 @@ pub fn runtime_staging_artifact_store(
             runtime_enabled,
             request,
             now,
+        )
+    })
+}
+
+/// Read a pending staging artifact body by registered artifact id.
+#[tauri::command]
+pub fn runtime_staging_artifact_read_body(
+    request: RuntimeStagingArtifactReadBodyRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeStagingArtifactReadBody, String> {
+    run_guarded("runtime_staging_artifact_read_body", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        runtime_staging_artifact_read_body_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
         )
     })
 }
@@ -5241,6 +5274,30 @@ fn runtime_staging_artifact_store_for_project(
     result
 }
 
+fn runtime_staging_artifact_read_body_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeStagingArtifactReadBodyRequest,
+) -> Result<RuntimeStagingArtifactReadBody, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let artifact_id = require_non_empty("invalid-artifact-id", "artifactId", &request.artifact_id)?;
+    let connection = open_staging_artifacts_runtime_locked(project_root)?;
+    let artifact = read_staging_artifact_tx_unchecked(&connection, artifact_id)?;
+    if artifact.status != PENDING_ARTIFACT_STATUS {
+        return Err(format!(
+            "invalid-state: read_body is not allowed from '{}'",
+            artifact.status
+        ));
+    }
+    ensure_staging_artifact_path_scoped_to_job(&artifact.job_id, &artifact.artifact_path)?;
+    let markdown = read_staging_artifact_file(project_root, &artifact.artifact_path)?;
+    Ok(RuntimeStagingArtifactReadBody {
+        artifact_id: artifact.artifact_id,
+        artifact_path: artifact.artifact_path,
+        markdown,
+    })
+}
+
 fn runtime_staging_artifacts_clear_pending_for_job_for_project(
     project_root: Option<&Path>,
     enabled: bool,
@@ -6669,6 +6726,51 @@ fn remove_staging_artifact_file(project_root: &Path, artifact_path: &str) -> Res
     }
 }
 
+fn read_staging_artifact_file(project_root: &Path, artifact_path: &str) -> Result<String, String> {
+    let artifact_path = normalize_staging_artifact_path(artifact_path)?;
+    let staging_root = staging_dir_path(project_root);
+    let target = staging_root.join(artifact_path);
+    let metadata = std::fs::symlink_metadata(&target).map_err(|err| {
+        format!(
+            "staging-artifact-stat-failed: failed to inspect '{}': {err}",
+            target.display()
+        )
+    })?;
+    if metadata.is_dir() {
+        return Err(
+            "invalid-artifact-path: staging artifact path points to a directory".to_string(),
+        );
+    }
+    if metadata.file_type().is_symlink() {
+        return Err("invalid-artifact-path: staging artifact path points to a symlink".to_string());
+    }
+    let canonical_root = std::fs::canonicalize(&staging_root).map_err(|err| {
+        format!(
+            "staging-root-canonicalize-failed: failed to canonicalize '{}': {err}",
+            staging_root.display()
+        )
+    })?;
+    let canonical_target = std::fs::canonicalize(&target).map_err(|err| {
+        format!(
+            "staging-artifact-canonicalize-failed: failed to canonicalize '{}': {err}",
+            target.display()
+        )
+    })?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(
+            "invalid-artifact-path: staging artifact escapes the runtime staging directory"
+                .to_string(),
+        );
+    }
+    let markdown = std::fs::read_to_string(&canonical_target).map_err(|err| {
+        format!(
+            "staging-artifact-read-failed: failed to read '{}': {err}",
+            canonical_target.display()
+        )
+    })?;
+    normalize_staging_markdown_body(&markdown)
+}
+
 fn ensure_claim_id_available(tx: &Transaction<'_>, claim_id: &str) -> Result<(), String> {
     let existing = tx
         .query_row(
@@ -7337,7 +7439,20 @@ fn read_staging_artifact_tx(
         [artifact_id],
         map_staging_artifact_row,
     )
-    .map_err(|err| format!("staging-artifact-read-failed: {err}"))
+        .map_err(|err| format!("staging-artifact-read-failed: {err}"))
+}
+
+fn read_staging_artifact_tx_unchecked(
+    connection: &Connection,
+    artifact_id: &str,
+) -> Result<RuntimeStagingArtifactRecord, String> {
+    connection
+        .query_row(
+            &staging_artifact_select_sql("WHERE artifact_id = ?1"),
+            [artifact_id],
+            map_staging_artifact_row,
+        )
+        .map_err(|err| format!("staging-artifact-read-failed: {err}"))
 }
 
 fn read_staging_artifact_optional_tx(
@@ -12303,6 +12418,149 @@ mod tests {
         assert_eq!(committed.status, COMMITTED_ARTIFACT_STATUS);
         assert_eq!(committed.target_path.as_deref(), Some("Wiki/Page.md"));
         assert!(!staging_dir_path(&project).join("job-1/page.md").exists());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_read_body_returns_pending_body() {
+        let project = temp_project("staging-read-body-happy");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+
+        runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect("store staging artifact");
+
+        let body = runtime_staging_artifact_read_body_for_project(
+            Some(&project),
+            true,
+            RuntimeStagingArtifactReadBodyRequest {
+                artifact_id: "artifact-1".to_string(),
+            },
+        )
+        .expect("read body");
+
+        assert_eq!(body.artifact_id, "artifact-1");
+        assert_eq!(body.artifact_path, "job-1/page.md");
+        assert_eq!(body.markdown, "# Page\n");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_read_body_requires_pending_status() {
+        let project = temp_project("staging-read-body-pending-only");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect("store staging artifact");
+        runtime_staging_artifact_commit_success_for_project(
+            Some(&project),
+            true,
+            staging_commit_request("artifact-1"),
+            300,
+        )
+        .expect("mark committed");
+
+        let error = runtime_staging_artifact_read_body_for_project(
+            Some(&project),
+            true,
+            RuntimeStagingArtifactReadBodyRequest {
+                artifact_id: "artifact-1".to_string(),
+            },
+        )
+        .expect_err("committed body read is rejected");
+
+        assert!(error.starts_with("invalid-state"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_read_body_rejects_unscoped_record_paths() {
+        let project = temp_project("staging-read-body-unscoped");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        write_staging_file(&project, "wiki/page.md", b"# Page\n");
+        runtime_staging_artifact_record_for_project(
+            Some(&project),
+            true,
+            staging_record_request(Some("artifact-1"), "job-1", "wiki/page.md", None),
+            200,
+        )
+        .expect("record unscoped artifact");
+
+        let error = runtime_staging_artifact_read_body_for_project(
+            Some(&project),
+            true,
+            RuntimeStagingArtifactReadBodyRequest {
+                artifact_id: "artifact-1".to_string(),
+            },
+        )
+        .expect_err("unscoped body read is rejected");
+
+        assert!(error.contains("artifactPath must start with jobId"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_artifact_read_body_rejects_symlink_target() {
+        let project = temp_project("staging-read-body-symlink");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let outside = temp_project("staging-read-outside-file");
+        fs::write(&outside, b"outside").expect("write outside file");
+        let link = staging_dir_path(&project).join("job-1/link.md");
+        fs::create_dir_all(link.parent().expect("link has parent")).expect("create link parent");
+        std::os::unix::fs::symlink(&outside, &link).expect("create symlink");
+        runtime_staging_artifact_record_for_project(
+            Some(&project),
+            true,
+            staging_record_request(Some("artifact-1"), "job-1", "job-1/link.md", None),
+            200,
+        )
+        .expect("record symlink artifact");
+
+        let error = runtime_staging_artifact_read_body_for_project(
+            Some(&project),
+            true,
+            RuntimeStagingArtifactReadBodyRequest {
+                artifact_id: "artifact-1".to_string(),
+            },
+        )
+        .expect_err("symlink body read is rejected");
+
+        assert!(error.starts_with("invalid-artifact-path"));
+        assert!(outside.exists());
+        let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(project);
     }
 

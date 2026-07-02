@@ -155,6 +155,16 @@ export interface RuntimeStagingArtifactStoreRequest {
   markdown: string
 }
 
+export interface RuntimeStagingArtifactReadBodyRequest {
+  artifactId: string
+}
+
+export interface RuntimeStagingArtifactReadBody {
+  artifactId: string
+  artifactPath: string
+  markdown: string
+}
+
 export interface RuntimeStagingArtifactsClearPendingForJobRequest {
   jobId: string
 }
@@ -537,6 +547,14 @@ export function runtimeStagingArtifactStore(
   request: RuntimeStagingArtifactStoreRequest,
 ): Promise<RuntimeStagingArtifactRecord> {
   return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_store", {
+    request,
+  })
+}
+
+export function runtimeStagingArtifactReadBody(
+  request: RuntimeStagingArtifactReadBodyRequest,
+): Promise<RuntimeStagingArtifactReadBody> {
+  return invoke<RuntimeStagingArtifactReadBody>("runtime_staging_artifact_read_body", {
     request,
   })
 }
