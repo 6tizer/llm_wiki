@@ -9,6 +9,7 @@ use rusqlite::{
     params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
@@ -34,7 +35,7 @@ const RESOURCE_BUDGETS_VERSION: i64 = 1;
 const EVENTS_PROGRESS_FAMILY: &str = "events-progress";
 const EVENTS_PROGRESS_VERSION: i64 = 1;
 const STAGING_ARTIFACTS_FAMILY: &str = "staging-artifacts";
-const STAGING_ARTIFACTS_VERSION: i64 = 1;
+const STAGING_ARTIFACTS_VERSION: i64 = 2;
 const DERIVED_STALE_MARKERS_FAMILY: &str = "derived-stale-markers";
 const DERIVED_STALE_MARKERS_VERSION: i64 = 1;
 const PROFILE_STATUS_FAMILY: &str = "profile-status";
@@ -66,6 +67,8 @@ const MAX_FAILED_ARTIFACT_TTL_MS: i64 = 2_592_000_000;
 const MAX_STAGING_ARTIFACT_PATH_BYTES: usize = 1024;
 const MAX_STAGING_ARTIFACT_HASH_BYTES: usize = 128;
 const MAX_STAGING_ARTIFACT_ERROR_BYTES: usize = 4096;
+const MAX_STAGING_ARTIFACT_BODY_BYTES: usize = 2_000_000;
+const MAX_STAGING_ARTIFACT_SOURCE_KIND_BYTES: usize = 128;
 const MAX_DERIVED_MARKER_BASE_VERSION_BYTES: usize = 256;
 const MAX_PROFILE_ID_BYTES: usize = 128;
 const MAX_PROFILE_DISPLAY_NAME_BYTES: usize = 256;
@@ -445,11 +448,32 @@ pub struct RuntimeStagingArtifactRecordRequest {
     last_error: Option<String>,
 }
 
+/// Request payload for writing a validated staging artifact body and metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeStagingArtifactStoreRequest {
+    artifact_id: String,
+    job_id: String,
+    artifact_path: String,
+    target_path: String,
+    operation_intent: String,
+    base_hash: Option<String>,
+    source_kind: String,
+    markdown: String,
+}
+
 /// Request payload for marking a committed artifact and cleaning its staging file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeStagingArtifactCommitSuccessRequest {
     artifact_id: String,
+}
+
+/// Request payload for clearing pending staging artifacts for one job.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeStagingArtifactsClearPendingForJobRequest {
+    job_id: String,
 }
 
 /// Request payload for listing staging artifact metadata.
@@ -469,6 +493,10 @@ pub struct RuntimeStagingArtifactRecord {
     job_id: String,
     artifact_path: String,
     artifact_hash: String,
+    target_path: Option<String>,
+    operation_intent: Option<String>,
+    base_hash: Option<String>,
+    source_kind: Option<String>,
     status: String,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -484,6 +512,13 @@ pub struct RuntimeStagingArtifactList {
     enabled: bool,
     status: RuntimeDbHealthState,
     artifacts: Vec<RuntimeStagingArtifactRecord>,
+}
+
+/// Response payload for clearing pending staging artifacts for one job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStagingArtifactsClearPendingForJob {
+    cleared: Vec<RuntimeStagingArtifactRecord>,
 }
 
 /// Response payload for a staging artifact GC pass.
@@ -1209,6 +1244,44 @@ pub fn runtime_staging_artifact_record(
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
         runtime_staging_artifact_record_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// Store a validated staging artifact body and commit-intent metadata.
+#[tauri::command]
+pub fn runtime_staging_artifact_store(
+    request: RuntimeStagingArtifactStoreRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeStagingArtifactRecord, String> {
+    run_guarded("runtime_staging_artifact_store", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_staging_artifact_store_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
+    })
+}
+
+/// Clear pending staging artifacts and files for one runtime job.
+#[tauri::command]
+pub fn runtime_staging_artifacts_clear_pending_for_job(
+    request: RuntimeStagingArtifactsClearPendingForJobRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeStagingArtifactsClearPendingForJob, String> {
+    run_guarded("runtime_staging_artifacts_clear_pending_for_job", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        runtime_staging_artifacts_clear_pending_for_job_for_project(
             project_root.as_deref(),
             runtime_enabled,
             request,
@@ -1943,6 +2016,31 @@ fn initialize_staging_artifacts_schema(connection: &Connection) -> Result<(), St
                         length(CAST(artifact_hash AS BLOB)) > 0
                         AND length(CAST(artifact_hash AS BLOB)) <= {MAX_STAGING_ARTIFACT_HASH_BYTES}
                     ),
+                    target_path TEXT CHECK(
+                        target_path IS NULL
+                        OR (
+                            length(CAST(target_path AS BLOB)) > 0
+                            AND length(CAST(target_path AS BLOB)) <= {MAX_STAGING_ARTIFACT_PATH_BYTES}
+                        )
+                    ),
+                    operation_intent TEXT CHECK(
+                        operation_intent IS NULL
+                        OR operation_intent IN ('create', 'update', 'append', 'delete')
+                    ),
+                    base_hash TEXT CHECK(
+                        base_hash IS NULL
+                        OR (
+                            length(CAST(base_hash AS BLOB)) > 0
+                            AND length(CAST(base_hash AS BLOB)) <= {MAX_STAGING_ARTIFACT_HASH_BYTES}
+                        )
+                    ),
+                    source_kind TEXT CHECK(
+                        source_kind IS NULL
+                        OR (
+                            length(CAST(source_kind AS BLOB)) > 0
+                            AND length(CAST(source_kind AS BLOB)) <= {MAX_STAGING_ARTIFACT_SOURCE_KIND_BYTES}
+                        )
+                    ),
                     status TEXT NOT NULL CHECK (
                         status IN ('pending', 'committed', 'failed', 'cancelled', 'deleted')
                     ),
@@ -1960,6 +2058,66 @@ fn initialize_staging_artifacts_schema(connection: &Connection) -> Result<(), St
             [],
         )
         .map_err(|err| format!("Failed to initialize runtime staging artifacts table: {err}"))?;
+
+    ensure_column_exists(
+        connection,
+        "runtime_staging_artifacts",
+        "target_path",
+        &format!(
+            "ALTER TABLE runtime_staging_artifacts
+             ADD COLUMN target_path TEXT CHECK(
+                 target_path IS NULL
+                 OR (
+                     length(CAST(target_path AS BLOB)) > 0
+                     AND length(CAST(target_path AS BLOB)) <= {MAX_STAGING_ARTIFACT_PATH_BYTES}
+                 )
+             )"
+        ),
+        "runtime staging artifact target_path",
+    )?;
+    ensure_column_exists(
+        connection,
+        "runtime_staging_artifacts",
+        "operation_intent",
+        "ALTER TABLE runtime_staging_artifacts
+         ADD COLUMN operation_intent TEXT CHECK(
+             operation_intent IS NULL
+             OR operation_intent IN ('create', 'update', 'append', 'delete')
+         )",
+        "runtime staging artifact operation_intent",
+    )?;
+    ensure_column_exists(
+        connection,
+        "runtime_staging_artifacts",
+        "base_hash",
+        &format!(
+            "ALTER TABLE runtime_staging_artifacts
+             ADD COLUMN base_hash TEXT CHECK(
+                 base_hash IS NULL
+                 OR (
+                     length(CAST(base_hash AS BLOB)) > 0
+                     AND length(CAST(base_hash AS BLOB)) <= {MAX_STAGING_ARTIFACT_HASH_BYTES}
+                 )
+             )"
+        ),
+        "runtime staging artifact base_hash",
+    )?;
+    ensure_column_exists(
+        connection,
+        "runtime_staging_artifacts",
+        "source_kind",
+        &format!(
+            "ALTER TABLE runtime_staging_artifacts
+             ADD COLUMN source_kind TEXT CHECK(
+                 source_kind IS NULL
+                 OR (
+                     length(CAST(source_kind AS BLOB)) > 0
+                     AND length(CAST(source_kind AS BLOB)) <= {MAX_STAGING_ARTIFACT_SOURCE_KIND_BYTES}
+                 )
+             )"
+        ),
+        "runtime staging artifact source_kind",
+    )?;
 
     connection
         .execute(
@@ -4971,6 +5129,145 @@ fn runtime_staging_artifact_record_for_project(
     })
 }
 
+fn runtime_staging_artifact_store_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeStagingArtifactStoreRequest,
+    now: i64,
+) -> Result<RuntimeStagingArtifactRecord, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let artifact_id =
+        require_non_empty("invalid-artifact-id", "artifactId", &request.artifact_id)?.to_string();
+    let job_id = require_non_empty("invalid-job-id", "jobId", &request.job_id)?.to_string();
+    let artifact_path = normalize_staging_artifact_path(&request.artifact_path)?;
+    ensure_staging_artifact_path_scoped_to_job(&job_id, &artifact_path)?;
+    let target_path = normalize_affected_path(&request.target_path)?.display_key;
+    let operation_intent = normalize_markdown_operation_intent(&request.operation_intent)?;
+    let base_hash = normalize_staging_base_hash(request.base_hash)?;
+    validate_operation_base_hash(&operation_intent, base_hash.as_deref())?;
+    let source_kind = normalize_staging_source_kind(&request.source_kind)?;
+    let markdown = normalize_staging_markdown_body(&request.markdown)?;
+    let artifact_hash = hash_staging_markdown(&markdown);
+
+    let mut wrote_file = false;
+    let result = with_runtime_writer(|| {
+        let mut connection = open_staging_artifacts_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        ensure_job_exists(&tx, &job_id)?;
+        let existing = read_staging_artifact_optional_tx(&tx, &artifact_id)?;
+        if let Some(existing) = existing.as_ref() {
+            if existing.status != PENDING_ARTIFACT_STATUS {
+                return Err(format!(
+                    "invalid-state: store is not allowed from '{}'",
+                    existing.status
+                ));
+            }
+        }
+        ensure_staging_artifact_path_available_tx(&tx, &artifact_id, &artifact_path)?;
+        write_normalized_staging_artifact_file(project_root, &artifact_path, &markdown)?;
+        wrote_file = true;
+
+        match existing {
+            Some(_existing) => {
+                tx.execute(
+                    "UPDATE runtime_staging_artifacts
+                     SET job_id = ?2,
+                         artifact_path = ?3,
+                         artifact_hash = ?4,
+                         target_path = ?5,
+                         operation_intent = ?6,
+                         base_hash = ?7,
+                         source_kind = ?8,
+                         status = ?9,
+                         updated_at_ms = ?10,
+                         expires_at_ms = NULL,
+                         last_error = NULL
+                     WHERE artifact_id = ?1 AND status = 'pending'",
+                    params![
+                        artifact_id,
+                        job_id,
+                        artifact_path,
+                        artifact_hash,
+                        target_path,
+                        operation_intent,
+                        base_hash,
+                        source_kind,
+                        PENDING_ARTIFACT_STATUS,
+                        now,
+                    ],
+                )
+                .map_err(|err| format!("staging-artifact-store-update-failed: {err}"))?;
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO runtime_staging_artifacts (
+                        artifact_id,
+                        job_id,
+                        artifact_path,
+                        artifact_hash,
+                        target_path,
+                        operation_intent,
+                        base_hash,
+                        source_kind,
+                        status,
+                        created_at_ms,
+                        updated_at_ms,
+                        expires_at_ms,
+                        last_error
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, NULL, NULL)",
+                    params![
+                        artifact_id,
+                        job_id,
+                        artifact_path,
+                        artifact_hash,
+                        target_path,
+                        operation_intent,
+                        base_hash,
+                        source_kind,
+                        PENDING_ARTIFACT_STATUS,
+                        now,
+                    ],
+                )
+                .map_err(|err| format!("staging-artifact-store-insert-failed: {err}"))?;
+            }
+        }
+        let artifact = read_staging_artifact_tx(&tx, &artifact_id)?;
+        tx.commit().map_err(tx_err)?;
+        Ok(artifact)
+    });
+    if result.is_err() && wrote_file {
+        let _ = remove_staging_artifact_file(project_root, &artifact_path);
+    }
+    result
+}
+
+fn runtime_staging_artifacts_clear_pending_for_job_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeStagingArtifactsClearPendingForJobRequest,
+    _now: i64,
+) -> Result<RuntimeStagingArtifactsClearPendingForJob, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let job_id = require_non_empty("invalid-job-id", "jobId", &request.job_id)?.to_string();
+    with_runtime_writer(|| {
+        let mut connection = open_staging_artifacts_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        ensure_job_exists(&tx, &job_id)?;
+        let pending = read_pending_staging_artifacts_for_job_tx(&tx, &job_id)?;
+        for artifact in &pending {
+            remove_staging_artifact_file(project_root, &artifact.artifact_path)?;
+            tx.execute(
+                "DELETE FROM runtime_staging_artifacts
+                 WHERE artifact_id = ?1 AND status = ?2",
+                params![artifact.artifact_id, PENDING_ARTIFACT_STATUS],
+            )
+            .map_err(|err| format!("staging-artifact-clear-pending-failed: {err}"))?;
+        }
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeStagingArtifactsClearPendingForJob { cleared: pending })
+    })
+}
+
 fn runtime_staging_artifact_commit_success_for_project(
     project_root: Option<&Path>,
     enabled: bool,
@@ -5095,10 +5392,17 @@ fn runtime_staging_artifact_list_for_project(
             artifacts: Vec::new(),
         });
     }
+    let include_commit_metadata = staging_artifact_commit_metadata_columns_exist(&connection)?;
     Ok(RuntimeStagingArtifactList {
         enabled: true,
         status: RuntimeDbHealthState::Healthy,
-        artifacts: read_staging_artifacts(&connection, job_id.as_deref(), status, limit)?,
+        artifacts: read_staging_artifacts(
+            &connection,
+            job_id.as_deref(),
+            status,
+            limit,
+            include_commit_metadata,
+        )?,
     })
 }
 
@@ -6127,6 +6431,188 @@ fn normalize_staging_artifact_path(raw: &str) -> Result<String, String> {
     }
 }
 
+fn normalize_markdown_operation_intent(raw: &str) -> Result<String, String> {
+    let value = require_non_empty("invalid-operation-intent", "operationIntent", raw)?;
+    match value {
+        "create" | "update" | "append" | "delete" => Ok(value.to_string()),
+        _ => Err(format!("invalid-operation-intent: unsupported operationIntent '{value}'")),
+    }
+}
+
+fn normalize_staging_base_hash(raw: Option<String>) -> Result<Option<String>, String> {
+    normalize_optional_limited_text(
+        "invalid-base-hash",
+        "baseHash",
+        raw,
+        MAX_STAGING_ARTIFACT_HASH_BYTES,
+    )
+}
+
+fn validate_operation_base_hash(
+    operation_intent: &str,
+    base_hash: Option<&str>,
+) -> Result<(), String> {
+    if operation_intent == "create" && base_hash.is_some() {
+        return Err("invalid-base-hash: create requires null baseHash".to_string());
+    }
+    if matches!(operation_intent, "update" | "delete") && base_hash.is_none() {
+        return Err(format!(
+            "invalid-base-hash: {operation_intent} requires baseHash"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_staging_source_kind(raw: &str) -> Result<String, String> {
+    require_limited_non_empty(
+        "invalid-source-kind",
+        "sourceKind",
+        raw,
+        MAX_STAGING_ARTIFACT_SOURCE_KIND_BYTES,
+    )
+    .map(str::to_string)
+}
+
+fn normalize_staging_markdown_body(raw: &str) -> Result<String, String> {
+    if raw.is_empty() {
+        return Err("invalid-markdown: markdown must not be empty".to_string());
+    }
+    if raw.as_bytes().len() > MAX_STAGING_ARTIFACT_BODY_BYTES {
+        return Err(format!(
+            "invalid-markdown: markdown must be at most {MAX_STAGING_ARTIFACT_BODY_BYTES} bytes"
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+fn canonicalize_staging_markdown_for_hash(markdown: &str) -> String {
+    markdown.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn hash_staging_markdown(markdown: &str) -> String {
+    let canonical = canonicalize_staging_markdown_for_hash(markdown);
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn write_normalized_staging_artifact_file(
+    project_root: &Path,
+    artifact_path: &str,
+    markdown: &str,
+) -> Result<(), String> {
+    let staging_root = staging_dir_path(project_root);
+    std::fs::create_dir_all(&staging_root).map_err(|err| {
+        format!(
+            "staging-dir-create-failed: failed to create staging directory '{}': {err}",
+            staging_root.display()
+        )
+    })?;
+    let target = staging_root.join(&artifact_path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "invalid-artifact-path: artifact path has no parent".to_string())?;
+    ensure_existing_staging_ancestors_safe(&staging_root, parent)?;
+    std::fs::create_dir_all(parent).map_err(|err| {
+        format!(
+            "staging-dir-create-failed: failed to create staging artifact parent '{}': {err}",
+            parent.display()
+        )
+    })?;
+    ensure_staging_parent_inside_root(&staging_root, parent)?;
+    if let Ok(metadata) = std::fs::symlink_metadata(&target) {
+        if metadata.is_dir() {
+            return Err(
+                "invalid-artifact-path: staging artifact path points to a directory".to_string(),
+            );
+        }
+        if metadata.file_type().is_symlink() {
+            return Err(
+                "invalid-artifact-path: staging artifact path points to a symlink".to_string(),
+            );
+        }
+    }
+
+    let file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "invalid-artifact-path: artifact path has no file name".to_string())?;
+    let temp = parent.join(format!(".{file_name}.tmp-{}", Uuid::new_v4()));
+    std::fs::write(&temp, markdown.as_bytes()).map_err(|err| {
+        format!(
+            "staging-artifact-write-failed: failed to write '{}': {err}",
+            temp.display()
+        )
+    })?;
+    std::fs::rename(&temp, &target).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!(
+            "staging-artifact-rename-failed: failed to move '{}' to '{}': {err}",
+            temp.display(),
+            target.display()
+        )
+    })
+}
+
+fn ensure_existing_staging_ancestors_safe(
+    staging_root: &Path,
+    parent: &Path,
+) -> Result<(), String> {
+    let relative = parent.strip_prefix(staging_root).map_err(|_| {
+        "invalid-artifact-path: staging artifact parent is outside the runtime staging directory"
+            .to_string()
+    })?;
+    let mut cursor = staging_root.to_path_buf();
+    for component in relative.components() {
+        cursor.push(component);
+        match std::fs::symlink_metadata(&cursor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(
+                        "invalid-artifact-path: staging artifact parent contains a symlink"
+                            .to_string(),
+                    );
+                }
+                if !metadata.is_dir() {
+                    return Err(
+                        "invalid-artifact-path: staging artifact parent contains a file"
+                            .to_string(),
+                    );
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => {
+                return Err(format!(
+                    "staging-parent-stat-failed: failed to inspect '{}': {err}",
+                    cursor.display()
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_staging_parent_inside_root(staging_root: &Path, parent: &Path) -> Result<(), String> {
+    let canonical_root = std::fs::canonicalize(staging_root).map_err(|err| {
+        format!(
+            "staging-root-canonicalize-failed: failed to canonicalize '{}': {err}",
+            staging_root.display()
+        )
+    })?;
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|err| {
+        format!(
+            "staging-parent-canonicalize-failed: failed to canonicalize '{}': {err}",
+            parent.display()
+        )
+    })?;
+    if canonical_parent.starts_with(&canonical_root) {
+        Ok(())
+    } else {
+        Err("invalid-artifact-path: staging artifact escapes the runtime staging directory"
+            .to_string())
+    }
+}
+
 fn remove_staging_artifact_file(project_root: &Path, artifact_path: &str) -> Result<(), String> {
     let artifact_path = normalize_staging_artifact_path(artifact_path)?;
     let staging_root = staging_dir_path(project_root);
@@ -6321,6 +6807,41 @@ fn ensure_job_exists(tx: &Transaction<'_>, job_id: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err("job-not-found: runtime job does not exist".to_string())
+    }
+}
+
+fn ensure_staging_artifact_path_scoped_to_job(
+    job_id: &str,
+    artifact_path: &str,
+) -> Result<(), String> {
+    let scope = artifact_path.split('/').next().unwrap_or_default();
+    if scope == job_id {
+        Ok(())
+    } else {
+        Err("invalid-artifact-path: artifactPath must start with jobId".to_string())
+    }
+}
+
+fn ensure_staging_artifact_path_available_tx(
+    tx: &Transaction<'_>,
+    artifact_id: &str,
+    artifact_path: &str,
+) -> Result<(), String> {
+    let existing = tx
+        .query_row(
+            "SELECT COUNT(*)
+             FROM runtime_staging_artifacts
+             WHERE artifact_path = ?1
+               AND artifact_id <> ?2
+               AND status NOT IN ('committed', 'deleted')",
+            params![artifact_path, artifact_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("staging-artifact-path-check-failed: {err}"))?;
+    if existing == 0 {
+        Ok(())
+    } else {
+        Err("artifact-path-conflict: staging artifact path is already in use".to_string())
     }
 }
 
@@ -6829,7 +7350,25 @@ fn read_staging_artifact_optional_tx(
         map_staging_artifact_row,
     )
     .optional()
-    .map_err(|err| format!("staging-artifact-read-failed: {err}"))
+        .map_err(|err| format!("staging-artifact-read-failed: {err}"))
+}
+
+fn read_pending_staging_artifacts_for_job_tx(
+    tx: &Transaction<'_>,
+    job_id: &str,
+) -> Result<Vec<RuntimeStagingArtifactRecord>, String> {
+    let mut statement = tx
+        .prepare(&staging_artifact_select_sql(
+            "WHERE job_id = ?1 AND status = 'pending'
+             ORDER BY created_at_ms, artifact_id",
+        ))
+        .map_err(|err| format!("staging-artifacts-pending-query-prepare-failed: {err}"))?;
+    let artifacts = statement
+        .query_map([job_id], map_staging_artifact_row)
+        .map_err(|err| format!("staging-artifacts-pending-query-failed: {err}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("staging-artifacts-pending-row-failed: {err}"))?;
+    Ok(artifacts)
 }
 
 fn read_expired_staging_artifacts_tx(
@@ -6856,13 +7395,15 @@ fn read_staging_artifacts(
     job_id: Option<&str>,
     status: Option<&str>,
     limit: i64,
+    include_commit_metadata: bool,
 ) -> Result<Vec<RuntimeStagingArtifactRecord>, String> {
     match (job_id, status) {
         (Some(job_id), Some(status)) => {
             let mut statement = connection
-                .prepare(&staging_artifact_select_sql(
+                .prepare(&staging_artifact_select_sql_with_metadata(
                     "WHERE job_id = ?1 AND status = ?2
                      ORDER BY updated_at_ms ASC, artifact_id ASC LIMIT ?3",
+                    include_commit_metadata,
                 ))
                 .map_err(|err| format!("staging-artifacts-read-prepare-failed: {err}"))?;
             let rows = statement
@@ -6873,8 +7414,9 @@ fn read_staging_artifacts(
         }
         (Some(job_id), None) => {
             let mut statement = connection
-                .prepare(&staging_artifact_select_sql(
+                .prepare(&staging_artifact_select_sql_with_metadata(
                     "WHERE job_id = ?1 ORDER BY updated_at_ms ASC, artifact_id ASC LIMIT ?2",
+                    include_commit_metadata,
                 ))
                 .map_err(|err| format!("staging-artifacts-read-prepare-failed: {err}"))?;
             let rows = statement
@@ -6885,8 +7427,9 @@ fn read_staging_artifacts(
         }
         (None, Some(status)) => {
             let mut statement = connection
-                .prepare(&staging_artifact_select_sql(
+                .prepare(&staging_artifact_select_sql_with_metadata(
                     "WHERE status = ?1 ORDER BY updated_at_ms ASC, artifact_id ASC LIMIT ?2",
+                    include_commit_metadata,
                 ))
                 .map_err(|err| format!("staging-artifacts-read-prepare-failed: {err}"))?;
             let rows = statement
@@ -6897,8 +7440,9 @@ fn read_staging_artifacts(
         }
         (None, None) => {
             let mut statement = connection
-                .prepare(&staging_artifact_select_sql(
+                .prepare(&staging_artifact_select_sql_with_metadata(
                     "ORDER BY updated_at_ms ASC, artifact_id ASC LIMIT ?1",
+                    include_commit_metadata,
                 ))
                 .map_err(|err| format!("staging-artifacts-read-prepare-failed: {err}"))?;
             let rows = statement
@@ -7195,6 +7739,17 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<b
         .map_err(|err| format!("column-exists-check-failed: {err}"))
 }
 
+fn staging_artifact_commit_metadata_columns_exist(
+    connection: &Connection,
+) -> Result<bool, String> {
+    for column in ["target_path", "operation_intent", "base_hash", "source_kind"] {
+        if !column_exists(connection, "runtime_staging_artifacts", column)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn ensure_column_exists(
     connection: &Connection,
     table: &str,
@@ -7299,11 +7854,39 @@ fn progress_select_sql(suffix: &str) -> String {
 }
 
 fn staging_artifact_select_sql(suffix: &str) -> String {
+    staging_artifact_select_sql_with_metadata(suffix, true)
+}
+
+fn staging_artifact_select_sql_with_metadata(suffix: &str, include_commit_metadata: bool) -> String {
+    let target_path = if include_commit_metadata {
+        "target_path"
+    } else {
+        "NULL AS target_path"
+    };
+    let operation_intent = if include_commit_metadata {
+        "operation_intent"
+    } else {
+        "NULL AS operation_intent"
+    };
+    let base_hash = if include_commit_metadata {
+        "base_hash"
+    } else {
+        "NULL AS base_hash"
+    };
+    let source_kind = if include_commit_metadata {
+        "source_kind"
+    } else {
+        "NULL AS source_kind"
+    };
     format!(
         "SELECT artifact_id,
                 job_id,
                 artifact_path,
                 artifact_hash,
+                {target_path},
+                {operation_intent},
+                {base_hash},
+                {source_kind},
                 status,
                 created_at_ms,
                 updated_at_ms,
@@ -7499,12 +8082,16 @@ fn map_staging_artifact_row(
         job_id: row.get(1)?,
         artifact_path: row.get(2)?,
         artifact_hash: row.get(3)?,
-        status: row.get(4)?,
-        created_at_ms: row.get(5)?,
-        updated_at_ms: row.get(6)?,
-        expires_at_ms: row.get(7)?,
-        deleted_at_ms: row.get(8)?,
-        last_error: row.get(9)?,
+        target_path: row.get(4)?,
+        operation_intent: row.get(5)?,
+        base_hash: row.get(6)?,
+        source_kind: row.get(7)?,
+        status: row.get(8)?,
+        created_at_ms: row.get(9)?,
+        updated_at_ms: row.get(10)?,
+        expires_at_ms: row.get(11)?,
+        deleted_at_ms: row.get(12)?,
+        last_error: row.get(13)?,
     })
 }
 
@@ -8057,6 +8644,27 @@ mod tests {
         }
     }
 
+    fn staging_store_request(
+        artifact_id: &str,
+        job_id: &str,
+        artifact_path: &str,
+        target_path: &str,
+        operation_intent: &str,
+        base_hash: Option<&str>,
+        markdown: &str,
+    ) -> RuntimeStagingArtifactStoreRequest {
+        RuntimeStagingArtifactStoreRequest {
+            artifact_id: artifact_id.to_string(),
+            job_id: job_id.to_string(),
+            artifact_path: artifact_path.to_string(),
+            target_path: target_path.to_string(),
+            operation_intent: operation_intent.to_string(),
+            base_hash: base_hash.map(str::to_string),
+            source_kind: "ingest".to_string(),
+            markdown: markdown.to_string(),
+        }
+    }
+
     fn staging_commit_request(artifact_id: &str) -> RuntimeStagingArtifactCommitSuccessRequest {
         RuntimeStagingArtifactCommitSuccessRequest {
             artifact_id: artifact_id.to_string(),
@@ -8071,6 +8679,14 @@ mod tests {
             job_id: job_id.map(str::to_string),
             status: status.map(str::to_string),
             limit: None,
+        }
+    }
+
+    fn staging_clear_pending_request(
+        job_id: &str,
+    ) -> RuntimeStagingArtifactsClearPendingForJobRequest {
+        RuntimeStagingArtifactsClearPendingForJobRequest {
+            job_id: job_id.to_string(),
         }
     }
 
@@ -8422,6 +9038,30 @@ mod tests {
         )
         .expect_err("commit request rejects delete");
         assert!(commit.to_string().contains("unknown field"));
+
+        let store =
+            serde_json::from_value::<RuntimeStagingArtifactStoreRequest>(serde_json::json!({
+                "artifactId": "artifact-1",
+                "jobId": "job-1",
+                "artifactPath": "wiki/a.md",
+                "targetPath": "wiki/a.md",
+                "operationIntent": "create",
+                "baseHash": null,
+                "sourceKind": "ingest",
+                "markdown": "# A",
+                "rawSecret": "nope"
+            }))
+            .expect_err("store request rejects rawSecret");
+        assert!(store.to_string().contains("unknown field"));
+
+        let clear = serde_json::from_value::<RuntimeStagingArtifactsClearPendingForJobRequest>(
+            serde_json::json!({
+                "jobId": "job-1",
+                "deleteCommitted": true
+            }),
+        )
+        .expect_err("clear request rejects deleteCommitted");
+        assert!(clear.to_string().contains("unknown field"));
 
         let list = serde_json::from_value::<RuntimeStagingArtifactListRequest>(serde_json::json!({
             "jobId": "job-1",
@@ -8863,6 +9503,70 @@ mod tests {
         let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
         assert!(!table_exists(&connection, "runtime_staging_artifacts").expect("check table"));
         assert!(!migration_family_exists(&project, STAGING_ARTIFACTS_FAMILY));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_list_reads_v1_rows_without_migration() {
+        let project = temp_project("staging-list-v1-table");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "CREATE TABLE runtime_staging_artifacts (
+                    artifact_id TEXT PRIMARY KEY CHECK(length(artifact_id) > 0),
+                    job_id TEXT NOT NULL CHECK(length(job_id) > 0),
+                    artifact_path TEXT NOT NULL CHECK(length(CAST(artifact_path AS BLOB)) > 0),
+                    artifact_hash TEXT NOT NULL CHECK(length(CAST(artifact_hash AS BLOB)) > 0),
+                    status TEXT NOT NULL CHECK (
+                        status IN ('pending', 'committed', 'failed', 'cancelled', 'deleted')
+                    ),
+                    created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    expires_at_ms INTEGER CHECK(expires_at_ms IS NULL OR expires_at_ms >= 0),
+                    deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= 0),
+                    last_error TEXT,
+                    FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id)
+                )",
+                [],
+            )
+            .expect("create v1 staging table");
+        connection
+            .execute(
+                "INSERT INTO runtime_staging_artifacts (
+                    artifact_id,
+                    job_id,
+                    artifact_path,
+                    artifact_hash,
+                    status,
+                    created_at_ms,
+                    updated_at_ms
+                ) VALUES ('artifact-1', 'job-1', 'job-1/page.md', 'sha256:abc', 'pending', 1, 2)",
+                [],
+            )
+            .expect("insert v1 staging row");
+        drop(connection);
+
+        let list = runtime_staging_artifact_list_for_project(
+            Some(&project),
+            true,
+            staging_list_request(Some("job-1"), Some(PENDING_ARTIFACT_STATUS)),
+        )
+        .expect("list v1 staging rows");
+
+        assert_eq!(list.artifacts.len(), 1);
+        assert_eq!(list.artifacts[0].artifact_path, "job-1/page.md");
+        assert_eq!(list.artifacts[0].target_path, None);
+        assert_eq!(list.artifacts[0].operation_intent, None);
+        assert_eq!(list.artifacts[0].base_hash, None);
+        assert_eq!(list.artifacts[0].source_kind, None);
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        assert!(
+            !column_exists(&connection, "runtime_staging_artifacts", "target_path")
+                .expect("check target column")
+        );
         let _ = fs::remove_dir_all(project);
     }
 
@@ -11539,6 +12243,443 @@ mod tests {
         )
         .expect("list committed artifacts");
         assert_eq!(list.artifacts, vec![committed]);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_store_writes_body_metadata_hash_and_cleanup() {
+        let project = temp_project("staging-store-happy");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let markdown = "# Title\r\nBody\rEnd\n";
+
+        let stored = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "update",
+                Some("sha256:base"),
+                markdown,
+            ),
+            200,
+        )
+        .expect("store staging artifact");
+
+        assert_eq!(stored.artifact_hash, hash_staging_markdown(markdown));
+        assert_eq!(
+            hash_staging_markdown("line1\r\nline2\rline3\n"),
+            hash_staging_markdown("line1\nline2\nline3\n")
+        );
+        assert_eq!(stored.target_path.as_deref(), Some("Wiki/Page.md"));
+        assert_eq!(stored.operation_intent.as_deref(), Some("update"));
+        assert_eq!(stored.base_hash.as_deref(), Some("sha256:base"));
+        assert_eq!(stored.source_kind.as_deref(), Some("ingest"));
+        assert_eq!(
+            fs::read_to_string(staging_dir_path(&project).join("job-1/page.md"))
+                .expect("read stored body"),
+            markdown
+        );
+
+        let listed = runtime_staging_artifact_list_for_project(
+            Some(&project),
+            true,
+            staging_list_request(Some("job-1"), Some(PENDING_ARTIFACT_STATUS)),
+        )
+        .expect("list stored artifact");
+        assert_eq!(listed.artifacts, vec![stored.clone()]);
+
+        let committed = runtime_staging_artifact_commit_success_for_project(
+            Some(&project),
+            true,
+            staging_commit_request("artifact-1"),
+            300,
+        )
+        .expect("commit cleanup");
+        assert_eq!(committed.status, COMMITTED_ARTIFACT_STATUS);
+        assert_eq!(committed.target_path.as_deref(), Some("Wiki/Page.md"));
+        assert!(!staging_dir_path(&project).join("job-1/page.md").exists());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_store_rejects_invalid_body_and_base_hash() {
+        let project = temp_project("staging-store-validation");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+
+        let mut create_with_base = staging_store_request(
+            "artifact-1",
+            "job-1",
+            "job-1/page.md",
+            "Wiki/Page.md",
+            "create",
+            Some("sha256:base"),
+            "# Page\n",
+        );
+        let base_error = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            create_with_base.clone(),
+            200,
+        )
+        .expect_err("create with base hash is rejected");
+        assert!(base_error.starts_with("invalid-base-hash"));
+
+        create_with_base.base_hash = None;
+        create_with_base.markdown = "x".repeat(MAX_STAGING_ARTIFACT_BODY_BYTES + 1);
+        let body_error = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            create_with_base,
+            200,
+        )
+        .expect_err("oversized body is rejected");
+        assert!(body_error.starts_with("invalid-markdown"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_store_cleans_file_when_metadata_write_fails() {
+        let project = temp_project("staging-store-db-failure-cleanup");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        let error = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "missing-job",
+                "missing-job/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect_err("missing job is rejected");
+
+        assert!(error.starts_with("job-not-found"));
+        assert!(!staging_dir_path(&project)
+            .join("missing-job/page.md")
+            .exists());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_store_cleans_file_after_post_write_insert_failure() {
+        let project = temp_project("staging-store-post-write-failure");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "CREATE TABLE runtime_staging_artifacts (
+                    artifact_id TEXT PRIMARY KEY CHECK(length(artifact_id) > 0),
+                    job_id TEXT NOT NULL CHECK(length(job_id) > 0),
+                    artifact_path TEXT NOT NULL CHECK(length(CAST(artifact_path AS BLOB)) > 0),
+                    artifact_hash TEXT NOT NULL CHECK(length(CAST(artifact_hash AS BLOB)) > 0),
+                    target_path TEXT,
+                    operation_intent TEXT,
+                    base_hash TEXT,
+                    source_kind TEXT CHECK(source_kind = 'blocked'),
+                    status TEXT NOT NULL CHECK (
+                        status IN ('pending', 'committed', 'failed', 'cancelled', 'deleted')
+                    ),
+                    created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    expires_at_ms INTEGER CHECK(expires_at_ms IS NULL OR expires_at_ms >= 0),
+                    deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= 0),
+                    last_error TEXT,
+                    FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id)
+                )",
+                [],
+            )
+            .expect("create constrained staging table");
+        drop(connection);
+
+        let error = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect_err("insert check failure is reported");
+
+        assert!(error.starts_with("staging-artifact-store-insert-failed"));
+        assert!(!staging_dir_path(&project).join("job-1/page.md").exists());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_store_rejects_unscoped_and_conflicting_paths() {
+        let project = temp_project("staging-store-path-scope");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create first job");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-2"), 110)
+            .expect("create second job");
+
+        runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect("store first artifact");
+
+        let unscoped = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-2",
+                "job-2",
+                "job-1/page.md",
+                "Wiki/Other.md",
+                "create",
+                None,
+                "# Other\n",
+            ),
+            210,
+        )
+        .expect_err("artifact path must be scoped to job");
+        assert!(unscoped.starts_with("invalid-artifact-path"));
+        assert_eq!(
+            fs::read_to_string(staging_dir_path(&project).join("job-1/page.md"))
+                .expect("first artifact still exists"),
+            "# Page\n"
+        );
+
+        let conflict = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-3",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Third.md",
+                "create",
+                None,
+                "# Third\n",
+            ),
+            220,
+        )
+        .expect_err("same active path must be rejected");
+        assert!(conflict.starts_with("artifact-path-conflict"));
+        assert_eq!(
+            fs::read_to_string(staging_dir_path(&project).join("job-1/page.md"))
+                .expect("first artifact remains unchanged"),
+            "# Page\n"
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifacts_clear_pending_for_job_removes_files_and_rows() {
+        let project = temp_project("staging-clear-pending");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+
+        for artifact_id in ["artifact-1", "artifact-2"] {
+            runtime_staging_artifact_store_for_project(
+                Some(&project),
+                true,
+                staging_store_request(
+                    artifact_id,
+                    "job-1",
+                    &format!("job-1/{artifact_id}.md"),
+                    &format!("Wiki/{artifact_id}.md"),
+                    "create",
+                    None,
+                    "# Page\n",
+                ),
+                200,
+            )
+            .expect("store pending artifact");
+        }
+
+        let cleared = runtime_staging_artifacts_clear_pending_for_job_for_project(
+            Some(&project),
+            true,
+            staging_clear_pending_request("job-1"),
+            300,
+        )
+        .expect("clear pending artifacts");
+
+        assert_eq!(cleared.cleared.len(), 2);
+        assert!(!staging_dir_path(&project).join("job-1/artifact-1.md").exists());
+        let list = runtime_staging_artifact_list_for_project(
+            Some(&project),
+            true,
+            staging_list_request(Some("job-1"), Some(PENDING_ARTIFACT_STATUS)),
+        )
+        .expect("list pending");
+        assert!(list.artifacts.is_empty());
+
+        let repeated = runtime_staging_artifacts_clear_pending_for_job_for_project(
+            Some(&project),
+            true,
+            staging_clear_pending_request("job-1"),
+            400,
+        )
+        .expect("repeated clear is idempotent");
+        assert!(repeated.cleared.is_empty());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifacts_clear_pending_tolerates_missing_files() {
+        let project = temp_project("staging-clear-missing-file");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect("store pending artifact");
+        fs::remove_file(staging_dir_path(&project).join("job-1/page.md"))
+            .expect("remove file before cleanup");
+
+        let cleared = runtime_staging_artifacts_clear_pending_for_job_for_project(
+            Some(&project),
+            true,
+            staging_clear_pending_request("job-1"),
+            300,
+        )
+        .expect("clear missing file");
+        assert_eq!(cleared.cleared.len(), 1);
+        let list = runtime_staging_artifact_list_for_project(
+            Some(&project),
+            true,
+            staging_list_request(Some("job-1"), Some(PENDING_ARTIFACT_STATUS)),
+        )
+        .expect("list pending");
+        assert!(list.artifacts.is_empty());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn staging_artifact_store_migrates_existing_runtime_db_columns() {
+        let project = temp_project("staging-store-migration");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS runtime_staging_artifacts (
+                    artifact_id TEXT PRIMARY KEY CHECK(length(artifact_id) > 0),
+                    job_id TEXT NOT NULL CHECK(length(job_id) > 0),
+                    artifact_path TEXT NOT NULL CHECK(length(CAST(artifact_path AS BLOB)) > 0),
+                    artifact_hash TEXT NOT NULL CHECK(length(CAST(artifact_hash AS BLOB)) > 0),
+                    status TEXT NOT NULL CHECK (
+                        status IN ('pending', 'committed', 'failed', 'cancelled', 'deleted')
+                    ),
+                    created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                    expires_at_ms INTEGER CHECK(expires_at_ms IS NULL OR expires_at_ms >= 0),
+                    deleted_at_ms INTEGER CHECK(deleted_at_ms IS NULL OR deleted_at_ms >= 0),
+                    last_error TEXT,
+                    FOREIGN KEY(job_id) REFERENCES runtime_jobs(job_id)
+                )",
+                [],
+            )
+            .expect("seed old staging table");
+        drop(connection);
+
+        let stored = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect("store after migration");
+
+        assert_eq!(stored.target_path.as_deref(), Some("Wiki/Page.md"));
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        assert!(column_exists(&connection, "runtime_staging_artifacts", "target_path")
+            .expect("check target column"));
+        assert!(column_exists(&connection, "runtime_staging_artifacts", "operation_intent")
+            .expect("check intent column"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_artifact_store_rejects_parent_symlink_escape() {
+        let project = temp_project("staging-store-parent-symlink");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("job-1"), 100)
+            .expect("create parent job");
+        let outside_dir = temp_project("staging-store-outside-dir");
+        fs::create_dir_all(&outside_dir).expect("create outside dir");
+        fs::create_dir_all(staging_dir_path(&project)).expect("create staging dir");
+        std::os::unix::fs::symlink(&outside_dir, staging_dir_path(&project).join("job-1"))
+            .expect("create parent symlink");
+
+        let error = runtime_staging_artifact_store_for_project(
+            Some(&project),
+            true,
+            staging_store_request(
+                "artifact-1",
+                "job-1",
+                "job-1/nested/page.md",
+                "Wiki/Page.md",
+                "create",
+                None,
+                "# Page\n",
+            ),
+            200,
+        )
+        .expect_err("parent symlink is rejected");
+
+        assert!(error.starts_with("invalid-artifact-path"));
+        assert!(!outside_dir.join("nested").exists());
+        assert!(!outside_dir.join("page.md").exists());
+        let _ = fs::remove_dir_all(outside_dir);
         let _ = fs::remove_dir_all(project);
     }
 

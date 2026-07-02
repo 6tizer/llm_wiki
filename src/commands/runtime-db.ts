@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
+import type { MarkdownCommitOperationIntent } from "@/core-runtime/contract"
 import type { MarkdownCommitBudgetClaimRequest } from "@/core-runtime/markdown-commit"
 
 export type RuntimeDbHealthState = "disabled" | "no-project" | "healthy"
@@ -109,6 +110,10 @@ export interface RuntimeStagingArtifactRecord {
   jobId: string
   artifactPath: string
   artifactHash: string
+  targetPath?: string | null
+  operationIntent?: MarkdownCommitOperationIntent | null
+  baseHash?: string | null
+  sourceKind?: string | null
   status: string
   createdAtMs: number
   updatedAtMs: number
@@ -137,6 +142,25 @@ export interface RuntimeStagingArtifactList {
   enabled: boolean
   status: RuntimeDbHealthState
   artifacts: RuntimeStagingArtifactRecord[]
+}
+
+export interface RuntimeStagingArtifactStoreRequest {
+  artifactId: string
+  jobId: string
+  artifactPath: string
+  targetPath: string
+  operationIntent: MarkdownCommitOperationIntent
+  baseHash?: string | null
+  sourceKind: string
+  markdown: string
+}
+
+export interface RuntimeStagingArtifactsClearPendingForJobRequest {
+  jobId: string
+}
+
+export interface RuntimeStagingArtifactsClearPendingForJob {
+  cleared: RuntimeStagingArtifactRecord[]
 }
 
 export interface RuntimeEventAppendRequest {
@@ -507,6 +531,23 @@ export function runtimeStagingArtifactRecord(
   return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_record", {
     request,
   })
+}
+
+export function runtimeStagingArtifactStore(
+  request: RuntimeStagingArtifactStoreRequest,
+): Promise<RuntimeStagingArtifactRecord> {
+  return invoke<RuntimeStagingArtifactRecord>("runtime_staging_artifact_store", {
+    request,
+  })
+}
+
+export function runtimeStagingArtifactsClearPendingForJob(
+  request: RuntimeStagingArtifactsClearPendingForJobRequest,
+): Promise<RuntimeStagingArtifactsClearPendingForJob> {
+  return invoke<RuntimeStagingArtifactsClearPendingForJob>(
+    "runtime_staging_artifacts_clear_pending_for_job",
+    { request },
+  )
 }
 
 export function runtimeStagingArtifactList(

@@ -11,6 +11,7 @@ import { streamChat } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { computeContextBudget } from "@/lib/context-budget"
+import { fnv1a64Hex } from "@/core-runtime/stable-hash"
 import { languageRule, trimLongText } from "./ingest-prompts"
 
 const LONG_SOURCE_MIN_BUDGET = 8_000
@@ -208,16 +209,7 @@ export function splitSourceIntoSemanticChunks(
 }
 
 export function hashTextHex(text: string): string {
-  // 64-bit FNV-1a over UTF-16 code units. This is a stability key, not
-  // a security primitive; validation also checks source length/chunk
-  // shape before resuming a checkpoint.
-  let hash = 0xcbf29ce484222325n
-  const prime = 0x100000001b3n
-  for (let i = 0; i < text.length; i++) {
-    hash ^= BigInt(text.charCodeAt(i))
-    hash = BigInt.asUintN(64, hash * prime)
-  }
-  return hash.toString(16).padStart(16, "0")
+  return fnv1a64Hex(text)
 }
 
 export function longSourceCheckpointPath(
@@ -481,4 +473,3 @@ export async function analyzeLongSourceInChunks(
 
   return { chunked: true, analysis, sourceContext, checkpointPath }
 }
-

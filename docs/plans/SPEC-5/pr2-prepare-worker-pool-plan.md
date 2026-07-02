@@ -1,6 +1,6 @@
 # SPEC-5 PR2: Prepare Worker Pool / Model-call Profile Routing
 
-> 类型：PR 执行计划 | 状态：planned / Architect WARN absorbed | issue：#237 | tracking：#191 | branch：`codex/spec-5-pr2-prepare-worker-pool` | run：`df217dc3-8d7e-46d5-b55d-81144ede39e2`
+> 类型：PR 执行计划 | 状态：merged via #238 | issue：#237 | tracking：#191 | branch：`codex/spec-5-pr2-prepare-worker-pool` | run：`df217dc3-8d7e-46d5-b55d-81144ede39e2`
 
 ## Summary
 
