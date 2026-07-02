@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -15,6 +16,7 @@ const MAX_BIND_RETRIES: u32 = 3;
 const MAX_RESTART_RETRIES: u32 = 10;
 const BIND_RETRY_DELAY_SECS: u64 = 2;
 const RESTART_DELAY_SECS: u64 = 5;
+const MAX_CLIP_BODY_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Get current daemon status as a string
 pub fn get_daemon_status() -> &'static str {
@@ -40,16 +42,19 @@ pub fn all_projects() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-const ALLOWED_APP_ORIGIN_PREFIXES: &[&str] = &[
+const ALLOWED_APP_ORIGINS: &[&str] = &[
     "http://localhost:1420",
     "tauri://localhost",
     "https://tauri.localhost",
 ];
 
-/// A request is allowed if it comes from the browser extension
-/// (`chrome-extension://<id>`) or the Tauri app webview. The browser always
-/// sends a truthful `Origin` on cross-origin fetch, so an arbitrary web page
-/// cannot forge one of these. Prefix match tolerates per-platform suffixes.
+/// A request is allowed if it comes from the Tauri app webview (exact
+/// `Origin` match against `ALLOWED_APP_ORIGINS`) or a browser extension
+/// (`chrome-extension://<id>`, any installed id). The browser always sends a
+/// truthful `Origin` on cross-origin fetch, so an arbitrary web page cannot
+/// forge one of these. Trusting any installed extension is an accepted
+/// limitation — a malicious installed extension is out of scope; pinning to
+/// our extension's id via the manifest `key` is a follow-up.
 fn origin_allowed(headers: &[Header]) -> bool {
     let origin = headers
         .iter()
@@ -57,8 +62,7 @@ fn origin_allowed(headers: &[Header]) -> bool {
         .map(|h| h.value.as_str());
     match origin {
         Some(o) => {
-            o.starts_with("chrome-extension://")
-                || ALLOWED_APP_ORIGIN_PREFIXES.iter().any(|p| o.starts_with(p))
+            o.starts_with("chrome-extension://") || ALLOWED_APP_ORIGINS.iter().any(|p| o == *p)
         }
         None => false,
     }
@@ -210,7 +214,11 @@ fn handle_one_request(mut request: Request) {
         }
         (&Method::Post, "/project") => {
             let mut body = String::new();
-            if let Err(e) = request.as_reader().read_to_string(&mut body) {
+            if let Err(e) = request
+                .as_reader()
+                .take(MAX_CLIP_BODY_BYTES)
+                .read_to_string(&mut body)
+            {
                 let err = serde_json::json!({
                     "ok": false,
                     "error": format!("Failed to read body: {}", e),
@@ -272,14 +280,19 @@ fn handle_one_request(mut request: Request) {
         }
         (&Method::Post, "/projects") => {
             let mut body = String::new();
-            if request.as_reader().read_to_string(&mut body).is_ok() {
+            if request
+                .as_reader()
+                .take(MAX_CLIP_BODY_BYTES)
+                .read_to_string(&mut body)
+                .is_ok()
+            {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
                     if let Some(arr) = parsed["projects"].as_array() {
                         let mut projects = ALL_PROJECTS.lock().unwrap_or_else(|e| e.into_inner());
                         projects.clear();
                         for item in arr {
                             let name = item["name"].as_str().unwrap_or("").to_string();
-                            let path = item["path"].as_str().unwrap_or("").to_string();
+                            let path = item["path"].as_str().unwrap_or("").replace('\\', "/");
                             if !path.is_empty() {
                                 projects.push((name, path));
                             }
@@ -322,7 +335,11 @@ fn handle_one_request(mut request: Request) {
         }
         (&Method::Post, "/clip") => {
             let mut body = String::new();
-            if let Err(e) = request.as_reader().read_to_string(&mut body) {
+            if let Err(e) = request
+                .as_reader()
+                .take(MAX_CLIP_BODY_BYTES)
+                .read_to_string(&mut body)
+            {
                 let err = serde_json::json!({
                     "ok": false,
                     "error": format!("Failed to read body: {}", e),
@@ -377,15 +394,9 @@ fn handle_set_project(body: &str) -> String {
         }
     };
 
-    match CURRENT_PROJECT.lock() {
-        Ok(mut guard) => {
-            *guard = path;
-            serde_json::json!({"ok": true}).to_string()
-        }
-        Err(e) => {
-            serde_json::json!({"ok": false, "error": format!("Lock error: {}", e)}).to_string()
-        }
-    }
+    let mut guard = CURRENT_PROJECT.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = path;
+    serde_json::json!({"ok": true}).to_string()
 }
 
 fn handle_clip(body: &str) -> String {
@@ -401,16 +412,15 @@ fn handle_clip(body: &str) -> String {
     let url = parsed["url"].as_str().unwrap_or("");
     let content = parsed["content"].as_str().unwrap_or("");
 
+    let current_project = CURRENT_PROJECT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+
     // Use projectPath from request body, or fall back to globally-set project path
     let project_path_from_body = parsed["projectPath"].as_str().unwrap_or("").to_string();
     let project_path = if project_path_from_body.is_empty() {
-        match CURRENT_PROJECT.lock() {
-            Ok(guard) => guard.clone(),
-            Err(e) => {
-                return serde_json::json!({"ok": false, "error": format!("Lock error: {}", e)})
-                    .to_string()
-            }
-        }
+        current_project.clone()
     } else {
         project_path_from_body
     };
@@ -430,15 +440,11 @@ fn handle_clip(body: &str) -> String {
         return serde_json::json!({"ok": false, "error": "content is required"}).to_string();
     }
 
-    let current = CURRENT_PROJECT
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
     let projects = ALL_PROJECTS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    if !is_known_project(&project_path, &current, &projects) {
+    if !is_known_project(&project_path, &current_project, &projects) {
         return serde_json::json!({
             "ok": false,
             "error": "projectPath is not a known project (open it in the app first)"
@@ -557,6 +563,33 @@ mod tests {
     fn origin_allowed_rejects_arbitrary_website_and_missing_origin() {
         assert!(!origin_allowed(&origin_header("https://evil.example.com")));
         assert!(!origin_allowed(&[]));
+    }
+
+    #[test]
+    fn origin_allowed_rejects_prefix_lookalike_origins() {
+        assert!(!origin_allowed(&origin_header(
+            "https://tauri.localhost.evil.com"
+        )));
+        assert!(!origin_allowed(&origin_header("http://localhost:14200")));
+        assert!(!origin_allowed(&origin_header(
+            "http://localhost:1420.evil.com"
+        )));
+    }
+
+    // Documents that backslash normalization happens upstream (ingress in
+    // handle_set_project / POST /projects, and on project_path in
+    // handle_clip) before is_known_project is ever called — the function
+    // itself is intentionally a plain equality check over already-
+    // normalized, forward-slash paths.
+    #[test]
+    fn is_known_project_matches_normalized_recent_project() {
+        let projects = vec![("proj-a".to_string(), "C:/Users/me/proj".to_string())];
+        let normalized_client_path = r"C:\Users\me\proj".replace('\\', "/");
+        assert!(is_known_project(
+            &normalized_client_path,
+            "/current",
+            &projects
+        ));
     }
 
     #[test]
