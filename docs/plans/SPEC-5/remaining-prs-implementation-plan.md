@@ -1,6 +1,6 @@
 # SPEC-5: Six-PR Continuous Delivery Plan
 
-> 类型：SPEC 连续执行总方案 | 状态：active / PR6 remaining | tracking：#191 | 当前 issue：#245 | 当前 branch：`codex/spec-5-pr6-progress-ui` | 当前 run：`37007d10-19ed-4a5f-84fb-d8b525ec155f`
+> 类型：SPEC 连续执行总方案 | 状态：completed by #236/#238/#240/#242/#244/#246 | tracking：#191 | closeout issue：#245 | closeout run：`37007d10-19ed-4a5f-84fb-d8b525ec155f`
 
 ## Summary
 
@@ -8,11 +8,11 @@ SPEC-5 按 6 个 PR 串行完成，不合并 scope，不跳 PR，不把后续 SP
 
 执行粒度固定为 one issue / one branch / one PR。每个 PR 开始时再落对应 PR 级计划，完成后按 workflow 执行 gate、PR、CI、merge、post-merge cleanup，并停止当前 agent-loop run 后进入下一 PR。
 
-当前事实：
+完成事实：
 
-- PR1-PR5 已合并到 `main`。
-- PR6 issue #245 已创建并绑定当前 agent-loop run。
-- PR6 计划已有 Architect gate BLOCK 反馈，编码前必须先修正 PR6 计划，确保 UI 有真实 runtime entry / observable data path，而不是只做空 UI 聚合。
+- PR1-PR6 已合并到 `main`。
+- PR6 由 #246 完成，issue #245 已交付。
+- PR6 Architect gate 初始 BLOCK 已吸收：最终实现包含真实 bulk runtime entry / observable data path，不是空 UI 聚合。
 
 ## Continuous PR Sequence
 
@@ -23,7 +23,7 @@ SPEC-5 按 6 个 PR 串行完成，不合并 scope，不跳 PR，不把后续 SP
 | PR3 | [pr3-staging-validator-plan.md](./pr3-staging-validator-plan.md) | #240 | merged | prepare output parser/validator、runtime staging store、repair route | schema safety、path safety、pending cleanup、repair payload redaction |
 | PR4 | [pr4-commit-integration-plan.md](./pr4-commit-integration-plan.md) | #242 | merged | pending staging artifact -> SPEC-3 commit operation | commit budget、base-hash conflict、derived stale marker、resume reconciliation |
 | PR5 | [pr5-long-document-map-reduce-plan.md](./pr5-long-document-map-reduce-plan.md) | #244 | merged | long-document chunk plan/map/reduce、partial repair route | partial draft not auto-commit、repair ordering、core helper boundary |
-| PR6 | [pr6-progress-ui-plan.md](./pr6-progress-ui-plan.md) | #245 | active | progress / ETA / pause / resume / cancel UI、Runtime Diagnostics closeout | real runtime entry, non-misleading ETA, polling cost, UI controls, diagnostics visibility |
+| PR6 | [pr6-progress-ui-plan.md](./pr6-progress-ui-plan.md) | #246 | merged | progress / ETA / pause / resume / cancel UI、Runtime Diagnostics closeout | real runtime entry, non-misleading ETA, polling cost, UI controls, diagnostics visibility |
 
 ## Workflow Per PR
 
@@ -102,18 +102,21 @@ PR6 计划修正后，再跑 focused Architect recheck。若外部 agent 不可�
 - Simplicity Gate 已 PASS/WARN 且 P2 清零。
 - Tester / Reviewer gate 的真实 blocking finding 已修复或按 workflow 建 follow-up 并记录。
 
-## Current Next Step
+## Closeout
 
-当前只剩 PR6：
+SPEC-5 六个实现 PR 已全部完成：
 
-1. 修正 [pr6-progress-ui-plan.md](./pr6-progress-ui-plan.md)，吸收 Architect BLOCK。
-2. 跑 focused Architect recheck。
-3. 按修正后的 PR6 plan 实现。
-4. 跑 focused tests、Simplicity、Tester、Reviewer、detect、PR、CI、merge。
-5. PR6 merge 后把 `spec-5-parallel-knowledge-pipeline.md` 和 README 标记为 completed。
+1. PR1 #236 Batch Planner。
+2. PR2 #238 Prepare Worker Pool。
+3. PR3 #240 Staging Artifact Parser / Validator。
+4. PR4 #242 Commit Operation Integration。
+5. PR5 #244 Long-document Map-reduce。
+6. PR6 #246 Progress / ETA / Controls UI。
+
+下一阶段进入 SPEC-6 Derived Knowledge Rebuild 的 PR 级规划。
 
 ## Test Plan For This Plan
 
-- `rg "Six-PR|PR6 Correction|Current Next Step|SPEC-5 PR6" docs/plans/SPEC-5 docs/plans/README.md`
+- `rg "Six-PR|PR6 Correction|Closeout|SPEC-5 PR6" docs/plans/SPEC-5 docs/plans/README.md`
 - `git diff --check`
 - 本文件是 docs planning artifact，不代表 PR6 implementation gate 结论。
