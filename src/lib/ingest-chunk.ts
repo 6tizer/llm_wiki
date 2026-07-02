@@ -11,28 +11,34 @@ import { streamChat } from "@/lib/llm-client"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { computeContextBudget } from "@/lib/context-budget"
-import { fnv1a64Hex } from "@/core-runtime/stable-hash"
+import {
+  LONG_SOURCE_CHUNK_ANALYSIS_MAX,
+  LONG_SOURCE_CHUNK_MAX,
+  LONG_SOURCE_CHUNK_MIN,
+  LONG_SOURCE_DIGEST_MAX,
+  clampNumber,
+  hashTextHex,
+  splitSourceIntoSemanticChunks,
+  type SourceChunk,
+} from "@/core-runtime/parallel-knowledge"
 import { languageRule, trimLongText } from "./ingest-prompts"
+
+export {
+  clampNumber,
+  hashTextHex,
+  overlapSuffix,
+  semanticBlocks,
+  splitOversizedBlock,
+  splitSourceIntoSemanticChunks,
+} from "@/core-runtime/parallel-knowledge"
+export type { SourceChunk } from "@/core-runtime/parallel-knowledge"
 
 const LONG_SOURCE_MIN_BUDGET = 8_000
 const LONG_SOURCE_MAX_SINGLE_PASS_BUDGET = 300_000
-const LONG_SOURCE_CHUNK_MIN = 12_000
-const LONG_SOURCE_CHUNK_MAX = 60_000
-const LONG_SOURCE_DIGEST_MAX = 15_000
-const LONG_SOURCE_CHUNK_ANALYSIS_MAX = 40_000
 const INGEST_GENERATION_TOKENS_DEFAULT = 8_192
 const INGEST_GENERATION_TOKENS_128K = 16_384
 const INGEST_GENERATION_TOKENS_256K = 24_576
 const INGEST_GENERATION_TOKENS_512K = 32_768
-
-export interface SourceChunk {
-  id: string
-  index: number
-  total: number
-  headingPath: string
-  overlapBefore: string
-  main: string
-}
 
 export interface LongSourcePlan {
   chunked: boolean
@@ -54,10 +60,6 @@ export interface LongSourceCheckpoint {
   globalDigest: string
   analyses: string[]
   updatedAt: number
-}
-
-export function clampNumber(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value))
 }
 
 export function computeIngestSourceBudget(
@@ -82,134 +84,6 @@ export function computeIngestGenerationMaxTokens(maxContextSize: number | undefi
 
 export function computeIngestReviewMaxTokens(maxContextSize: number | undefined): number {
   return Math.min(8_192, Math.max(4_096, Math.floor(computeIngestGenerationMaxTokens(maxContextSize) / 2)))
-}
-
-export function splitOversizedBlock(block: string, targetChars: number): string[] {
-  if (block.length <= targetChars * 1.25) return [block]
-
-  const pieces = block.match(/[^.!?。！？\n]+[.!?。！？]?|\n+/g) ?? [block]
-  const out: string[] = []
-  let current = ""
-  for (const piece of pieces) {
-    if (current && current.length + piece.length > targetChars) {
-      out.push(current.trim())
-      current = ""
-    }
-    if (piece.length > targetChars) {
-      for (let i = 0; i < piece.length; i += targetChars) {
-        const slice = piece.slice(i, i + targetChars).trim()
-        if (slice) out.push(slice)
-      }
-    } else {
-      current += piece
-    }
-  }
-  if (current.trim()) out.push(current.trim())
-  return out
-}
-
-export function semanticBlocks(content: string, targetChars: number): Array<{ text: string; headingPath: string }> {
-  const blocks: Array<{ text: string; headingPath: string }> = []
-  const headingStack: string[] = []
-  let paragraph: string[] = []
-  let paragraphHeading = ""
-
-  const currentHeadingPath = () => headingStack.filter(Boolean).join(" > ")
-  const flushParagraph = () => {
-    const text = paragraph.join("\n").trim()
-    if (text) {
-      for (const piece of splitOversizedBlock(text, targetChars)) {
-        blocks.push({ text: piece, headingPath: paragraphHeading })
-      }
-    }
-    paragraph = []
-  }
-
-  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
-    const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line)
-    if (heading) {
-      flushParagraph()
-      const depth = heading[1].length
-      headingStack.length = depth - 1
-      headingStack[depth - 1] = heading[2].trim()
-      blocks.push({ text: line.trim(), headingPath: currentHeadingPath() })
-      paragraphHeading = currentHeadingPath()
-      continue
-    }
-
-    if (line.trim() === "") {
-      flushParagraph()
-      paragraphHeading = currentHeadingPath()
-      continue
-    }
-
-    if (paragraph.length === 0) paragraphHeading = currentHeadingPath()
-    paragraph.push(line)
-  }
-  flushParagraph()
-
-  return blocks
-}
-
-export function overlapSuffix(text: string, maxChars: number): string {
-  if (!text || maxChars <= 0) return ""
-  if (text.length <= maxChars) return text
-  const raw = text.slice(-maxChars)
-  const paragraphBreak = raw.search(/\n\s*\n/)
-  if (paragraphBreak > 0 && raw.length - paragraphBreak > maxChars * 0.4) {
-    return raw.slice(paragraphBreak).trim()
-  }
-  const sentenceBreak = raw.search(/[.!?。！？]\s+/)
-  if (sentenceBreak > 0 && raw.length - sentenceBreak > maxChars * 0.4) {
-    return raw.slice(sentenceBreak + 1).trim()
-  }
-  return raw.trim()
-}
-
-export function splitSourceIntoSemanticChunks(
-  content: string,
-  targetChars: number,
-  overlapChars: number,
-): SourceChunk[] {
-  const target = Math.max(1_000, targetChars)
-  const blocks = semanticBlocks(content, target)
-  if (blocks.length === 0) return []
-
-  const rawChunks: Array<{ main: string; headingPath: string }> = []
-  let current: string[] = []
-  let currentLength = 0
-  let currentHeading = blocks[0]?.headingPath ?? ""
-
-  const flush = () => {
-    const main = current.join("\n\n").trim()
-    if (main) rawChunks.push({ main, headingPath: currentHeading })
-    current = []
-    currentLength = 0
-  }
-
-  for (const block of blocks) {
-    const nextLength = currentLength + block.text.length + (current.length > 0 ? 2 : 0)
-    if (current.length > 0 && nextLength > target) {
-      flush()
-    }
-    if (current.length === 0) currentHeading = block.headingPath
-    current.push(block.text)
-    currentLength += block.text.length + (current.length > 1 ? 2 : 0)
-  }
-  flush()
-
-  return rawChunks.map((chunk, idx) => ({
-    id: `chunk-${idx + 1}`,
-    index: idx + 1,
-    total: rawChunks.length,
-    headingPath: chunk.headingPath,
-    overlapBefore: idx > 0 ? overlapSuffix(rawChunks[idx - 1].main, overlapChars) : "",
-    main: chunk.main,
-  }))
-}
-
-export function hashTextHex(text: string): string {
-  return fnv1a64Hex(text)
 }
 
 export function longSourceCheckpointPath(

@@ -1,6 +1,6 @@
 # SPEC-5 PR4: Commit Operation Integration
 
-> 类型：PR 执行计划 | 状态：post-PR review fixes active | issue：#241 | tracking：#191 | branch：`codex/spec-5-pr4-commit-integration` | run：`8a94310a-0e90-4af3-841a-42caf0a06902`
+> 类型：PR 执行计划 | 状态：merged via #242 | issue：#241 | tracking：#191 | branch：`codex/spec-5-pr4-commit-integration` | run：`8a94310a-0e90-4af3-841a-42caf0a06902`
 
 ## Summary
 

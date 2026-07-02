@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
   BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+  BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
   BULK_KNOWLEDGE_PREPARE_JOB_KIND,
   BULK_KNOWLEDGE_PREPARE_OUTPUT_KIND,
   derivePrepareArtifactId,
+  type BulkKnowledgeMapReduceRepairJobPayload,
+  type LongDocumentReduceResult,
 } from "@/core-runtime/parallel-knowledge"
 import {
   PREPARE_PROFILE_TASK_FAMILY,
@@ -75,6 +78,92 @@ function healthyPool(): RuntimeProfilePoolList {
     status: "healthy",
     activeClaims: [],
     circuitBreakers: [],
+  }
+}
+
+function partialMapReduceResult(): LongDocumentReduceResult {
+  return {
+    kind: "bulk-knowledge-long-document-map-reduce-result",
+    sourcePath: "docs/a.md",
+    sourceIdentity: "docs/a.md",
+    sourceHash: "source-hash-a",
+    status: "partial",
+    commitPolicy: "repair-only",
+    totalChunks: 2,
+    successfulChunkCount: 1,
+    failedChunkCount: 1,
+    lowConfidenceChunkCount: 0,
+    missingChunkCount: 0,
+    analysisMarkdown: "# Partial draft with private details",
+    sourceContext: "chunk text must not be routed",
+    failedChunks: [
+      {
+        chunkId: "chunk-2",
+        chunkIndex: 2,
+        chunkTotal: 2,
+        headingPath: "Private Section",
+        chunkHash: "chunk-hash-2",
+        status: "failed",
+        error: "provider-error",
+      },
+    ],
+    repairJobs: [
+      {
+        kind: BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+        sourcePath: "docs/a.md",
+        sourceIdentity: "docs/a.md",
+        sourceHash: "source-hash-a",
+        chunkId: "chunk-2",
+        chunkIndex: 2,
+        chunkTotal: 2,
+        chunkHash: "chunk-hash-2",
+        headingPath: "Private Section",
+        status: "failed",
+        error: "provider-error",
+        owner: "bulk-map-reduce",
+        strategy: "reanalyze-chunk",
+        markdown: "# private repair draft",
+        analysisMarkdown: "# private analysis",
+        sourceContext: "private source context",
+      } as BulkKnowledgeMapReduceRepairJobPayload,
+    ],
+  }
+}
+
+function partialMapReduceResultWithTwoRepairs(): LongDocumentReduceResult {
+  const base = partialMapReduceResult()
+  const secondFailure = {
+    ...base.failedChunks[0],
+    chunkId: "chunk-3",
+    chunkIndex: 3,
+    chunkTotal: 3,
+    chunkHash: "chunk-hash-3",
+  }
+  const secondRepair = {
+    ...base.repairJobs[0],
+    chunkId: "chunk-3",
+    chunkIndex: 3,
+    chunkTotal: 3,
+    chunkHash: "chunk-hash-3",
+  }
+
+  return {
+    ...base,
+    totalChunks: 3,
+    failedChunkCount: 2,
+    failedChunks: [...base.failedChunks, secondFailure],
+    repairJobs: [...base.repairJobs, secondRepair],
+  }
+}
+
+function failedMapReduceResult(): LongDocumentReduceResult {
+  const base = partialMapReduceResult()
+  return {
+    ...base,
+    status: "failed",
+    successfulChunkCount: 0,
+    failedChunkCount: 2,
+    lowConfidenceChunkCount: 0,
   }
 }
 
@@ -488,6 +577,334 @@ it("validates and stores successful prepare artifacts before completing a job", 
     "bulk-prepare:job-claimed",
     "bulk-prepare:artifacts-stored",
     "bulk-prepare:job-completed",
+  ])
+})
+
+it("routes partial map-reduce chunks to repair and skips repair-only source artifacts", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: partialMapReduceResult(),
+      artifacts: [
+        {
+          kind: BULK_KNOWLEDGE_PREPARE_OUTPUT_KIND,
+          sourcePath: "docs/a.md",
+          targetPath: "Wiki/Partial.md",
+          artifactPath: "job-1/partial.md",
+          operationIntent: "create",
+          sourceKind: "ingest",
+          markdown: "# Partial draft with secret sk-test-secret\n",
+          baseHash: null,
+        },
+        {
+          kind: BULK_KNOWLEDGE_PREPARE_OUTPUT_KIND,
+          sourcePath: "docs/b.md",
+          targetPath: "Wiki/Complete.md",
+          artifactPath: "job-1/complete.md",
+          operationIntent: "create",
+          sourceKind: "ingest",
+          markdown: "# Complete\n",
+          baseHash: null,
+        },
+      ],
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 1,
+    storedArtifacts: 1,
+    mapReduceRepairJobs: 1,
+    partialMapReduceResults: 1,
+  })
+  expect(runtime.calls.stagingArtifactStore).toHaveLength(1)
+  expect(runtime.calls.stagingArtifactStore[0]).toMatchObject({
+    targetPath: "Wiki/Complete.md",
+    artifactPath: "job-1/complete.md",
+    markdown: "# Complete\n",
+  })
+  expect(runtime.calls.createJob).toEqual([
+    expect.objectContaining({
+      jobId: expect.stringMatching(/^bulk-map-reduce-repair-[0-9a-f]{16}$/),
+      kind: BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+      maxAttempts: 3,
+    }),
+  ])
+  const repairPayload = JSON.parse((runtime.calls.createJob[0] as { payload: string }).payload)
+  expect(repairPayload).toMatchObject({
+    kind: BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+    jobId: "job-1",
+    sourceJobKind: BULK_KNOWLEDGE_PREPARE_JOB_KIND,
+    sourcePath: "docs/a.md",
+    chunkId: "chunk-2",
+    headingPath: "",
+    error: "provider-error",
+  })
+  expect(repairPayload).not.toHaveProperty("markdown")
+  expect(repairPayload).not.toHaveProperty("artifactPath")
+  expect(repairPayload).not.toHaveProperty("analysisMarkdown")
+  expect(repairPayload).not.toHaveProperty("sourceContext")
+  expect(JSON.stringify(repairPayload)).not.toContain("Private Section")
+  expect(JSON.stringify(repairPayload)).not.toContain("sk-test-secret")
+  expect(JSON.stringify(repairPayload)).not.toContain("chunk text must not be routed")
+  expect(runtime.calls.sequence).toEqual([
+    "claimJobByKind",
+    "progressAppend",
+    "profilePoolList",
+    "profilePoolClaim",
+    "stagingArtifactsClearPendingForJob",
+    "stagingArtifactStore",
+    "progressAppend",
+    "createJob",
+    "progressAppend",
+    "profilePoolRelease",
+    "completeJob",
+    "progressAppend",
+  ])
+  expect(progressPayloadTypes(runtime.calls.progressAppend)).toEqual([
+    "bulk-prepare:job-claimed",
+    "bulk-prepare:artifacts-stored",
+    "bulk-prepare:map-reduce-repair-routed",
+    "bulk-prepare:job-completed",
+  ])
+})
+
+it("sanitizes executor-provided map-reduce repair errors before creating repair jobs", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+  const unsafe = partialMapReduceResult()
+  const unsafeRepairResult: LongDocumentReduceResult = {
+    ...unsafe,
+    repairJobs: [
+      {
+        ...unsafe.repairJobs[0],
+        error: "sk-worker-secret: provider error",
+      },
+    ],
+  }
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: unsafeRepairResult,
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 1,
+    mapReduceRepairJobs: 1,
+  })
+  const repairPayload = JSON.parse((runtime.calls.createJob[0] as { payload: string }).payload)
+  expect(repairPayload.error).toBe("map-chunk-failed")
+  expect(JSON.stringify(repairPayload)).not.toContain("sk-worker-secret")
+})
+
+it("uses deterministic map-reduce repair job ids so retries can skip already-created jobs", async () => {
+  const firstRuntime = createRuntime([jobClaim("job-1")])
+  let firstCreateCount = 0
+  firstRuntime.createJob = async (request) => {
+    firstRuntime.calls.sequence.push("createJob")
+    firstRuntime.calls.createJob.push(request)
+    firstCreateCount += 1
+    if (firstCreateCount === 2) {
+      throw new Error("job-create-failed: queue unavailable")
+    }
+    return { ...jobClaim(request.jobId ?? "repair-1").job, kind: request.kind, payload: request.payload }
+  }
+
+  const executor = async () => ({
+    status: "success" as const,
+    mapReduceResults: partialMapReduceResultWithTwoRepairs(),
+  })
+  const firstResult = await runPrepareWorkerPool({
+    runtime: firstRuntime,
+    executor,
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(firstResult).toMatchObject({
+    completedJobs: 0,
+    failedJobs: 1,
+    mapReduceRepairJobs: 1,
+  })
+  const firstRepairJobId = (firstRuntime.calls.createJob[0] as { jobId?: string }).jobId
+  expect(firstRepairJobId).toMatch(/^bulk-map-reduce-repair-[0-9a-f]{16}$/)
+
+  const retryRuntime = createRuntime([jobClaim("job-1")])
+  retryRuntime.createJob = async (request) => {
+    retryRuntime.calls.sequence.push("createJob")
+    retryRuntime.calls.createJob.push(request)
+    if (request.jobId === firstRepairJobId) {
+      throw new Error("UNIQUE constraint failed: runtime_jobs.job_id")
+    }
+    return { ...jobClaim(request.jobId ?? "repair-2").job, kind: request.kind, payload: request.payload }
+  }
+
+  const retryResult = await runPrepareWorkerPool({
+    runtime: retryRuntime,
+    executor,
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(retryResult).toMatchObject({
+    completedJobs: 1,
+    failedJobs: 0,
+    mapReduceRepairJobs: 1,
+  })
+  expect(retryRuntime.calls.createJob).toHaveLength(2)
+  expect((retryRuntime.calls.createJob[0] as { jobId?: string }).jobId).toBe(firstRepairJobId)
+  expect((retryRuntime.calls.createJob[1] as { jobId?: string }).jobId).not.toBe(firstRepairJobId)
+  expect(retryRuntime.calls.completeJob).toEqual([{ jobId: "job-1", leaseId: "lease-job-1" }])
+})
+
+it("recognizes common duplicate job-id error shapes across database dialects", async () => {
+  const duplicateMessages = [
+    "duplicate key value violates unique constraint \"runtime_jobs_job_id_key\"",
+    "duplicate key value violates unique constraint \"runtime_jobs_pkey\"",
+    "Duplicate entry 'repair-1' for key 'PRIMARY'",
+  ]
+
+  for (const duplicateMessage of duplicateMessages) {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.createJob = async (request) => {
+      runtime.calls.sequence.push("createJob")
+      runtime.calls.createJob.push(request)
+      throw new Error(duplicateMessage)
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({
+        status: "success",
+        mapReduceResults: partialMapReduceResult(),
+      }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result).toMatchObject({
+      completedJobs: 1,
+      failedJobs: 0,
+      mapReduceRepairJobs: 0,
+    })
+  }
+})
+
+it("does not swallow non-duplicate runtime job create failures", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+  runtime.createJob = async (request) => {
+    runtime.calls.sequence.push("createJob")
+    runtime.calls.createJob.push(request)
+    throw new Error("CHECK constraint failed: runtime_jobs.job_id")
+  }
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: partialMapReduceResult(),
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 0,
+    failedJobs: 1,
+    mapReduceRepairJobs: 0,
+  })
+  expect(runtime.calls.failJob).toHaveLength(1)
+})
+
+it("counts failed map-reduce results that route repair jobs", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: failedMapReduceResult(),
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 1,
+    mapReduceRepairJobs: 1,
+    partialMapReduceResults: 1,
+  })
+})
+
+it("clears pending artifacts and fails the job when map-reduce repair routing fails", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+  runtime.createJob = async (request) => {
+    runtime.calls.sequence.push("createJob")
+    runtime.calls.createJob.push(request)
+    throw new Error("runtime-create-job-failed: queue unavailable")
+  }
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: partialMapReduceResult(),
+      artifacts: [
+        {
+          kind: BULK_KNOWLEDGE_PREPARE_OUTPUT_KIND,
+          sourcePath: "docs/b.md",
+          targetPath: "Wiki/Complete.md",
+          artifactPath: "job-1/complete.md",
+          operationIntent: "create",
+          sourceKind: "ingest",
+          markdown: "# Complete\n",
+          baseHash: null,
+        },
+      ],
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 0,
+    failedJobs: 1,
+    storedArtifacts: 1,
+    mapReduceRepairJobs: 0,
+  })
+  expect(runtime.calls.stagingArtifactsClearPendingForJob).toEqual([
+    { jobId: "job-1" },
+    { jobId: "job-1" },
+  ])
+  expect(runtime.calls.completeJob).toEqual([])
+  expect(runtime.calls.profilePoolRelease).toEqual([
+    {
+      claimId: "claim-job-1",
+      outcome: "success",
+      reason: "bulk-prepare-local-map-reduce-repair-failed",
+      error: "map-reduce-repair-failed: runtime-create-job-failed",
+    },
+  ])
+  expect(runtime.calls.failJob).toEqual([
+    {
+      jobId: "job-1",
+      leaseId: "lease-job-1",
+      error: "map-reduce-repair-failed: runtime-create-job-failed",
+      retryAfterMs: undefined,
+    },
+  ])
+  expect(progressPayloadTypes(runtime.calls.progressAppend)).toEqual([
+    "bulk-prepare:job-claimed",
+    "bulk-prepare:artifacts-stored",
+    "bulk-prepare:map-reduce-repair-failed",
   ])
 })
 

@@ -1,8 +1,14 @@
 import {
+  BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
   BULK_KNOWLEDGE_PREPARE_JOB_KIND,
   BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+  canonicalizeBulkKnowledgeSourcePath,
+  hashTextHex,
+  sanitizeRepairError,
   validatePrepareArtifacts,
   type BulkKnowledgePrepareJobPayload,
+  type BulkKnowledgeMapReduceRepairJobPayload,
+  type LongDocumentReduceResult,
   type ValidatedPrepareArtifact,
 } from "@/core-runtime/parallel-knowledge"
 import {
@@ -47,6 +53,7 @@ export type PrepareModelCallOutcome =
   | {
       status: "success"
       artifacts?: readonly unknown[]
+      mapReduceResults?: LongDocumentReduceResult | readonly LongDocumentReduceResult[]
       metadata?: Record<string, unknown>
     }
   | {
@@ -107,6 +114,8 @@ export interface PrepareWorkerPoolResult {
   storedArtifacts: number
   artifactStoreFailures: number
   repairJobs: number
+  mapReduceRepairJobs: number
+  partialMapReduceResults: number
   profileUnavailable: number
   rateLimited: number
   idleWorkers: number
@@ -140,6 +149,8 @@ export async function runPrepareWorkerPool(
     storedArtifacts: 0,
     artifactStoreFailures: 0,
     repairJobs: 0,
+    mapReduceRepairJobs: 0,
+    partialMapReduceResults: 0,
     profileUnavailable: 0,
     rateLimited: 0,
     idleWorkers: 0,
@@ -297,14 +308,24 @@ async function storeSuccessfulArtifacts(
   outcome: Extract<PrepareModelCallOutcome, { status: "success" }>,
   profileClaim: RuntimeProfilePoolClaim,
 ): Promise<boolean> {
-  if (outcome.artifacts === undefined) return true
-
   let artifacts: ValidatedPrepareArtifact[]
   try {
-    artifacts = validatePrepareArtifacts(outcome.artifacts, { jobId: claim.job.jobId })
-    if (artifacts.length === 0) return true
+    artifacts = outcome.artifacts === undefined
+      ? []
+      : validatePrepareArtifacts(outcome.artifacts, { jobId: claim.job.jobId })
+  } catch (err) {
+    const error = `artifact-store-failed: ${sanitizeLocalArtifactError(err)}`
+    await handleArtifactStoreFailure(context, claim, profileClaim, error)
+    return false
+  }
+
+  const mapReduceResults = normalizeMapReduceResults(outcome.mapReduceResults)
+  const committableArtifacts = filterCommittableArtifacts(artifacts, mapReduceResults)
+  if (artifacts.length === 0 && mapReduceResults.length === 0) return true
+
+  try {
     await context.runtime.stagingArtifactsClearPendingForJob({ jobId: claim.job.jobId })
-    for (const artifact of artifacts) {
+    for (const artifact of committableArtifacts) {
       await context.runtime.stagingArtifactStore({
         artifactId: artifact.artifactId,
         jobId: claim.job.jobId,
@@ -317,16 +338,29 @@ async function storeSuccessfulArtifacts(
       })
       context.result.storedArtifacts += 1
     }
-    await appendWorkerProgress(context, claim, "bulk-prepare:artifacts-stored", {
-      profileId: profileClaim.profileId,
-      artifactCount: artifacts.length,
-    })
-    return true
   } catch (err) {
     const error = `artifact-store-failed: ${sanitizeLocalArtifactError(err)}`
     await handleArtifactStoreFailure(context, claim, profileClaim, error)
     return false
   }
+
+  if (committableArtifacts.length > 0) {
+    await appendWorkerProgress(context, claim, "bulk-prepare:artifacts-stored", {
+      profileId: profileClaim.profileId,
+      artifactCount: committableArtifacts.length,
+      skippedRepairOnlyArtifactCount: artifacts.length - committableArtifacts.length,
+    })
+  }
+
+  try {
+    await createMapReduceRepairJobs(context, claim, profileClaim, mapReduceResults)
+  } catch (err) {
+    const error = `map-reduce-repair-failed: ${sanitizeLocalArtifactError(err)}`
+    await handleMapReduceRepairFailure(context, claim, profileClaim, error)
+    return false
+  }
+
+  return true
 }
 
 async function handleArtifactStoreFailure(
@@ -376,6 +410,64 @@ async function createArtifactRepairJob(
   } catch (err) {
     context.result.errors.push(`artifact-repair-job-failed: ${errorMessage(err)}`)
   }
+}
+
+async function createMapReduceRepairJobs(
+  context: PrepareWorkerContext,
+  claim: RuntimeJobClaim,
+  profileClaim: RuntimeProfilePoolClaim,
+  mapReduceResults: readonly LongDocumentReduceResult[],
+): Promise<void> {
+  const repairPayloads = mapReduceResults.flatMap((result) => {
+    if ((result.status === "partial" || result.status === "failed") && result.repairJobs.length > 0) {
+      context.result.partialMapReduceResults += 1
+    }
+    return result.repairJobs.map((repairJob) =>
+      withPrepareJobMetadata(repairJob, claim),
+    )
+  })
+  if (repairPayloads.length === 0) return
+
+  for (const payload of repairPayloads) {
+    try {
+      await context.runtime.createJob({
+        jobId: mapReduceRepairJobId(claim, payload),
+        kind: BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+        payload: JSON.stringify(payload),
+        maxAttempts: 3,
+      })
+      context.result.mapReduceRepairJobs += 1
+    } catch (err) {
+      if (!isDuplicateRuntimeJobError(err)) throw err
+    }
+  }
+  await appendWorkerProgress(context, claim, "bulk-prepare:map-reduce-repair-routed", {
+    profileId: profileClaim.profileId,
+    repairJobCount: repairPayloads.length,
+  })
+}
+
+async function handleMapReduceRepairFailure(
+  context: PrepareWorkerContext,
+  claim: RuntimeJobClaim,
+  profileClaim: RuntimeProfilePoolClaim,
+  error: string,
+): Promise<void> {
+  try {
+    await context.runtime.stagingArtifactsClearPendingForJob({ jobId: claim.job.jobId })
+  } catch (err) {
+    context.result.errors.push(`map-reduce-repair-cleanup-failed: ${errorMessage(err)}`)
+  }
+  await context.runtime.profilePoolRelease({
+    claimId: profileClaim.claimId,
+    outcome: "success",
+    reason: "bulk-prepare-local-map-reduce-repair-failed",
+    error,
+  })
+  await failClaimedJob(context, claim, error, {
+    type: "bulk-prepare:map-reduce-repair-failed",
+    profileId: profileClaim.profileId,
+  })
 }
 
 async function getHealthyProfilePool(
@@ -454,6 +546,87 @@ function leaseRequest(claim: RuntimeJobClaim): RuntimeJobLeaseRequest {
     jobId: claim.job.jobId,
     leaseId: claim.lease.leaseId,
   }
+}
+
+function normalizeMapReduceResults(
+  mapReduceResults: Extract<PrepareModelCallOutcome, { status: "success" }>["mapReduceResults"],
+): readonly LongDocumentReduceResult[] {
+  if (mapReduceResults === undefined) return []
+  if (Array.isArray(mapReduceResults)) {
+    return mapReduceResults as readonly LongDocumentReduceResult[]
+  }
+  return [mapReduceResults as LongDocumentReduceResult]
+}
+
+function filterCommittableArtifacts(
+  artifacts: readonly ValidatedPrepareArtifact[],
+  mapReduceResults: readonly LongDocumentReduceResult[],
+): readonly ValidatedPrepareArtifact[] {
+  const repairOnlySources = new Set(
+    mapReduceResults
+      .filter((result) => result.commitPolicy === "repair-only")
+      .flatMap((result) => [
+        sourceKey(result.sourcePath),
+        sourceKey(result.sourceIdentity),
+      ]),
+  )
+  if (repairOnlySources.size === 0) return artifacts
+  return artifacts.filter((artifact) => !repairOnlySources.has(sourceKey(artifact.sourcePath)))
+}
+
+function sourceKey(sourcePath: string): string {
+  try {
+    return canonicalizeBulkKnowledgeSourcePath(sourcePath)
+  } catch {
+    return `__invalid-bulk-knowledge-source__:${hashTextHex(sourcePath)}`
+  }
+}
+
+function withPrepareJobMetadata(
+  repairJob: BulkKnowledgeMapReduceRepairJobPayload,
+  claim: RuntimeJobClaim,
+): BulkKnowledgeMapReduceRepairJobPayload {
+  return {
+    kind: BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+    jobId: claim.job.jobId,
+    sourceJobKind: claim.job.kind,
+    sourcePath: repairJob.sourcePath,
+    sourceIdentity: repairJob.sourceIdentity,
+    sourceHash: repairJob.sourceHash,
+    chunkId: repairJob.chunkId,
+    chunkIndex: repairJob.chunkIndex,
+    chunkTotal: repairJob.chunkTotal,
+    chunkHash: repairJob.chunkHash,
+    headingPath: "",
+    status: repairJob.status,
+    error: sanitizeRepairError(repairJob.error),
+    owner: "bulk-map-reduce",
+    strategy: "reanalyze-chunk",
+  }
+}
+
+function mapReduceRepairJobId(
+  claim: RuntimeJobClaim,
+  repairJob: BulkKnowledgeMapReduceRepairJobPayload,
+): string {
+  return `bulk-map-reduce-repair-${hashTextHex([
+    claim.job.jobId,
+    repairJob.sourceHash,
+    repairJob.chunkId,
+    repairJob.chunkHash,
+  ].join("\n"))}`
+}
+
+function isDuplicateRuntimeJobError(err: unknown): boolean {
+  const message = errorMessage(err).toLowerCase()
+  const isJobIdConstraint = message.includes("runtime_jobs.job_id")
+    || message.includes("runtime_jobs_job_id")
+    || message.includes("runtime_jobs_pkey")
+    || message.includes("runtime_jobs.primary")
+    || message.includes("for key 'primary'")
+  const isConstraintFailure = message.includes("unique constraint")
+    || message.includes("duplicate")
+  return isJobIdConstraint && isConstraintFailure
 }
 
 async function appendWorkerProgress(
