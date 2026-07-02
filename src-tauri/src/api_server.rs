@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -998,45 +998,13 @@ fn handle_file_content(app: &AppHandle, project_id: &str, query: &str) -> ApiRes
 }
 
 fn safe_join(project_path: &str, rel: &str) -> Result<PathBuf, String> {
-    let root = PathBuf::from(project_path);
-    let rel = rel.trim_start_matches('/');
-    let rel_path = Path::new(rel);
-    if rel_path.is_absolute() {
+    if rel.starts_with('/') || Path::new(rel).is_absolute() {
         return Err("Absolute paths are not allowed".to_string());
     }
-    for component in rel_path.components() {
-        if matches!(
-            component,
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir
-        ) {
-            return Err("Path traversal is not allowed".to_string());
-        }
-    }
-    let joined = root.join(rel_path);
-    let root_canon = root
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve project path: {e}"))?;
-    if joined.exists() {
-        let joined_canon = joined
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve path: {e}"))?;
-        if !joined_canon.starts_with(&root_canon) {
-            return Err("Resolved path escapes the project directory".to_string());
-        }
-        return Ok(joined_canon);
-    }
-    let parent = joined
-        .parent()
-        .ok_or_else(|| "Path has no parent directory".to_string())?;
-    if parent.exists() {
-        let parent_canon = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve parent path: {e}"))?;
-        if !parent_canon.starts_with(&root_canon) {
-            return Err("Resolved parent escapes the project directory".to_string());
-        }
-    }
-    Ok(joined)
+    crate::commands::file_ops::path_safety::validate_within_project(
+        &PathBuf::from(project_path),
+        rel,
+    )
 }
 
 fn is_public_project_rel(rel: &str) -> bool {
@@ -1825,6 +1793,34 @@ mod tests {
         let root_str = root.to_string_lossy();
         let joined = safe_join(&root_str, "wiki/index.md").unwrap();
         assert_eq!(joined, root.join("wiki/index.md"));
+    }
+
+    #[test]
+    fn safe_join_rejects_missing_parent_absolute_escape() {
+        let root = test_project_dir();
+        let root_str = root.to_string_lossy();
+        // safe_join rejects any absolute `rel` up front, before it ever
+        // reaches validate_within_project's ancestor walk — this is the
+        // entry-point-level guarantee this test locks in.
+        let target = std::env::temp_dir().join(format!(
+            "llm-wiki-api-escape-{}-{}/missingA/missingB/evil.md",
+            std::process::id(),
+            Uuid::new_v4().simple()
+        ));
+        assert!(safe_join(&root_str, target.to_str().unwrap()).is_err());
+
+        // The underlying S1 fix (walking up to the nearest existing
+        // ancestor instead of only the immediate parent) is exercised
+        // directly against validate_within_project here, since safe_join
+        // never forwards an absolute `rel` to it.
+        let result = crate::commands::file_ops::path_safety::validate_within_project(
+            &root,
+            target.to_str().unwrap(),
+        );
+        assert!(
+            result.is_err(),
+            "absolute path outside root with multi-level missing parent should be rejected"
+        );
     }
 
     #[test]
