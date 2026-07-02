@@ -79,6 +79,7 @@ describe("Core Runtime boundary checker", () => {
     ["@/stores/wiki-store"],
     ["@/components/settings/settings-view"],
     ["@/commands/fs"],
+    ["@/lib/project-identity"],
     ["@tauri-apps/api/core"],
     ["@tauri-apps/plugin-store"],
     ["@/lib/runtime.db"],
@@ -91,7 +92,7 @@ describe("Core Runtime boundary checker", () => {
     ["../contract/index"],
     ["typescript"],
     ["node:fs"],
-    ["@/lib/project-identity"],
+    ["@/core-runtime/stable-hash"],
   ])("allows non-shell import %s", (specifier) => {
     expect(isForbiddenCoreImport(specifier)).toBe(false)
   })
@@ -103,6 +104,7 @@ describe("Core Runtime boundary checker", () => {
         sourceText: `
           import React from "react"
           import { open } from "@/commands/fs"
+          import { projectIdentity } from "@/lib/project-identity"
           import { useWikiStore } from "@/stores/wiki-store"
         `,
       },
@@ -118,6 +120,11 @@ describe("Core Runtime boundary checker", () => {
         filePath: "src/core-runtime/example.ts",
         specifier: "@/commands/fs",
         reason: "Core Runtime must not import shell command wrappers",
+      },
+      {
+        filePath: "src/core-runtime/example.ts",
+        specifier: "@/lib/project-identity",
+        reason: "Core Runtime must not import shell library modules",
       },
       {
         filePath: "src/core-runtime/example.ts",

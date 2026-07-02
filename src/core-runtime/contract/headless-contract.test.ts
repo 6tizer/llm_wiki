@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync, statSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { checkCoreRuntimeBoundary } from "./boundary-check"
@@ -66,6 +66,16 @@ const SPEC_3_ADR = "docs/plans/SPEC-3/adr-markdown-commit-layer.md"
 
 function repoFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf-8")
+}
+
+function repoFilesUnder(path: string): string[] {
+  const absolute = resolve(process.cwd(), path)
+  return readdirSync(absolute).flatMap((entry) => {
+    const child = `${path}/${entry}`
+    const childStat = statSync(resolve(process.cwd(), child))
+    if (childStat.isDirectory()) return repoFilesUnder(child)
+    return child.endsWith(".ts") ? [child] : []
+  })
 }
 
 function sectionBetween(source: string, start: string, end: string): string {
@@ -193,6 +203,15 @@ describe("Core Runtime headless contract skeleton", () => {
         },
       ]),
     ).toEqual([])
+  })
+
+  it("keeps every core-runtime module independent from shell/runtime imports", () => {
+    const files = repoFilesUnder("src/core-runtime").map((filePath) => ({
+      filePath,
+      sourceText: repoFile(filePath),
+    }))
+
+    expect(checkCoreRuntimeBoundary(files)).toEqual([])
   })
 
   it("keeps the ADR inventory aligned with the frozen skeleton", () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { buildChunkAnalysisSystemPrompt } from "./ingest-chunk"
+import { splitSourceIntoSemanticChunks as splitFromIngestChunk } from "./ingest-chunk"
+import { splitSourceIntoSemanticChunks as splitFromIngest } from "./ingest"
 
 describe("buildChunkAnalysisSystemPrompt", () => {
   it("omits root index context when normal ingest passes no existing wiki context", () => {
@@ -14,5 +16,18 @@ describe("buildChunkAnalysisSystemPrompt", () => {
 
     expect(prompt).toContain("## Current Wiki Index")
     expect(prompt).toContain("[[attention]]")
+  })
+
+  it("keeps chunk helper exports stable after core extraction", () => {
+    const content = [
+      "# One",
+      "A".repeat(1_100),
+      "## Two",
+      "B".repeat(1_100),
+    ].join("\n\n")
+
+    expect(splitFromIngestChunk(content, 1_000, 120)).toEqual(
+      splitFromIngest(content, 1_000, 120),
+    )
   })
 })

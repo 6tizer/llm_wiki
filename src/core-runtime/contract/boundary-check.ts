@@ -33,6 +33,10 @@ const FORBIDDEN_IMPORTS = [
     reason: "Core Runtime must not import shell command wrappers",
   },
   {
+    match: (specifier: string) => specifier.startsWith("@/lib/"),
+    reason: "Core Runtime must not import shell library modules",
+  },
+  {
     match: (specifier: string) => specifier.startsWith("@tauri-apps/"),
     reason: "Core Runtime must not import Tauri plugin APIs",
   },
