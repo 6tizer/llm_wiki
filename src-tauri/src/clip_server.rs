@@ -46,6 +46,8 @@ const ALLOWED_APP_ORIGINS: &[&str] = &[
     "http://localhost:1420",
     "tauri://localhost",
     "https://tauri.localhost",
+    // Windows Tauri webview origin (macOS/Linux use tauri://localhost).
+    "http://tauri.localhost",
 ];
 
 /// A request is allowed if it comes from the Tauri app webview (exact
@@ -440,6 +442,8 @@ fn handle_clip(body: &str) -> String {
         return serde_json::json!({"ok": false, "error": "content is required"}).to_string();
     }
 
+    // current_project and projects are independent lock snapshots, momentarily
+    // inconsistent if the project set changes between them (accepted, non-security).
     let projects = ALL_PROJECTS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -557,6 +561,7 @@ mod tests {
         assert!(origin_allowed(&origin_header("http://localhost:1420")));
         assert!(origin_allowed(&origin_header("tauri://localhost")));
         assert!(origin_allowed(&origin_header("https://tauri.localhost")));
+        assert!(origin_allowed(&origin_header("http://tauri.localhost")));
     }
 
     #[test]
@@ -573,6 +578,9 @@ mod tests {
         assert!(!origin_allowed(&origin_header("http://localhost:14200")));
         assert!(!origin_allowed(&origin_header(
             "http://localhost:1420.evil.com"
+        )));
+        assert!(!origin_allowed(&origin_header(
+            "http://tauri.localhost.evil.com"
         )));
     }
 
