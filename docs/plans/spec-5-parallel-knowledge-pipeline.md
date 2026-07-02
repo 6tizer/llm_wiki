@@ -1,6 +1,6 @@
 # SPEC-5: Parallel Knowledge Pipeline / 批量编译加速
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#191 | 依赖：SPEC-1、SPEC-2、SPEC-3、SPEC-4 | 执行顺序：SPEC-4-FIX PR1-PR3 完成后进入
+> 类型：阶段 SPEC | 状态：completed by #236/#238/#240/#242/#244/#246 | 覆盖：#191 | 依赖：SPEC-1、SPEC-2、SPEC-3、SPEC-4 | 执行顺序：已完成，后续进入 SPEC-6
 
 ## 目标与成功标准
 

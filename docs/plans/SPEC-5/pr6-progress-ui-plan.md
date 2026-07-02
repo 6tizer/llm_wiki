@@ -1,6 +1,6 @@
 # SPEC-5 PR6: Progress / ETA / Controls UI
 
-> 类型：PR 执行计划 | 状态：focused architect WARN absorbed / implementation ready | issue：#245 | tracking：#191 | branch：`codex/spec-5-pr6-progress-ui` | run：`37007d10-19ed-4a5f-84fb-d8b525ec155f`
+> 类型：PR 执行计划 | 状态：merged by #246 | issue：#245 | tracking：#191 | branch：`codex/spec-5-pr6-progress-ui` | run：`37007d10-19ed-4a5f-84fb-d8b525ec155f`
 
 ## Summary
 
@@ -28,8 +28,8 @@
   - 展示 staging pending / failed / committed summary 和最近 commit progress。
   - pause / resume / cancel 继续调用 SPEC-2 runtime job commands；UI shell 不持有 scheduler 状态机。
 - Docs closeout：
-  - `docs/plans/README.md` 标记 PR5 merged、PR6 active。
-  - 本 PR 完成后把 SPEC-5 文档、SPEC-5 continuous plan 和 README 标记为 completed / PR6 merged。
+  - `docs/plans/README.md` 在 PR6 执行期标记 PR5 merged、PR6 active；closeout 后标记 SPEC-5 completed / PR6 merged。
+  - PR6 完成后把 SPEC-5 文档、SPEC-5 continuous plan 和 README 标记为 completed / PR6 merged。
 
 ## Non-goals
 
@@ -61,7 +61,7 @@ HIGH 风险处理：不改 Rust runtime transition，不改 legacy ingest queue�
 - ZCode Architect fallback 返回 `BLOCK`。已吸收：
   - P0：原计划没有真实 bulk runtime entry，UI 会空转。修正为显式 bulk prepare plan/enqueue。
   - P1：ETA 数据源不足。修正为只基于 job payload metadata + observed terminal progress；样本不足显示 fallback，不伪造 SLA。
-  - P2：diagnostics polling 成本。修正为 adaptive polling：active 2s、idle 10s、section/all-error 30s。
+  - P2：diagnostics polling 成本。修正为 adaptive polling：active 2s、idle 10s、empty/quiet 30s、section/all-error 30s。
   - P2：`useRuntimeJobsState` contract 必须保留 `list` 和 `summary`。修正为追加 `snapshot/diagnostics`，不替换旧字段。
   - P2：`runtime-diagnostics.test.ts` deep expected object 必须更新 profile pool section。
   - P3：workerId/profile holder/circuit breaker label 必须准确。修正为 UI 用 `holder` / `profileId`，不把 circuit breaker 假称 worker assignment。
