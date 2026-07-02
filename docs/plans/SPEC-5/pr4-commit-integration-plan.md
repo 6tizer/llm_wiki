@@ -1,6 +1,6 @@
 # SPEC-5 PR4: Commit Operation Integration
 
-> 类型：PR 执行计划 | 状态：Architect BLOCK absorbed / ready to implement | issue：#241 | tracking：#191 | branch：`codex/spec-5-pr4-commit-integration` | run：`8a94310a-0e90-4af3-841a-42caf0a06902`
+> 类型：PR 执行计划 | 状态：post-PR review fixes active | issue：#241 | tracking：#191 | branch：`codex/spec-5-pr4-commit-integration` | run：`8a94310a-0e90-4af3-841a-42caf0a06902`
 
 ## Summary
 
@@ -25,17 +25,18 @@
   - `inputHash = null` for delete，其他 intent 使用 `result.finalHash`
   - `baseVersion = result.currentHash ?? result.baseHash ?? "genesis"`
   - 每个 layer 单独调用 `runtimeDerivedStaleMarkerRecord`
-  - `markerId` 使用 deterministic key，避免同一 commit event 重跑时制造重复 marker。
+  - commit audit `eventId` 和 marker `markerId` 使用 deterministic key；crash retry 遇到 duplicate event / marker insert 时按幂等成功处理，避免重复 event / marker 堆积。
 - commit conflict / base hash mismatch 不 silent overwrite，必须保留 staging artifact 并创建 repair job。
 - resume reconciliation：
   - create/update conflict 时若 committed target 的 hash 已等于 staged artifact hash，视为 crash-after-write-before-cleanup 的 already-committed outcome；跳过 repair，继续 event / marker / `commit_success` 收尾。
-  - append conflict 时若 committed target 已包含 staged append body 作为尾部内容，视为 already-merged outcome；跳过 repair 并收尾。
+  - append conflict 不做尾部内容启发式自动合并；即使 target 已以 staged append body 结尾，也走 repair，避免把同尾内容的并发写误判为 already-merged 并静默丢 append。
   - delete 对 missing target 返回 `skipped` 时视为终态 delete cleanup，避免 artifact 永久 pending。
 - 同路径并发语义：
   - 本地 concurrency guard 使用 `normalizeCommitTargetPath(...).resourceKey`。
   - 若 DB commit budget 返回 `commit-path-already-claimed`，该 artifact 保持 `pending`，结果计入 retryable skip，后续 pass 可重试；不能 terminal fail，不能清 staging。
 - 写 progress / result summary，供 PR6 Runtime Diagnostics 展示 commit/staging 状态。
 - 缺少 commit metadata 的 pending artifact 只 skip-and-log，不进入 repair route。
+- 确定性 rejected（如 `artifact-hash-mismatch` / `unsupported-operation`）标记 staging artifact 为 `failed`，避免每次 commit pass 无限重试；非确定性 rejected 保持 pending。
 
 ## Non-goals
 
@@ -79,13 +80,22 @@
 - Absorbed P1/P2 before coding:
   - Missing-file `readFile` error must map to `null`.
   - Derived marker request fields must satisfy Rust validation.
-  - Crash-after-write-before-`commit_success` must reconcile without false repair.
+  - Crash-after-write-before-`commit_success` must reconcile for full-content create/update equality; append conflicts must route repair instead of relying on ambiguous suffix matching.
   - Same-path contention must leave loser pending and retryable.
 - P3 folded into tests:
   - Rust read-body command safety tests.
   - Explicit commit budget TTL.
   - Missing metadata pending artifact skip.
   - Deterministic marker id.
+
+## Post-PR Review Notes
+
+- Claude ACP post-PR review session `f34c4f7f-9643-4ccb-879c-dbdbc8a03d0b` returned `WARN`.
+- P2 fixed in PR:
+  - Removed append suffix-based auto reconciliation; append conflicts now route repair even if the current target ends with the staged append segment.
+- P3 fixed in PR:
+  - Commit audit event id and derived marker id are stable across crash retries; duplicate insert errors are treated as idempotent.
+  - Terminal rejected artifacts are marked `failed` instead of staying pending forever.
 
 ## Gate Plan
 

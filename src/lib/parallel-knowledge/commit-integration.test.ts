@@ -85,25 +85,25 @@ describe("parallel knowledge commit integration", () => {
     expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
   })
 
-  it("reconciles append artifacts when the staged append is already present", async () => {
+  it("routes append conflicts to repair even when the target ends with the staged segment", async () => {
     const base = "# Existing\n"
     const staged = "## Added\n"
-    const merged = `${base}${staged}`
+    const changed = `# Concurrent change\n${staged}`
     const artifact = await stagingArtifact({
       artifactHash: await hashMarkdownContent(staged),
       operationIntent: "append",
       baseHash: await hashMarkdownContent(base),
     })
     const runtime = fakeRuntime([artifact], { [artifact.artifactId]: staged })
-    const files = fakeFiles({ "Wiki/Page.md": merged })
+    const files = fakeFiles({ "Wiki/Page.md": changed })
 
     const result = await commitPendingStagingArtifacts({ runtime, files })
 
-    expect(result.merged).toBe(1)
-    expect(result.repairJobs).toBe(0)
-    expect(result.cleanedArtifacts).toBe(1)
-    expect(runtime.calls.repairs).toEqual([])
-    expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
+    expect(result.conflicted).toBe(1)
+    expect(result.repairJobs).toBe(1)
+    expect(result.cleanedArtifacts).toBe(0)
+    expect(runtime.calls.repairs).toHaveLength(1)
+    expect(runtime.calls.committedArtifacts).toEqual([])
   })
 
   it("treats missing-target delete skips as terminal cleanup", async () => {
@@ -229,6 +229,78 @@ describe("parallel knowledge commit integration", () => {
     expect(result.cleanedArtifacts).toBe(0)
     expect(runtime.calls.committedArtifacts).toEqual([])
   })
+
+  it("treats duplicate audit events as idempotent on crash retry", async () => {
+    const markdown = "# Page\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent(markdown),
+      operationIntent: "create",
+      baseHash: null,
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: markdown })
+    runtime.appendEvent = async () => {
+      throw new Error(
+        "event-insert-failed: UNIQUE constraint failed: runtime_events.event_id",
+      )
+    }
+
+    const result = await commitPendingStagingArtifacts({
+      runtime,
+      files: fakeFiles(),
+    })
+
+    expect(result.committed).toBe(1)
+    expect(result.cleanedArtifacts).toBe(1)
+    expect(result.errors).toEqual([])
+    expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
+  })
+
+  it("treats duplicate derived markers as idempotent on crash retry", async () => {
+    const markdown = "# Page\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent(markdown),
+      operationIntent: "create",
+      baseHash: null,
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: markdown })
+    runtime.recordDerivedStaleMarker = async () => {
+      throw new Error(
+        "derived-marker-record-insert-failed: UNIQUE constraint failed: runtime_derived_stale_markers.marker_id",
+      )
+    }
+
+    const result = await commitPendingStagingArtifacts({
+      runtime,
+      files: fakeFiles(),
+    })
+
+    expect(result.committed).toBe(1)
+    expect(result.cleanedArtifacts).toBe(1)
+    expect(result.markersRecorded).toBe(0)
+    expect(result.errors).toEqual([])
+    expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
+  })
+
+  it("marks deterministic rejected artifacts failed instead of retrying forever", async () => {
+    const markdown = "# Page\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent("# Different\n"),
+      operationIntent: "create",
+      baseHash: null,
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: markdown })
+
+    const result = await commitPendingStagingArtifacts({
+      runtime,
+      files: fakeFiles(),
+    })
+
+    expect(result.rejected).toBe(1)
+    expect(result.cleanedArtifacts).toBe(0)
+    expect(runtime.calls.failedArtifacts).toEqual(["artifact-1"])
+    expect(runtime.calls.committedArtifacts).toEqual([])
+    expect(runtime.calls.repairs).toEqual([])
+  })
 })
 
 async function stagingArtifact(
@@ -283,12 +355,14 @@ function fakeRuntime(
 ): CommitIntegrationRuntimeAdapter & {
   calls: {
     committedArtifacts: string[]
+    failedArtifacts: string[]
     repairs: unknown[]
     markers: unknown[]
   }
 } {
   const calls = {
     committedArtifacts: [] as string[],
+    failedArtifacts: [] as string[],
     repairs: [] as unknown[],
     markers: [] as unknown[],
   }
@@ -360,6 +434,14 @@ function fakeRuntime(
       const artifact = artifacts.find((candidate) => candidate.artifactId === artifactId)
       if (!artifact) throw new Error("artifact missing")
       return { ...artifact, status: "committed", deletedAtMs: 1 }
+    },
+    async markArtifactFailed(request) {
+      calls.failedArtifacts.push(request.artifactId)
+      const artifact = artifacts.find(
+        (candidate) => candidate.artifactId === request.artifactId,
+      )
+      if (!artifact) throw new Error("artifact missing")
+      return { ...artifact, status: "failed", lastError: request.lastError }
     },
     async routeConflictRepair(context) {
       calls.repairs.push(context)

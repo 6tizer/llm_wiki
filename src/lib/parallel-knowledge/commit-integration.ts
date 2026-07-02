@@ -6,7 +6,6 @@ import {
 } from "@/core-runtime/contract"
 import {
   commitMarkdownArtifact,
-  canonicalizeMarkdownContentForHash,
   hashMarkdownContent,
   type MarkdownCommitArtifact,
   type MarkdownCommitAuditPayload,
@@ -31,6 +30,7 @@ import {
   runtimeProgressAppend,
   runtimeStagingArtifactCommitSuccess,
   runtimeStagingArtifactList,
+  runtimeStagingArtifactRecord,
   runtimeStagingArtifactReadBody,
   type RuntimeCommitBudgetClaimRequest,
   type RuntimeDerivedStaleMarkerRecord,
@@ -63,6 +63,7 @@ export interface CommitIntegrationRuntimeAdapter {
   ): Promise<MarkdownCommitBudgetClaimReceipt>
   releaseBudget(claimId: string): Promise<RuntimeResourceBudgetClaimRecord[]>
   appendEvent(request: {
+    eventId: string
     jobId: string
     payload: MarkdownCommitAuditPayload
   }): Promise<RuntimeEventRecord>
@@ -76,6 +77,13 @@ export interface CommitIntegrationRuntimeAdapter {
     sourceEventId: string
   }): Promise<RuntimeDerivedStaleMarkerRecord>
   markArtifactCommitted(artifactId: string): Promise<RuntimeStagingArtifactRecord>
+  markArtifactFailed(request: {
+    artifactId: string
+    jobId: string
+    artifactPath: string
+    artifactHash: string
+    lastError: string
+  }): Promise<RuntimeStagingArtifactRecord>
   routeConflictRepair(
     context: MarkdownCommitConflictRepairContext,
   ): Promise<{ repairJobId: string }>
@@ -129,12 +137,23 @@ const defaultRuntime: CommitIntegrationRuntimeAdapter = {
   releaseBudget: runtimeCommitBudgetRelease,
   async appendEvent(request) {
     return runtimeEventAppend({
+      eventId: request.eventId,
       jobId: request.jobId,
       payload: JSON.stringify(request.payload),
     })
   },
   recordDerivedStaleMarker: runtimeDerivedStaleMarkerRecord,
   markArtifactCommitted: runtimeStagingArtifactCommitSuccess,
+  async markArtifactFailed(request) {
+    return runtimeStagingArtifactRecord({
+      artifactId: request.artifactId,
+      jobId: request.jobId,
+      artifactPath: request.artifactPath,
+      artifactHash: request.artifactHash,
+      status: "failed",
+      lastError: request.lastError,
+    })
+  },
   routeConflictRepair: routeMarkdownConflictRepair,
   appendProgress: runtimeProgressAppend,
 }
@@ -254,7 +273,7 @@ async function commitArtifact(
     return
   }
 
-  const reconciled = await reconcileAlreadyCommitted(commitResult, artifact, context)
+  const reconciled = reconcileAlreadyCommitted(commitResult)
   await finalizeCommitResult(artifact, reconciled, context)
 }
 
@@ -303,10 +322,27 @@ async function finalizeCommitResult(
   if (
     commitResult.result === "committed" ||
     commitResult.result === "merged" ||
-    isTerminalDeleteSkip(artifact, commitResult)
+    (artifact.operationIntent === "delete" && commitResult.result === "skipped")
   ) {
     await appendEventMarkersAndCleanup(context, artifact, commitResult)
     context.result[commitResult.result] += 1
+    return
+  }
+
+  if (isTerminalRejectedCommitResult(commitResult)) {
+    const event = await appendAuditEvent(context, artifact, commitResult)
+    await context.runtime.markArtifactFailed({
+      artifactId: artifact.artifactId,
+      jobId: artifact.jobId,
+      artifactPath: artifact.artifactPath,
+      artifactHash: artifact.artifactHash,
+      lastError: commitResult.error ?? "commit-rejected",
+    })
+    context.result.rejected += 1
+    await appendProgress(context, artifact, "rejected", {
+      eventId: event.eventId,
+      error: commitResult.error,
+    })
     return
   }
 
@@ -317,11 +353,9 @@ async function finalizeCommitResult(
   })
 }
 
-async function reconcileAlreadyCommitted(
+function reconcileAlreadyCommitted(
   commitResult: MarkdownCommitOperationResult,
-  artifact: MarkdownCommitArtifact,
-  context: ProcessContext,
-): Promise<MarkdownCommitOperationResult> {
+): MarkdownCommitOperationResult {
   if (commitResult.result !== "conflicted") {
     return commitResult
   }
@@ -335,46 +369,7 @@ async function reconcileAlreadyCommitted(
     }
   }
 
-  if (artifact.operationIntent !== "append") {
-    return commitResult
-  }
-
-  const currentBody = await readExistingCommittedBody(context.files, artifact.targetPath)
-  if (currentBody === null) {
-    return commitResult
-  }
-  const stagedBody = await context.runtime.readStagingArtifactBody(artifact.artifactId)
-  if (!hasAppendBodyApplied(currentBody, stagedBody.markdown)) {
-    return commitResult
-  }
-
-  return {
-    ...commitResult,
-    result: "merged",
-    finalHash: commitResult.currentHash,
-    repairJobId: null,
-  }
-}
-
-async function readExistingCommittedBody(
-  files: CommitIntegrationFileAdapter,
-  targetPath: string,
-): Promise<string | null> {
-  if (!(await files.exists(targetPath))) return null
-  return files.read(targetPath)
-}
-
-function hasAppendBodyApplied(currentBody: string, stagedBody: string): boolean {
-  const stagedSegment = canonicalizeMarkdownContentForHash(stagedBody).replace(/^\n+/, "")
-  if (stagedSegment.length === 0) return false
-  return canonicalizeMarkdownContentForHash(currentBody).endsWith(stagedSegment)
-}
-
-function isTerminalDeleteSkip(
-  artifact: MarkdownCommitArtifact,
-  commitResult: MarkdownCommitOperationResult,
-): boolean {
-  return artifact.operationIntent === "delete" && commitResult.result === "skipped"
+  return commitResult
 }
 
 async function appendEventMarkersAndCleanup(
@@ -422,24 +417,38 @@ async function appendAuditEvent(
   artifact: MarkdownCommitArtifact,
   commitResult: MarkdownCommitOperationResult,
 ): Promise<RuntimeEventRecord> {
-  return context.runtime.appendEvent({
-    jobId: artifact.jobId,
-    payload: {
-      kind: "markdown-commit",
-      artifactId: commitResult.artifactId,
-      artifactHash: commitResult.artifactHash,
-      targetPath: commitResult.targetPath,
-      operationIntent: commitResult.operationIntent,
-      result: commitResult.result,
-      baseHash: commitResult.baseHash,
-      currentHash: commitResult.currentHash,
-      finalHash: commitResult.finalHash,
-      affectedPaths: commitResult.affectedPaths,
-      repairJobId: commitResult.repairJobId,
-      ...(commitResult.repairError ? { repairError: commitResult.repairError } : {}),
-      sourceKind: artifact.sourceKind,
-    },
-  })
+  const eventId = deterministicCommitEventId(artifact, commitResult)
+  const payload: MarkdownCommitAuditPayload = {
+    kind: "markdown-commit",
+    artifactId: commitResult.artifactId,
+    artifactHash: commitResult.artifactHash,
+    targetPath: commitResult.targetPath,
+    operationIntent: commitResult.operationIntent,
+    result: commitResult.result,
+    baseHash: commitResult.baseHash,
+    currentHash: commitResult.currentHash,
+    finalHash: commitResult.finalHash,
+    affectedPaths: commitResult.affectedPaths,
+    repairJobId: commitResult.repairJobId,
+    ...(commitResult.repairError ? { repairError: commitResult.repairError } : {}),
+    sourceKind: artifact.sourceKind,
+  }
+  try {
+    return await context.runtime.appendEvent({
+      eventId,
+      jobId: artifact.jobId,
+      payload,
+    })
+  } catch (error) {
+    if (!isDuplicateRuntimeEventError(error)) throw error
+    return {
+      eventId,
+      jobId: artifact.jobId,
+      eventName: "job-runtime:event-appended",
+      payload: JSON.stringify(payload),
+      createdAtMs: 0,
+    }
+  }
 }
 
 async function recordDerivedMarkers(
@@ -453,16 +462,20 @@ async function recordDerivedMarkers(
   const baseVersion = commitResult.currentHash ?? commitResult.baseHash ?? "genesis"
 
   for (const layer of context.markerLayers) {
-    await context.runtime.recordDerivedStaleMarker({
-      markerId: deterministicMarkerId(sourceEventId, layer, artifact.targetPath),
-      layer,
-      affectedPath: artifact.targetPath,
-      inputHash,
-      baseVersion,
-      reason,
-      sourceEventId,
-    })
-    context.result.markersRecorded += 1
+    try {
+      await context.runtime.recordDerivedStaleMarker({
+        markerId: deterministicMarkerId(artifact.artifactId, layer, artifact.targetPath),
+        layer,
+        affectedPath: artifact.targetPath,
+        inputHash,
+        baseVersion,
+        reason,
+        sourceEventId,
+      })
+      context.result.markersRecorded += 1
+    } catch (error) {
+      if (!isDuplicateDerivedMarkerError(error)) throw error
+    }
   }
 }
 
@@ -534,6 +547,15 @@ function isRetryableBudgetRejection(result: MarkdownCommitOperationResult): bool
   )
 }
 
+function isTerminalRejectedCommitResult(result: MarkdownCommitOperationResult): boolean {
+  const error = result.error ?? ""
+  return (
+    result.result === "rejected" &&
+    (error.startsWith("artifact-hash-mismatch") ||
+      error.startsWith("unsupported-operation"))
+  )
+}
+
 function markerReason(
   intent: MarkdownCommitOperationIntent,
 ): DerivedStaleMarkerReason {
@@ -545,12 +567,21 @@ function requireFinalHash(result: MarkdownCommitOperationResult): string {
   throw new Error("derived-marker-final-hash-missing")
 }
 
+function deterministicCommitEventId(
+  artifact: MarkdownCommitArtifact,
+  result: MarkdownCommitOperationResult,
+): string {
+  return `commit-event-${fnv1a64Hex(
+    `${artifact.artifactId}\n${result.result}\n${artifact.targetPath}`,
+  )}`
+}
+
 function deterministicMarkerId(
-  sourceEventId: string,
+  artifactId: string,
   layer: DerivedStaleMarkerLayer,
   affectedPath: string,
 ): string {
-  return `derived-marker-${fnv1a64Hex(`${sourceEventId}\n${layer}\n${affectedPath}`)}`
+  return `derived-marker-${fnv1a64Hex(`${artifactId}\n${layer}\n${affectedPath}`)}`
 }
 
 function isMarkdownCommitOperationIntent(
@@ -597,4 +628,20 @@ function emptyResult(): CommitPendingStagingArtifactsResult {
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+function isDuplicateRuntimeEventError(error: unknown): boolean {
+  const message = describeError(error)
+  return (
+    message.includes("event-insert-failed") &&
+    (message.includes("UNIQUE constraint failed") || message.includes("PRIMARY KEY"))
+  )
+}
+
+function isDuplicateDerivedMarkerError(error: unknown): boolean {
+  const message = describeError(error)
+  return (
+    message.includes("derived-marker-record-insert-failed") &&
+    (message.includes("UNIQUE constraint failed") || message.includes("PRIMARY KEY"))
+  )
 }
