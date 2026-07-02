@@ -1,6 +1,19 @@
 # SPEC-8: Maintainability / Tooling / QA Fixture
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：#183、#182
+> 类型：阶段 SPEC | 状态：reviewed / augmented by 2026-07 review / ready for PR split | 覆盖：#183、#182 + `spec-5-8-post-review-findings.md` 五（精简清单）
+
+## 2026-07 Review 补充（必读）
+
+深度 review（见 `spec-5-8-post-review-findings.md`）对本 SPEC 有三处修正：
+
+- **`api_server.rs` "重构"担忧被夸大**：`handle_request`（236-304）是干净的集中式路由表（8 分支 match），鉴权在 match 之前判定一次，无 handler 自带鉴权分支，结构上不存在"某条路由漏挂鉴权"。因此该项从"重构"**降级为保行为的机械 `mod` 拆分**（dispatch/auth/CORS 留 mod.rs，projects/graph/reviews 分文件），顺带修 percent_decode 字符边界 panic（新增路由测试会踩到）+ 抽 `resolve_project_or_404`（6 处重复）+ 413/500 改类型化错误。不重写已正确的鉴权设计。
+- **`autoIngestImpl` characterization tests 与 SPEC-11 是同一批工作**：测试目标聚焦 cache-hit / cache-miss / abort-mid-write / cancel-during-processing 四条路径（D4 与 cancelTask 竞态藏在此），须与 SPEC-11 协调 owner，先合并、不重复。
+- **新增大量机械精简项**（见下方新增 PR）：这些是 review 发现的重复/死代码，多数是安全机械替换，少数需先补测试。
+
+## 关键决策补充
+
+- 精简项按"安全机械替换"与"需先补特征化测试"分层：前者可直接做，后者（`autoIngestImpl`、`writeFileBlocks`/`executeIngestWrites`、`sweepWikiReferences`、lint fix 函数、web-search provider）先锁行为再动。
+- `i18n-parity.test.ts` 只校验 en/zh 互相一致，缺"代码引用的 key 必须存在"断言（`common.dismiss` / `fileTree.*` 因此漏检）；补该断言归本 SPEC。
 
 ## 目标与成功标准
 
@@ -31,7 +44,15 @@
 5. P2-9：`runAgentAppToolHandler` handler map 重构。
 6. #182：先强制重建复现 GitNexus TSX warning；再决定 workaround / upstream note / close as resolved。
 7. #86 QA fixture infrastructure：提供 dev-only 入口和可重复性工具；支持稳定触发 permission、profile unavailable、SDK model rejected、resource limit、timeline；SPEC-7 负责具体 Agent 场景覆盖。
-8. SPEC-1 cleanup candidates：拆 `App.tsx` 非 UI bootstrap、store/runtime state 混用、Tauri store 直接耦合；每项独立 PR，必须证明 behavior unchanged。
+8. SPEC-1 cleanup candidates：拆 `App.tsx` 非 UI bootstrap（`setupAutoSave`/`startClipWatcher`、update-check、`init()` 配置 hydration、`handleProjectOpened` 项目切换编排——对应 `bootstrap-boundary.ts` 已登记候选）、store/runtime state 混用、Tauri store 直接耦合；每项独立 PR，必须证明 behavior unchanged。
+9. **`api_server.rs` 机械 mod 拆分**（保行为，非重写）：dispatch/auth/CORS 留 mod.rs，projects/graph/reviews 分文件；顺带修 percent_decode 字符边界 panic、抽 `resolve_project_or_404`、413/500 类型化错误、删 CORS 短路死代码。
+10. **Rust 机械精简**（约省 500+ 行）：`runtime_db.rs` 命令包装 helper（`run_project_write`/`run_project_read`）+ 缓存 schema init + `read_rows_tx` 泛型 + staging 路径 helper；`vectorstore.rs` `open_table_if_exists`/`with_project_lock`；`codex_cli.rs`/`claude_cli.rs` 8 处重复合并到 `cli_resolver.rs` + 共享受管理子进程模块；`fs.rs` 拆 `office_extract.rs`；`path_safety.rs`/`extract_images.rs` 沙箱实现合并（与 SPEC-10 S1 同点）；`clip_server.rs` CORS 响应 helper。
+11. **TS 机械精简**：`flattenMdFiles` 四处统一、dedup 规范化 key 三处统一、`fnv1a64Hex` 统一、`isDuplicateRuntimeJobError` 两处统一、`appendWorkerProgress`/`appendProgress` 统一、`apiConfig` 默认值常量、`boundary-check.ts:43-46` 死规则删除、`ClaudeCliStatusPill`/`CodexCliStatusPill` 与 ReactMarkdown 覆写去重。需先补测试的：`web-search.ts` `fetchSearchApi`、`mineru.ts` `pollUntilDone`、`lint-fixer.ts` `runMultiPageFix`/`withLintActivity`、`sweepWikiReferences`、`commit-integration` 与 `markdown-commit/index` 两套提交后处理二选一。
+12. **i18n 修复 + parity 断言**：修 `common.dismiss`（`graph-view.tsx:1745`）、`fileTree.*`（`file-tree.tsx`）缺失 key；给 `i18n-parity.test.ts` 补"代码引用 key 必须存在于两个 bundle"断言。
+
+13. **P3 known-minor backlog 收纳**：`spec-5-8-post-review-findings.md` 第八节的 P2/P3 长尾（健壮性/性能/死代码/资源泄露：vectorstore 锁淘汰与 optimize 阻塞、search 全量重扫、runtime_db migration 版本未分支、error 响应未转义、mineru/web-search/wiki-synthesis 未包裹解析、graph-view 缓存/RangeError、project-store 死代码等）。除标注归 SPEC-10（安全）/SPEC-11（数据）的项外，默认在本 SPEC 收纳——随相邻主 PR 顺带修，或按子系统单列低风险 PR；不要求一次清空，但每项须在对应主 PR 的 detect/review 中确认未回归。
+
+> 注：`persistSetting` helper、`useProjectPersistedResource` hook、per-item 状态 store 虽也是"消重复"，但它们同时修复 SPEC-11 的数据丢失 bug，owner 归 SPEC-11，本 SPEC 不重复。
 
 ## 验证策略
 
