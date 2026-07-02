@@ -26,6 +26,7 @@ import {
   runtimeProgressAppend,
   runtimeProgressList,
   runtimeStagingArtifactRecord,
+  runtimeStagingArtifactReadBody,
   runtimeStagingArtifactsClearPendingForJob,
   runtimeStagingArtifactCommitSuccess,
   runtimeStagingArtifactList,
@@ -307,6 +308,26 @@ describe("runtime-db commands", () => {
           sourceKind: "ingest",
           markdown: "# Page\n",
         },
+      },
+    )
+  })
+
+  it("sends staging artifact read-body payloads", async () => {
+    const response = {
+      artifactId: "artifact-1",
+      artifactPath: "job-1/page.md",
+      markdown: "# Page",
+    }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeStagingArtifactReadBody({ artifactId: "artifact-1" }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      "runtime_staging_artifact_read_body",
+      {
+        request: { artifactId: "artifact-1" },
       },
     )
   })

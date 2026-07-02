@@ -463,6 +463,7 @@ pub fn run() {
             commands::runtime_db::runtime_progress_append,
             commands::runtime_db::runtime_progress_list,
             commands::runtime_db::runtime_staging_artifact_store,
+            commands::runtime_db::runtime_staging_artifact_read_body,
             commands::runtime_db::runtime_staging_artifacts_clear_pending_for_job,
             commands::runtime_db::runtime_staging_artifact_commit_success,
             commands::runtime_db::runtime_staging_artifact_gc,
