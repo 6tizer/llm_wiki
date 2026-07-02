@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -998,45 +998,18 @@ fn handle_file_content(app: &AppHandle, project_id: &str, query: &str) -> ApiRes
 }
 
 fn safe_join(project_path: &str, rel: &str) -> Result<PathBuf, String> {
-    let root = PathBuf::from(project_path);
+    // A leading '/' here is URL-style (project-relative), NOT a filesystem
+    // absolute path — the sibling `is_public_project_rel` gate normalizes it
+    // the same way. Strip it, then reject anything still absolute (e.g. a
+    // Windows drive path) before delegating to the shared sandbox validator.
     let rel = rel.trim_start_matches('/');
-    let rel_path = Path::new(rel);
-    if rel_path.is_absolute() {
+    if Path::new(rel).is_absolute() {
         return Err("Absolute paths are not allowed".to_string());
     }
-    for component in rel_path.components() {
-        if matches!(
-            component,
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir
-        ) {
-            return Err("Path traversal is not allowed".to_string());
-        }
-    }
-    let joined = root.join(rel_path);
-    let root_canon = root
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve project path: {e}"))?;
-    if joined.exists() {
-        let joined_canon = joined
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve path: {e}"))?;
-        if !joined_canon.starts_with(&root_canon) {
-            return Err("Resolved path escapes the project directory".to_string());
-        }
-        return Ok(joined_canon);
-    }
-    let parent = joined
-        .parent()
-        .ok_or_else(|| "Path has no parent directory".to_string())?;
-    if parent.exists() {
-        let parent_canon = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve parent path: {e}"))?;
-        if !parent_canon.starts_with(&root_canon) {
-            return Err("Resolved parent escapes the project directory".to_string());
-        }
-    }
-    Ok(joined)
+    crate::commands::file_ops::path_safety::validate_within_project(
+        &PathBuf::from(project_path),
+        rel,
+    )
 }
 
 fn is_public_project_rel(rel: &str) -> bool {
@@ -1825,6 +1798,54 @@ mod tests {
         let root_str = root.to_string_lossy();
         let joined = safe_join(&root_str, "wiki/index.md").unwrap();
         assert_eq!(joined, root.join("wiki/index.md"));
+    }
+
+    #[test]
+    fn safe_join_strips_leading_slash_then_validate_rejects_true_absolute_escape() {
+        let root = test_project_dir();
+        let root_str = root.to_string_lossy();
+        // safe_join treats a leading '/' as URL-style (project-relative), the
+        // same contract `is_public_project_rel` uses — so an OS-absolute path
+        // like this one is stripped of its leading slash and joined *under*
+        // the project root, landing safely inside it rather than being
+        // rejected as an escape.
+        let target = std::env::temp_dir().join(format!(
+            "llm-wiki-api-escape-{}-{}/missingA/missingB/evil.md",
+            std::process::id(),
+            Uuid::new_v4().simple()
+        ));
+        assert!(
+            safe_join(&root_str, target.to_str().unwrap()).is_ok(),
+            "leading-slash input is project-relative under safe_join, not a real absolute escape"
+        );
+
+        // The underlying S1 fix (walking up to the nearest existing
+        // ancestor instead of only the immediate parent) is exercised
+        // directly against validate_within_project with the untouched
+        // absolute path, which must still correctly resolve outside `root`.
+        let result = crate::commands::file_ops::path_safety::validate_within_project(
+            &root,
+            target.to_str().unwrap(),
+        );
+        assert!(
+            result.is_err(),
+            "absolute path outside root with multi-level missing parent should be rejected"
+        );
+    }
+
+    #[test]
+    fn safe_join_accepts_leading_slash_relative_path() {
+        let root = test_project_dir();
+        let root_str = root.to_string_lossy();
+        // `?path=/wiki/foo.md` is a VALID public path per `is_public_project_rel`
+        // (which trims the leading '/' and treats it as project-relative).
+        // safe_join must accept the same input rather than rejecting it as an
+        // absolute filesystem path (P1 regression fix).
+        let result = safe_join(&root_str, "/wiki/foo.md");
+        assert!(
+            result.is_ok(),
+            "leading-slash URL-style path should be treated as project-relative"
+        );
     }
 
     #[test]

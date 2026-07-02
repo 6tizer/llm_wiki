@@ -14,24 +14,39 @@
 //!     read before the watcher starts, e.g. during project open)
 //!   - write/delete commands: deny (fail-closed — never write without a known
 //!     sandbox root)
+//!
+//! Known limitation (accepted, out of scope): for not-yet-existing targets,
+//! validation checks the nearest *existing* ancestor at check time. A symlink
+//! swapped into the not-yet-created path between validation and the caller's
+//! actual I/O could still escape — a classic check-then-act TOCTOU inherent
+//! to canonicalize-based sandboxing.
 
 use std::path::{Component, Path, PathBuf};
 
 /// Validate that `target` resolves to a path inside `project_root`.
 ///
-/// Mirrors `api_server.rs::safe_join`: strips leading `/`, rejects absolute
-/// paths and `..`/`Prefix`/`RootDir` components, then canonicalizes both root
-/// and target (or target's parent for not-yet-existing paths) and checks
-/// `starts_with`.
-///
-/// `target` may be absolute (must start with or be under `project_root`) or
-/// relative (joined against `project_root`).
+/// Mirrors `api_server.rs::safe_join`. Absolute targets are allowed if they
+/// resolve inside `project_root` — rejected only if they escape it, or
+/// contain a `..` component; `Prefix`/`RootDir` are allowed since they're
+/// structurally required for any absolute path. Relative targets are joined
+/// against `project_root`; `..`/`Prefix`/`RootDir` are rejected outright in
+/// this branch. For targets that don't exist yet, the nearest *existing*
+/// ancestor is canonicalized and checked against the canonicalized root.
 pub fn validate_within_project(project_root: &Path, target: &str) -> Result<PathBuf, String> {
     let target_path = Path::new(target);
 
     // If the target is absolute, it must already be inside the project root.
     // If relative, join it against the root.
     let joined = if target_path.is_absolute() {
+        // Reject `..` traversal components in absolute paths too. RootDir and
+        // Prefix (Windows drive/UNC) are structurally required for any absolute
+        // path and are validated by the canonicalize + starts_with(root) check
+        // below, so they are not rejected here.
+        for component in target_path.components() {
+            if matches!(component, Component::ParentDir) {
+                return Err(format!("Path traversal is not allowed: '{target}'"));
+            }
+        }
         target_path.to_path_buf()
     } else {
         let rel = target.trim_start_matches('/');
@@ -73,22 +88,31 @@ pub fn validate_within_project(project_root: &Path, target: &str) -> Result<Path
         Ok(joined_canon)
     } else {
         // For not-yet-existing paths (e.g. a file about to be written),
-        // canonicalize the parent and check that's inside the root.
-        let parent = joined
-            .parent()
-            .ok_or_else(|| "Path has no parent directory".to_string())?;
-        if parent.exists() {
-            let parent_canon = parent.canonicalize().map_err(|e| {
-                format!("Failed to resolve parent path '{}': {e}", parent.display())
+        // walk up to the nearest existing ancestor and verify IT is inside the
+        // root. Checking only the immediate parent let an absolute path whose
+        // parent dirs also don't exist escape the sandbox (S1).
+        let existing_ancestor = joined
+            .ancestors()
+            .skip(1) // skip `joined` itself; start from its parent
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                format!("Cannot resolve any existing ancestor of '{}'", joined.display())
             })?;
-            if !parent_canon.starts_with(&root_canon) {
-                return Err(format!(
-                    "Resolved parent '{}' escapes the project directory '{}'",
-                    parent_canon.display(),
-                    root_canon.display()
-                ));
-            }
+        let ancestor_canon = existing_ancestor.canonicalize().map_err(|e| {
+            format!("Failed to resolve ancestor '{}': {e}", existing_ancestor.display())
+        })?;
+        if !ancestor_canon.starts_with(&root_canon) {
+            return Err(format!(
+                "Resolved ancestor '{}' escapes the project directory '{}'",
+                ancestor_canon.display(),
+                root_canon.display()
+            ));
         }
+        // Return the (non-canonical) joined path: its existing-ancestor prefix
+        // has been canonicalized and confirmed inside the root, and the
+        // non-existing tail contains no `..`/absolute escape. Callers use this
+        // for I/O only — do NOT string-compare it against root without
+        // re-canonicalizing, since the tail is not yet resolved.
         Ok(joined)
     }
 }
@@ -159,5 +183,91 @@ mod tests {
         let result = validate_within_project(&root, "wiki/../../etc/passwd");
         assert!(result.is_err(), "nested .. traversal should be rejected");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absolute_path_with_multilevel_missing_parent_outside_root_is_rejected() {
+        let root = tmp_root();
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        // The middle directories (missingA/missingB) are intentionally never
+        // created, so the immediate-parent-only check (pre-fix) would fall
+        // through and return Ok even though this path is outside `root`.
+        let target = env::temp_dir().join(format!(
+            "llm-wiki-escape-{}-{}/missingA/missingB/evil.md",
+            std::process::id(),
+            id
+        ));
+        let result = validate_within_project(&root, target.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "absolute path outside root with multi-level missing parent should be rejected"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absolute_path_with_single_missing_parent_outside_root_is_rejected() {
+        let root = tmp_root();
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Minimal form of the escape: exactly ONE level (the immediate
+        // parent) is missing, while its parent (temp_dir itself) exists.
+        // Guards against "optimizing" the ancestor walk back down to a
+        // single-level check that happens to pass the multilevel test.
+        let target = env::temp_dir().join(format!(
+            "llm-wiki-single-missing-{}-{}/evil.md",
+            std::process::id(),
+            id
+        ));
+        let result = validate_within_project(&root, target.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "absolute path outside root with single missing parent should be rejected"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relative_path_with_multilevel_missing_parent_inside_root_is_allowed() {
+        let root = tmp_root();
+        // Canonicalize root first — on macOS /tmp symlinks to /private/tmp, so
+        // comparing a non-canonical root against a canonicalized ancestor fails.
+        let root_canon = root.canonicalize().unwrap();
+        let result = validate_within_project(&root_canon, "newdir/newsub/file.md");
+        assert!(
+            result.is_ok(),
+            "relative path with missing intermediate dirs inside root should be allowed"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absolute_path_with_dotdot_component_is_rejected() {
+        let root = tmp_root();
+        let target = format!("{}/../../../etc/passwd", root.display());
+        let result = validate_within_project(&root, &target);
+        assert!(
+            result.is_err(),
+            "absolute path with '..' component should be rejected"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ancestor_pointing_outside_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let root = tmp_root();
+        let root_canon = root.canonicalize().unwrap();
+        // Create a real dir outside root, and a symlink inside root pointing to it.
+        let outside = tmp_root(); // separate temp dir, outside `root`
+        let link = root_canon.join("escape_link");
+        let _ = std::fs::remove_file(&link);
+        symlink(&outside, &link).unwrap();
+        // A path under the symlink resolves outside root once canonicalized.
+        let target = link.join("evil.md");
+        let result = validate_within_project(&root_canon, target.to_str().unwrap());
+        assert!(result.is_err(), "path under a symlink escaping root must be rejected");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }
