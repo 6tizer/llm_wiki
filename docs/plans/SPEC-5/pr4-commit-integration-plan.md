@@ -29,7 +29,7 @@
 - commit conflict / base hash mismatch 不 silent overwrite，必须保留 staging artifact 并创建 repair job。
 - resume reconciliation：
   - create/update conflict 时若 committed target 的 hash 已等于 staged artifact hash，视为 crash-after-write-before-cleanup 的 already-committed outcome；跳过 repair，继续 event / marker / `commit_success` 收尾。
-  - append conflict 不做尾部内容启发式自动合并；即使 target 已以 staged append body 结尾，也走 repair，避免把同尾内容的并发写误判为 already-merged 并静默丢 append。
+  - append conflict 不做尾部内容启发式或 `currentHash === artifactHash` 自动合并；即使 target 已以 staged append body 结尾或刚好等于 staged segment，也走 repair，避免把并发写误判为 already-merged 并静默丢 append。
   - delete 对 missing target 返回 `skipped` 时视为终态 delete cleanup，避免 artifact 永久 pending。
 - 同路径并发语义：
   - 本地 concurrency guard 使用 `normalizeCommitTargetPath(...).resourceKey`。
@@ -92,7 +92,7 @@
 
 - Claude ACP post-PR review session `f34c4f7f-9643-4ccb-879c-dbdbc8a03d0b` returned `WARN`.
 - P2 fixed in PR:
-  - Removed append suffix-based auto reconciliation; append conflicts now route repair even if the current target ends with the staged append segment.
+  - Removed append suffix-based and exact-hash auto reconciliation; append conflicts now route repair even if the current target ends with or equals the staged append segment.
 - P3 fixed in PR:
   - Commit audit event id and derived marker id are stable across crash retries; duplicate insert errors are treated as idempotent.
   - Terminal rejected artifacts are marked `failed` instead of staying pending forever.

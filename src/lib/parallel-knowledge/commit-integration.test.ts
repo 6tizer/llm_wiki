@@ -106,6 +106,26 @@ describe("parallel knowledge commit integration", () => {
     expect(runtime.calls.committedArtifacts).toEqual([])
   })
 
+  it("routes append conflicts to repair when the current target equals the staged segment", async () => {
+    const base = "# Existing\n"
+    const staged = "## Added\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent(staged),
+      operationIntent: "append",
+      baseHash: await hashMarkdownContent(base),
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: staged })
+    const files = fakeFiles({ "Wiki/Page.md": staged })
+
+    const result = await commitPendingStagingArtifacts({ runtime, files })
+
+    expect(result.conflicted).toBe(1)
+    expect(result.repairJobs).toBe(1)
+    expect(result.cleanedArtifacts).toBe(0)
+    expect(runtime.calls.repairs).toHaveLength(1)
+    expect(runtime.calls.committedArtifacts).toEqual([])
+  })
+
   it("treats missing-target delete skips as terminal cleanup", async () => {
     const markdown = "# Delete marker\n"
     const artifact = await stagingArtifact({

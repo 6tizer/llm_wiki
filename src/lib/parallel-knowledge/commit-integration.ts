@@ -273,7 +273,7 @@ async function commitArtifact(
     return
   }
 
-  const reconciled = reconcileAlreadyCommitted(commitResult)
+  const reconciled = reconcileAlreadyCommitted(commitResult, artifact)
   await finalizeCommitResult(artifact, reconciled, context)
 }
 
@@ -355,12 +355,16 @@ async function finalizeCommitResult(
 
 function reconcileAlreadyCommitted(
   commitResult: MarkdownCommitOperationResult,
+  artifact: MarkdownCommitArtifact,
 ): MarkdownCommitOperationResult {
   if (commitResult.result !== "conflicted") {
     return commitResult
   }
 
-  if (commitResult.currentHash === commitResult.artifactHash) {
+  if (
+    (artifact.operationIntent === "create" || artifact.operationIntent === "update") &&
+    commitResult.currentHash === commitResult.artifactHash
+  ) {
     return {
       ...commitResult,
       result: "committed",
