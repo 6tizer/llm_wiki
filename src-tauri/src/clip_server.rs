@@ -1,7 +1,8 @@
+use std::io::Read;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use tiny_http::{Header, Method, Response, Server};
+use tiny_http::{Header, Method, Request, Response, Server};
 
 static CURRENT_PROJECT: Mutex<String> = Mutex::new(String::new());
 static ALL_PROJECTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // (name, path)
@@ -15,6 +16,7 @@ const MAX_BIND_RETRIES: u32 = 3;
 const MAX_RESTART_RETRIES: u32 = 10;
 const BIND_RETRY_DELAY_SECS: u64 = 2;
 const RESTART_DELAY_SECS: u64 = 5;
+const MAX_CLIP_BODY_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Get current daemon status as a string
 pub fn get_daemon_status() -> &'static str {
@@ -38,6 +40,39 @@ pub fn all_projects() -> Vec<(String, String)> {
         .lock()
         .map(|guard| guard.clone())
         .unwrap_or_default()
+}
+
+const ALLOWED_APP_ORIGINS: &[&str] = &[
+    "http://localhost:1420",
+    "tauri://localhost",
+    "https://tauri.localhost",
+    // Windows Tauri webview origin (macOS/Linux use tauri://localhost).
+    "http://tauri.localhost",
+];
+
+/// A request is allowed if it comes from the Tauri app webview (exact
+/// `Origin` match against `ALLOWED_APP_ORIGINS`) or a browser extension
+/// (`chrome-extension://<id>`, any installed id). The browser always sends a
+/// truthful `Origin` on cross-origin fetch, so an arbitrary web page cannot
+/// forge one of these. Trusting any installed extension is an accepted
+/// limitation — a malicious installed extension is out of scope; pinning to
+/// our extension's id via the manifest `key` is a follow-up.
+fn origin_allowed(headers: &[Header]) -> bool {
+    let origin = headers
+        .iter()
+        .find(|h| h.field.equiv("Origin"))
+        .map(|h| h.value.as_str());
+    match origin {
+        Some(o) => {
+            o.starts_with("chrome-extension://") || ALLOWED_APP_ORIGINS.iter().any(|p| o == *p)
+        }
+        None => false,
+    }
+}
+
+/// The clip write target must be a project the app currently knows about.
+fn is_known_project(path: &str, current: &str, projects: &[(String, String)]) -> bool {
+    path == current || projects.iter().any(|(_, p)| p == path)
 }
 
 pub fn start_clip_server() {
@@ -86,188 +121,12 @@ pub fn start_clip_server() {
             restart_count = 0; // Reset on successful bind
             println!("[Clip Server] Listening on http://127.0.0.1:{}", PORT);
 
-            for mut request in server.incoming_requests() {
-                let cors_headers = vec![
-                    Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap(),
-                    Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                        .unwrap(),
-                    Header::from_bytes("Access-Control-Allow-Headers", "Content-Type").unwrap(),
-                    Header::from_bytes("Content-Type", "application/json").unwrap(),
-                ];
-
-                // Handle CORS preflight
-                if request.method() == &Method::Options {
-                    let mut response = Response::from_string("").with_status_code(204);
-                    for h in &cors_headers {
-                        response.add_header(h.clone());
-                    }
-                    let _ = request.respond(response);
-                    continue;
-                }
-
-                let url = request.url().to_string();
-
-                match (request.method(), url.as_str()) {
-                    (&Method::Get, "/status") => {
-                        let body = r#"{"ok":true,"version":"0.1.0"}"#;
-                        let mut response = Response::from_string(body);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    (&Method::Get, "/project") => {
-                        let path = CURRENT_PROJECT.lock().unwrap().clone();
-                        // serde_json handles backslash escaping so a Windows
-                        // path that somehow still contains `\` won't break
-                        // the JSON parser on the client.
-                        let body = serde_json::json!({
-                            "ok": true,
-                            "path": path,
-                        })
-                        .to_string();
-                        let mut response = Response::from_string(body);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    (&Method::Post, "/project") => {
-                        let mut body = String::new();
-                        if let Err(e) = request.as_reader().read_to_string(&mut body) {
-                            let err =
-                                format!(r#"{{"ok":false,"error":"Failed to read body: {}"}}"#, e);
-                            let mut response = Response::from_string(err).with_status_code(400);
-                            for h in &cors_headers {
-                                response.add_header(h.clone());
-                            }
-                            let _ = request.respond(response);
-                            continue;
-                        }
-
-                        let result = handle_set_project(&body);
-                        let status = if result.contains(r#""ok":true"#) {
-                            200
-                        } else {
-                            400
-                        };
-                        let mut response = Response::from_string(result).with_status_code(status);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    (&Method::Get, "/projects") => {
-                        let projects = ALL_PROJECTS.lock().unwrap().clone();
-                        let current = CURRENT_PROJECT.lock().unwrap().clone();
-                        // serde_json for proper escaping of `\`, `"`, and any
-                        // other characters that might appear in a project name
-                        // or path. Previously only `"` was escaped by hand,
-                        // which broke on Windows paths containing backslashes.
-                        let items: Vec<serde_json::Value> = projects
-                            .iter()
-                            .map(|(name, path)| {
-                                serde_json::json!({
-                                    "name": name,
-                                    "path": path,
-                                    "current": path == &current,
-                                })
-                            })
-                            .collect();
-                        let body = serde_json::json!({
-                            "ok": true,
-                            "projects": items,
-                        })
-                        .to_string();
-                        let mut response = Response::from_string(body);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    (&Method::Post, "/projects") => {
-                        let mut body = String::new();
-                        if request.as_reader().read_to_string(&mut body).is_ok() {
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
-                                if let Some(arr) = parsed["projects"].as_array() {
-                                    let mut projects = ALL_PROJECTS.lock().unwrap();
-                                    projects.clear();
-                                    for item in arr {
-                                        let name = item["name"].as_str().unwrap_or("").to_string();
-                                        let path = item["path"].as_str().unwrap_or("").to_string();
-                                        if !path.is_empty() {
-                                            projects.push((name, path));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let mut response = Response::from_string(r#"{"ok":true}"#);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    (&Method::Get, "/clips/pending") => {
-                        let mut pending = PENDING_CLIPS.lock().unwrap();
-                        // Use serde_json for proper escaping of both quotes
-                        // and backslashes — hand-rolled escaping previously
-                        // produced invalid JSON on Windows paths containing
-                        // \r, \s, etc.
-                        let clips_json: Vec<serde_json::Value> = pending
-                            .iter()
-                            .map(|(proj, file)| {
-                                serde_json::json!({
-                                    "projectPath": proj,
-                                    "filePath": file,
-                                })
-                            })
-                            .collect();
-                        let body = serde_json::json!({
-                            "ok": true,
-                            "clips": clips_json,
-                        })
-                        .to_string();
-                        pending.clear();
-                        let mut response = Response::from_string(body);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    (&Method::Post, "/clip") => {
-                        let mut body = String::new();
-                        if let Err(e) = request.as_reader().read_to_string(&mut body) {
-                            let err =
-                                format!(r#"{{"ok":false,"error":"Failed to read body: {}"}}"#, e);
-                            let mut response = Response::from_string(err).with_status_code(400);
-                            for h in &cors_headers {
-                                response.add_header(h.clone());
-                            }
-                            let _ = request.respond(response);
-                            continue;
-                        }
-
-                        let result = handle_clip(&body);
-                        let status = if result.contains(r#""ok":true"#) {
-                            200
-                        } else {
-                            500
-                        };
-                        let mut response = Response::from_string(result).with_status_code(status);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
-                    _ => {
-                        let body = r#"{"ok":false,"error":"Not found"}"#;
-                        let mut response = Response::from_string(body).with_status_code(404);
-                        for h in &cors_headers {
-                            response.add_header(h.clone());
-                        }
-                        let _ = request.respond(response);
-                    }
+            for request in server.incoming_requests() {
+                if let Err(e) = crate::panic_guard::run_guarded("clip_server_request", move || {
+                    handle_one_request(request);
+                    Ok::<(), String>(())
+                }) {
+                    eprintln!("[Clip Server] request handling panicked, connection dropped: {e}");
                 }
             }
 
@@ -292,45 +151,278 @@ pub fn start_clip_server() {
     });
 }
 
+fn handle_one_request(mut request: Request) {
+    let cors_headers = vec![
+        Header::from_bytes("Access-Control-Allow-Origin", "*")
+            .expect("static CORS header bytes are valid"),
+        Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            .expect("static CORS header bytes are valid"),
+        Header::from_bytes("Access-Control-Allow-Headers", "Content-Type")
+            .expect("static CORS header bytes are valid"),
+        Header::from_bytes("Content-Type", "application/json")
+            .expect("static CORS header bytes are valid"),
+    ];
+
+    // Handle CORS preflight
+    if request.method() == &Method::Options {
+        let mut response = Response::from_string("").with_status_code(204);
+        for h in &cors_headers {
+            response.add_header(h.clone());
+        }
+        let _ = request.respond(response);
+        return;
+    }
+
+    let is_status_probe = request.method() == &Method::Get && request.url() == "/status";
+    if !is_status_probe && !origin_allowed(request.headers()) {
+        let body = serde_json::json!({"ok": false, "error": "Origin not allowed"}).to_string();
+        let mut response = Response::from_string(body).with_status_code(403);
+        for h in &cors_headers {
+            response.add_header(h.clone());
+        }
+        let _ = request.respond(response);
+        return;
+    }
+
+    let url = request.url().to_string();
+
+    match (request.method(), url.as_str()) {
+        (&Method::Get, "/status") => {
+            let body = r#"{"ok":true,"version":"0.1.0"}"#;
+            let mut response = Response::from_string(body);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        (&Method::Get, "/project") => {
+            let path = CURRENT_PROJECT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            // serde_json handles backslash escaping so a Windows
+            // path that somehow still contains `\` won't break
+            // the JSON parser on the client.
+            let body = serde_json::json!({
+                "ok": true,
+                "path": path,
+            })
+            .to_string();
+            let mut response = Response::from_string(body);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        (&Method::Post, "/project") => {
+            let mut body = String::new();
+            if let Err(e) = request
+                .as_reader()
+                .take(MAX_CLIP_BODY_BYTES)
+                .read_to_string(&mut body)
+            {
+                let err = serde_json::json!({
+                    "ok": false,
+                    "error": format!("Failed to read body: {}", e),
+                })
+                .to_string();
+                let mut response = Response::from_string(err).with_status_code(400);
+                for h in &cors_headers {
+                    response.add_header(h.clone());
+                }
+                let _ = request.respond(response);
+                return;
+            }
+
+            let result = handle_set_project(&body);
+            let status = if result.contains(r#""ok":true"#) {
+                200
+            } else {
+                400
+            };
+            let mut response = Response::from_string(result).with_status_code(status);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        (&Method::Get, "/projects") => {
+            let projects = ALL_PROJECTS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let current = CURRENT_PROJECT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            // serde_json for proper escaping of `\`, `"`, and any
+            // other characters that might appear in a project name
+            // or path. Previously only `"` was escaped by hand,
+            // which broke on Windows paths containing backslashes.
+            let items: Vec<serde_json::Value> = projects
+                .iter()
+                .map(|(name, path)| {
+                    serde_json::json!({
+                        "name": name,
+                        "path": path,
+                        "current": path == &current,
+                    })
+                })
+                .collect();
+            let body = serde_json::json!({
+                "ok": true,
+                "projects": items,
+            })
+            .to_string();
+            let mut response = Response::from_string(body);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        (&Method::Post, "/projects") => {
+            let mut body = String::new();
+            if request
+                .as_reader()
+                .take(MAX_CLIP_BODY_BYTES)
+                .read_to_string(&mut body)
+                .is_ok()
+            {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(arr) = parsed["projects"].as_array() {
+                        let mut projects = ALL_PROJECTS.lock().unwrap_or_else(|e| e.into_inner());
+                        projects.clear();
+                        for item in arr {
+                            let name = item["name"].as_str().unwrap_or("").to_string();
+                            let path = item["path"].as_str().unwrap_or("").replace('\\', "/");
+                            if !path.is_empty() {
+                                projects.push((name, path));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut response = Response::from_string(r#"{"ok":true}"#);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        (&Method::Get, "/clips/pending") => {
+            let mut pending = PENDING_CLIPS.lock().unwrap_or_else(|e| e.into_inner());
+            // Use serde_json for proper escaping of both quotes
+            // and backslashes — hand-rolled escaping previously
+            // produced invalid JSON on Windows paths containing
+            // \r, \s, etc.
+            let clips_json: Vec<serde_json::Value> = pending
+                .iter()
+                .map(|(proj, file)| {
+                    serde_json::json!({
+                        "projectPath": proj,
+                        "filePath": file,
+                    })
+                })
+                .collect();
+            let body = serde_json::json!({
+                "ok": true,
+                "clips": clips_json,
+            })
+            .to_string();
+            pending.clear();
+            let mut response = Response::from_string(body);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        (&Method::Post, "/clip") => {
+            let mut body = String::new();
+            if let Err(e) = request
+                .as_reader()
+                .take(MAX_CLIP_BODY_BYTES)
+                .read_to_string(&mut body)
+            {
+                let err = serde_json::json!({
+                    "ok": false,
+                    "error": format!("Failed to read body: {}", e),
+                })
+                .to_string();
+                let mut response = Response::from_string(err).with_status_code(400);
+                for h in &cors_headers {
+                    response.add_header(h.clone());
+                }
+                let _ = request.respond(response);
+                return;
+            }
+
+            let result = handle_clip(&body);
+            let status = if result.contains(r#""ok":true"#) {
+                200
+            } else {
+                500
+            };
+            let mut response = Response::from_string(result).with_status_code(status);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+        _ => {
+            let body = r#"{"ok":false,"error":"Not found"}"#;
+            let mut response = Response::from_string(body).with_status_code(404);
+            for h in &cors_headers {
+                response.add_header(h.clone());
+            }
+            let _ = request.respond(response);
+        }
+    }
+}
+
 fn handle_set_project(body: &str) -> String {
     let parsed: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"Invalid JSON: {}"}}"#, e),
+        Err(e) => {
+            return serde_json::json!({"ok": false, "error": format!("Invalid JSON: {}", e)})
+                .to_string()
+        }
     };
 
     let path = match parsed["path"].as_str() {
         // Normalize to forward slashes on ingress so downstream
         // comparisons against frontend-normalized paths succeed.
         Some(p) => p.replace('\\', "/"),
-        None => return r#"{"ok":false,"error":"path field is required"}"#.to_string(),
+        None => {
+            return serde_json::json!({"ok": false, "error": "path field is required"}).to_string()
+        }
     };
 
-    match CURRENT_PROJECT.lock() {
-        Ok(mut guard) => {
-            *guard = path;
-            r#"{"ok":true}"#.to_string()
-        }
-        Err(e) => format!(r#"{{"ok":false,"error":"Lock error: {}"}}"#, e),
-    }
+    let mut guard = CURRENT_PROJECT.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = path;
+    serde_json::json!({"ok": true}).to_string()
 }
 
 fn handle_clip(body: &str) -> String {
     let parsed: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"ok":false,"error":"Invalid JSON: {}"}}"#, e),
+        Err(e) => {
+            return serde_json::json!({"ok": false, "error": format!("Invalid JSON: {}", e)})
+                .to_string()
+        }
     };
 
     let title = parsed["title"].as_str().unwrap_or("Untitled");
     let url = parsed["url"].as_str().unwrap_or("");
     let content = parsed["content"].as_str().unwrap_or("");
 
+    let current_project = CURRENT_PROJECT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+
     // Use projectPath from request body, or fall back to globally-set project path
     let project_path_from_body = parsed["projectPath"].as_str().unwrap_or("").to_string();
     let project_path = if project_path_from_body.is_empty() {
-        match CURRENT_PROJECT.lock() {
-            Ok(guard) => guard.clone(),
-            Err(e) => return format!(r#"{{"ok":false,"error":"Lock error: {}"}}"#, e),
-        }
+        current_project.clone()
     } else {
         project_path_from_body
     };
@@ -339,12 +431,29 @@ fn handle_clip(body: &str) -> String {
     let project_path = project_path.replace('\\', "/");
 
     if project_path.is_empty() {
-        return r#"{"ok":false,"error":"projectPath is required (set via POST /project or include in request body)"}"#
-            .to_string();
+        return serde_json::json!({
+            "ok": false,
+            "error": "projectPath is required (set via POST /project or include in request body)"
+        })
+        .to_string();
     }
 
     if content.is_empty() {
-        return r#"{"ok":false,"error":"content is required"}"#.to_string();
+        return serde_json::json!({"ok": false, "error": "content is required"}).to_string();
+    }
+
+    // current_project and projects are independent lock snapshots, momentarily
+    // inconsistent if the project set changes between them (accepted, non-security).
+    let projects = ALL_PROJECTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if !is_known_project(&project_path, &current_project, &projects) {
+        return serde_json::json!({
+            "ok": false,
+            "error": "projectPath is not a known project (open it in the app first)"
+        })
+        .to_string();
     }
 
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -375,10 +484,11 @@ fn handle_clip(body: &str) -> String {
 
     // Ensure directory exists
     if let Err(e) = std::fs::create_dir_all(&dir_path) {
-        return format!(
-            r#"{{"ok":false,"error":"Failed to create directory: {}"}}"#,
-            e
-        );
+        return serde_json::json!({
+            "ok": false,
+            "error": format!("Failed to create directory: {}", e),
+        })
+        .to_string();
     }
 
     // Find unique filename
@@ -407,7 +517,11 @@ fn handle_clip(body: &str) -> String {
     );
 
     if let Err(e) = std::fs::write(&file_path, &markdown) {
-        return format!(r#"{{"ok":false,"error":"Failed to write file: {}"}}"#, e);
+        return serde_json::json!({
+            "ok": false,
+            "error": format!("Failed to write file: {}", e),
+        })
+        .to_string();
     }
 
     // Compute relative path using Path for cross-platform separator handling
@@ -429,4 +543,93 @@ fn handle_clip(body: &str) -> String {
         "path": relative_path,
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn origin_header(value: &str) -> Vec<Header> {
+        vec![Header::from_bytes("Origin", value).unwrap()]
+    }
+
+    #[test]
+    fn origin_allowed_accepts_extension_and_app_origins() {
+        assert!(origin_allowed(&origin_header(
+            "chrome-extension://abcdefghijklmnop"
+        )));
+        assert!(origin_allowed(&origin_header("http://localhost:1420")));
+        assert!(origin_allowed(&origin_header("tauri://localhost")));
+        assert!(origin_allowed(&origin_header("https://tauri.localhost")));
+        assert!(origin_allowed(&origin_header("http://tauri.localhost")));
+    }
+
+    #[test]
+    fn origin_allowed_rejects_arbitrary_website_and_missing_origin() {
+        assert!(!origin_allowed(&origin_header("https://evil.example.com")));
+        assert!(!origin_allowed(&[]));
+    }
+
+    #[test]
+    fn origin_allowed_rejects_prefix_lookalike_origins() {
+        assert!(!origin_allowed(&origin_header(
+            "https://tauri.localhost.evil.com"
+        )));
+        assert!(!origin_allowed(&origin_header("http://localhost:14200")));
+        assert!(!origin_allowed(&origin_header(
+            "http://localhost:1420.evil.com"
+        )));
+        assert!(!origin_allowed(&origin_header(
+            "http://tauri.localhost.evil.com"
+        )));
+    }
+
+    // Documents that backslash normalization happens upstream (ingress in
+    // handle_set_project / POST /projects, and on project_path in
+    // handle_clip) before is_known_project is ever called — the function
+    // itself is intentionally a plain equality check over already-
+    // normalized, forward-slash paths.
+    #[test]
+    fn is_known_project_matches_normalized_recent_project() {
+        let projects = vec![("proj-a".to_string(), "C:/Users/me/proj".to_string())];
+        let normalized_client_path = r"C:\Users\me\proj".replace('\\', "/");
+        assert!(is_known_project(
+            &normalized_client_path,
+            "/current",
+            &projects
+        ));
+    }
+
+    #[test]
+    fn is_known_project_accepts_current_and_recent_but_rejects_unknown() {
+        let projects = vec![
+            ("proj-a".to_string(), "/a".to_string()),
+            ("proj-b".to_string(), "/b".to_string()),
+        ];
+        assert!(is_known_project("/current", "/current", &projects));
+        assert!(is_known_project("/a", "/current", &projects));
+        assert!(is_known_project("/b", "/current", &projects));
+        assert!(!is_known_project(
+            "/nonexistent/evil",
+            "/current",
+            &projects
+        ));
+    }
+
+    #[test]
+    fn handle_clip_rejects_missing_content() {
+        let result = handle_clip(r#"{"projectPath":"/x","title":"t","content":"","url":"u"}"#);
+        assert!(result.contains("content is required"), "got: {result}");
+    }
+
+    // Safe from cross-test interference: no other test in this module sets
+    // CURRENT_PROJECT or ALL_PROJECTS to "/nonexistent/evil", so this path
+    // is never accidentally "known" regardless of test execution order.
+    #[test]
+    fn handle_clip_rejects_unknown_project_path() {
+        let result = handle_clip(
+            r#"{"projectPath":"/nonexistent/evil","title":"t","content":"c","url":"u"}"#,
+        );
+        assert!(result.contains("is not a known project"), "got: {result}");
+    }
 }
