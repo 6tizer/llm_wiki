@@ -26,6 +26,10 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
         data: { enabled: true, status: "healthy", artifacts: [] },
         error: null,
       },
+      profilePool: {
+        data: { enabled: true, status: "healthy", activeClaims: [], circuitBreakers: [] },
+        error: null,
+      },
       summary: {
         queuedJobCount: 0,
         activeJobCount: 0,
@@ -37,6 +41,8 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
         progressCount: 0,
         eventCount: 0,
         stagingArtifactCount: 0,
+        activeProfileClaimCount: 0,
+        circuitBreakerCount: 0,
       },
     })
   })
@@ -99,6 +105,35 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
             },
           ],
         },
+        profilePool: {
+          enabled: true,
+          status: "healthy",
+          activeClaims: [
+            {
+              claimId: "claim-1",
+              profileId: "profile-1",
+              kind: "model-call",
+              taskFamily: "ingest",
+              jobId: "running-1",
+              holder: "bulk-prepare:worker-1",
+              acquiredAtMs: 1,
+              expiresAtMs: 2,
+              releasedAtMs: null,
+              status: "active",
+            },
+          ],
+          circuitBreakers: [
+            {
+              profileId: "profile-2",
+              status: "rate-limited",
+              reason: "rate-limit",
+              error: null,
+              openedAtMs: 1,
+              openUntilMs: 2,
+              updatedAtMs: 1,
+            },
+          ],
+        },
       }),
     )
 
@@ -113,6 +148,8 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
       progressCount: 1,
       eventCount: 1,
       stagingArtifactCount: 1,
+      activeProfileClaimCount: 1,
+      circuitBreakerCount: 1,
     })
   })
 
@@ -149,12 +186,39 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
     expect(snapshot.timeline.data?.events).toEqual([])
   })
 
+  it("keeps successful sections when profile pool diagnostics fail", async () => {
+    const snapshot = await captureRuntimeDiagnosticsSnapshot({
+      ...makeAdapters({
+        jobs: {
+          enabled: true,
+          status: "healthy",
+          jobs: [job("queued-1", "queued")],
+          leases: [],
+        },
+      }),
+      listProfilePool: () => Promise.reject(new Error("profile pool unavailable")),
+    })
+
+    expect(snapshot.status).toBe("partial-error")
+    expect(snapshot.jobs.data?.jobs).toHaveLength(1)
+    expect(snapshot.profilePool).toEqual({
+      data: null,
+      error: "profile pool unavailable",
+    })
+    expect(snapshot.summary).toMatchObject({
+      queuedJobCount: 1,
+      activeProfileClaimCount: 0,
+      circuitBreakerCount: 0,
+    })
+  })
+
   it("reports error when every section fails", async () => {
     const snapshot = await captureRuntimeDiagnosticsSnapshot({
       listJobs: () => Promise.reject(new Error("jobs failed")),
       listProgress: () => Promise.reject(new Error("progress failed")),
       listTimeline: () => Promise.reject(new Error("timeline failed")),
       listStagingArtifacts: () => Promise.reject(new Error("artifacts failed")),
+      listProfilePool: () => Promise.reject(new Error("profile pool failed")),
     })
 
     expect(snapshot.status).toBe("error")
@@ -170,6 +234,8 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
       progressCount: 0,
       eventCount: 0,
       stagingArtifactCount: 0,
+      activeProfileClaimCount: 0,
+      circuitBreakerCount: 0,
     })
   })
 })
@@ -180,6 +246,7 @@ function makeAdapters(
     progress: Awaited<ReturnType<RuntimeDiagnosticsAdapters["listProgress"]>>
     timeline: Awaited<ReturnType<RuntimeDiagnosticsAdapters["listTimeline"]>>
     stagingArtifacts: Awaited<ReturnType<RuntimeDiagnosticsAdapters["listStagingArtifacts"]>>
+    profilePool: Awaited<ReturnType<RuntimeDiagnosticsAdapters["listProfilePool"]>>
   }> = {},
 ): RuntimeDiagnosticsAdapters {
   return {
@@ -192,6 +259,15 @@ function makeAdapters(
     listStagingArtifacts: () =>
       Promise.resolve(
         overrides.stagingArtifacts ?? { enabled: true, status: "healthy", artifacts: [] },
+      ),
+    listProfilePool: () =>
+      Promise.resolve(
+        overrides.profilePool ?? {
+          enabled: true,
+          status: "healthy",
+          activeClaims: [],
+          circuitBreakers: [],
+        },
       ),
   }
 }

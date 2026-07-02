@@ -56,6 +56,16 @@
     "summary": "{{running}} running / {{queued}} queued / {{paused}} paused / {{failed}} failed",
     "empty": "No runtime jobs",
     "attempt": "attempt {{attempt}}/{{maxAttempts}}",
+    "diagnostics": {
+      "title": "Diagnostics",
+      "prepare": "{{completed}}/{{total}} prepare jobs · {{sources}} sources",
+      "etaWaiting": "ETA waiting for completed batches",
+      "etaReady": "~{{eta}} remaining",
+      "profiles": "{{claims}} profile claims / {{breakers}} backoff",
+      "awaitingWorker": "Queued; waiting for a prepare worker",
+      "staging": "{{pending}} pending / {{failed}} failed / {{committed}} committed artifacts",
+      "latestProgress": "Latest: {{type}}"
+    },
     "state": {
       "queued": "Queued",
       "running": "Running",
@@ -127,6 +137,9 @@
     "refreshFolderHint": "Rescan the source folder and process new, changed, or deleted files.",
     "refreshFolderTooltip": "Rescan the project source folder with the same rules as automatic monitoring. New or modified allowed files are queued for ingest; deleted sources trigger the normal wiki and index cleanup; then the file tree is rebuilt.",
     "refreshFailed": "Failed to refresh sources: {{error}}",
+    "bulkPrepare": "Plan bulk prepare",
+    "bulkPrepareTooltip": "Create runtime prepare jobs for the current source tree. Jobs advance when a prepare worker is running; existing import and re-ingest behavior is unchanged.",
+    "bulkPrepareFailed": "{{count}} of {{total}} runtime prepare jobs failed to enqueue.",
     "ingest": "Ingest",
     "delete": "Delete source and related wiki pages",
     "deleteConfirm": "Delete \"{{name}}\" and its related wiki pages?\n\nThis will:\n- Delete the source file\n- Delete wiki pages generated from this source\n- Update index.md",
