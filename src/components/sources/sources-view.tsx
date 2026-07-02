@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
-import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown } from "lucide-react"
+import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown, ListTodo } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -18,6 +18,7 @@ import {
   importSourceFiles,
   importSourceFolder,
 } from "@/lib/source-lifecycle"
+import { enqueueBulkKnowledgePrepareJobs } from "@/lib/parallel-knowledge/bulk-runtime-entry"
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
@@ -37,6 +38,10 @@ export function SourcesView() {
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [planningRuntime, setPlanningRuntime] = useState(false)
+  const [runtimePlanError, setRuntimePlanError] = useState<string | null>(null)
+  const sourceFilePaths = useMemo(() => collectSourceFilePaths(sources), [sources])
+  const sourceFileCount = sourceFilePaths.length
   /**
    * Path of the source-tree node currently in "click again to
    * confirm delete" state. Lifted up here (rather than living
@@ -91,6 +96,29 @@ export function SourcesView() {
     } finally {
       await loadSources()
       setRefreshing(false)
+    }
+  }
+
+  async function handlePlanBulkPrepare() {
+    if (!project || planningRuntime) return
+    if (sourceFilePaths.length === 0) return
+
+    setPlanningRuntime(true)
+    setRuntimePlanError(null)
+    try {
+      const result = await enqueueBulkKnowledgePrepareJobs(
+        sourceFilePaths.map((sourcePath) => ({ sourcePath })),
+      )
+      if (result.failedJobs.length > 0) {
+        setRuntimePlanError(t("sources.bulkPrepareFailed", {
+          count: result.failedJobs.length,
+          total: result.plan.jobs.length,
+        }))
+      }
+    } catch (err) {
+      setRuntimePlanError(String(err))
+    } finally {
+      setPlanningRuntime(false)
     }
   }
 
@@ -281,6 +309,24 @@ export function SourcesView() {
               {t("sources.refreshFolderTooltip")}
             </TooltipContent>
           </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handlePlanBulkPrepare}
+                  disabled={!project || planningRuntime || sourceFileCount === 0}
+                  aria-label={t("sources.bulkPrepare")}
+                />
+              }
+            >
+              <ListTodo className={`h-4 w-4 ${planningRuntime ? "animate-pulse" : ""}`} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="end" className="max-w-80 whitespace-normal leading-relaxed">
+              {t("sources.bulkPrepareTooltip")}
+            </TooltipContent>
+          </Tooltip>
           <Button size="sm" onClick={handleImport} disabled={importing}>
             <Plus className="mr-1 h-4 w-4" />
             {importing ? t("sources.importing") : t("sources.import")}
@@ -299,6 +345,11 @@ export function SourcesView() {
               defaultValue: "Failed to refresh sources: {{error}}",
               error: refreshError,
             })}
+          </div>
+        )}
+        {runtimePlanError && (
+          <div className="mx-4 mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {runtimePlanError}
           </div>
         )}
         {sources.length === 0 ? (
@@ -333,7 +384,7 @@ export function SourcesView() {
       </ScrollArea>
 
       <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
-        <span>{t("sources.sourceCount", { count: countFiles(sources) })}</span>
+        <span>{t("sources.sourceCount", { count: sourceFileCount })}</span>
         <Tooltip>
           <TooltipTrigger
             render={
@@ -386,6 +437,18 @@ function countFiles(nodes: FileNode[]): number {
     }
   }
   return count
+}
+
+function collectSourceFilePaths(nodes: readonly FileNode[]): string[] {
+  const paths: string[] = []
+  for (const node of nodes) {
+    if (node.is_dir && node.children) {
+      paths.push(...collectSourceFilePaths(node.children))
+    } else if (!node.is_dir) {
+      paths.push(node.path)
+    }
+  }
+  return paths
 }
 
 function sortSourceNodes(nodes: readonly FileNode[]): FileNode[] {

@@ -1,6 +1,6 @@
 # SPEC-5 PR5: Long-document Map-reduce Analysis
 
-> 类型：PR 执行计划 | 状态：architect gate absorbed / implementation active | issue：#243 | tracking：#191 | branch：`codex/spec-5-pr5-map-reduce` | run：`c6d25219-1397-4744-bbb1-404bcbaf20b4`
+> 类型：PR 执行计划 | 状态：merged via #244 | issue：#243 | tracking：#191 | branch：`codex/spec-5-pr5-map-reduce` | run：`c6d25219-1397-4744-bbb1-404bcbaf20b4`
 
 ## Summary
 

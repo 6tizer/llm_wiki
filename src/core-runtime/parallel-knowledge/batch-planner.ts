@@ -17,7 +17,12 @@ export interface BulkKnowledgePlannedSource {
 
 export interface BulkKnowledgePrepareJobPayload {
   readonly kind: typeof BULK_KNOWLEDGE_PREPARE_JOB_KIND
+  readonly planId: string
   readonly batchIndex: number
+  readonly batchTotal: number
+  readonly sourceTotal: number
+  readonly uniqueSourceTotal: number
+  readonly duplicateSourceTotal: number
   readonly sources: readonly BulkKnowledgePlannedSource[]
 }
 
@@ -31,6 +36,7 @@ export interface BulkKnowledgePrepareJobSpec {
 
 export interface BulkKnowledgePreparePlan {
   readonly kind: "bulk-knowledge-prepare-plan"
+  readonly planId: string
   readonly batchSize: number
   readonly sourceCount: number
   readonly uniqueSourceCount: number
@@ -47,19 +53,31 @@ export function planBulkKnowledgePrepare(
   const plannedSources = collectUniqueSources(sources)
   const uniqueSources = plannedSources
     .sort((left, right) => compareCodeUnits(left.sourceIdentity, right.sourceIdentity))
-  const jobs = chunkSources(uniqueSources, batchSize).map((batch, batchIndex) =>
-    buildPrepareJob(batch, batchIndex),
+  const sourceCount = sources.length
+  const duplicateSourceCount = uniqueSources.reduce(
+    (total, source) => total + source.duplicateCount,
+    0,
+  )
+  const planId = buildPreparePlanId(uniqueSources, batchSize)
+  const batches = chunkSources(uniqueSources, batchSize)
+  const jobMetadata = {
+    planId,
+    batchTotal: batches.length,
+    sourceTotal: sourceCount,
+    uniqueSourceTotal: uniqueSources.length,
+    duplicateSourceTotal: duplicateSourceCount,
+  }
+  const jobs = batches.map((batch, batchIndex) =>
+    buildPrepareJob(batch, batchIndex, jobMetadata),
   )
 
   return {
     kind: "bulk-knowledge-prepare-plan",
+    planId,
     batchSize,
-    sourceCount: sources.length,
+    sourceCount,
     uniqueSourceCount: uniqueSources.length,
-    duplicateSourceCount: uniqueSources.reduce(
-      (total, source) => total + source.duplicateCount,
-      0,
-    ),
+    duplicateSourceCount,
     jobs,
   }
 }
@@ -127,12 +145,18 @@ function chunkSources(
 function buildPrepareJob(
   sources: readonly BulkKnowledgePlannedSource[],
   batchIndex: number,
+  metadata: {
+    readonly planId: string
+    readonly batchTotal: number
+    readonly sourceTotal: number
+    readonly uniqueSourceTotal: number
+    readonly duplicateSourceTotal: number
+  },
 ): BulkKnowledgePrepareJobSpec {
-  const jobKey = `bulk-prepare-${batchIndex + 1}-${stableHash(
-    sources.map((source) => source.sourceIdentity).join("\n"),
-  )}`
+  const jobKey = `bulk-prepare-${metadata.planId}-${batchIndex + 1}`
   const payload = {
     kind: BULK_KNOWLEDGE_PREPARE_JOB_KIND,
+    ...metadata,
     batchIndex,
     sources,
   } satisfies BulkKnowledgePrepareJobPayload
@@ -144,6 +168,14 @@ function buildPrepareJob(
     sourceCount: payload.sources.length,
     payload,
   }
+}
+
+function buildPreparePlanId(
+  sources: readonly BulkKnowledgePlannedSource[],
+  batchSize: number,
+): string {
+  const sourceIdentityKey = sources.map((source) => source.sourceIdentity).join("\n")
+  return `bulk-plan-${stableHash(`${sourceIdentityKey}\nbatchSize:${batchSize}`)}`
 }
 
 function stableHash(value: string): string {

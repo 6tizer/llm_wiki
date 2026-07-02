@@ -24,6 +24,14 @@ describe("planBulkKnowledgePrepare", () => {
       "raw/sources/b.md",
       "raw/sources/c.md",
     ])
+    expect(first.jobs[0]?.payload).toMatchObject({
+      planId: first.planId,
+      batchIndex: 0,
+      batchTotal: 1,
+      sourceTotal: 3,
+      uniqueSourceTotal: 3,
+      duplicateSourceTotal: 0,
+    })
   })
 
   it("sorts mixed case and non-ASCII source identities without locale collation", () => {
@@ -83,9 +91,32 @@ describe("planBulkKnowledgePrepare", () => {
     expect(plan.jobs.map((job) => job.sourceCount)).toEqual([3, 3, 1])
   })
 
+  it("derives plan ids from normalized source identities and batch size", () => {
+    const first = planBulkKnowledgePrepare([
+      { sourcePath: "./raw//sources/b.md" },
+      { sourcePath: "raw/sources/a.md" },
+      { sourcePath: "raw/sources/a.md/" },
+    ], { batchSize: 2 })
+    const second = planBulkKnowledgePrepare([
+      { sourcePath: "raw\\sources\\a.md" },
+      { sourcePath: "raw/sources/b.md" },
+    ], { batchSize: 2 })
+    const differentBatchSize = planBulkKnowledgePrepare([
+      { sourcePath: "raw/sources/a.md" },
+      { sourcePath: "raw/sources/b.md" },
+    ], { batchSize: 1 })
+
+    expect(second.planId).toBe(first.planId)
+    expect(second.jobs.map((job) => job.jobKey)).toEqual(
+      first.jobs.map((job) => job.jobKey),
+    )
+    expect(differentBatchSize.planId).not.toBe(first.planId)
+  })
+
   it("handles empty and single-source inputs", () => {
     expect(planBulkKnowledgePrepare([])).toEqual({
       kind: "bulk-knowledge-prepare-plan",
+      planId: "bulk-plan-485a67a1",
       batchSize: 10,
       sourceCount: 0,
       uniqueSourceCount: 0,

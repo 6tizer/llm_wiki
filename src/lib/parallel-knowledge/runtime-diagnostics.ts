@@ -1,11 +1,13 @@
 import {
   runtimeJobList,
   runtimeProgressList,
+  runtimeProfilePoolList,
   runtimeStagingArtifactList,
   runtimeTimelineList,
   type RuntimeDbHealthState,
   type RuntimeJobList,
   type RuntimeProgressList,
+  type RuntimeProfilePoolList,
   type RuntimeStagingArtifactList,
   type RuntimeTimelineList,
 } from "@/commands/runtime-db"
@@ -20,6 +22,7 @@ export interface RuntimeDiagnosticsAdapters {
   readonly listProgress: () => Promise<RuntimeProgressList>
   readonly listTimeline: () => Promise<RuntimeTimelineList>
   readonly listStagingArtifacts: () => Promise<RuntimeStagingArtifactList>
+  readonly listProfilePool: () => Promise<RuntimeProfilePoolList>
 }
 
 export interface RuntimeDiagnosticsSection<T> {
@@ -38,6 +41,8 @@ export interface RuntimeDiagnosticsSummary {
   readonly progressCount: number
   readonly eventCount: number
   readonly stagingArtifactCount: number
+  readonly activeProfileClaimCount: number
+  readonly circuitBreakerCount: number
 }
 
 export interface RuntimeDiagnosticsSnapshot {
@@ -46,6 +51,7 @@ export interface RuntimeDiagnosticsSnapshot {
   readonly progress: RuntimeDiagnosticsSection<RuntimeProgressList>
   readonly timeline: RuntimeDiagnosticsSection<RuntimeTimelineList>
   readonly stagingArtifacts: RuntimeDiagnosticsSection<RuntimeStagingArtifactList>
+  readonly profilePool: RuntimeDiagnosticsSection<RuntimeProfilePoolList>
   readonly summary: RuntimeDiagnosticsSummary
 }
 
@@ -54,26 +60,30 @@ const DEFAULT_RUNTIME_DIAGNOSTICS_ADAPTERS: RuntimeDiagnosticsAdapters = {
   listProgress: runtimeProgressList,
   listTimeline: runtimeTimelineList,
   listStagingArtifacts: runtimeStagingArtifactList,
+  listProfilePool: () =>
+    runtimeProfilePoolList({ kind: "model-call", taskFamily: "ingest" }),
 }
 
 /** Reads runtime diagnostics without mutating jobs, progress, timeline, or artifacts. */
 export async function captureRuntimeDiagnosticsSnapshot(
   adapters: RuntimeDiagnosticsAdapters = DEFAULT_RUNTIME_DIAGNOSTICS_ADAPTERS,
 ): Promise<RuntimeDiagnosticsSnapshot> {
-  const [jobs, progress, timeline, stagingArtifacts] = await Promise.all([
+  const [jobs, progress, timeline, stagingArtifacts, profilePool] = await Promise.all([
     readSection(adapters.listJobs),
     readSection(adapters.listProgress),
     readSection(adapters.listTimeline),
     readSection(adapters.listStagingArtifacts),
+    readSection(adapters.listProfilePool),
   ])
 
   return {
-    status: resolveSnapshotStatus([jobs, progress, timeline, stagingArtifacts]),
+    status: resolveSnapshotStatus([jobs, progress, timeline, stagingArtifacts, profilePool]),
     jobs,
     progress,
     timeline,
     stagingArtifacts,
-    summary: summarizeRuntimeDiagnostics(jobs, progress, timeline, stagingArtifacts),
+    profilePool,
+    summary: summarizeRuntimeDiagnostics(jobs, progress, timeline, stagingArtifacts, profilePool),
   }
 }
 
@@ -110,6 +120,7 @@ function summarizeRuntimeDiagnostics(
   progress: RuntimeDiagnosticsSection<RuntimeProgressList>,
   timeline: RuntimeDiagnosticsSection<RuntimeTimelineList>,
   stagingArtifacts: RuntimeDiagnosticsSection<RuntimeStagingArtifactList>,
+  profilePool: RuntimeDiagnosticsSection<RuntimeProfilePoolList>,
 ): RuntimeDiagnosticsSummary {
   const jobRows = jobs.data?.jobs ?? []
 
@@ -124,6 +135,8 @@ function summarizeRuntimeDiagnostics(
     progressCount: progress.data?.progress.length ?? 0,
     eventCount: timeline.data?.events.length ?? 0,
     stagingArtifactCount: stagingArtifacts.data?.artifacts.length ?? 0,
+    activeProfileClaimCount: profilePool.data?.activeClaims.length ?? 0,
+    circuitBreakerCount: profilePool.data?.circuitBreakers.length ?? 0,
   }
 }
 
