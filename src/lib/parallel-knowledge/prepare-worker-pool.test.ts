@@ -156,6 +156,17 @@ function partialMapReduceResultWithTwoRepairs(): LongDocumentReduceResult {
   }
 }
 
+function failedMapReduceResult(): LongDocumentReduceResult {
+  const base = partialMapReduceResult()
+  return {
+    ...base,
+    status: "failed",
+    successfulChunkCount: 0,
+    failedChunkCount: 2,
+    lowConfidenceChunkCount: 0,
+  }
+}
+
 function progressPayloadTypes(
   calls: unknown[],
   options: { withProfileId?: boolean } = {},
@@ -662,6 +673,38 @@ it("routes partial map-reduce chunks to repair and skips repair-only source arti
   ])
 })
 
+it("sanitizes executor-provided map-reduce repair errors before creating repair jobs", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+  const unsafe = partialMapReduceResult()
+  const unsafeRepairResult: LongDocumentReduceResult = {
+    ...unsafe,
+    repairJobs: [
+      {
+        ...unsafe.repairJobs[0],
+        error: "sk-worker-secret: provider error",
+      },
+    ],
+  }
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: unsafeRepairResult,
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 1,
+    mapReduceRepairJobs: 1,
+  })
+  const repairPayload = JSON.parse((runtime.calls.createJob[0] as { payload: string }).payload)
+  expect(repairPayload.error).toBe("map-chunk-failed")
+  expect(JSON.stringify(repairPayload)).not.toContain("sk-worker-secret")
+})
+
 it("uses deterministic map-reduce repair job ids so retries can skip already-created jobs", async () => {
   const firstRuntime = createRuntime([jobClaim("job-1")])
   let firstCreateCount = 0
@@ -699,7 +742,7 @@ it("uses deterministic map-reduce repair job ids so retries can skip already-cre
     retryRuntime.calls.sequence.push("createJob")
     retryRuntime.calls.createJob.push(request)
     if (request.jobId === firstRepairJobId) {
-      throw new Error("job-create-failed: constraint failed: runtime_jobs.job_id")
+      throw new Error("UNIQUE constraint failed: runtime_jobs.job_id")
     }
     return { ...jobClaim(request.jobId ?? "repair-2").job, kind: request.kind, payload: request.payload }
   }
@@ -720,6 +763,85 @@ it("uses deterministic map-reduce repair job ids so retries can skip already-cre
   expect((retryRuntime.calls.createJob[0] as { jobId?: string }).jobId).toBe(firstRepairJobId)
   expect((retryRuntime.calls.createJob[1] as { jobId?: string }).jobId).not.toBe(firstRepairJobId)
   expect(retryRuntime.calls.completeJob).toEqual([{ jobId: "job-1", leaseId: "lease-job-1" }])
+})
+
+it("recognizes common duplicate job-id error shapes across database dialects", async () => {
+  const duplicateMessages = [
+    "duplicate key value violates unique constraint \"runtime_jobs_job_id_key\"",
+    "duplicate key value violates unique constraint \"runtime_jobs_pkey\"",
+    "Duplicate entry 'repair-1' for key 'PRIMARY'",
+  ]
+
+  for (const duplicateMessage of duplicateMessages) {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.createJob = async (request) => {
+      runtime.calls.sequence.push("createJob")
+      runtime.calls.createJob.push(request)
+      throw new Error(duplicateMessage)
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({
+        status: "success",
+        mapReduceResults: partialMapReduceResult(),
+      }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result).toMatchObject({
+      completedJobs: 1,
+      failedJobs: 0,
+      mapReduceRepairJobs: 0,
+    })
+  }
+})
+
+it("does not swallow non-duplicate runtime job create failures", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+  runtime.createJob = async (request) => {
+    runtime.calls.sequence.push("createJob")
+    runtime.calls.createJob.push(request)
+    throw new Error("CHECK constraint failed: runtime_jobs.job_id")
+  }
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: partialMapReduceResult(),
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 0,
+    failedJobs: 1,
+    mapReduceRepairJobs: 0,
+  })
+  expect(runtime.calls.failJob).toHaveLength(1)
+})
+
+it("counts failed map-reduce results that route repair jobs", async () => {
+  const runtime = createRuntime([jobClaim("job-1")])
+
+  const result = await runPrepareWorkerPool({
+    runtime,
+    executor: async () => ({
+      status: "success",
+      mapReduceResults: failedMapReduceResult(),
+    }),
+    concurrency: 1,
+    maxJobs: 1,
+  })
+
+  expect(result).toMatchObject({
+    completedJobs: 1,
+    mapReduceRepairJobs: 1,
+    partialMapReduceResults: 1,
+  })
 })
 
 it("clears pending artifacts and fails the job when map-reduce repair routing fails", async () => {

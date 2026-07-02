@@ -491,7 +491,8 @@ function trimLongText(text: string, maxChars: number): string {
   return text.slice(0, maxChars).trimEnd() + "\n...[truncated]"
 }
 
-function sanitizeRepairError(error: string): string {
+/** Returns a persisted repair-safe error code without source text or secrets. */
+export function sanitizeRepairError(error: string): string {
   const code = error.split(":", 1)[0]?.trim()
   if (code && LONG_SOURCE_REPAIR_ERROR_CODES.has(code)) return code
   return LONG_SOURCE_REPAIR_ERROR_FALLBACK

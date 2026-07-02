@@ -4,6 +4,7 @@ import {
   BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
   canonicalizeBulkKnowledgeSourcePath,
   hashTextHex,
+  sanitizeRepairError,
   validatePrepareArtifacts,
   type BulkKnowledgePrepareJobPayload,
   type BulkKnowledgeMapReduceRepairJobPayload,
@@ -418,7 +419,9 @@ async function createMapReduceRepairJobs(
   mapReduceResults: readonly LongDocumentReduceResult[],
 ): Promise<void> {
   const repairPayloads = mapReduceResults.flatMap((result) => {
-    if (result.status === "partial") context.result.partialMapReduceResults += 1
+    if ((result.status === "partial" || result.status === "failed") && result.repairJobs.length > 0) {
+      context.result.partialMapReduceResults += 1
+    }
     return result.repairJobs.map((repairJob) =>
       withPrepareJobMetadata(repairJob, claim),
     )
@@ -575,7 +578,7 @@ function sourceKey(sourcePath: string): string {
   try {
     return canonicalizeBulkKnowledgeSourcePath(sourcePath)
   } catch {
-    return sourcePath.trim().replace(/\\/g, "/")
+    return `__invalid-bulk-knowledge-source__:${hashTextHex(sourcePath)}`
   }
 }
 
@@ -596,7 +599,7 @@ function withPrepareJobMetadata(
     chunkHash: repairJob.chunkHash,
     headingPath: "",
     status: repairJob.status,
-    error: repairJob.error,
+    error: sanitizeRepairError(repairJob.error),
     owner: "bulk-map-reduce",
     strategy: "reanalyze-chunk",
   }
@@ -616,11 +619,14 @@ function mapReduceRepairJobId(
 
 function isDuplicateRuntimeJobError(err: unknown): boolean {
   const message = errorMessage(err).toLowerCase()
-  return message.includes("job-create-failed") && (
-    message.includes("unique")
+  const isJobIdConstraint = message.includes("runtime_jobs.job_id")
+    || message.includes("runtime_jobs_job_id")
+    || message.includes("runtime_jobs_pkey")
+    || message.includes("runtime_jobs.primary")
+    || message.includes("for key 'primary'")
+  const isConstraintFailure = message.includes("unique constraint")
     || message.includes("duplicate")
-    || message.includes("runtime_jobs.job_id")
-  )
+  return isJobIdConstraint && isConstraintFailure
 }
 
 async function appendWorkerProgress(
