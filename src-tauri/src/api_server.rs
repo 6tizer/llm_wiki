@@ -1801,7 +1801,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_join_rejects_missing_parent_absolute_escape() {
+    fn safe_join_strips_leading_slash_then_validate_rejects_true_absolute_escape() {
         let root = test_project_dir();
         let root_str = root.to_string_lossy();
         // safe_join treats a leading '/' as URL-style (project-relative), the

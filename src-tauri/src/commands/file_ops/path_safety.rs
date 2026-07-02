@@ -14,18 +14,24 @@
 //!     read before the watcher starts, e.g. during project open)
 //!   - write/delete commands: deny (fail-closed — never write without a known
 //!     sandbox root)
+//!
+//! Known limitation (accepted, out of scope): for not-yet-existing targets,
+//! validation checks the nearest *existing* ancestor at check time. A symlink
+//! swapped into the not-yet-created path between validation and the caller's
+//! actual I/O could still escape — a classic check-then-act TOCTOU inherent
+//! to canonicalize-based sandboxing.
 
 use std::path::{Component, Path, PathBuf};
 
 /// Validate that `target` resolves to a path inside `project_root`.
 ///
-/// Mirrors `api_server.rs::safe_join`: strips leading `/`, rejects absolute
-/// paths and `..`/`Prefix`/`RootDir` components, then canonicalizes both root
-/// and target (or target's parent for not-yet-existing paths) and checks
-/// `starts_with`.
-///
-/// `target` may be absolute (must start with or be under `project_root`) or
-/// relative (joined against `project_root`).
+/// Mirrors `api_server.rs::safe_join`. Absolute targets are allowed if they
+/// resolve inside `project_root` — rejected only if they escape it, or
+/// contain a `..` component; `Prefix`/`RootDir` are allowed since they're
+/// structurally required for any absolute path. Relative targets are joined
+/// against `project_root`; `..`/`Prefix`/`RootDir` are rejected outright in
+/// this branch. For targets that don't exist yet, the nearest *existing*
+/// ancestor is canonicalized and checked against the canonicalized root.
 pub fn validate_within_project(project_root: &Path, target: &str) -> Result<PathBuf, String> {
     let target_path = Path::new(target);
 
@@ -82,33 +88,25 @@ pub fn validate_within_project(project_root: &Path, target: &str) -> Result<Path
         Ok(joined_canon)
     } else {
         // For not-yet-existing paths (e.g. a file about to be written),
-        // walk up to the nearest existing ancestor and verify IT is inside
-        // the root. Checking only the immediate parent let an absolute path
-        // whose parent dirs also don't exist escape the sandbox (S1).
-        let mut ancestor = joined.parent();
-        loop {
-            match ancestor {
-                None => {
-                    return Err(format!(
-                        "Cannot resolve any existing ancestor of '{}'",
-                        joined.display()
-                    ));
-                }
-                Some(p) if p.exists() => {
-                    let ancestor_canon = p.canonicalize().map_err(|e| {
-                        format!("Failed to resolve ancestor '{}': {e}", p.display())
-                    })?;
-                    if !ancestor_canon.starts_with(&root_canon) {
-                        return Err(format!(
-                            "Resolved ancestor '{}' escapes the project directory '{}'",
-                            ancestor_canon.display(),
-                            root_canon.display()
-                        ));
-                    }
-                    break;
-                }
-                Some(p) => ancestor = p.parent(),
-            }
+        // walk up to the nearest existing ancestor and verify IT is inside the
+        // root. Checking only the immediate parent let an absolute path whose
+        // parent dirs also don't exist escape the sandbox (S1).
+        let existing_ancestor = joined
+            .ancestors()
+            .skip(1) // skip `joined` itself; start from its parent
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                format!("Cannot resolve any existing ancestor of '{}'", joined.display())
+            })?;
+        let ancestor_canon = existing_ancestor.canonicalize().map_err(|e| {
+            format!("Failed to resolve ancestor '{}': {e}", existing_ancestor.display())
+        })?;
+        if !ancestor_canon.starts_with(&root_canon) {
+            return Err(format!(
+                "Resolved ancestor '{}' escapes the project directory '{}'",
+                ancestor_canon.display(),
+                root_canon.display()
+            ));
         }
         // Return the (non-canonical) joined path: its existing-ancestor prefix
         // has been canonicalized and confirmed inside the root, and the
@@ -203,6 +201,27 @@ mod tests {
         assert!(
             result.is_err(),
             "absolute path outside root with multi-level missing parent should be rejected"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn absolute_path_with_single_missing_parent_outside_root_is_rejected() {
+        let root = tmp_root();
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Minimal form of the escape: exactly ONE level (the immediate
+        // parent) is missing, while its parent (temp_dir itself) exists.
+        // Guards against "optimizing" the ancestor walk back down to a
+        // single-level check that happens to pass the multilevel test.
+        let target = env::temp_dir().join(format!(
+            "llm-wiki-single-missing-{}-{}/evil.md",
+            std::process::id(),
+            id
+        ));
+        let result = validate_within_project(&root, target.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "absolute path outside root with single missing parent should be rejected"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
