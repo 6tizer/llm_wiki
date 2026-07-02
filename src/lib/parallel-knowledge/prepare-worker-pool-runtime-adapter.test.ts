@@ -8,12 +8,15 @@ import type {
 
 const runtimeMocks = vi.hoisted(() => ({
   runtimeJobClaimByKind: vi.fn(),
+  runtimeJobCreate: vi.fn(),
   runtimeJobComplete: vi.fn(),
   runtimeJobFail: vi.fn(),
   runtimeProfilePoolClaim: vi.fn(),
   runtimeProfilePoolList: vi.fn(),
   runtimeProfilePoolRelease: vi.fn(),
   runtimeProgressAppend: vi.fn(),
+  runtimeStagingArtifactsClearPendingForJob: vi.fn(),
+  runtimeStagingArtifactStore: vi.fn(),
 }))
 
 vi.mock("@/commands/runtime-db", () => runtimeMocks)

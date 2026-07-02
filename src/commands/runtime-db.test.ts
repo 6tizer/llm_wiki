@@ -26,8 +26,10 @@ import {
   runtimeProgressAppend,
   runtimeProgressList,
   runtimeStagingArtifactRecord,
+  runtimeStagingArtifactsClearPendingForJob,
   runtimeStagingArtifactCommitSuccess,
   runtimeStagingArtifactList,
+  runtimeStagingArtifactStore,
   runtimeTimelineList,
 } from "./runtime-db"
 
@@ -272,6 +274,54 @@ describe("runtime-db commands", () => {
           lastError: "commit-conflict: base hash mismatch",
         },
       },
+    )
+  })
+
+  it("sends staging artifact store payloads", async () => {
+    const response = { artifactId: "artifact-1", artifactHash: "sha256:artifact" }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeStagingArtifactStore({
+        artifactId: "artifact-1",
+        jobId: "job-1",
+        artifactPath: "job-1/artifact.md",
+        targetPath: "Wiki/Page.md",
+        operationIntent: "update",
+        baseHash: "sha256:base",
+        sourceKind: "ingest",
+        markdown: "# Page\n",
+      }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      "runtime_staging_artifact_store",
+      {
+        request: {
+          artifactId: "artifact-1",
+          jobId: "job-1",
+          artifactPath: "job-1/artifact.md",
+          targetPath: "Wiki/Page.md",
+          operationIntent: "update",
+          baseHash: "sha256:base",
+          sourceKind: "ingest",
+          markdown: "# Page\n",
+        },
+      },
+    )
+  })
+
+  it("sends staging artifact pending cleanup payloads", async () => {
+    const response = { cleared: [] }
+    tauriMocks.invoke.mockResolvedValue(response)
+
+    await expect(
+      runtimeStagingArtifactsClearPendingForJob({ jobId: "job-1" }),
+    ).resolves.toBe(response)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith(
+      "runtime_staging_artifacts_clear_pending_for_job",
+      { request: { jobId: "job-1" } },
     )
   })
 

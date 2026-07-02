@@ -1,18 +1,25 @@
 import {
   BULK_KNOWLEDGE_PREPARE_JOB_KIND,
+  BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+  validatePrepareArtifacts,
   type BulkKnowledgePrepareJobPayload,
+  type ValidatedPrepareArtifact,
 } from "@/core-runtime/parallel-knowledge"
 import {
   runtimeJobClaimByKind,
   runtimeJobComplete,
+  runtimeJobCreate,
   runtimeJobFail,
   runtimeProfilePoolClaim,
   runtimeProfilePoolList,
   runtimeProfilePoolRelease,
   runtimeProgressAppend,
+  runtimeStagingArtifactsClearPendingForJob,
+  runtimeStagingArtifactStore,
   type RuntimeDbHealthState,
   type RuntimeJobClaim,
   type RuntimeJobClaimByKindRequest,
+  type RuntimeJobCreateRequest,
   type RuntimeJobFailRequest,
   type RuntimeJobLeaseRequest,
   type RuntimeJobRecord,
@@ -24,6 +31,10 @@ import {
   type RuntimeProfilePoolReleaseRequest,
   type RuntimeProgressAppend,
   type RuntimeProgressAppendRequest,
+  type RuntimeStagingArtifactsClearPendingForJob,
+  type RuntimeStagingArtifactsClearPendingForJobRequest,
+  type RuntimeStagingArtifactRecord,
+  type RuntimeStagingArtifactStoreRequest,
 } from "@/commands/runtime-db"
 
 export const PREPARE_PROFILE_TASK_FAMILY = "ingest"
@@ -33,7 +44,11 @@ const NO_QUEUED_JOB_ERROR_PREFIX = "no-queued-job:"
 const RUNTIME_DISABLED_ERROR_PREFIX = "runtime-disabled:"
 
 export type PrepareModelCallOutcome =
-  | { status: "success"; metadata?: Record<string, unknown> }
+  | {
+      status: "success"
+      artifacts?: readonly unknown[]
+      metadata?: Record<string, unknown>
+    }
   | {
       status: "rate-limited"
       retryAfterMs: number
@@ -61,12 +76,19 @@ export type PrepareModelCallExecutor = (
 
 export interface PrepareWorkerRuntimeAdapter {
   claimJobByKind(request: RuntimeJobClaimByKindRequest): Promise<RuntimeJobClaim>
+  createJob(request: RuntimeJobCreateRequest): Promise<RuntimeJobRecord>
   completeJob(request: RuntimeJobLeaseRequest): Promise<RuntimeJobRecord>
   failJob(request: RuntimeJobFailRequest): Promise<RuntimeJobRecord>
   profilePoolList(request: RuntimeProfilePoolListRequest): Promise<RuntimeProfilePoolList>
   profilePoolClaim(request: RuntimeProfilePoolClaimRequest): Promise<RuntimeProfilePoolClaim>
   profilePoolRelease(request: RuntimeProfilePoolReleaseRequest): Promise<RuntimeProfilePoolRelease>
   progressAppend(request: RuntimeProgressAppendRequest): Promise<RuntimeProgressAppend>
+  stagingArtifactStore(
+    request: RuntimeStagingArtifactStoreRequest,
+  ): Promise<RuntimeStagingArtifactRecord>
+  stagingArtifactsClearPendingForJob(
+    request: RuntimeStagingArtifactsClearPendingForJobRequest,
+  ): Promise<RuntimeStagingArtifactsClearPendingForJob>
 }
 
 export interface RunPrepareWorkerPoolOptions {
@@ -82,6 +104,9 @@ export interface PrepareWorkerPoolResult {
   claimedJobs: number
   completedJobs: number
   failedJobs: number
+  storedArtifacts: number
+  artifactStoreFailures: number
+  repairJobs: number
   profileUnavailable: number
   rateLimited: number
   idleWorkers: number
@@ -91,12 +116,15 @@ export interface PrepareWorkerPoolResult {
 
 const defaultRuntime: PrepareWorkerRuntimeAdapter = {
   claimJobByKind: runtimeJobClaimByKind,
+  createJob: runtimeJobCreate,
   completeJob: runtimeJobComplete,
   failJob: runtimeJobFail,
   profilePoolList: runtimeProfilePoolList,
   profilePoolClaim: runtimeProfilePoolClaim,
   profilePoolRelease: runtimeProfilePoolRelease,
   progressAppend: runtimeProgressAppend,
+  stagingArtifactStore: runtimeStagingArtifactStore,
+  stagingArtifactsClearPendingForJob: runtimeStagingArtifactsClearPendingForJob,
 }
 
 /** Runs a bounded pool that prepares only bulk knowledge jobs through model-call profiles. */
@@ -109,6 +137,9 @@ export async function runPrepareWorkerPool(
     claimedJobs: 0,
     completedJobs: 0,
     failedJobs: 0,
+    storedArtifacts: 0,
+    artifactStoreFailures: 0,
+    repairJobs: 0,
     profileUnavailable: 0,
     rateLimited: 0,
     idleWorkers: 0,
@@ -215,6 +246,8 @@ async function processPrepareJob(
 
   const outcome = await runExecutor(context, claim, payload, profileClaim)
   if (outcome.status === "success") {
+    const stored = await storeSuccessfulArtifacts(context, claim, outcome, profileClaim)
+    if (!stored) return
     await context.runtime.profilePoolRelease({
       claimId: profileClaim.claimId,
       outcome: "success",
@@ -256,6 +289,93 @@ async function processPrepareJob(
     type: "bulk-prepare:job-failed",
     profileId: profileClaim.profileId,
   })
+}
+
+async function storeSuccessfulArtifacts(
+  context: PrepareWorkerContext,
+  claim: RuntimeJobClaim,
+  outcome: Extract<PrepareModelCallOutcome, { status: "success" }>,
+  profileClaim: RuntimeProfilePoolClaim,
+): Promise<boolean> {
+  if (outcome.artifacts === undefined) return true
+
+  let artifacts: ValidatedPrepareArtifact[]
+  try {
+    artifacts = validatePrepareArtifacts(outcome.artifacts, { jobId: claim.job.jobId })
+    if (artifacts.length === 0) return true
+    await context.runtime.stagingArtifactsClearPendingForJob({ jobId: claim.job.jobId })
+    for (const artifact of artifacts) {
+      await context.runtime.stagingArtifactStore({
+        artifactId: artifact.artifactId,
+        jobId: claim.job.jobId,
+        artifactPath: artifact.artifactPath,
+        targetPath: artifact.targetPath,
+        operationIntent: artifact.operationIntent,
+        baseHash: artifact.baseHash,
+        sourceKind: artifact.sourceKind,
+        markdown: artifact.markdown,
+      })
+      context.result.storedArtifacts += 1
+    }
+    await appendWorkerProgress(context, claim, "bulk-prepare:artifacts-stored", {
+      profileId: profileClaim.profileId,
+      artifactCount: artifacts.length,
+    })
+    return true
+  } catch (err) {
+    const error = `artifact-store-failed: ${sanitizeLocalArtifactError(err)}`
+    await handleArtifactStoreFailure(context, claim, profileClaim, error)
+    return false
+  }
+}
+
+async function handleArtifactStoreFailure(
+  context: PrepareWorkerContext,
+  claim: RuntimeJobClaim,
+  profileClaim: RuntimeProfilePoolClaim,
+  error: string,
+): Promise<void> {
+  context.result.artifactStoreFailures += 1
+  try {
+    await context.runtime.stagingArtifactsClearPendingForJob({ jobId: claim.job.jobId })
+  } catch (err) {
+    context.result.errors.push(`artifact-cleanup-failed: ${errorMessage(err)}`)
+  }
+  await createArtifactRepairJob(context, claim, error)
+  await context.runtime.profilePoolRelease({
+    claimId: profileClaim.claimId,
+    outcome: "success",
+    reason: "bulk-prepare-local-artifact-store-failed",
+    error,
+  })
+  await failClaimedJob(context, claim, error, {
+    type: "bulk-prepare:artifact-store-failed",
+    profileId: profileClaim.profileId,
+  })
+}
+
+async function createArtifactRepairJob(
+  context: PrepareWorkerContext,
+  claim: RuntimeJobClaim,
+  error: string,
+): Promise<void> {
+  try {
+    await context.runtime.createJob({
+      kind: BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+      payload: JSON.stringify({
+        kind: BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+        jobId: claim.job.jobId,
+        sourceJobKind: claim.job.kind,
+        error,
+        owner: "bulk-prepare",
+        strategy: "validate-and-retry",
+      }),
+      maxAttempts: 3,
+    })
+    context.result.repairJobs += 1
+  } catch (err) {
+    context.result.errors.push(`artifact-repair-job-failed: ${errorMessage(err)}`)
+  }
 }
 
 async function getHealthyProfilePool(
@@ -381,4 +501,9 @@ function errorMessage(err: unknown): string {
   if (err === null) return "null error thrown"
   if (err === undefined) return "undefined error thrown"
   return String(err)
+}
+
+function sanitizeLocalArtifactError(err: unknown): string {
+  const code = errorMessage(err).split(":", 1)[0]?.trim()
+  return code && /^[a-z0-9-]+$/.test(code) ? code : "local-artifact-store-error"
 }
