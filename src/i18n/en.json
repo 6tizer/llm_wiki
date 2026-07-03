@@ -63,8 +63,12 @@
       "etaReady": "~{{eta}} remaining",
       "profiles": "{{claims}} profile claims / {{breakers}} backoff",
       "awaitingWorker": "Queued; waiting for a prepare worker",
+      "suspectedStuck": "{{count}} prepare job(s) look stuck — heartbeat stale or lease expired",
+      "prepareUnparseable": "{{count}} prepare job(s) have unparseable payloads — excluded from totals above",
       "staging": "{{pending}} pending / {{failed}} failed / {{committed}} committed artifacts",
-      "latestProgress": "Latest: {{type}}"
+      "latestProgress": "Latest: {{type}}",
+      "repairPending": "{{count}} repair job(s) pending — no consumer wired up yet",
+      "repairPendingKind": "{{kind}}: {{count}} pending — no consumer wired up yet"
     },
     "state": {
       "queued": "Queued",
@@ -73,7 +77,8 @@
       "retry-wait": "Retry wait",
       "failed": "Failed",
       "completed": "Completed",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "suspectedStuck": "Suspected stuck"
     },
     "actions": {
       "pause": "Pause",

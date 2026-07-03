@@ -86,6 +86,7 @@ export interface RuntimeDiagnosticsSummary {
 
 export interface RuntimeDiagnosticsSnapshot {
   readonly status: RuntimeDiagnosticsStatus
+  readonly capturedAtMs: number
   readonly jobs: RuntimeDiagnosticsSection<RuntimeJobList>
   readonly progress: RuntimeDiagnosticsSection<RuntimeProgressList>
   readonly timeline: RuntimeDiagnosticsSection<RuntimeTimelineList>
@@ -107,6 +108,7 @@ const DEFAULT_RUNTIME_DIAGNOSTICS_ADAPTERS: RuntimeDiagnosticsAdapters = {
 export async function captureRuntimeDiagnosticsSnapshot(
   adapters: RuntimeDiagnosticsAdapters = DEFAULT_RUNTIME_DIAGNOSTICS_ADAPTERS,
 ): Promise<RuntimeDiagnosticsSnapshot> {
+  const capturedAtMs = Date.now()
   const [jobs, progress, timeline, stagingArtifacts, profilePool] = await Promise.all([
     readSection(adapters.listJobs),
     readSection(adapters.listProgress),
@@ -117,6 +119,7 @@ export async function captureRuntimeDiagnosticsSnapshot(
 
   return {
     status: resolveSnapshotStatus([jobs, progress, timeline, stagingArtifacts, profilePool]),
+    capturedAtMs,
     jobs,
     progress,
     timeline,

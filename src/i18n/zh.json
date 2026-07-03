@@ -63,8 +63,12 @@
       "etaReady": "约剩 {{eta}}",
       "profiles": "{{claims}} 个 profile 占用 / {{breakers}} 个退避",
       "awaitingWorker": "已排队，等待 prepare worker",
+      "suspectedStuck": "{{count}} 个 prepare 任务疑似卡死（心跳超时或 lease 已过期）",
+      "prepareUnparseable": "{{count}} 个 prepare 任务 payload 无法解析，未计入以上统计",
       "staging": "{{pending}} 个待提交 / {{failed}} 个失败 / {{committed}} 个已提交 artifact",
-      "latestProgress": "最近：{{type}}"
+      "latestProgress": "最近：{{type}}",
+      "repairPending": "{{count}} 个 repair 任务待处理，暂无消费者",
+      "repairPendingKind": "{{kind}}：{{count}} 个待处理，暂无消费者"
     },
     "state": {
       "queued": "排队中",
@@ -73,7 +77,8 @@
       "retry-wait": "等待重试",
       "failed": "失败",
       "completed": "已完成",
-      "cancelled": "已取消"
+      "cancelled": "已取消",
+      "suspectedStuck": "疑似卡死"
     },
     "actions": {
       "pause": "暂停",
