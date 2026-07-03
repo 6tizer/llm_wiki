@@ -355,6 +355,41 @@ pub fn extract_pdf_images(
 
 // ── PPTX / DOCX (zip) ──────────────────────────────────────────────────
 
+/// Hard cap on how many decompressed bytes we'll read out of a single zip
+/// entry (an embedded image, or an XML part such as `document.xml`).
+/// Office documents are just zip archives, and a malicious file can
+/// declare a tiny compressed size while decompressing to gigabytes (a
+/// "zip bomb") — `entry.size()` is attacker-controlled and must never be
+/// trusted for pre-allocation or as an actual limit. 256 MiB is well
+/// beyond any legitimate embedded image or XML part in a real-world
+/// document, while still bounding worst-case memory use per entry.
+pub(crate) const MAX_DECOMPRESSED_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Read a single zip entry into memory, capped at `max_bytes` of
+/// decompressed output regardless of what the entry's declared (and
+/// attacker-controlled) size claims. Never pre-allocates based on
+/// `entry.size()` — uses `Read::take` so decompression stops the moment
+/// the cap is crossed, rather than after fully inflating an oversized
+/// entry.
+pub(crate) fn read_zip_entry_capped(
+    entry: &mut zip::read::ZipFile<'_>,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    entry
+        .by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("failed to read zip entry '{}': {e}", entry.name()))?;
+    if buf.len() as u64 > max_bytes {
+        return Err(format!(
+            "zip entry '{}' exceeds {max_bytes}-byte decompression cap (possible zip bomb)",
+            entry.name()
+        ));
+    }
+    Ok(buf)
+}
+
 /// Office Open XML formats (PPTX, DOCX) embed images verbatim under
 /// `<root>/media/`. We don't parse the surrounding XML to figure out
 /// which slide / paragraph an image lives in — that's more work than
@@ -422,11 +457,13 @@ pub fn extract_office_images(
         }
         let mime_type = mime_type.unwrap();
 
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        if let Err(e) = entry.read_to_end(&mut bytes) {
-            eprintln!("[extract_office_images] read '{entry_name}' failed: {e}");
-            continue;
-        }
+        let bytes = match read_zip_entry_capped(&mut entry, MAX_DECOMPRESSED_ENTRY_BYTES) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[extract_office_images] read '{entry_name}' failed: {e}");
+                continue;
+            }
+        };
 
         // We need width/height to apply the size filter. Decoding via
         // the `image` crate is the safest cross-format path; it
@@ -546,10 +583,13 @@ fn build_pptx_media_slide_map(
             Ok(e) => e,
             Err(_) => continue,
         };
-        let mut xml = String::new();
-        if entry.read_to_string(&mut xml).is_err() {
-            continue;
-        }
+        let xml = match read_zip_entry_capped(&mut entry, MAX_DECOMPRESSED_ENTRY_BYTES)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+        {
+            Some(x) => x,
+            None => continue,
+        };
 
         // Naive extraction: rels XML has Target="../media/imageN.png"
         // attributes for image relationships. We don't bother with a
@@ -819,11 +859,13 @@ pub fn extract_and_save_office_images(
             None => continue,
         };
 
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        if let Err(e) = entry.read_to_end(&mut bytes) {
-            eprintln!("[extract_and_save_office_images] read '{entry_name}' failed: {e}");
-            continue;
-        }
+        let bytes = match read_zip_entry_capped(&mut entry, MAX_DECOMPRESSED_ENTRY_BYTES) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[extract_and_save_office_images] read '{entry_name}' failed: {e}");
+                continue;
+            }
+        };
 
         let (width, height) = match image::load_from_memory(&bytes) {
             Ok(img) => (img.width(), img.height()),
@@ -973,6 +1015,7 @@ pub async fn extract_and_save_office_images_cmd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn is_media_path_recognizes_pptx_docx_xlsx() {
@@ -1026,5 +1069,59 @@ mod tests {
         assert_eq!(o.min_width, 100);
         assert_eq!(o.min_height, 100);
         assert_eq!(o.max_images, 500);
+    }
+
+    /// Builds an in-memory zip archive with a single entry named `name`
+    /// containing `content`, compressed with Deflate (so a highly
+    /// repetitive `content` yields a small stored/compressed size but a
+    /// much larger decompressed size — the same shape as a real zip
+    /// bomb).
+    fn build_test_zip(name: &str, content: &[u8]) -> zip::ZipArchive<std::io::Cursor<Vec<u8>>> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file(name, options).unwrap();
+        writer.write_all(content).unwrap();
+        let cursor = writer.finish().unwrap();
+        zip::ZipArchive::new(cursor).unwrap()
+    }
+
+    #[test]
+    fn read_zip_entry_capped_reads_small_entry_within_cap() {
+        let mut archive = build_test_zip("small.txt", b"hello world");
+        let mut entry = archive.by_name("small.txt").unwrap();
+        let bytes = read_zip_entry_capped(&mut entry, 1024).unwrap();
+        assert_eq!(bytes, b"hello world");
+    }
+
+    #[test]
+    fn read_zip_entry_capped_rejects_oversized_declared_size_without_oom() {
+        // Simulates a zip-bomb-style entry: a small, highly compressible
+        // payload (10 MiB of a repeated byte deflates to a tiny stored
+        // size) that would decompress far past a tight cap. The cap must
+        // reject it — and, because `read_zip_entry_capped` never
+        // pre-allocates from `entry.size()`, it must do so via a bounded
+        // read rather than by first materializing the whole entry.
+        let big_content = vec![b'A'; 10 * 1024 * 1024];
+        let mut archive = build_test_zip("bomb.bin", &big_content);
+        let mut entry = archive.by_name("bomb.bin").unwrap();
+
+        // Cap far below both the real (10 MiB) and any attacker-declared
+        // size.
+        let result = read_zip_entry_capped(&mut entry, 1024);
+        assert!(
+            result.is_err(),
+            "entry exceeding the cap must be rejected, not silently truncated or OOM-read"
+        );
+        assert!(result.unwrap_err().contains("decompression cap"));
+    }
+
+    #[test]
+    fn read_zip_entry_capped_boundary_exact_size_is_ok() {
+        let content = vec![b'x'; 100];
+        let mut archive = build_test_zip("exact.bin", &content);
+        let mut entry = archive.by_name("exact.bin").unwrap();
+        let bytes = read_zip_entry_capped(&mut entry, 100).unwrap();
+        assert_eq!(bytes.len(), 100);
     }
 }

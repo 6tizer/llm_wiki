@@ -563,14 +563,30 @@ fn parse_query(query: &str) -> BTreeMap<String, String> {
     out
 }
 
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn percent_decode(input: &str) -> String {
+    // Operates purely on raw bytes (never re-slices `input` as a `str`):
+    // the two bytes following `%` may be the interior bytes of a multi-byte
+    // UTF-8 character (e.g. `%` immediately followed by `€` or an emoji in
+    // the raw query string), and slicing `input[i+1..i+3]` in that case
+    // lands mid-codepoint and panics with "byte index is not a char
+    // boundary". Comparing raw bytes against hex digit ranges sidesteps
+    // char-boundary requirements entirely.
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
-                out.push(v);
+            if let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
                 i += 3;
                 continue;
             }
@@ -1853,6 +1869,38 @@ mod tests {
         let parsed = parse_query("path=wiki%2Fhello+world.md&token=a%2Bb");
         assert_eq!(parsed.get("path").unwrap(), "wiki/hello world.md");
         assert_eq!(parsed.get("token").unwrap(), "a+b");
+    }
+
+    #[test]
+    fn percent_decode_does_not_panic_on_multibyte_utf8_after_percent() {
+        // `%` directly followed by the raw (not percent-encoded) bytes of a
+        // multi-byte UTF-8 character used to panic: the old implementation
+        // sliced `input[i+1..i+3]` as a `str`, and those two bytes can land
+        // mid-codepoint (not a char boundary).
+        let euro = "path=%€"; // '€' is E2 82 AC (3 bytes)
+        let decoded = percent_decode(euro);
+        assert!(decoded.contains('€'), "euro sign should pass through intact");
+
+        let emoji = "path=%🙂"; // 4-byte UTF-8 character
+        let decoded = percent_decode(emoji);
+        assert!(decoded.contains('🙂'), "emoji should pass through intact");
+
+        // Also exercise via resolve_project's project_id decoding path and
+        // the query parser, both of which call percent_decode directly.
+        let parsed = parse_query("project_id=%€");
+        assert!(parsed.get("project_id").unwrap().contains('€'));
+    }
+
+    #[test]
+    fn percent_decode_still_decodes_valid_percent_sequences() {
+        assert_eq!(percent_decode("hello%20world"), "hello world");
+        assert_eq!(percent_decode("wiki%2Ffoo.md"), "wiki/foo.md");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        // Trailing incomplete sequence should not panic and passes through.
+        assert_eq!(percent_decode("abc%2"), "abc%2");
+        assert_eq!(percent_decode("abc%"), "abc%");
+        // Invalid hex after % is passed through unchanged.
+        assert_eq!(percent_decode("abc%zz"), "abc%zz");
     }
 
     #[test]
