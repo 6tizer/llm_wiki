@@ -90,6 +90,13 @@ const DEFAULT_PROFILE_STATUS: &str = "unknown";
 const PROFILE_PROBE_BACKOFF_MS: i64 = DEFAULT_RETRY_BACKOFF_MS;
 const PROFILE_PROBE_MAX_TOKENS: i64 = 8;
 const PROFILE_PROBE_TIMEOUT_SECS: u64 = 30;
+// Keep aligned with PREPARE_PROFILE_TASK_FAMILY in
+// src/lib/parallel-knowledge/prepare-worker-pool.ts.
+const PREPARE_PROFILE_TASK_FAMILY: &str = "ingest";
+const MODEL_CALL_FORWARD_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_MODEL_CALL_RATE_LIMIT_RETRY_MS: i64 = 30_000;
+const MIN_MODEL_CALL_RATE_LIMIT_RETRY_MS: i64 = 1_000;
+const MAX_MODEL_CALL_RATE_LIMIT_RETRY_MS: i64 = MAX_PROFILE_POOL_BREAKER_MS;
 const MAX_PROFILE_CONCURRENCY: i64 = 128;
 const MIN_PROFILE_POOL_TTL_MS: i64 = 1_000;
 // Keep this aligned with AGENT_PROFILE_CLAIM_TTL_MS in src/lib/agent/agent-transport.ts.
@@ -1511,6 +1518,67 @@ pub async fn runtime_profile_probe(
     .await
 }
 
+/// Secretless model-call plan forwarded from JS. `provider`/`apiMode`/
+/// `model` are cross-checked against the claimed profile for a clearer
+/// error message but are NEVER used to pick the request destination —
+/// `runtime_model_call_forward_for_project_with_store` re-derives the URL
+/// and auth header entirely from the server-stored profile so a buggy or
+/// compromised caller cannot redirect the request or exfiltrate the
+/// secret. `body` is the already-built provider request body (see
+/// `src/lib/llm-providers.ts`); it never contains the secret or a final
+/// destination URL.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeModelCallForwardRequest {
+    claim_id: String,
+    provider: String,
+    api_mode: String,
+    model: String,
+    body: serde_json::Value,
+}
+
+/// Forward one bulk-knowledge-prepare model-call through the profile pool.
+///
+/// Returns only the raw provider response body on success (2xx). On
+/// failure this NEVER returns provider response bodies, request headers,
+/// the destination URL, or raw reqwest error Debug output — see the
+/// anti-leak notes on `runtime_model_call_forward_for_project_with_store`.
+#[tauri::command]
+pub async fn runtime_model_call_forward(
+    request: RuntimeModelCallForwardRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<String, String> {
+    let (project_root, runtime_enabled, now) =
+        run_guarded("runtime_model_call_forward", || {
+            let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+            let project_root = root_state.get();
+            let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+            Ok((project_root, runtime_enabled, now))
+        })?;
+
+    let client = model_call_forward_client()?;
+    runtime_model_call_forward_for_project_with_store(
+        project_root.as_deref(),
+        runtime_enabled,
+        request,
+        now,
+        &OsSecretStore,
+        &client,
+    )
+    .await
+}
+
+fn model_call_forward_client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_secs(MODEL_CALL_FORWARD_TIMEOUT_SECS))
+        // Anti-leak constraint #2: never follow a redirect with the
+        // Authorization/x-api-key header attached. Disabling redirects
+        // entirely is simpler to audit than a same-origin allowlist.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| format!("model-call-forward-client-failed: {err}"))
+}
+
 /// Claim one eligible profile-pool slot for the currently-open project.
 #[tauri::command]
 pub fn runtime_profile_pool_claim(
@@ -2575,22 +2643,41 @@ fn runtime_job_claim_matching_kind_for_project(
     now: i64,
 ) -> Result<RuntimeJobClaim, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
+    let holder = require_non_empty("invalid-holder", "holder", &request.holder)?.to_string();
     with_runtime_writer(|| {
         let mut connection = open_job_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
-        let job_id = select_queued_job_id_tx(&tx, kind_filter.as_deref())?;
 
-        ensure_no_active_lease(&tx, &job_id)?;
-        tx.execute(
-            "UPDATE runtime_jobs
-             SET state = 'running',
-                 attempt = attempt + 1,
-                 started_at_ms = COALESCE(started_at_ms, ?2),
-                 updated_at_ms = ?2
-             WHERE job_id = ?1 AND state = 'queued'",
-            params![job_id, now],
-        )
-        .map_err(|err| format!("job-claim-update-failed: {err}"))?;
+        // `select` + `UPDATE ... WHERE state = 'queued'` is two round trips, so
+        // in principle another writer could flip the same job's state between
+        // them. `with_runtime_writer` currently serializes every writer body
+        // behind one process-wide mutex, so that interleaving cannot happen
+        // today — but this loop is defense-in-depth against that assumption
+        // ever changing (e.g. a future move to per-connection or async
+        // locking). If the UPDATE claims zero rows, the job was already taken;
+        // exclude it and select the next candidate instead of inserting a
+        // second active lease for a job some other transaction just claimed.
+        let mut excluded_job_ids: Vec<String> = Vec::new();
+        let job_id = loop {
+            let candidate = select_queued_job_id_tx(&tx, kind_filter.as_deref(), &excluded_job_ids)?;
+            ensure_no_active_lease(&tx, &candidate)?;
+            let claimed_rows = tx
+                .execute(
+                    "UPDATE runtime_jobs
+                     SET state = 'running',
+                         attempt = attempt + 1,
+                         started_at_ms = COALESCE(started_at_ms, ?2),
+                         updated_at_ms = ?2
+                     WHERE job_id = ?1 AND state = 'queued'",
+                    params![candidate, now],
+                )
+                .map_err(|err| format!("job-claim-update-failed: {err}"))?;
+            if claimed_rows == 0 {
+                excluded_job_ids.push(candidate);
+                continue;
+            }
+            break candidate;
+        };
 
         let lease_id = request
             .lease_id
@@ -2605,13 +2692,7 @@ fn runtime_job_claim_matching_kind_for_project(
                 expires_at_ms,
                 status
             ) VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'active')",
-            params![
-                lease_id,
-                job_id,
-                require_non_empty("invalid-holder", "holder", &request.holder)?,
-                now,
-                now + DEFAULT_LEASE_TTL_MS
-            ],
+            params![lease_id, job_id, holder, now, now + DEFAULT_LEASE_TTL_MS],
         )
         .map_err(|err| format!("job-claim-lease-failed: {err}"))?;
 
@@ -2625,6 +2706,7 @@ fn runtime_job_claim_matching_kind_for_project(
 fn select_queued_job_id_tx(
     tx: &Transaction<'_>,
     kind_filter: Option<&str>,
+    excluded_job_ids: &[String],
 ) -> Result<String, String> {
     let mut sql = String::from(
         "SELECT job_id
@@ -2634,8 +2716,12 @@ fn select_queued_job_id_tx(
     let kind_value = kind_filter.map(str::to_string);
     let mut sql_params: Vec<&dyn ToSql> = Vec::new();
     if let Some(kind) = kind_value.as_ref() {
-        sql.push_str(" AND kind = ?1");
+        sql.push_str(" AND kind = ?");
         sql_params.push(kind);
+    }
+    for excluded_job_id in excluded_job_ids {
+        sql.push_str(" AND job_id != ?");
+        sql_params.push(excluded_job_id);
     }
     sql.push_str(
         " ORDER BY priority DESC, queued_at_ms ASC, created_at_ms ASC
@@ -4721,6 +4807,187 @@ fn bounded_profile_probe_error(message: &str) -> String {
         end -= 1;
     }
     message[..end].to_string()
+}
+
+/// Core B+hybrid model-call forwarder. Re-reads the claimed profile
+/// server-side (never trusting `request.provider`/`apiMode`/`model` as a
+/// destination — those are only cross-checked for a clearer error),
+/// builds the destination URL and auth header from the STORED profile,
+/// injects the secret, and returns the raw provider response body.
+///
+/// Anti-leak constraints (verified in tests):
+/// 1. No error path here ever interpolates request headers, a full
+///    destination URL, raw reqwest Debug output, or a substring that could
+///    contain `Authorization`/`x-api-key`/`api-key` — every error is a
+///    fixed, static message or a fixed prefix + safe fields (status code,
+///    clamped retry-after ms).
+/// 2. Redirects are disabled entirely (`model_call_forward_client`), so no
+///    redirect can ever carry the injected auth header anywhere.
+/// 3. Non-2xx provider response bodies are never read into the returned
+///    error — only the HTTP status is surfaced.
+/// 4. The sanitized errors returned here are already safe before they ever
+///    reach `runtime_profile_pool_release`'s breaker-error redactor; this
+///    function does not rely on that redactor as a backstop.
+/// 5. On success, only the raw provider response body is returned — no
+///    envelope, no headers.
+async fn runtime_model_call_forward_for_project_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeModelCallForwardRequest,
+    now: i64,
+    store: &impl SecretStore,
+    client: &Client,
+) -> Result<String, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let claim_id = normalize_profile_text(
+        "invalid-claim-id",
+        "claimId",
+        &request.claim_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+
+    let (profile, claim) = with_runtime_writer(|| {
+        let mut connection = open_profile_pool_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        expire_profile_claims_tx(&tx, now)?;
+        let claim = read_active_profile_claim_by_id_tx(&tx, &claim_id, now)?
+            .ok_or_else(|| PROFILE_CLAIM_INACTIVE_ERROR.to_string())?;
+        if claim.kind != "model-call" || claim.task_family != PREPARE_PROFILE_TASK_FAMILY {
+            return Err(
+                "model-call-claim-unsupported: claim is not an ingest model-call claim"
+                    .to_string(),
+            );
+        }
+        let profile = read_visible_profile_tx(&tx, &claim.profile_id)?;
+        if !profile_pool_profile_base_eligible(
+            &tx,
+            &profile,
+            "model-call",
+            PREPARE_PROFILE_TASK_FAMILY,
+            now,
+        )? {
+            return Err(
+                "model-call-profile-unsupported: profile is not eligible for model-call use"
+                    .to_string(),
+            );
+        }
+        tx.commit().map_err(tx_err)?;
+        Ok((profile, claim))
+    })?;
+
+    if profile.profile_id != claim.profile_id {
+        return Err(
+            "model-call-claim-mismatch: claim profile does not match resolved profile"
+                .to_string(),
+        );
+    }
+    require_plan_field_match(&profile.provider_id, &request.provider, "provider")?;
+    require_plan_field_match(&profile.api_mode, &request.api_mode, "apiMode")?;
+    require_plan_field_match(&profile.model_id, &request.model, "model")?;
+
+    let secret_value = if profile_secret_required(&profile.auth_style) {
+        let secret_ref = profile.secret_ref.as_deref().ok_or_else(|| {
+            "model-call-missing-secret: stored profile has no secretRef".to_string()
+        })?;
+        read_profile_secret(store, secret_ref)?
+    } else {
+        String::new()
+    };
+
+    let url = match profile.api_mode.as_str() {
+        "anthropic-messages" => anthropic_messages_url(profile.endpoint.as_deref()),
+        "openai-chat-completions" => openai_chat_url(profile.endpoint.as_deref()),
+        "google-generate-content" => {
+            google_stream_generate_content_url(profile.endpoint.as_deref(), &profile.model_id)
+        }
+        _ => {
+            return Err(
+                "model-call-api-mode-unsupported: profile api mode has no HTTP model-call transport"
+                    .to_string(),
+            );
+        }
+    };
+    let headers = probe_headers(&profile.api_mode, &profile.auth_style, &secret_value);
+
+    // Anti-leak constraint #1: on network failure, do not interpolate the
+    // underlying reqwest::Error (its Display can include the destination
+    // URL). Mirrors `post_probe_json`'s existing pattern.
+    let response = client
+        .post(&url)
+        .headers(headers)
+        .json(&request.body)
+        .send()
+        .await
+        .map_err(|_| "model-call-network-failed: request failed".to_string())?;
+
+    let status = response.status();
+    if status.as_u16() == 429 {
+        let retry_after_ms = model_call_retry_after_ms(response.headers());
+        // Anti-leak constraint #3: never read/forward the 429 body.
+        return Err(format!(
+            "model-call-rate-limited: retryAfterMs={retry_after_ms} provider returned {status}"
+        ));
+    }
+    if !status.is_success() {
+        // Anti-leak constraint #3: non-2xx bodies are never surfaced.
+        return Err(format!("model-call-http-failed: provider returned {status}"));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|_| "model-call-response-read-failed: response stream failed".to_string())
+}
+
+/// Checks one plan field against the claimed profile's value. `field_name`
+/// must always be a hardcoded literal (never request-derived data) — the
+/// error string embeds it directly and anti-leak constraint #3 forbids
+/// surfacing request/response payload content in error text.
+fn require_plan_field_match(actual: &str, expected: &str, field_name: &str) -> Result<(), String> {
+    if actual != expected {
+        return Err(format!(
+            "model-call-plan-mismatch: {field_name} does not match the claimed profile"
+        ));
+    }
+    Ok(())
+}
+
+/// Google's SSE model-call endpoint. Mirrors the "google" branch of
+/// `getProviderConfig` in src/lib/llm-providers.ts (`:streamGenerateContent
+/// ?alt=sse`), not the plain `:generateContent` endpoint `probe_profile_target`
+/// uses for one-shot capability checks.
+fn google_stream_generate_content_url(endpoint: Option<&str>, model_id: &str) -> String {
+    let base = endpoint_base(endpoint, "https://generativelanguage.googleapis.com/v1beta");
+    if base.contains(":streamGenerateContent") {
+        return if base.contains("alt=sse") {
+            base.to_string()
+        } else if base.contains('?') {
+            format!("{base}&alt=sse")
+        } else {
+            format!("{base}?alt=sse")
+        };
+    }
+    format!(
+        "{base}/models/{}:streamGenerateContent?alt=sse",
+        encode_url_path_segment(model_id)
+    )
+}
+
+/// Reads a provider's `Retry-After` header (seconds) and clamps it to a
+/// sane range. Missing/unparseable headers fall back to a fixed default —
+/// never `now` or another request-derived value, so a malicious/broken
+/// provider cannot use this to smuggle unbounded delays.
+fn model_call_retry_after_ms(headers: &HeaderMap) -> i64 {
+    let parsed = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .map(|seconds| seconds.saturating_mul(1_000))
+        .unwrap_or(DEFAULT_MODEL_CALL_RATE_LIMIT_RETRY_MS);
+    parsed.clamp(
+        MIN_MODEL_CALL_RATE_LIMIT_RETRY_MS,
+        MAX_MODEL_CALL_RATE_LIMIT_RETRY_MS,
+    )
 }
 
 fn runtime_commit_budget_claim_for_project(
@@ -8748,7 +9015,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::{Arc, Barrier, Mutex};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn temp_project(label: &str) -> PathBuf {
@@ -16163,6 +16430,641 @@ mod tests {
         assert_eq!(timeout.state, "retry-wait");
         let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
         assert_eq!(list.leases[0].status, EXPIRED_LEASE_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn select_queued_job_id_tx_skips_excluded_ids_and_advances_to_next_candidate() {
+        let project = temp_project("select-queued-job-skip");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-1", "compile-page", 0),
+            100,
+        )
+        .expect("create job-1");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-2", "compile-page", 0),
+            100,
+        )
+        .expect("create job-2");
+
+        let mut connection = open_job_runtime_locked(&project).expect("open runtime db");
+        let tx = connection.transaction().expect("begin tx");
+        let first =
+            select_queued_job_id_tx(&tx, Some("compile-page"), &[]).expect("select first job");
+        assert_eq!(first, "job-1");
+        let second = select_queued_job_id_tx(&tx, Some("compile-page"), &[first.clone()])
+            .expect("select next candidate excluding first");
+        assert_eq!(second, "job-2");
+        let none_left = select_queued_job_id_tx(&tx, Some("compile-page"), &[first, second]);
+        assert!(none_left.unwrap_err().starts_with("no-queued-job"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn runtime_job_claim_by_kind_never_double_leases_a_job_under_concurrent_threads() {
+        // Real SQLite + real OS threads (not mocked), exercising the exact
+        // claim path used by the bulk-prepare worker pool. Today
+        // `with_runtime_writer`'s process-wide mutex fully serializes every
+        // writer body, so this cannot currently observe a double-claim —
+        // the `select_queued_job_id_tx` "skip zero-row UPDATE and retry the
+        // next candidate" defense (above) exists for if that ever changes.
+        // This test's job is to prove that under real concurrency each
+        // queued job is claimed by exactly one thread and never carries
+        // more than one active lease.
+        let project = temp_project("job-claim-concurrent");
+        fs::create_dir_all(&project).expect("create temp project");
+        for job_id in ["job-1", "job-2"] {
+            runtime_job_create_for_project(
+                Some(&project),
+                true,
+                create_request_with_kind(job_id, "compile-page", 0),
+                100,
+            )
+            .expect("create queued job");
+        }
+
+        let shared_project = Arc::new(project.clone());
+        let worker_count = 6;
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let handles = (0..worker_count)
+            .map(|index| {
+                let project = Arc::clone(&shared_project);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    runtime_job_claim_by_kind_for_project(
+                        Some(project.as_path()),
+                        true,
+                        claim_by_kind_request(
+                            &format!("worker-{index}"),
+                            &format!("lease-{index}"),
+                            "compile-page",
+                        ),
+                        200,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("claim thread"))
+            .collect::<Vec<_>>();
+
+        let mut claimed_job_ids: Vec<&str> = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok())
+            .map(|claim| claim.job.job_id.as_str())
+            .collect();
+        claimed_job_ids.sort_unstable();
+        assert_eq!(claimed_job_ids, vec!["job-1", "job-2"]);
+
+        let failures: Vec<&String> = results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .collect();
+        assert_eq!(failures.len(), worker_count - 2);
+        assert!(failures
+            .iter()
+            .all(|error| error.starts_with("no-queued-job")));
+
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let mut statement = connection
+            .prepare(
+                "SELECT job_id, COUNT(*) AS active_count
+                 FROM runtime_job_leases
+                 WHERE status = 'active'
+                 GROUP BY job_id
+                 HAVING COUNT(*) > 1",
+            )
+            .expect("prepare duplicate-lease check");
+        let duplicate_leases = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query duplicate leases")
+            .count();
+        assert_eq!(duplicate_leases, 0, "no job should ever carry two active leases");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    fn model_call_forward_profile_create_request(
+        profile_id: &str,
+        provider_id: &str,
+        model_id: &str,
+        endpoint: &str,
+        api_mode: &str,
+        auth_style: &str,
+    ) -> RuntimeProfileCreateRequest {
+        RuntimeProfileCreateRequest {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            endpoint: if endpoint.is_empty() {
+                None
+            } else {
+                Some(endpoint.to_string())
+            },
+            api_mode: api_mode.to_string(),
+            auth_style: auth_style.to_string(),
+            task_families: vec![PREPARE_PROFILE_TASK_FAMILY.to_string()],
+            ..profile_create_request(profile_id)
+        }
+    }
+
+    fn setup_model_call_forward_profile(
+        label: &str,
+        provider_id: &str,
+        model_id: &str,
+        endpoint: &str,
+        api_mode: &str,
+        auth_style: &str,
+    ) -> (PathBuf, TestSecretStore, Client, String, String) {
+        let project = temp_project(label);
+        fs::create_dir_all(&project).expect("create temp project");
+        let created = runtime_profile_create_for_project(
+            Some(&project),
+            true,
+            model_call_forward_profile_create_request(
+                "profile-1",
+                provider_id,
+                model_id,
+                endpoint,
+                api_mode,
+                auth_style,
+            ),
+            100,
+        )
+        .expect("create model-call profile");
+
+        let mut update = profile_update_request("profile-1");
+        update.capability_status = Some("supported".to_string());
+        update.capability_json = Some(profile_pool_capability_json(
+            serde_json::json!(true),
+            serde_json::json!(false),
+        ));
+        update.capability_version = Some(PROFILE_PROBE_CAPABILITY_VERSION.to_string());
+        update.capability_checked_at_ms = Some(150);
+        runtime_profile_update_for_project(Some(&project), true, update, 150)
+            .expect("mark model-call profile capable");
+
+        let store = TestSecretStore::default();
+        if let Some(secret_ref) = created.secret_ref.clone() {
+            // Deliberately fake-looking so it can never be a real credential.
+            store.insert(secret_ref, "sk-test000-stored-secret");
+        }
+
+        let claim = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolClaimRequest {
+                claim_id: Some("claim-1".to_string()),
+                kind: "model-call".to_string(),
+                task_family: PREPARE_PROFILE_TASK_FAMILY.to_string(),
+                holder: "bulk-prepare:1".to_string(),
+                job_id: None,
+                ttl_ms: Some(10_000),
+                preferred_profile_ids: None,
+            },
+            200,
+        )
+        .expect("claim ingest model-call profile");
+
+        // Use the same client construction the real `#[tauri::command]` uses
+        // (no-redirect policy included) so tests exercise production
+        // behavior, not a more permissive default reqwest client.
+        let client = model_call_forward_client().expect("build model call forward client");
+        (project, store, client, claim.claim_id, claim.profile_id)
+    }
+
+    fn model_call_forward_request(
+        claim_id: &str,
+        provider: &str,
+        api_mode: &str,
+        model: &str,
+        body: serde_json::Value,
+    ) -> RuntimeModelCallForwardRequest {
+        RuntimeModelCallForwardRequest {
+            claim_id: claim_id.to_string(),
+            provider: provider.to_string(),
+            api_mode: api_mode.to_string(),
+            model: model.to_string(),
+            body,
+        }
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_returns_raw_body_and_injects_secret_from_profile() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "sk-test000-stored-secret"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (project, store, client, claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-success",
+            "anthropic",
+            "claude-test",
+            &server.uri(),
+            "anthropic-messages",
+            "x-api-key",
+        );
+
+        let body = serde_json::json!({
+            "model": "claude-test",
+            "max_tokens": 64,
+            "stream": true,
+            "messages": [{ "role": "user", "content": "hello" }]
+        });
+        let result = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(&claim_id, "anthropic", "anthropic-messages", "claude-test", body),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect("forward model call");
+
+        assert_eq!(
+            result,
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n"
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_rejects_inactive_or_unknown_claim() {
+        let (project, store, client, _claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-inactive-claim",
+            "anthropic",
+            "claude-test",
+            "http://127.0.0.1:1",
+            "anthropic-messages",
+            "x-api-key",
+        );
+
+        let error = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                "claim-does-not-exist",
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({}),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("unknown claim must be rejected");
+
+        assert!(error.starts_with("claim-inactive"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_rejects_claim_with_wrong_kind_or_task_family() {
+        let project = temp_project("forward-claim-wrong-kind");
+        fs::create_dir_all(&project).expect("create temp project");
+        let agent_profile = create_agent_profile_pool_profile(&project, "agent-profile-1");
+        let agent_claim = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            agent_profile_pool_claim_request("claim-agent-1", vec!["agent-profile-1"]),
+            200,
+        )
+        .expect("claim agent-run profile");
+        let store = TestSecretStore::default();
+        if let Some(secret_ref) = agent_profile.secret_ref.clone() {
+            store.insert(secret_ref, "sk-test000-stored-secret");
+        }
+        let client = Client::builder().build().expect("client");
+
+        let error = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &agent_claim.claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({}),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("agent-run claim must not authorize a model-call forward");
+
+        assert!(error.starts_with("model-call-claim-unsupported"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_rejects_plan_field_mismatch_against_stored_profile() {
+        let (project, store, client, claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-plan-mismatch",
+            "anthropic",
+            "claude-test",
+            "http://127.0.0.1:1",
+            "anthropic-messages",
+            "x-api-key",
+        );
+
+        let wrong_model = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "not-the-claimed-model",
+                serde_json::json!({}),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("model mismatch must be rejected");
+        assert!(wrong_model.starts_with("model-call-plan-mismatch"));
+
+        let wrong_provider = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "openai",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({}),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("provider mismatch must be rejected");
+        assert!(wrong_provider.starts_with("model-call-plan-mismatch"));
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_never_leaks_non_2xx_provider_body_headers_or_secret() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(500).set_body_string(
+                "Authorization: Bearer sk-test000-stored-secret\nleaked-upstream-diagnostic-details",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (project, store, client, claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-error-body-leak",
+            "anthropic",
+            "claude-test",
+            &server.uri(),
+            "anthropic-messages",
+            "x-api-key",
+        );
+
+        let error = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({ "messages": [] }),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("non-2xx provider response must surface as an error");
+
+        assert_eq!(error, "model-call-http-failed: provider returned 500 Internal Server Error");
+        assert!(!error.contains("sk-test000-stored-secret"));
+        assert!(!error.contains("Authorization"));
+        assert!(!error.contains("leaked-upstream-diagnostic-details"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_reports_rate_limit_with_retry_after_and_no_body_leak() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "12")
+                    .set_body_string("private-rate-limit-diagnostic sk-test000-stored-secret"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (project, store, client, claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-rate-limited",
+            "anthropic",
+            "claude-test",
+            &server.uri(),
+            "anthropic-messages",
+            "x-api-key",
+        );
+
+        let error = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({ "messages": [] }),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("429 must surface as a rate-limited error");
+
+        assert!(error.starts_with("model-call-rate-limited: retryAfterMs=12000"));
+        assert!(!error.contains("sk-test000-stored-secret"));
+        assert!(!error.contains("private-rate-limit-diagnostic"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_never_follows_redirects_with_auth_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "/redirected-with-secret"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/redirected-with-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("should-never-be-fetched"))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let (project, store, client, claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-no-redirect",
+            "anthropic",
+            "claude-test",
+            &server.uri(),
+            "anthropic-messages",
+            "x-api-key",
+        );
+
+        let error = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({ "messages": [] }),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("a 3xx response must not be followed");
+
+        assert!(error.starts_with("model-call-http-failed: provider returned 302"));
+        let _ = fs::remove_dir_all(project);
+        // wiremock's `.expect(0)` above already asserts on drop that the
+        // redirect target was never hit; verified again here for clarity.
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_builds_google_sse_url_and_openai_chat_url() {
+        let google_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            // `endpoint_base` uses a caller-provided endpoint verbatim (no
+            // implicit "/v1beta" prefix — that default only applies when the
+            // profile has no endpoint override), so the test profile's
+            // endpoint (the mock server's bare origin) plus the SSE path
+            // segment is the full expected path.
+            .and(path("/models/gemini-test:streamGenerateContent"))
+            .and(query_param("alt", "sse"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("data: {}\n"))
+            .expect(1)
+            .mount(&google_server)
+            .await;
+        let (google_project, google_store, google_client, google_claim_id, _) =
+            setup_model_call_forward_profile(
+                "forward-google-url",
+                "google",
+                "gemini-test",
+                &google_server.uri(),
+                "google-generate-content",
+                "api-key",
+            );
+        runtime_model_call_forward_for_project_with_store(
+            Some(&google_project),
+            true,
+            model_call_forward_request(
+                &google_claim_id,
+                "google",
+                "google-generate-content",
+                "gemini-test",
+                serde_json::json!({ "contents": [] }),
+            ),
+            250,
+            &google_store,
+            &google_client,
+        )
+        .await
+        .expect("forward google model call");
+        let _ = fs::remove_dir_all(google_project);
+
+        let openai_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("data: {}\n"))
+            .expect(1)
+            .mount(&openai_server)
+            .await;
+        let (openai_project, openai_store, openai_client, openai_claim_id, _) =
+            setup_model_call_forward_profile(
+                "forward-openai-url",
+                "openai",
+                "gpt-test",
+                &openai_server.uri(),
+                "openai-chat-completions",
+                "bearer",
+            );
+        runtime_model_call_forward_for_project_with_store(
+            Some(&openai_project),
+            true,
+            model_call_forward_request(
+                &openai_claim_id,
+                "openai",
+                "openai-chat-completions",
+                "gpt-test",
+                serde_json::json!({ "messages": [] }),
+            ),
+            250,
+            &openai_store,
+            &openai_client,
+        )
+        .await
+        .expect("forward openai model call");
+        let _ = fs::remove_dir_all(openai_project);
+    }
+
+    #[tokio::test]
+    async fn model_call_forward_rejects_local_cli_api_mode_without_network_call() {
+        let (project, store, client, claim_id, _profile_id) = setup_model_call_forward_profile(
+            "forward-local-cli-unsupported",
+            "claude-code",
+            "claude-cli",
+            "",
+            "local-cli",
+            "oauth-local-cli",
+        );
+
+        let error = runtime_model_call_forward_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "claude-code",
+                "local-cli",
+                "claude-cli",
+                serde_json::json!({}),
+            ),
+            250,
+            &store,
+            &client,
+        )
+        .await
+        .expect_err("local-cli api mode has no HTTP transport");
+
+        assert!(error.starts_with("model-call-api-mode-unsupported"));
         let _ = fs::remove_dir_all(project);
     }
 }

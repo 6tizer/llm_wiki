@@ -681,6 +681,25 @@ function buildGoogleBody(
   }
 }
 
+/**
+ * `LlmConfig["provider"]` ids whose `getProviderConfig` case below builds
+ * its request body with `buildOpenAiCompatibleBody` and parses responses
+ * with `parseOpenAiLine` — i.e. genuinely OpenAI-wire-compatible native
+ * providers, as opposed to `"custom"` (which may or may not speak that
+ * wire; see the `custom` case's `apiMode` branch).
+ *
+ * Single source of truth: consumers that need to know "is this provider
+ * id one of the OpenAI-compatible native ones" (e.g. the bulk-prepare
+ * model-call executor building a secretless synthetic `LlmConfig`) import
+ * this instead of hand-maintaining their own copy that could drift out of
+ * sync with the switch below.
+ */
+export const OPENAI_COMPATIBLE_NATIVE_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "openai",
+  "azure",
+  "ollama",
+])
+
 export function getProviderConfig(config: LlmConfig): ProviderConfig {
   const { provider, apiKey, model, ollamaUrl, customEndpoint } = config
 

@@ -18,7 +18,7 @@ import {
   importSourceFiles,
   importSourceFolder,
 } from "@/lib/source-lifecycle"
-import { enqueueBulkKnowledgePrepareJobs } from "@/lib/parallel-knowledge/bulk-runtime-entry"
+import { runBulkKnowledgePrepare } from "@/lib/parallel-knowledge/bulk-prepare-driver"
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
@@ -106,14 +106,16 @@ export function SourcesView() {
     setPlanningRuntime(true)
     setRuntimePlanError(null)
     try {
-      const result = await enqueueBulkKnowledgePrepareJobs(
+      const result = await runBulkKnowledgePrepare(
         sourceFilePaths.map((sourcePath) => ({ sourcePath })),
       )
-      if (result.failedJobs.length > 0) {
+      if (result.enqueue.failedJobs.length > 0) {
         setRuntimePlanError(t("sources.bulkPrepareFailed", {
-          count: result.failedJobs.length,
-          total: result.plan.jobs.length,
+          count: result.enqueue.failedJobs.length,
+          total: result.enqueue.plan.jobs.length,
         }))
+      } else if (result.workerPool.errors.length > 0) {
+        setRuntimePlanError(result.workerPool.errors.join("; "))
       }
     } catch (err) {
       setRuntimePlanError(String(err))
