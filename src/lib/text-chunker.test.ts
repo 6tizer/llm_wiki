@@ -222,6 +222,22 @@ describe("chunkMarkdown — markdown tables", () => {
     expect(result.map((c) => c.text).join("\n")).toContain("|single pipe line")
     expect(result.map((c) => c.text).join("\n")).toContain("second paragraph")
   })
+
+  it("does not hang on a single leading-pipe line inside a long section (regression, D3)", () => {
+    // Section must exceed targetChars (1000) so chunkSection's short-input
+    // fast path is bypassed and tokenizeAtoms actually runs. A stray `|`
+    // line (not a real table — only one such line) used to make the
+    // paragraph branch's absorb-loop condition false on entry, so `i`
+    // never advanced and tokenizeAtoms spun forever.
+    const filler = "Lorem ipsum dolor sit amet consectetur adipiscing elit. ".repeat(30)
+    const input = lines(filler, "|not a real table row", filler)
+    const result = chunkMarkdown(input)
+    const joined = result.map((c) => c.text).join("\n")
+    expect(joined).toContain("Lorem ipsum")
+    expect(joined).toContain("|not a real table row")
+    expect(result.length).toBeGreaterThan(0)
+    expect(result.length).toBeLessThan(20)
+  })
 })
 
 // ── Recursive split levels ─────────────────────────────────────────
