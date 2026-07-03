@@ -29,6 +29,7 @@
  */
 
 import { parseFrontmatter } from "./frontmatter"
+import { validateLlmPageOutput } from "./llm-output-validation"
 import {
   parseFrontmatterArray,
   mergeArrayFieldsIntoContent,
@@ -373,11 +374,57 @@ export async function mergeDuplicateGroup(
     throw new Error("mergeDuplicateGroup requires at least 2 pages in the group")
   }
 
+  // Path/slug collision guard (SPEC-11 D6 bug4). Two different files can
+  // share a bare filename across wiki directories (wiki/entities/x.md vs
+  // wiki/concepts/x.md). If the caller's slug->path resolution collapsed
+  // two distinct group members onto the same file, every downstream step
+  // here (canonical selection, redirects, deletion) would silently operate
+  // on the wrong page. Refuse rather than guess.
+  const pathsSeen = new Map<string, string[]>()
+  for (const page of req.group) {
+    const slugsForPath = pathsSeen.get(page.path) ?? []
+    slugsForPath.push(page.slug)
+    pathsSeen.set(page.path, slugsForPath)
+  }
+  for (const [path, slugs] of pathsSeen) {
+    if (slugs.length > 1) {
+      throw new Error(
+        `Duplicate group resolves multiple slugs (${slugs.join(", ")}) to the same file "${path}" — refusing to merge. This usually means a same-named file exists in more than one wiki directory (e.g. entities/ and concepts/) and the slug lookup collided.`,
+      )
+    }
+  }
+
   // 1. LLM body merge
   const userMessage = buildMergerUserMessage(req.group)
   const llmOutput = await llmCall(MERGER_SYSTEM_PROMPT, userMessage, options.signal, {
     maxTokens: DEDUP_MERGE_MAX_TOKENS,
   })
+
+  // Content-integrity guard (SPEC-11 D6 bug2). A truncated stream or a
+  // short refusal can still be a non-empty string. Validate before folding
+  // it into canonicalContent and computing pagesToDelete — an invalid
+  // merge output must abort BEFORE any file is deleted, not after.
+  const referenceContent = req.group.reduce(
+    (longest, p) => (p.content.length > longest.length ? p.content : longest),
+    req.group[0].content,
+  )
+  const validation = validateLlmPageOutput(llmOutput, referenceContent)
+  if (!validation.ok) {
+    throw new Error(`Duplicate merge LLM output failed validation: ${validation.reason}`)
+  }
+
+  // Known residual (SPEC-11 D6, bounded scope): this guard only screens for
+  // garbage/truncation via a length ratio against the longest group member.
+  // It does not — and cannot — validate merge *semantic* completeness. A
+  // fluent, well-formed merge that quietly drops one member's unique detail
+  // (a fact only page B stated, absent from A/C) will pass this check just
+  // as readily as a faithful merge, and mergeDuplicateGroup's caller
+  // (dedup-runner) then deletes every non-canonical member on the strength
+  // of that pass. Catching *that* class of loss needs a semantic diff
+  // against each individual source page, not a length check against the
+  // longest one — out of scope for this PR (output-validation, not
+  // merge-completeness), so it's left as an explicit, tracked gap rather
+  // than an implicit one.
 
   // 2. Frontmatter union (deterministic post-processing of LLM output).
   //    For each unioned field, fold every input page's values into

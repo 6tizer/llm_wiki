@@ -3,6 +3,7 @@ import { hasUsableLlm } from "@/lib/has-usable-llm";
 import { isSafeIngestPath } from "@/lib/ingest";
 import { sanitizeIngestedFileContent } from "@/lib/ingest-sanitize";
 import { type LintResult, runStructuralLint, runSemanticLint, generateLintReport, lintReportToMarkdown, type LintReport } from "@/lib/lint";
+import { validateLlmPageOutput } from "@/lib/llm-output-validation";
 import { streamChat } from "@/lib/llm-client";
 import { buildLanguageDirective } from "@/lib/output-language";
 import { getRelativePath, normalizePath } from "@/lib/path-utils";
@@ -12,11 +13,20 @@ import { lintFixMutex } from "@/lib/lint-fix-mutex";
 import type { LlmConfig } from "@/stores/wiki-store";
 
 /**
- * Can this lint result be auto-fixed?
- * All types except "suggestion" (too vague) are fixable.
+ * Can this lint result be auto-fixed via the single-item / bulk "Auto Fix"
+ * UI paths (handleAutoFix, handleFixAll in lint-view.tsx)?
+ * All types except "suggestion" (too vague) and "orphan" are fixable.
+ *
+ * Orphan is deliberately excluded (SPEC-11 D6 bug1 follow-up): fixOrphan
+ * calls cascadeDeleteWikiPagesWithRefs with zero confirmation, so routing
+ * orphan through the unconfirmed Auto Fix button would silently delete
+ * pages. Orphans must only be removed via the confirmed Delete button
+ * (handleDeleteOrphan), which shows a window.confirm prompt first. This
+ * mirrors classifyFixability() in lint.ts, which routes orphan to
+ * humanItems for the same reason.
  */
 export function isFixable(result: LintResult): boolean {
-	if (result.type === "orphan") return true;
+	if (result.type === "orphan") return false;
 	if (result.type === "broken-link") return true;
 	if (result.type === "no-outlinks") return true;
 	if (result.type === "semantic") {
@@ -211,7 +221,16 @@ async function fixBrokenLink(
 			},
 		});
 
-		if (hadError || !raw.trim()) return false;
+		if (hadError) return false;
+
+		const validation = validateLlmPageOutput(raw, content);
+		if (!validation.ok) {
+			activity.updateItem(activityId, {
+				status: "error",
+				detail: validation.reason ?? "LLM output failed validation.",
+			});
+			return false;
+		}
 
 		const sanitized = sanitizeIngestedFileContent(raw);
 		await writeFile(pagePath, sanitized);
@@ -306,7 +325,16 @@ async function fixNoOutlinks(
 			},
 		});
 
-		if (hadError || !raw.trim()) return false;
+		if (hadError) return false;
+
+		const validation = validateLlmPageOutput(raw, content);
+		if (!validation.ok) {
+			activity.updateItem(activityId, {
+				status: "error",
+				detail: validation.reason ?? "LLM output failed validation.",
+			});
+			return false;
+		}
 
 		const sanitized = sanitizeIngestedFileContent(raw);
 		await writeFile(pagePath, sanitized);
@@ -414,6 +442,7 @@ async function fixContradiction(
 			activity,
 			activityId,
 			result,
+			pages,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -491,6 +520,7 @@ async function fixStale(
 			activity,
 			activityId,
 			result,
+			pages,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -558,6 +588,7 @@ async function fixMissingPage(
 			activity,
 			activityId,
 			result,
+			undefined,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -633,6 +664,7 @@ async function fixGenericSemantic(
 			activity,
 			activityId,
 			result,
+			pages,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -649,6 +681,14 @@ async function applyLlmFix(
 	activity: ReturnType<typeof useActivityStore.getState>,
 	activityId: string,
 	result: LintResult,
+	/** Original content of the pages the LLM was asked to edit, keyed by the
+	 *  same bare page path the LLM is prompted to echo back in FILE blocks
+	 *  (e.g. "concepts/foo.md"). Used as the reference document for the
+	 *  length-sanity check in validateLlmPageOutput. Omitted for fixes that
+	 *  create a brand-new page (fixMissingPage) — there is no "original" to
+	 *  compare against, so the check falls back to the block's own content
+	 *  (which only enforces the absolute floor, not a ratio). */
+	originalPages?: Record<string, string>,
 ): Promise<boolean> {
 	let raw = "";
 	let hadError = false;
@@ -692,6 +732,7 @@ async function applyLlmFix(
 	}
 
 	const filesWritten: string[] = [];
+	let rejectedCount = 0;
 	for (const block of blocks) {
 		// Path-traversal guard (#119 P1-3). block.path comes from LLM output,
 		// which is attacker-controllable via prompt injection in lint sources.
@@ -703,12 +744,39 @@ async function applyLlmFix(
 		const wikiRel = stripped.startsWith("wiki/") ? stripped : `wiki/${stripped}`;
 		if (!isSafeIngestPath(wikiRel)) {
 			console.warn(`[lint-fixer] rejecting unsafe path "${block.path}" (normalized "${wikiRel}")`);
+			rejectedCount++;
 			continue;
 		}
+
+		// Content-integrity guard (SPEC-11 D6 bug2). A truncated or refused
+		// LLM stream can still produce a syntactically valid FILE block (the
+		// regex above just needs matching markers) with garbage or
+		// near-empty content between them. Validate before this overwrites
+		// the page on disk. originalPages has no entry for brand-new pages
+		// (fixMissingPage) — in that case the reference is the block's own
+		// content, which only enforces the absolute-length floor.
+		const original = originalPages?.[block.path] ?? originalPages?.[stripped] ?? originalPages?.[stripped.replace(/^wiki\//, "")] ?? block.content;
+		const validation = validateLlmPageOutput(block.content, original);
+		if (!validation.ok) {
+			console.warn(`[lint-fixer] rejecting invalid LLM output for "${block.path}": ${validation.reason}`);
+			rejectedCount++;
+			continue;
+		}
+
 		const targetPath = `${pp}/${wikiRel}`;
 		const sanitized = sanitizeIngestedFileContent(block.content);
 		await writeFile(targetPath, sanitized);
 		filesWritten.push(getRelativePath(targetPath, pp));
+	}
+
+	if (filesWritten.length === 0) {
+		activity.updateItem(activityId, {
+			status: "error",
+			detail: rejectedCount > 0
+				? `LLM output failed validation for all ${rejectedCount} file block(s); nothing written.`
+				: "No valid file blocks to write.",
+		});
+		return false;
 	}
 
 	activity.updateItem(activityId, {

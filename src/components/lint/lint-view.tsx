@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { hasUsableLlm } from "@/lib/has-usable-llm";
 import { runSemanticLint, runStructuralLint } from "@/lib/lint";
 import { fixAllLintResults, fixLintResult, isFixable } from "@/lib/lint-fixer";
+import { lintFixMutex } from "@/lib/lint-fix-mutex";
 import { normalizePath } from "@/lib/path-utils";
 import { useReviewStore } from "@/stores/review-store";
 import { useWikiStore } from "@/stores/wiki-store";
@@ -216,6 +217,7 @@ export function LintView() {
 		const pp = normalizePath(project.path);
 		setFixingId(`autofix-${item.id}`);
 
+		const release = await lintFixMutex.acquire();
 		try {
 			const ok = await fixLintResult(pp, item, llmConfig);
 			if (ok) {
@@ -225,6 +227,7 @@ export function LintView() {
 		} catch (err) {
 			console.error("Auto fix failed:", err);
 		} finally {
+			release();
 			setFixingId(null);
 		}
 	}
@@ -234,6 +237,7 @@ export function LintView() {
 		const pp = normalizePath(project.path);
 		setFixingAll(true);
 
+		const release = await lintFixMutex.acquire();
 		try {
 			const fixableItems = items.filter(isFixable);
 			const { fixed } = await fixAllLintResults(pp, fixableItems, llmConfig);
@@ -246,6 +250,7 @@ export function LintView() {
 		} catch (err) {
 			console.error("Fix all failed:", err);
 		} finally {
+			release();
 			setFixingAll(false);
 		}
 	}
