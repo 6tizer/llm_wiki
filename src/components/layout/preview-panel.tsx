@@ -1,11 +1,36 @@
 import { useEffect, useCallback, useRef } from "react"
 import { X } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useActivityStore } from "@/stores/activity-store"
 import { readFile, writeFile } from "@/commands/fs"
 import { getFileCategory, isBinary } from "@/lib/file-types"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
 import { getFileName } from "@/lib/path-utils"
+
+/**
+ * Per-file debounced-save bookkeeping. This component is mounted once for
+ * the lifetime of the app (app-layout.tsx) and never remounts on file (or
+ * project) switch, so a single-entry ref keyed by absolute file path — not
+ * a single shared ref — is required: otherwise a pending debounce timer or
+ * "last loaded from disk" snapshot for one file leaks into another file
+ * (or another project, since paths are absolute) that gets selected while
+ * the timer is still pending.
+ */
+interface FileSaveEntry {
+  timer: ReturnType<typeof setTimeout> | null
+  /**
+   * Snapshot of what was most recently loaded from (or written to) disk
+   * for this file. Milkdown re-emits `markdownUpdated` on initial parse
+   * (before the user types anything), which used to trigger an auto-save
+   * that could write back a placeholder marker if read_file had returned
+   * one for a missing/locked file. We skip save when the incoming
+   * markdown equals this snapshot.
+   */
+  lastLoaded: string
+  /** Content queued for the pending debounce timer, if any. */
+  pendingSnapshot: string | null
+}
 
 export function PreviewPanel() {
   const selectedFile = useWikiStore((s) => s.selectedFile)
@@ -13,77 +38,125 @@ export function PreviewPanel() {
   const externalPreview = useWikiStore((s) => s.externalPreview)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Snapshot of what was most recently loaded from disk. Milkdown re-emits
-  // `markdownUpdated` on initial parse (before the user types anything),
-  // which used to trigger an auto-save that could write back a placeholder
-  // marker if read_file had returned one for a missing/locked file. We
-  // skip save when the incoming markdown equals the last-loaded content.
-  const lastLoadedRef = useRef<string>("")
+  const fileEntriesRef = useRef<Map<string, FileSaveEntry>>(new Map())
 
-  useEffect(() => {
-    if (!selectedFile) {
-      setFileContent("")
-      lastLoadedRef.current = ""
-      return
+  const getEntry = useCallback((path: string): FileSaveEntry => {
+    let entry = fileEntriesRef.current.get(path)
+    if (!entry) {
+      entry = { timer: null, lastLoaded: "", pendingSnapshot: null }
+      fileEntriesRef.current.set(path, entry)
     }
-    if (externalPreview?.path === selectedFile) {
-      lastLoadedRef.current = fileContent
-      return
-    }
+    return entry
+  }, [])
 
-    const category = getFileCategory(selectedFile)
-
-    if (isBinary(category)) {
-      setFileContent("")
-      lastLoadedRef.current = ""
-      return
-    }
-
-    readFile(selectedFile)
-      .then((content) => {
-        lastLoadedRef.current = content
-        setFileContent(content)
-      })
-      .catch((err) => {
-        lastLoadedRef.current = ""
-        setFileContent(`Error loading file: ${err}`)
-      })
-  }, [selectedFile, setFileContent])
-
-  const writeNow = useCallback((path: string, markdown: string, syncStore = false) => {
+  const writeNow = useCallback((path: string, markdown: string, syncStore: boolean) => {
     writeFile(path, markdown)
       .then(() => {
-        lastLoadedRef.current = markdown
-        if (syncStore) setFileContent(markdown)
+        getEntry(path).lastLoaded = markdown
+        // Only push the write into the display store if this file is
+        // still the one on screen — writeFile is async, and the user may
+        // have switched to a different file while it was in flight. Doing
+        // this unconditionally is what let a delayed write for file A
+        // clobber file B's already-loaded content.
+        if (syncStore && useWikiStore.getState().selectedFile === path) {
+          setFileContent(markdown)
+        }
       })
-      .catch((err) => console.error("Failed to save:", err))
-  }, [setFileContent])
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        useActivityStore.getState().addItem({
+          type: "autosave",
+          title: "File auto-save",
+          status: "error",
+          detail: `Failed to save "${getFileName(path)}": ${message}`,
+          filesWritten: [],
+        })
+      })
+  }, [getEntry, setFileContent])
+
+  useEffect(() => {
+    const path = selectedFile
+
+    if (!path) {
+      setFileContent("")
+    } else if (externalPreview?.path === path) {
+      getEntry(path).lastLoaded = fileContent
+    } else {
+      const category = getFileCategory(path)
+      if (isBinary(category)) {
+        setFileContent("")
+        getEntry(path).lastLoaded = ""
+      } else {
+        readFile(path)
+          .then((content) => {
+            getEntry(path).lastLoaded = content
+            // Guard against a stale readFile resolving after the user has
+            // already switched to a different file (same pattern as
+            // writeNow below) — without this, a slow load for a file the
+            // user navigated away from can clobber the currently
+            // displayed file's content when it finally resolves.
+            if (useWikiStore.getState().selectedFile === path) {
+              setFileContent(content)
+            }
+          })
+          .catch((err) => {
+            getEntry(path).lastLoaded = ""
+            if (useWikiStore.getState().selectedFile === path) {
+              setFileContent(`Error loading file: ${err}`)
+            }
+          })
+      }
+    }
+
+    // Flush — not just cancel — any pending debounced write for the file
+    // we are navigating away from. This runs before the effect body above
+    // executes for the newly selected file (React runs the previous
+    // render's cleanup before the next render's effect), so the outgoing
+    // file's last edit reaches disk before anything else touches the
+    // shared fileContent/selectedFile store. A plain clearTimeout here
+    // (the old behavior) silently dropped that edit.
+    return () => {
+      if (!path) return
+      const entry = fileEntriesRef.current.get(path)
+      if (!entry?.timer) return
+      clearTimeout(entry.timer)
+      entry.timer = null
+      const snapshot = entry.pendingSnapshot
+      entry.pendingSnapshot = null
+      // syncStore=true: writeNow's own selectedFile===path guard decides
+      // whether to push this flushed write into the display store. If the
+      // user has quickly switched back to this file before the write
+      // resolves, the guard is true and the flushed content correctly
+      // syncs the display; if they're still elsewhere, the guard is false
+      // and nothing is clobbered.
+      if (snapshot !== null) writeNow(path, snapshot, true)
+    }
+  }, [selectedFile, setFileContent, getEntry, writeNow])
 
   const handleSave = useCallback(
     (markdown: string, options?: { immediate?: boolean }) => {
       if (!selectedFile) return
+      const path = selectedFile
+      const entry = getEntry(path)
       // Ignore no-op saves from the editor's initial re-emit. Only write
       // when the user has actually changed the content relative to the
       // last disk read.
-      if (markdown === lastLoadedRef.current) return
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      if (markdown === entry.lastLoaded) return
+      if (entry.timer) clearTimeout(entry.timer)
+      entry.pendingSnapshot = null
       if (options?.immediate) {
-        writeNow(selectedFile, markdown, true)
+        writeNow(path, markdown, true)
         return
       }
-      saveTimerRef.current = setTimeout(() => {
-        writeNow(selectedFile, markdown, true)
+      entry.pendingSnapshot = markdown
+      entry.timer = setTimeout(() => {
+        entry.timer = null
+        entry.pendingSnapshot = null
+        writeNow(path, markdown, true)
       }, 1000)
     },
-    [selectedFile, setFileContent, writeNow]
+    [selectedFile, getEntry, writeNow]
   )
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    }
-  }, [])
 
   if (!selectedFile) {
     return (
