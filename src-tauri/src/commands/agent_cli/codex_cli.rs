@@ -21,6 +21,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::cli_resolver::{child_path_env, find_cli_command};
+use crate::commands::runtime_db;
 
 pub struct CodexCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
@@ -236,20 +237,31 @@ pub async fn codex_cli_spawn(
         let app = app_for_task;
 
         let stderr_task = tokio::spawn(async move {
+            let mut redactor = runtime_db::SecretRedactor::new();
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
-                eprintln!("[codex-cli stderr] {line}");
-                append_capped_line(&mut collected, &line, STDERR_LIMIT_BYTES);
+                let sanitized = redactor.redact_line(&line);
+                eprintln!("[codex-cli stderr] {sanitized}");
+                append_capped_line(&mut collected, &sanitized, STDERR_LIMIT_BYTES);
             }
             collected
         });
 
+        // `codex exec --json` emits one JSON object per stdout line, which
+        // the frontend JSON.parses per line — whole-token redaction would
+        // turn a secret-bearing minified line into a single unparseable
+        // token, so this uses the JSON-aware, structural redactor instead.
+        // `stdout_text` (used for the :done diagnostic payload) accumulates
+        // the same sanitized value emitted to the frontend, not the raw
+        // line.
+        let mut stdout_redactor = runtime_db::SecretRedactor::new();
         let mut stdout_text = String::new();
         loop {
             match reader.next_line().await {
                 Ok(Some(line)) => {
-                    append_capped_line(&mut stdout_text, &line, STDOUT_LIMIT_BYTES);
-                    if app.emit(&topic, line).is_err() {
+                    let sanitized = stdout_redactor.redact_json_line(&line);
+                    append_capped_line(&mut stdout_text, &sanitized, STDOUT_LIMIT_BYTES);
+                    if app.emit(&topic, sanitized).is_err() {
                         break;
                     }
                 }
