@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Clock,
   Loader2,
@@ -20,7 +21,14 @@ import {
 import {
   captureRuntimeDiagnosticsSnapshot,
   type RuntimeDiagnosticsSnapshot,
+  type RuntimeRepairJobKindSummary,
 } from "@/lib/parallel-knowledge/runtime-diagnostics"
+import {
+  classifyJobLeaseHealth,
+  groupLeasesByJobId,
+  isAwaitingWorker,
+  type LeaseHealth,
+} from "@/lib/parallel-knowledge/lease-health"
 import {
   BULK_KNOWLEDGE_PREPARE_JOB_KIND,
   type BulkKnowledgePrepareJobPayload,
@@ -49,6 +57,7 @@ export interface RuntimeJobsState {
   list: RuntimeJobList | null
   summary: RuntimeJobsSummary
   diagnostics: RuntimeJobsDiagnostics
+  capturedAtMs: number | null
   actionJobId: string | null
   refresh: () => Promise<void>
   pauseJob: (jobId: string) => Promise<void>
@@ -74,6 +83,8 @@ export interface RuntimeJobsDiagnostics {
   prepareTotal: number
   prepareSources: number
   prepareWaitingForWorker: boolean
+  prepareSuspectedStuckCount: number
+  prepareUnparseableJobCount: number
   etaMs: number | null
   activeProfileClaims: number
   circuitBreakers: number
@@ -81,6 +92,8 @@ export interface RuntimeJobsDiagnostics {
   stagingFailed: number
   stagingCommitted: number
   latestProgressType: string | null
+  repairPendingCount: number
+  repairJobsByKind: readonly RuntimeRepairJobKindSummary[]
   sectionError: string | null
 }
 
@@ -90,6 +103,8 @@ export const EMPTY_RUNTIME_JOBS_DIAGNOSTICS: RuntimeJobsDiagnostics = {
   prepareTotal: 0,
   prepareSources: 0,
   prepareWaitingForWorker: false,
+  prepareSuspectedStuckCount: 0,
+  prepareUnparseableJobCount: 0,
   etaMs: null,
   activeProfileClaims: 0,
   circuitBreakers: 0,
@@ -97,6 +112,8 @@ export const EMPTY_RUNTIME_JOBS_DIAGNOSTICS: RuntimeJobsDiagnostics = {
   stagingFailed: 0,
   stagingCommitted: 0,
   latestProgressType: null,
+  repairPendingCount: 0,
+  repairJobsByKind: [],
   sectionError: null,
 }
 
@@ -209,6 +226,7 @@ export function useRuntimeJobsState(): RuntimeJobsState {
     list,
     summary,
     diagnostics,
+    capturedAtMs: snapshot?.capturedAtMs ?? null,
     actionJobId,
     refresh,
     pauseJob: (jobId) => runAction(jobId, runtimeJobPause),
@@ -219,7 +237,7 @@ export function useRuntimeJobsState(): RuntimeJobsState {
 
 export function RuntimeJobsSection({ state }: { state: RuntimeJobsState }) {
   const { t } = useTranslation()
-  const { list, summary, diagnostics } = state
+  const { list, summary, diagnostics, capturedAtMs } = state
 
   if (!summary.visible && !diagnostics.visible) return null
 
@@ -227,6 +245,11 @@ export function RuntimeJobsSection({ state }: { state: RuntimeJobsState }) {
   const visibleJobs = [...jobs]
     .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
     .slice(0, 8)
+  const now = capturedAtMs ?? Date.now()
+  const leasesByJobId = groupLeasesByJobId(list?.leases ?? [])
+  const leaseHealthByJobId = new Map<string, LeaseHealth>(
+    jobs.map((job) => [job.jobId, classifyJobLeaseHealth(job, leasesByJobId.get(job.jobId) ?? [], now)]),
+  )
 
   return (
     <div className="border-b border-border/50 px-3 py-1.5">
@@ -253,6 +276,7 @@ export function RuntimeJobsSection({ state }: { state: RuntimeJobsState }) {
           <RuntimeJobRow
             key={job.jobId}
             job={job}
+            leaseHealth={leaseHealthByJobId.get(job.jobId) ?? "no-lease"}
             actionJobId={state.actionJobId}
             onPause={state.pauseJob}
             onResume={state.resumeJob}
@@ -299,6 +323,20 @@ function RuntimeDiagnosticsBlock({ diagnostics }: { diagnostics: RuntimeJobsDiag
           {t("runtimeJobs.diagnostics.awaitingWorker")}
         </div>
       )}
+      {diagnostics.prepareSuspectedStuckCount > 0 && (
+        <div className="truncate text-amber-600" data-testid="runtime-diagnostics-prepare-suspected-stuck">
+          {t("runtimeJobs.diagnostics.suspectedStuck", {
+            count: diagnostics.prepareSuspectedStuckCount,
+          })}
+        </div>
+      )}
+      {diagnostics.prepareUnparseableJobCount > 0 && (
+        <div className="truncate text-destructive" data-testid="runtime-diagnostics-prepare-unparseable">
+          {t("runtimeJobs.diagnostics.prepareUnparseable", {
+            count: diagnostics.prepareUnparseableJobCount,
+          })}
+        </div>
+      )}
       <div className="truncate">
         {t("runtimeJobs.diagnostics.staging", {
           pending: diagnostics.stagingPending,
@@ -313,6 +351,27 @@ function RuntimeDiagnosticsBlock({ diagnostics }: { diagnostics: RuntimeJobsDiag
           })}
         </div>
       )}
+      {diagnostics.repairPendingCount > 0 && (
+        <div className="truncate" data-testid="runtime-diagnostics-repair-pending">
+          {t("runtimeJobs.diagnostics.repairPending", {
+            count: diagnostics.repairPendingCount,
+          })}
+        </div>
+      )}
+      {diagnostics.repairJobsByKind
+        .filter((entry) => entry.pendingCount > 0)
+        .map((entry) => (
+          <div
+            key={entry.kind}
+            className="truncate pl-2 text-muted-foreground/80"
+            data-testid={`runtime-diagnostics-repair-pending-kind-${entry.kind}`}
+          >
+            {t("runtimeJobs.diagnostics.repairPendingKind", {
+              kind: entry.kind,
+              count: entry.pendingCount,
+            })}
+          </div>
+        ))}
       {diagnostics.sectionError && (
         <div className="truncate text-destructive" data-testid="runtime-diagnostics-error">
           {diagnostics.sectionError}
@@ -324,12 +383,14 @@ function RuntimeDiagnosticsBlock({ diagnostics }: { diagnostics: RuntimeJobsDiag
 
 function RuntimeJobRow({
   job,
+  leaseHealth,
   actionJobId,
   onPause,
   onResume,
   onCancel,
 }: {
   job: RuntimeJobRecord
+  leaseHealth: LeaseHealth
   actionJobId: string | null
   onPause: (jobId: string) => void
   onResume: (jobId: string) => void
@@ -340,20 +401,27 @@ function RuntimeJobRow({
   const canPause = job.state === "queued" || job.state === "running"
   const canResume = job.state === "paused"
   const canCancel = ["queued", "running", "paused", "retry-wait"].includes(job.state)
-  const Icon = iconForJobState(job.state)
+  const isSuspectedStuck = job.state === "running" && leaseHealth === "suspected-stuck"
+  const suspectedStuckLabel = isSuspectedStuck ? t("runtimeJobs.state.suspectedStuck") : null
+  const Icon = isSuspectedStuck ? AlertTriangle : iconForJobState(job.state)
 
   return (
     <div className="py-1.5 text-xs" data-testid={`runtime-job-row-${job.jobId}`}>
       <div className="flex items-center gap-2">
-        <div className="shrink-0">
-          <Icon className={iconClassName(job.state)} />
+        <div
+          className="shrink-0"
+          data-testid={isSuspectedStuck ? `runtime-job-row-suspected-stuck-${job.jobId}` : undefined}
+          title={suspectedStuckLabel ?? undefined}
+        >
+          <Icon className={isSuspectedStuck ? "h-3 w-3 text-amber-500" : iconClassName(job.state)} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate font-medium">
             {job.kind} <span className="font-mono text-[10px] text-muted-foreground">{shortJobId(job.jobId)}</span>
           </div>
           <div className="truncate text-[10px] text-muted-foreground/70">
-            {t(`runtimeJobs.state.${job.state}`)} - {t("runtimeJobs.attempt", {
+            {t(`runtimeJobs.state.${job.state}`)}
+            {suspectedStuckLabel ? ` · ${suspectedStuckLabel}` : ""} - {t("runtimeJobs.attempt", {
               attempt: job.attempt,
               maxAttempts: job.maxAttempts,
             })}
@@ -432,28 +500,29 @@ function summarizeRuntimeDiagnosticsView(
   }
 
   const jobs = snapshot.jobs.data?.jobs ?? []
+  const leasesByJobId = groupLeasesByJobId(snapshot.jobs.data?.leases ?? [])
+  const now = snapshot.capturedAtMs
   const prepareJobs = jobs.filter((job) => job.kind === BULK_KNOWLEDGE_PREPARE_JOB_KIND)
-  const payloads = prepareJobs.map(parsePreparePayload).filter((payload) => payload !== null)
-  const prepareTotal = payloads.reduce(
-    (max, payload) => Math.max(max, payload.batchTotal),
-    prepareJobs.length,
-  )
-  const prepareSources = payloads.reduce(
-    (max, payload) => Math.max(max, payload.uniqueSourceTotal),
+  const { groups: prepareGroups, unparseable: prepareUnparseableJobs } = groupPrepareJobsByPlan(prepareJobs)
+  const prepareTotal = prepareGroups.reduce((sum, group) => sum + group.batchTotal, 0)
+  const prepareSources = prepareGroups.reduce((sum, group) => sum + group.uniqueSourceTotal, 0)
+  const prepareCompleted = prepareGroups.reduce(
+    (sum, group) => sum + Math.min(group.completed, group.batchTotal),
     0,
   )
-  const prepareCompleted = prepareJobs.filter((job) => job.state === "completed").length
+  const prepareSuspectedStuckCount = prepareJobs.filter(
+    (job) => classifyJobLeaseHealth(job, leasesByJobId.get(job.jobId) ?? [], now) === "suspected-stuck",
+  ).length
   const progressRows = snapshot.progress.data?.progress ?? []
   const stagingArtifacts = snapshot.stagingArtifacts.data?.artifacts ?? []
   const sectionError = firstSectionError(snapshot)
   const activeProfileClaims = snapshot.profilePool.data?.activeClaims.length ?? 0
   const circuitBreakers = snapshot.profilePool.data?.circuitBreakers.length ?? 0
-  const prepareWaitingForWorker =
-    prepareJobs.length > 0 &&
-    prepareCompleted === 0 &&
-    progressRows.length === 0 &&
-    activeProfileClaims === 0 &&
-    prepareJobs.some((job) => job.state === "queued" || job.state === "retry-wait")
+  const prepareWaitingForWorker = prepareJobs.some((job) =>
+    isAwaitingWorker(job, leasesByJobId.get(job.jobId) ?? []),
+  )
+  const repairPendingCount = snapshot.summary.repairJobPendingCount
+  const repairJobsByKind = snapshot.summary.repairJobsByKind
   const diagnostics = {
     visible:
       prepareJobs.length > 0 ||
@@ -461,11 +530,14 @@ function summarizeRuntimeDiagnosticsView(
       stagingArtifacts.length > 0 ||
       activeProfileClaims > 0 ||
       circuitBreakers > 0 ||
+      repairPendingCount > 0 ||
       Boolean(sectionError),
     prepareCompleted,
     prepareTotal,
     prepareSources,
     prepareWaitingForWorker,
+    prepareSuspectedStuckCount,
+    prepareUnparseableJobCount: prepareUnparseableJobs.length,
     etaMs: estimatePrepareEtaMs(prepareJobs, prepareTotal, prepareCompleted),
     activeProfileClaims,
     circuitBreakers,
@@ -473,6 +545,8 @@ function summarizeRuntimeDiagnosticsView(
     stagingFailed: stagingArtifacts.filter((artifact) => artifact.status === "failed").length,
     stagingCommitted: stagingArtifacts.filter((artifact) => artifact.status === "committed").length,
     latestProgressType: latestProgressType(progressRows),
+    repairPendingCount,
+    repairJobsByKind,
     sectionError,
   } satisfies RuntimeJobsDiagnostics
 
@@ -503,23 +577,64 @@ function firstSectionError(snapshot: RuntimeDiagnosticsSnapshot): string | null 
 }
 
 function parsePreparePayload(job: RuntimeJobRecord): {
+  readonly planId: string
   readonly batchTotal: number
   readonly uniqueSourceTotal: number
 } | null {
   try {
     const payload = JSON.parse(job.payload) as Partial<BulkKnowledgePrepareJobPayload>
-    if (payload.kind !== BULK_KNOWLEDGE_PREPARE_JOB_KIND) {
+    if (payload.kind !== BULK_KNOWLEDGE_PREPARE_JOB_KIND || !payload.planId) {
       return null
     }
     const batchTotal = numberOrZero(payload.batchTotal)
     const uniqueSourceTotal = numberOrZero(payload.uniqueSourceTotal)
     return {
+      planId: payload.planId,
       batchTotal,
       uniqueSourceTotal: uniqueSourceTotal || sourceCountFromPayload(payload.sources),
     }
   } catch {
     return null
   }
+}
+
+interface PreparePlanGroup {
+  readonly planId: string
+  readonly batchTotal: number
+  readonly uniqueSourceTotal: number
+  readonly completed: number
+}
+
+function groupPrepareJobsByPlan(prepareJobs: readonly RuntimeJobRecord[]): {
+  readonly groups: readonly PreparePlanGroup[]
+  readonly unparseable: readonly RuntimeJobRecord[]
+} {
+  const byPlanId = new Map<string, { batchTotal: number; uniqueSourceTotal: number; completed: number }>()
+  const unparseable: RuntimeJobRecord[] = []
+
+  for (const job of prepareJobs) {
+    const payload = parsePreparePayload(job)
+    if (!payload) {
+      unparseable.push(job)
+      continue
+    }
+    const completedDelta = job.state === "completed" ? 1 : 0
+    const existing = byPlanId.get(payload.planId)
+    if (existing) {
+      existing.batchTotal = Math.max(existing.batchTotal, payload.batchTotal)
+      existing.uniqueSourceTotal = Math.max(existing.uniqueSourceTotal, payload.uniqueSourceTotal)
+      existing.completed += completedDelta
+    } else {
+      byPlanId.set(payload.planId, {
+        batchTotal: payload.batchTotal,
+        uniqueSourceTotal: payload.uniqueSourceTotal,
+        completed: completedDelta,
+      })
+    }
+  }
+
+  const groups = Array.from(byPlanId.entries()).map(([planId, group]) => ({ planId, ...group }))
+  return { groups, unparseable }
 }
 
 function sourceCountFromPayload(sources: unknown): number {

@@ -10,6 +10,7 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
 
     expect(snapshot).toEqual({
       status: "healthy",
+      capturedAtMs: expect.any(Number),
       jobs: {
         data: { enabled: true, status: "healthy", jobs: [], leases: [] },
         error: null,
@@ -285,6 +286,15 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
     // These orphan kinds don't add to the "normal" job-state summary meaning.
     expect(snapshot.summary.queuedJobCount).toBe(3)
     expect(snapshot.summary.failedJobCount).toBe(1)
+  })
+
+  it("captures capturedAtMs once at snapshot time", async () => {
+    const before = Date.now()
+    const snapshot = await captureRuntimeDiagnosticsSnapshot(makeAdapters())
+    const after = Date.now()
+
+    expect(snapshot.capturedAtMs).toBeGreaterThanOrEqual(before)
+    expect(snapshot.capturedAtMs).toBeLessThanOrEqual(after)
   })
 })
 

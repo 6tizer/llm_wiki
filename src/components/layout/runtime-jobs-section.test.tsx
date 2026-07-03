@@ -11,7 +11,12 @@ import {
 } from "./runtime-jobs-section"
 import { ActivityPanel, getRuntimeStatusText } from "./activity-panel"
 import { useWikiStore } from "@/stores/wiki-store"
-import type { RuntimeJobList, RuntimeJobRecord, RuntimeJobState } from "@/commands/runtime-db"
+import type {
+  RuntimeJobLeaseRecord,
+  RuntimeJobList,
+  RuntimeJobRecord,
+  RuntimeJobState,
+} from "@/commands/runtime-db"
 
 const runtimeDbMocks = vi.hoisted(() => ({
   runtimeJobList: vi.fn(),
@@ -66,8 +71,27 @@ function bulkPrepareJob(
   }
 }
 
-function list(jobs: RuntimeJobRecord[], enabled = true, status: RuntimeJobList["status"] = "healthy"): RuntimeJobList {
-  return { enabled, status, jobs, leases: [] }
+function list(
+  jobs: RuntimeJobRecord[],
+  enabled = true,
+  status: RuntimeJobList["status"] = "healthy",
+  leases: RuntimeJobLeaseRecord[] = [],
+): RuntimeJobList {
+  return { enabled, status, jobs, leases }
+}
+
+function lease(jobId: string, overrides: Partial<RuntimeJobLeaseRecord> = {}): RuntimeJobLeaseRecord {
+  return {
+    leaseId: `${jobId}-lease`,
+    jobId,
+    holder: "worker-1",
+    acquiredAtMs: 100,
+    heartbeatAtMs: 100,
+    expiresAtMs: 100_000_000,
+    releasedAtMs: null,
+    status: "active",
+    ...overrides,
+  }
 }
 
 function stagingArtifact(artifactId: string, status: string) {
@@ -285,10 +309,12 @@ describe("RuntimeJobsSection", () => {
   it("renders bulk runtime diagnostics from snapshot sections", async () => {
     runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
       bulkPrepareJob("bulk-1", "completed", {
+        planId: "plan-1",
         batchTotal: 2,
         uniqueSourceTotal: 3,
       }),
       bulkPrepareJob("bulk-2", "queued", {
+        planId: "plan-1",
         batchTotal: 2,
         uniqueSourceTotal: 3,
       }),
@@ -361,6 +387,7 @@ describe("RuntimeJobsSection", () => {
   it("shows queued prepare jobs as waiting for a worker when no progress or profile claim exists", async () => {
     runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
       bulkPrepareJob("bulk-queued", "queued", {
+        planId: "plan-solo",
         batchTotal: 1,
         uniqueSourceTotal: 2,
       }),
@@ -426,6 +453,208 @@ describe("RuntimeJobsSection", () => {
 
     expect(container.textContent).toContain("Runtime: 1 waiting")
     expect(toggle.querySelector("svg.animate-spin")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("flags a running job with a stale heartbeat as suspected-stuck without triggering the worker-waiting text", async () => {
+    const now = Date.now()
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(
+      list(
+        [bulkPrepareJob("bulk-stale", "running", { planId: "plan-stale", batchTotal: 1, uniqueSourceTotal: 1 })],
+        true,
+        "healthy",
+        [lease("bulk-stale", { heartbeatAtMs: now - 20_000, expiresAtMs: now + 100_000 })],
+      ),
+    )
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-job-row-suspected-stuck-bulk-stale']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='runtime-diagnostics-worker-waiting']")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("flags a running job with a hard-expired lease as suspected-stuck", async () => {
+    const now = Date.now()
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(
+      list(
+        [job("job-expired", "running")],
+        true,
+        "healthy",
+        [lease("job-expired", { heartbeatAtMs: now - 1_000, expiresAtMs: now - 1_000 })],
+      ),
+    )
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-job-row-suspected-stuck-job-expired']")).not.toBeNull()
+
+    unmount(root)
+  })
+
+  it("flags a running job with no lease record at all as suspected-stuck", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([job("job-no-lease", "running")]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-job-row-suspected-stuck-job-no-lease']")).not.toBeNull()
+
+    unmount(root)
+  })
+
+  it("treats a retry-wait job with only a released lease as awaiting a worker", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(
+      list(
+        [bulkPrepareJob("bulk-retry", "retry-wait", { planId: "plan-retry", batchTotal: 1, uniqueSourceTotal: 1 })],
+        true,
+        "healthy",
+        [lease("bulk-retry", { status: "released", releasedAtMs: 100 })],
+      ),
+    )
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-diagnostics-worker-waiting']")).not.toBeNull()
+
+    unmount(root)
+  })
+
+  it("aggregates prepare totals per plan instead of across every prepare job (regression: old code returned 2/2)", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      bulkPrepareJob("planA-1", "completed", { planId: "plan-a", batchTotal: 2, uniqueSourceTotal: 2 }),
+      bulkPrepareJob("planA-2", "completed", { planId: "plan-a", batchTotal: 2, uniqueSourceTotal: 2 }),
+      bulkPrepareJob("planB-1", "queued", { planId: "plan-b", batchTotal: 2, uniqueSourceTotal: 2 }),
+    ]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.textContent).toContain("2/4 prepare jobs")
+    expect(container.textContent).not.toContain("2/2 prepare jobs")
+
+    unmount(root)
+  })
+
+  it("still flags a queued job in one plan as awaiting a worker even when another plan already has progress", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      bulkPrepareJob("planA-1", "running", { planId: "plan-a", batchTotal: 1, uniqueSourceTotal: 1 }),
+      bulkPrepareJob("planB-1", "queued", { planId: "plan-b", batchTotal: 1, uniqueSourceTotal: 1 }),
+    ]))
+    runtimeDbMocks.runtimeProgressList.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      progress: [
+        {
+          jobId: "planA-1",
+          progressKey: "bulk-prepare:worker:1",
+          payload: "{}",
+          updatedAtMs: 1,
+          lastEventId: null,
+        },
+      ],
+    })
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-diagnostics-worker-waiting']")).not.toBeNull()
+
+    unmount(root)
+  })
+
+  it("counts unparseable prepare payloads separately without corrupting group totals", async () => {
+    const badPayloadJob: RuntimeJobRecord = {
+      ...job("bulk-bad", "queued"),
+      kind: "bulk-knowledge-prepare",
+      payload: "{not-json",
+    }
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      bulkPrepareJob("plan-ok-1", "completed", { planId: "plan-ok", batchTotal: 1, uniqueSourceTotal: 1 }),
+      badPayloadJob,
+    ]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.textContent).toContain("1/1 prepare jobs")
+    const unparseableRow = container.querySelector("[data-testid='runtime-diagnostics-prepare-unparseable']")
+    expect(unparseableRow).not.toBeNull()
+    expect(unparseableRow?.textContent).toContain("1")
+
+    unmount(root)
+  })
+
+  it("surfaces pending repair jobs with an honest no-consumer message", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      { ...job("repair-1", "queued"), kind: "bulk-knowledge-artifact-repair" },
+    ]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    const repairRow = container.querySelector("[data-testid='runtime-diagnostics-repair-pending']")
+    expect(repairRow).not.toBeNull()
+    expect(repairRow?.textContent).toContain("1")
+
+    const kindRow = container.querySelector(
+      "[data-testid='runtime-diagnostics-repair-pending-kind-bulk-knowledge-artifact-repair']",
+    )
+    expect(kindRow).not.toBeNull()
+    expect(kindRow?.textContent).toContain("bulk-knowledge-artifact-repair")
+    expect(kindRow?.textContent).toContain("1")
+    expect(
+      container.querySelector(
+        "[data-testid='runtime-diagnostics-repair-pending-kind-bulk-knowledge-map-reduce-repair']",
+      ),
+    ).toBeNull()
+    expect(
+      container.querySelector("[data-testid='runtime-diagnostics-repair-pending-kind-markdown-conflict-repair']"),
+    ).toBeNull()
+
+    unmount(root)
+  })
+
+  it("renders a separate per-kind breakdown row for each repair kind with pending jobs", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      { ...job("repair-1", "queued"), kind: "bulk-knowledge-artifact-repair" },
+      { ...job("repair-2", "retry-wait"), kind: "bulk-knowledge-map-reduce-repair" },
+      { ...job("repair-3", "queued"), kind: "bulk-knowledge-map-reduce-repair" },
+    ]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-diagnostics-repair-pending']")?.textContent).toContain("3")
+    expect(
+      container.querySelector(
+        "[data-testid='runtime-diagnostics-repair-pending-kind-bulk-knowledge-artifact-repair']",
+      )?.textContent,
+    ).toContain("1")
+    expect(
+      container.querySelector(
+        "[data-testid='runtime-diagnostics-repair-pending-kind-bulk-knowledge-map-reduce-repair']",
+      )?.textContent,
+    ).toContain("2")
+
+    unmount(root)
+  })
+
+  it("does not render the repair-pending row or per-kind breakdown when there are no pending repair jobs", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      bulkPrepareJob("plan-ok-1", "completed", { planId: "plan-ok", batchTotal: 1, uniqueSourceTotal: 1 }),
+    ]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(container.querySelector("[data-testid='runtime-diagnostics-repair-pending']")).toBeNull()
+    expect(container.querySelector("[data-testid^='runtime-diagnostics-repair-pending-kind-']")).toBeNull()
 
     unmount(root)
   })
