@@ -33,6 +33,7 @@ import { useZoomStore } from "@/stores/zoom-store"
 import { loadCloseBehavior, loadSourceWatchConfig, loadTheme, saveLanguage, type CloseBehavior } from "@/lib/project-store"
 import { saveAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { activateThemePreference, readThemeMirror, type AppTheme } from "@/lib/theme"
+import { persistSetting } from "@/lib/store-helpers"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { LlmProviderSection } from "./sections/llm-provider-section"
@@ -279,6 +280,12 @@ export function mineruConfigFromDraft(draft: SettingsDraft) {
   }
 }
 
+/**
+ * Persists theme and close-behavior independently so a failure saving
+ * one doesn't prevent the other from being tried — each is isolated in
+ * its own try/catch and reported back via the returned failed-key list
+ * instead of throwing and aborting the caller's remaining save steps.
+ */
 export async function persistAppPreferences(
   draft: Pick<SettingsDraft, "theme" | "closeBehavior">,
   deps: {
@@ -288,12 +295,67 @@ export async function persistAppPreferences(
     setSavedTheme: (theme: AppTheme) => void
     setSavedCloseBehavior: (behavior: CloseBehavior) => void
   },
-): Promise<void> {
-  await deps.saveTheme(draft.theme)
-  deps.setSavedTheme(draft.theme)
-  deps.activateThemePreference(draft.theme)
-  await deps.saveCloseBehavior(draft.closeBehavior)
-  deps.setSavedCloseBehavior(draft.closeBehavior)
+): Promise<Array<"theme" | "closeBehavior">> {
+  const failedKeys: Array<"theme" | "closeBehavior"> = []
+  try {
+    await deps.saveTheme(draft.theme)
+    deps.setSavedTheme(draft.theme)
+    deps.activateThemePreference(draft.theme)
+  } catch {
+    failedKeys.push("theme")
+  }
+  try {
+    await deps.saveCloseBehavior(draft.closeBehavior)
+    deps.setSavedCloseBehavior(draft.closeBehavior)
+  } catch {
+    failedKeys.push("closeBehavior")
+  }
+  return failedKeys
+}
+
+export type SaveStatus =
+  | { kind: "idle" }
+  | { kind: "saved" }
+  | { kind: "partial-error"; failedKeys: string[] }
+
+// Maps a handleSave step key to the settings category whose label best
+// describes it, so the partial-error message reads as "LLM Models,
+// Network" instead of raw internal step identifiers.
+const SETTINGS_SAVE_STEP_LABEL_KEYS: Record<string, string> = {
+  llm: "settings.categories.llm",
+  embedding: "settings.categories.embedding",
+  multimodal: "settings.categories.multimodal",
+  mineru: "settings.categories.mineru",
+  outputLanguage: "settings.categories.output",
+  proxy: "settings.categories.network",
+  sourceWatch: "settings.categories.sourceWatch",
+  scheduledImport: "settings.categories.scheduledImport",
+  zoomLevel: "settings.categories.interface",
+  theme: "settings.categories.interface",
+  closeBehavior: "settings.categories.general",
+  apiConfig: "settings.categories.apiServer",
+  agent: "settings.categories.agent",
+  language: "settings.categories.interface",
+}
+
+// Rust reads these three straight out of app-state.json on its own
+// schedule (proxy env / API server cache / close behavior), so a JS-set
+// that persists successfully in this session but fails to reach disk
+// can silently diverge from what the next launch picks up.
+const RUST_LOCKED_SAVE_KEYS = new Set(["proxy", "apiConfig", "closeBehavior"])
+
+export function describeFailedSettingsKeys(
+  keys: string[],
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  return keys
+    .map((key) => {
+      const label = t(SETTINGS_SAVE_STEP_LABEL_KEYS[key] ?? key)
+      return RUST_LOCKED_SAVE_KEYS.has(key)
+        ? `${label} (${t("settings.saveFailedRustLockedNote")})`
+        : label
+    })
+    .join(", ")
 }
 
 export function SettingsView() {
@@ -333,7 +395,7 @@ export function SettingsView() {
   const updateAvailable = useUpdateStore((s) => hasAvailableUpdate(s))
 
   const [active, setActive] = useState<CategoryId>("llm")
-  const [saved, setSaved] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: "idle" })
   const [savedTheme, setSavedTheme] = useState<AppTheme>(() => readThemeMirror())
   const [savedCloseBehavior, setSavedCloseBehavior] = useState<CloseBehavior>("hide")
   const [draft, setDraftState] = useState<SettingsDraft>(() =>
@@ -525,123 +587,284 @@ export function SettingsView() {
       bypassLocal: draft.proxyBypassLocal,
     }
     const newMineru = mineruConfigFromDraft(draft)
-
-    setLlmConfig(newLlm)
-    await saveLlmConfig(newLlm)
-    setEmbeddingConfig(newEmbed)
-    await saveEmbeddingConfig(newEmbed)
-    setMultimodalConfig(newMultimodal)
-    await saveMultimodalConfig(newMultimodal)
-    setMineruConfig(newMineru)
-    await saveMineruConfig(newMineru)
-    setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
-    await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage, project?.id)
-    setProxyConfig(newProxy)
-    await saveProxyConfig(newProxy)
     const newSourceWatch = normalizeSourceWatchConfig(draft.sourceWatchConfig)
-    setSourceWatchConfig(newSourceWatch)
-    await saveSourceWatchConfig(newSourceWatch, project?.id)
-    if (project) {
-      const { startProjectFileSync, stopProjectFileSync } = await import("@/lib/project-file-sync")
-      if (newSourceWatch.enabled) {
-        await startProjectFileSync(project, newSourceWatch).catch((err) =>
-          console.error("Failed to start project file sync:", err)
-        )
-      } else {
-        await stopProjectFileSync()
-      }
-    }
-    // Apply the proxy env vars LIVE so the next outbound request
-    // picks them up — no app restart needed. tauri-plugin-http
-    // builds a fresh reqwest client per fetch and reqwest reads
-    // env vars at build time, so changing them here is enough.
-    try {
-      await invoke<string>("set_proxy_env", { config: newProxy })
-    } catch (err) {
-      console.warn("[proxy] live update failed; restart will still apply:", err)
-    }
-
     const newScheduledImport = {
       enabled: draft.scheduledImportEnabled,
       path: draft.scheduledImportPath,
       interval: Math.max(1, Math.min(1440, draft.scheduledImportInterval || 60)),
       lastScan: scheduledImportConfig.lastScan,
     }
-    setScheduledImportConfig(newScheduledImport)
-    if (project) {
-      await saveScheduledImportConfig(project.path, newScheduledImport)
-      const { startScheduledImport, stopScheduledImport } = await import("@/lib/scheduled-import")
-      if (
-        newScheduledImport.enabled &&
-        newScheduledImport.path &&
-        newScheduledImport.interval > 0
-      ) {
-        startScheduledImport(project, newScheduledImport)
-      } else {
-        stopScheduledImport()
-      }
-    }
+    const newApiConfig = apiConfigFromDraft(draft)
+    const failedKeys: string[] = []
+
+    // Each step persists independently: a failure here only rolls back
+    // and records that one step (via persistSetting's optimistic-set +
+    // revert-on-error), it never aborts the steps that follow. That way
+    // one bad write (e.g. disk full on the LLM config) doesn't also
+    // silently drop the user's embedding/proxy/theme edits.
+    const steps: Array<{ key: string; run: () => Promise<boolean> }> = [
+      {
+        key: "llm",
+        run: () =>
+          persistSetting(llmConfig, newLlm, setLlmConfig, saveLlmConfig, () => useWikiStore.getState().llmConfig),
+      },
+      {
+        key: "embedding",
+        run: () =>
+          persistSetting(
+            embeddingConfig,
+            newEmbed,
+            setEmbeddingConfig,
+            saveEmbeddingConfig,
+            () => useWikiStore.getState().embeddingConfig,
+          ),
+      },
+      {
+        key: "multimodal",
+        run: () =>
+          persistSetting(
+            multimodalConfig,
+            newMultimodal,
+            setMultimodalConfig,
+            saveMultimodalConfig,
+            () => useWikiStore.getState().multimodalConfig,
+          ),
+      },
+      {
+        key: "mineru",
+        run: () =>
+          persistSetting(
+            mineruConfig,
+            newMineru,
+            setMineruConfig,
+            saveMineruConfig,
+            () => useWikiStore.getState().mineruConfig,
+          ),
+      },
+      {
+        key: "outputLanguage",
+        run: () =>
+          persistSetting(
+            outputLanguage,
+            draft.outputLanguage as typeof outputLanguage,
+            setOutputLanguage,
+            (value) => saveOutputLanguage(value, project?.id),
+            () => useWikiStore.getState().outputLanguage,
+          ),
+      },
+      {
+        // Rust-locked: the setup hook reads proxyConfig straight from
+        // app-state.json, so a failed persist here can diverge from
+        // the live env vars applied below until the next launch.
+        key: "proxy",
+        run: async () => {
+          const ok = await persistSetting(
+            proxyConfig,
+            newProxy,
+            setProxyConfig,
+            saveProxyConfig,
+            () => useWikiStore.getState().proxyConfig,
+          )
+          // Apply the proxy env vars LIVE so the next outbound request
+          // picks them up — no app restart needed. tauri-plugin-http
+          // builds a fresh reqwest client per fetch and reqwest reads
+          // env vars at build time, so changing them here is enough.
+          // Gated on the persist succeeding: applying it after a failed
+          // save would switch this process's live HTTP env to newProxy
+          // while memory/disk still show the old value — a real
+          // runtime/state split, not just a "will apply on restart" gap.
+          if (ok) {
+            try {
+              await invoke<string>("set_proxy_env", { config: newProxy })
+            } catch (err) {
+              console.warn("[proxy] live update failed; restart will still apply:", err)
+            }
+          }
+          return ok
+        },
+      },
+      {
+        key: "sourceWatch",
+        run: async () => {
+          const ok = await persistSetting(
+            sourceWatchConfig,
+            newSourceWatch,
+            setSourceWatchConfig,
+            (value) => saveSourceWatchConfig(value, project?.id),
+            () => useWikiStore.getState().sourceWatchConfig,
+          )
+          // Only actually (re)start the watcher off a config that made
+          // it to disk — otherwise the reverted in-memory config and a
+          // live watcher on the failed config would disagree.
+          if (ok && project) {
+            const { startProjectFileSync, stopProjectFileSync } = await import("@/lib/project-file-sync")
+            if (newSourceWatch.enabled) {
+              await startProjectFileSync(project, newSourceWatch).catch((err) =>
+                console.error("Failed to start project file sync:", err)
+              )
+            } else {
+              await stopProjectFileSync()
+            }
+          }
+          return ok
+        },
+      },
+      {
+        key: "scheduledImport",
+        run: async () => {
+          if (!project) {
+            setScheduledImportConfig(newScheduledImport)
+            return true
+          }
+          const ok = await persistSetting(
+            scheduledImportConfig,
+            newScheduledImport,
+            setScheduledImportConfig,
+            (value) => saveScheduledImportConfig(project.path, value),
+            () => useWikiStore.getState().scheduledImportConfig,
+          )
+          if (ok) {
+            const { startScheduledImport, stopScheduledImport } = await import("@/lib/scheduled-import")
+            if (
+              newScheduledImport.enabled &&
+              newScheduledImport.path &&
+              newScheduledImport.interval > 0
+            ) {
+              startScheduledImport(project, newScheduledImport)
+            } else {
+              stopScheduledImport()
+            }
+          }
+          return ok
+        },
+      },
+      {
+        key: "zoomLevel",
+        run: () =>
+          persistSetting(
+            zoomLevel,
+            draft.zoomLevel,
+            (value) => useZoomStore.getState().setLevel(value),
+            saveZoomLevel,
+            () => useZoomStore.getState().level,
+          ),
+      },
+      {
+        // theme + closeBehavior are isolated from each other inside
+        // persistAppPreferences; closeBehavior is Rust-locked (read
+        // straight from app-state.json by the window-close handler).
+        key: "app-preferences",
+        run: async () => {
+          const failed = await persistAppPreferences(draft, {
+            saveTheme,
+            saveCloseBehavior,
+            activateThemePreference,
+            setSavedTheme,
+            setSavedCloseBehavior,
+          })
+          failed.forEach((key) => failedKeys.push(key))
+          return true
+        },
+      },
+      {
+        // Rust-locked: the API server reads apiConfig from the same
+        // app-state.json on a 5s cache; see the reload call below.
+        key: "apiConfig",
+        run: async () => {
+          const ok = await persistSetting(
+            apiConfig,
+            newApiConfig,
+            setApiConfig,
+            saveApiConfig,
+            () => useWikiStore.getState().apiConfig,
+          )
+          // Unlike set_proxy_env, this doesn't inject a JS-held value
+          // into the live process — it just tells the Rust side "reread
+          // app-state.json now". If the save above failed, disk still
+          // has the old apiConfig, so reloading is a harmless no-op
+          // rather than a real divergence risk; gated anyway so a
+          // failed save never triggers pointless IPC work.
+          if (ok) {
+            try {
+              await invoke<string>("api_server_reload_config")
+            } catch (err) {
+              console.warn("[api] failed to reload API server config cache:", err)
+            }
+          }
+          return ok
+        },
+      },
+      {
+        key: "agent",
+        run: async () => {
+          if (!project) return true
+          try {
+            const newAgentConfig = await saveAgentResourceConfig(project.path, {
+              maxTurns: draft.agentMaxTurns,
+              maxFilesChanged: draft.agentMaxFilesChanged,
+              maxWriteBytes: draft.agentMaxWriteKiB * 1024,
+              // The preflight toggle has no UI control yet (plumbing only, see
+              // #119 P0-3). Preserve the current value so saving unrelated
+              // settings doesn't silently reset a hand-edited flag to false.
+              maxFilesChangedEnabled: agentConfig.maxFilesChangedEnabled,
+            })
+            setAgentResourceConfig(newAgentConfig)
+            return true
+          } catch (err) {
+            console.error("[settings] failed to save agent resource config:", err)
+            return false
+          }
+        },
+      },
+      {
+        key: "language",
+        run: async () => {
+          if (draft.uiLanguage === i18n.language) return true
+          try {
+            await i18n.changeLanguage(draft.uiLanguage)
+            await saveLanguage(draft.uiLanguage)
+            return true
+          } catch (err) {
+            console.error("[settings] failed to save UI language:", err)
+            return false
+          }
+        },
+      },
+    ]
 
     setMaxHistoryMessages(draft.maxHistoryMessages)
-    useZoomStore.getState().setLevel(draft.zoomLevel)
-    await saveZoomLevel(draft.zoomLevel)
-    await persistAppPreferences(draft, {
-      saveTheme,
-      saveCloseBehavior,
-      activateThemePreference,
-      setSavedTheme,
-      setSavedCloseBehavior,
-    })
-
-    // ── API server: persist + push to store. The Rust side reads
-    // `apiConfig.{enabled,token,mcpEnabled}` from this same `app-state.json` on
-    // every request via a 5s cache, so saved changes propagate
-    // within that window without any IPC round-trip.
-    const newApiConfig = apiConfigFromDraft(draft)
-    setApiConfig(newApiConfig)
-    await saveApiConfig(newApiConfig)
-    try {
-      await invoke<string>("api_server_reload_config")
-    } catch (err) {
-      console.warn("[api] failed to reload API server config cache:", err)
+    for (const step of steps) {
+      const ok = await step.run()
+      if (!ok) failedKeys.push(step.key)
     }
 
-    if (project) {
-      const newAgentConfig = await saveAgentResourceConfig(project.path, {
-        maxTurns: draft.agentMaxTurns,
-        maxFilesChanged: draft.agentMaxFilesChanged,
-        maxWriteBytes: draft.agentMaxWriteKiB * 1024,
-        // The preflight toggle has no UI control yet (plumbing only, see
-        // #119 P0-3). Preserve the current value so saving unrelated
-        // settings doesn't silently reset a hand-edited flag to false.
-        maxFilesChangedEnabled: agentConfig.maxFilesChangedEnabled,
-      })
-      setAgentResourceConfig(newAgentConfig)
-    }
-
-    if (draft.uiLanguage !== i18n.language) {
-      await i18n.changeLanguage(draft.uiLanguage)
-      await saveLanguage(draft.uiLanguage)
-    }
-
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setSaveStatus(failedKeys.length > 0 ? { kind: "partial-error", failedKeys } : { kind: "saved" })
+    setTimeout(() => setSaveStatus((cur) => (cur.kind === "idle" ? cur : { kind: "idle" })), 2000)
   }, [
     draft,
     project,
+    llmConfig,
     setLlmConfig,
+    embeddingConfig,
     setEmbeddingConfig,
+    multimodalConfig,
     setMultimodalConfig,
+    mineruConfig,
     setMineruConfig,
-    setOutputLanguage,
-    setProxyConfig,
-    setScheduledImportConfig,
-    setSourceWatchConfig,
-    setApiConfig,
-    setAgentResourceConfig,
-    scheduledImportConfig,
-    setMaxHistoryMessages,
     outputLanguage,
+    setOutputLanguage,
+    proxyConfig,
+    setProxyConfig,
+    sourceWatchConfig,
+    setSourceWatchConfig,
+    scheduledImportConfig,
+    setScheduledImportConfig,
+    zoomLevel,
+    apiConfig,
+    setApiConfig,
+    agentConfig,
+    setAgentResourceConfig,
+    setMaxHistoryMessages,
   ])
 
   const body = useMemo(() => {
@@ -754,11 +977,24 @@ export function SettingsView() {
         {shouldShowGlobalSettingsSaveBar(activeCategory) && (
           <div className="shrink-0 border-t bg-background/80 px-4 py-3 backdrop-blur md:px-8">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
-              <p className="text-xs text-muted-foreground">
-                {saved ? t("settings.savedTick") : t("settings.changeHint")}
+              <p
+                className={`min-w-0 flex-1 truncate text-xs ${
+                  saveStatus.kind === "partial-error" ? "text-destructive" : "text-muted-foreground"
+                }`}
+                title={
+                  saveStatus.kind === "partial-error"
+                    ? t("settings.saveFailed", { keys: describeFailedSettingsKeys(saveStatus.failedKeys, t) })
+                    : undefined
+                }
+              >
+                {saveStatus.kind === "partial-error"
+                  ? t("settings.saveFailed", { keys: describeFailedSettingsKeys(saveStatus.failedKeys, t) })
+                  : saveStatus.kind === "saved"
+                    ? t("settings.savedTick")
+                    : t("settings.changeHint")}
               </p>
-              <Button onClick={handleSave}>
-                {saved ? t("settings.saved") : t("settings.save")}
+              <Button onClick={handleSave} className="shrink-0">
+                {saveStatus.kind === "saved" ? t("settings.saved") : t("settings.save")}
               </Button>
             </div>
           </div>

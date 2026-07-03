@@ -3,11 +3,24 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import "@/i18n"
+import i18n from "@/i18n"
+import { invoke } from "@tauri-apps/api/core"
 import { useWikiStore } from "@/stores/wiki-store"
+import {
+  saveApiConfig,
+  saveEmbeddingConfig,
+  saveLlmConfig,
+  saveMineruConfig,
+  saveProxyConfig,
+  saveScheduledImportConfig,
+  saveSourceWatchConfig,
+} from "@/lib/project-store"
+import { startProjectFileSync, stopProjectFileSync } from "@/lib/project-file-sync"
+import { startScheduledImport, stopScheduledImport } from "@/lib/scheduled-import"
 
 import {
   coerceSettingsCategory,
+  describeFailedSettingsKeys,
   getSettingsCategories,
   isMacLikeRuntime,
   initialDraft,
@@ -26,6 +39,28 @@ vi.mock("@/lib/project-store", () => ({
   loadSourceWatchConfig: vi.fn(async () => undefined),
   loadTheme: vi.fn(async () => "system"),
   saveLanguage: vi.fn(async () => undefined),
+  saveLlmConfig: vi.fn(async () => undefined),
+  saveEmbeddingConfig: vi.fn(async () => undefined),
+  saveMultimodalConfig: vi.fn(async () => undefined),
+  saveOutputLanguage: vi.fn(async () => undefined),
+  saveProxyConfig: vi.fn(async () => undefined),
+  saveScheduledImportConfig: vi.fn(async () => undefined),
+  saveSourceWatchConfig: vi.fn(async () => undefined),
+  saveMineruConfig: vi.fn(async () => undefined),
+  saveApiConfig: vi.fn(async () => undefined),
+  saveZoomLevel: vi.fn(async () => undefined),
+  saveTheme: vi.fn(async () => undefined),
+  saveCloseBehavior: vi.fn(async () => undefined),
+}))
+
+vi.mock("@/lib/project-file-sync", () => ({
+  startProjectFileSync: vi.fn(async () => undefined),
+  stopProjectFileSync: vi.fn(async () => undefined),
+}))
+
+vi.mock("@/lib/scheduled-import", () => ({
+  startScheduledImport: vi.fn(() => undefined),
+  stopScheduledImport: vi.fn(() => undefined),
 }))
 
 vi.mock("./sections/synthesis-section", () => ({
@@ -65,6 +100,28 @@ async function click(element: Element): Promise<void> {
     await Promise.resolve()
     await Promise.resolve()
   })
+}
+
+async function setStoreAndFlush(mutate: () => void): Promise<void> {
+  await act(async () => {
+    mutate()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+async function clickCategoryAndSave(container: HTMLDivElement, categoryTestId: string): Promise<void> {
+  const tab = container.querySelector(`[data-testid='settings-category-${categoryTestId}']`)
+  if (!tab) throw new Error(`${categoryTestId} category button not found`)
+  await click(tab)
+  await flush()
+
+  const saveButton = Array.from(container.querySelectorAll("button")).find(
+    (btn) => btn.textContent === "Save",
+  )
+  if (!saveButton) throw new Error("Save button not found")
+  await click(saveButton)
+  await flush()
 }
 
 function unmount(root: Root): void {
@@ -349,5 +406,196 @@ describe("settings MinerU polling draft", () => {
       pollIntervalMs: 30000,
       pollTimeoutMs: 1800000,
     })
+  })
+})
+
+describe("describeFailedSettingsKeys", () => {
+  it("labels each failed step with its settings category and flags Rust-locked keys", () => {
+    const description = describeFailedSettingsKeys(["embedding", "proxy"], i18n.t.bind(i18n))
+    expect(description).toContain("Embeddings")
+    expect(description).toContain("Network")
+    expect(description).toContain("may not take effect until the next launch")
+  })
+})
+
+describe("SettingsView handleSave step isolation", () => {
+  beforeEach(() => {
+    vi.mocked(saveEmbeddingConfig).mockReset()
+    vi.mocked(saveMineruConfig).mockReset().mockResolvedValue(undefined)
+    vi.mocked(saveLlmConfig).mockReset().mockResolvedValue(undefined)
+    vi.mocked(saveProxyConfig).mockReset().mockResolvedValue(undefined)
+  })
+
+  it("keeps running later save steps and reports a partial-error status when one step fails", async () => {
+    vi.mocked(saveEmbeddingConfig).mockRejectedValueOnce(new Error("disk full"))
+
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    // The embedding step failed, but MinerU (a later step in handleSave)
+    // must still have run — proving the failure didn't abort the rest.
+    expect(saveMineruConfig).toHaveBeenCalled()
+    expect(container.textContent).toContain("Embeddings")
+
+    unmount(root)
+  })
+
+  it("does not roll back an earlier successful step when a later step fails", async () => {
+    vi.mocked(saveEmbeddingConfig).mockRejectedValueOnce(new Error("disk full"))
+    // persistSetting only calls its `set` a second time (the revert) when
+    // ITS OWN persist rejects. The llm step's own save (saveLlmConfig)
+    // never rejects here, so setLlmConfig must be invoked exactly once —
+    // the optimistic apply — regardless of the embedding step's failure.
+    const setLlmConfigSpy = vi.spyOn(useWikiStore.getState(), "setLlmConfig")
+
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    expect(setLlmConfigSpy).toHaveBeenCalledTimes(1)
+
+    setLlmConfigSpy.mockRestore()
+    unmount(root)
+  })
+
+  it("flags Rust-locked settings when their save fails, noting they may not apply until restart", async () => {
+    vi.mocked(saveProxyConfig).mockRejectedValueOnce(new Error("disk full"))
+
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    expect(container.textContent).toContain("Network")
+    expect(container.textContent).toContain("may not take effect until the next launch")
+
+    unmount(root)
+  })
+})
+
+describe("SettingsView persist-gated live-apply side effects", () => {
+  const enabledSourceWatch = {
+    enabled: true,
+    autoIngest: false,
+    includeExtensions: [],
+    excludeExtensions: [],
+    excludeDirs: [],
+    excludeGlobs: [],
+    maxFileSizeMb: 10,
+  }
+  const enabledScheduledImport = {
+    enabled: true,
+    path: "/project/raw/sources",
+    interval: 60,
+    lastScan: null,
+  }
+
+  beforeEach(() => {
+    vi.mocked(saveSourceWatchConfig).mockReset().mockResolvedValue(undefined)
+    vi.mocked(saveScheduledImportConfig).mockReset().mockResolvedValue(undefined)
+    vi.mocked(startProjectFileSync).mockReset().mockResolvedValue(undefined)
+    vi.mocked(stopProjectFileSync).mockReset().mockResolvedValue(undefined)
+    vi.mocked(startScheduledImport).mockReset()
+    vi.mocked(stopScheduledImport).mockReset()
+  })
+
+  it("does not start the file watcher or scheduled import when their config fails to persist", async () => {
+    vi.mocked(saveSourceWatchConfig).mockRejectedValueOnce(new Error("disk full"))
+    vi.mocked(saveScheduledImportConfig).mockRejectedValueOnce(new Error("disk full"))
+
+    const { container, root } = renderSettingsView()
+    await flush()
+    await setStoreAndFlush(() => {
+      useWikiStore.setState({
+        sourceWatchConfig: enabledSourceWatch,
+        scheduledImportConfig: enabledScheduledImport,
+      } as never)
+    })
+
+    await clickCategoryAndSave(container, "network")
+
+    // ok === false for both steps, so the `if (ok && ...)` / `if (ok)`
+    // gate must skip the live-apply entirely — neither start nor stop
+    // should run against a config that never made it to disk.
+    expect(startProjectFileSync).not.toHaveBeenCalled()
+    expect(stopProjectFileSync).not.toHaveBeenCalled()
+    expect(startScheduledImport).not.toHaveBeenCalled()
+    expect(stopScheduledImport).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("starts the file watcher and scheduled import when their config persists successfully", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+    await setStoreAndFlush(() => {
+      useWikiStore.setState({
+        sourceWatchConfig: enabledSourceWatch,
+        scheduledImportConfig: enabledScheduledImport,
+      } as never)
+    })
+
+    await clickCategoryAndSave(container, "network")
+
+    expect(startProjectFileSync).toHaveBeenCalledTimes(1)
+    expect(startScheduledImport).toHaveBeenCalledTimes(1)
+
+    unmount(root)
+  })
+})
+
+describe("SettingsView proxy/apiConfig live-apply gating", () => {
+  beforeEach(() => {
+    vi.mocked(saveProxyConfig).mockReset().mockResolvedValue(undefined)
+    vi.mocked(saveApiConfig).mockReset().mockResolvedValue(undefined)
+    vi.mocked(invoke).mockReset().mockResolvedValue("")
+  })
+
+  it("does not push the live proxy env when saving the proxy config fails", async () => {
+    vi.mocked(saveProxyConfig).mockRejectedValueOnce(new Error("disk full"))
+
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    // set_proxy_env directly injects newProxy into this process's live
+    // HTTP env — unlike a disk write, there's no "will apply on restart"
+    // fallback, so pushing it after a failed save would leave the
+    // running process on a value memory/disk both disagree with.
+    expect(invoke).not.toHaveBeenCalledWith("set_proxy_env", expect.anything())
+
+    unmount(root)
+  })
+
+  it("pushes the live proxy env when saving the proxy config succeeds", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    expect(invoke).toHaveBeenCalledWith("set_proxy_env", expect.anything())
+
+    unmount(root)
+  })
+
+  it("does not reload the API server config cache when saving apiConfig fails", async () => {
+    vi.mocked(saveApiConfig).mockRejectedValueOnce(new Error("disk full"))
+
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    expect(invoke).not.toHaveBeenCalledWith("api_server_reload_config")
+
+    unmount(root)
+  })
+
+  it("reloads the API server config cache when saving apiConfig succeeds", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+    await clickCategoryAndSave(container, "network")
+
+    expect(invoke).toHaveBeenCalledWith("api_server_reload_config")
+
+    unmount(root)
   })
 })
