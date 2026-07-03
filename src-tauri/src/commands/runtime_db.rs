@@ -6028,6 +6028,7 @@ const CREDENTIAL_FIELD_NAMES: &[&str] = &[
     "id_token",
     "session_token",
     "private_key",
+    "api_keys",
 ];
 
 struct SecretTokenClass {
@@ -6341,6 +6342,10 @@ fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, fo
             for item in items {
                 redact_json_value_inner(item, changed, force_redact);
             }
+        }
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) if force_redact => {
+            *changed = true;
+            *value = serde_json::Value::String(SECRET_REDACTION_MARKER.to_string());
         }
         serde_json::Value::Object(map) => {
             // Profile pools key data by credential in a few places, so a
@@ -12023,6 +12028,45 @@ mod tests {
                 serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
             assert_eq!(parsed[key], "[REDACTED]", "key {key} should be [REDACTED]");
         }
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_non_string_primitives_under_credential_keys() {
+        for (line, key) in [
+            ("{\"password\":123456}\n", "password"),
+            ("{\"api_key\":12345}\n", "api_key"),
+            ("{\"secret\":true}\n", "secret"),
+        ] {
+            let redacted = SecretRedactor::new().redact_json_line(line);
+            assert_ne!(redacted, line, "line {line} should have been redacted");
+            let trimmed = redacted.trim_end_matches(['\r', '\n']);
+            let parsed: serde_json::Value =
+                serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+            assert_eq!(parsed[key], "[REDACTED]", "key {key} should be [REDACTED]");
+        }
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_leaves_non_credential_number_untouched() {
+        let line = "{\"count\":123}\n";
+        assert_eq!(SecretRedactor::new().redact_json_line(line), line);
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_api_keys_plural_field_name() {
+        let line = "{\"api_keys\":[{\"key\":\"opaque_secret_test_777\"}]}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaque_secret_test_777"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["api_keys"][0]["key"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_keeps_null_under_credential_key_as_null() {
+        let line = "{\"password\":null}\n";
+        assert_eq!(SecretRedactor::new().redact_json_line(line), line);
     }
 
     #[test]

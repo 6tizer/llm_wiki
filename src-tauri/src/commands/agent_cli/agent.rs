@@ -33,28 +33,37 @@ const AGENT_PROFILE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
 // Redacts credential-named query-param values (`?api_key=...`,
 // `&access_token=...`) whose value is an opaque token/session id with no
 // sk-/tp-/aiza marker for `redact_secrets_preserving_format` below to catch
-// on its own. Splits on `?` then `&` then the first `=` in each param and
-// swaps the value for the marker when the param name (case-insensitive) is
+// on its own. Splits the query portion on BOTH `&` and `?` (a malformed URL
+// with more than one `?`, e.g. `...?a=1?api_key=SECRET`, otherwise folds the
+// stray `?api_key=...` into the previous param's value and never sees it as
+// its own name=value pair) and the first `=` in each param, swapping the
+// value for the marker when the param name (case-insensitive) is
 // credential-bearing, reusing the same name list JSON redaction uses rather
-// than duplicating it here. A trailing `#fragment` on the last param's
-// value is swallowed along with it when that param is credential-bearing
-// (acceptable: it still means no credential-named value leaks); a fragment
-// on a non-credential param is left untouched.
+// than duplicating it here. The original separator between params
+// (`&` or `?`) is preserved verbatim in the rebuilt string. A trailing
+// `#fragment` on the last param's value is swallowed along with it when
+// that param is credential-bearing (acceptable: it still means no
+// credential-named value leaks); a fragment on a non-credential param is
+// left untouched.
 fn redact_url_query_param_credentials(url: &str) -> String {
     let Some(query_start) = url.find('?') else {
         return url.to_string();
     };
     let (before, query) = url.split_at(query_start + 1);
-    let redacted_query = query
-        .split('&')
-        .map(|param| match param.split_once('=') {
-            Some((name, _value)) if runtime_db::key_is_credential_bearing(name) => {
-                format!("{name}=[REDACTED]")
-            }
-            _ => param.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("&");
+    let redact_param = |param: &str| match param.split_once('=') {
+        Some((name, _value)) if runtime_db::key_is_credential_bearing(name) => {
+            format!("{name}=[REDACTED]")
+        }
+        _ => param.to_string(),
+    };
+    let mut redacted_query = String::with_capacity(query.len());
+    let mut start = 0;
+    for (idx, separator) in query.match_indices(['&', '?']) {
+        redacted_query.push_str(&redact_param(&query[start..idx]));
+        redacted_query.push_str(separator);
+        start = idx + separator.len();
+    }
+    redacted_query.push_str(&redact_param(&query[start..]));
     format!("{before}{redacted_query}")
 }
 
@@ -904,6 +913,18 @@ mod tests {
     fn redact_url_userinfo_for_log_control_url_without_credentials_is_byte_identical() {
         let url = "https://gw.example.com/v1?q=hello&page=2";
         assert_eq!(redact_url_userinfo_for_log(url), url);
+    }
+
+    #[test]
+    fn redact_url_userinfo_for_log_redacts_credential_after_malformed_second_question_mark() {
+        // A stray second `?` (malformed URL) must not fold the trailing
+        // `api_key=...` into the preceding param's value and skip
+        // credential-name detection entirely.
+        let redacted = redact_url_userinfo_for_log(
+            "https://gw.example.com/v1?a=1?api_key=OpaqueSecretTest654321",
+        );
+        assert!(!redacted.contains("OpaqueSecretTest654321"));
+        assert_eq!(redacted, "https://gw.example.com/v1?a=1?api_key=[REDACTED]");
     }
 
     fn args_with_optional_fields_none() -> AgentSpawnArgs {
