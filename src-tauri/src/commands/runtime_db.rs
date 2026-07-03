@@ -6209,10 +6209,13 @@ fn redact_profile_pool_text(value: &str) -> String {
 pub(crate) struct SecretRedactor {
     redact_next: bool,
     // Path-scoped carry for the JSON structural path (`redact_json_line`):
-    // the set of dotted JSON paths from the document root (e.g.
-    // "delta.text") whose most recently redacted string value ended armed
-    // (e.g. a bare "Authorization:" split across two streamed events).
-    // Scoped by full path — not bare leaf key name, and not global.
+    // the set of length-prefixed JSON paths from the document root (e.g.
+    // "5:delta4:text" for ["delta","text"]) whose most recently redacted
+    // string value ended armed (e.g. a bare "Authorization:" split across
+    // two streamed events). Each segment is encoded as `{len}:{key}`, which
+    // is collision-free by construction — no two distinct key sequences can
+    // produce the same path string, unlike a plain dotted join. Scoped by
+    // full path — not bare leaf key name, and not global.
     // Streaming agent output interleaves protocol fields (e.g.
     // "type":"content_block_delta") between text deltas on the same event;
     // a global carry would consume itself on those unrelated fields and
@@ -6376,24 +6379,26 @@ fn redact_json_value(
     redact_json_value_inner(value, changed, false, None, carry);
 }
 
-// `enclosing_path` is the dotted JSON path (from the document root) of the
-// object key whose value this string/array/etc. is (or, for a string nested
-// inside an array, the path of the key that owns the array — array levels
-// do NOT append a path segment, so items in an array under `delta.text` all
-// share path "delta.text") — `None` for values with no enclosing key
-// (top-level scalars). It scopes `carry`: a string value seeds its stateful
-// redaction pass from `carry.contains(enclosing_path)` and updates that
-// same entry afterward, so a credential split across two streamed JSON
-// events under the SAME path (e.g. `{"text":"Authorization:"}` then
-// `{"text":"Basic <token>"}`, or `{"delta":{"text":"Authorization:"}}` then
-// `{"delta":{"text":"Basic <token>"}}`) is still caught, while a different
-// path — including one that merely shares a bare leaf key name (e.g.
-// top-level "text" vs. "delta.text") — on an intervening or later event
-// never consumes or touches it. Scoping by bare leaf key name instead of
-// full path (an earlier round) let unrelated paths steal/falsely-arm each
-// other's carry; this is the fix for that. A key containing a literal "."
-// can alias a different structural path in the dotted-path encoding — an
-// accepted, narrow imprecision for a redaction heuristic.
+// `enclosing_path` is the length-prefixed JSON path (from the document
+// root) of the object key whose value this string/array/etc. is (or, for a
+// string nested inside an array, the path of the key that owns the array —
+// array levels do NOT append a path segment, so items in an array under
+// "delta"."text" all share that same path) — `None` for values with no
+// enclosing key (top-level scalars). It scopes `carry`: a string value
+// seeds its stateful redaction pass from `carry.contains(enclosing_path)`
+// and updates that same entry afterward, so a credential split across two
+// streamed JSON events under the SAME path (e.g. `{"text":"Authorization:"}`
+// then `{"text":"Basic <token>"}`, or `{"delta":{"text":"Authorization:"}}`
+// then `{"delta":{"text":"Basic <token>"}}`) is still caught, while a
+// different path — including one that merely shares a bare leaf key name
+// (e.g. top-level "text" vs. "delta"."text") — on an intervening or later
+// event never consumes or touches it. Scoping by bare leaf key name instead
+// of full path (an earlier round) let unrelated paths steal/falsely-arm
+// each other's carry; this is the fix for that. Each path segment is
+// encoded as `{len}:{key}` (see `redact_json_value_inner`'s Object arm)
+// rather than joined with a plain ".", so a literal key containing "." can
+// no longer alias a different structural path — the encoding is
+// collision-free by construction.
 fn redact_json_value_inner(
     value: &mut serde_json::Value,
     changed: &mut bool,
@@ -6459,12 +6464,17 @@ fn redact_json_value_inner(
             for (key, mut entry) in std::mem::take(map) {
                 let key_is_secret = token_looks_like_secret_value(&key.to_ascii_lowercase());
                 let force_redact = force_redact || key_is_secret || key_is_credential_bearing(&key);
-                // Build this key's full dotted path from its parent's path
-                // (`None` at the document root, so a top-level key's path
-                // is just the bare key name with no leading dot).
+                // Build this key's full path from its parent's path (`None`
+                // at the document root). Each segment is length-prefixed
+                // (`{len}:{key}`) rather than dot-joined, so no two distinct
+                // key sequences can ever produce the same path string — a
+                // literal key containing "." cannot alias a nested path
+                // (e.g. ["delta","text"] encodes as "5:delta4:text", never
+                // colliding with a literal "delta.text" key, which encodes
+                // as "10:delta.text").
                 let child_path = match enclosing_path {
-                    Some(parent) => format!("{parent}.{key}"),
-                    None => key.clone(),
+                    Some(parent) => format!("{parent}{}:{key}", key.len()),
+                    None => format!("{}:{key}", key.len()),
                 };
                 redact_json_value_inner(&mut entry, changed, force_redact, Some(&child_path), carry);
                 let key = if key_is_secret {
@@ -12410,6 +12420,60 @@ mod tests {
         let early_continuation =
             redactor.redact_json_line("{\"k000\":\"Basic opaqueEARLY\"}\n");
         assert!(!early_continuation.contains("opaqueEARLY"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_dotted_literal_key_does_not_alias_nested_path() {
+        // Reproduces the round-7 P1 regression: a plain dotted join
+        // (`format!("{parent}.{key}")`) makes the path for nested
+        // ["delta","text"] identical to the path for a literal top-level
+        // key "delta.text" ("delta.text" == "delta" + "." + "text"). A
+        // length-prefixed encoding must keep them distinct.
+        let mut redactor = SecretRedactor::new();
+
+        // evt1: arms the carry for the NESTED path ["delta","text"].
+        redactor.redact_json_line("{\"delta\":{\"text\":\"Authorization:\"}}\n");
+
+        // evt2: a LITERAL "delta.text" key — a different path under the new
+        // encoding — must round-trip byte-identical: it must not steal the
+        // nested arm, and its own benign value must not falsely arm or
+        // consume anything.
+        let evt2_line = "{\"delta.text\":\"benign\"}\n";
+        let evt2_out = redactor.redact_json_line(evt2_line);
+        assert_eq!(evt2_out, evt2_line);
+
+        // evt3: the true nested continuation must still be armed (untouched
+        // by evt2) and redact the split secret.
+        let evt3_out =
+            redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueCHAINLEAK\"}}\n");
+        assert!(!evt3_out.contains("opaqueCHAINLEAK"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_literal_dotted_key_carry_is_path_isolated() {
+        // Reverse direction of the above: arming via the LITERAL "delta.text"
+        // key must not be consumable by the NESTED ["delta","text"] path —
+        // they are different carry slots by construction, so the nested
+        // event's own credential-looking value is untouched (that is
+        // correct path isolation, not a leak: the nested path was never
+        // armed), while a further literal-key continuation still redacts.
+        let mut redactor = SecretRedactor::new();
+
+        // evt1: arms the carry for the LITERAL "delta.text" path.
+        redactor.redact_json_line("{\"delta.text\":\"Authorization:\"}\n");
+
+        // evt2: the NESTED path is a different slot, so it is not armed —
+        // "Basic opaqueREV1" is not preceded by an armed "Authorization:"
+        // under its own path, so it is left untouched.
+        let evt2_out =
+            redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueREV1\"}}\n");
+        assert!(evt2_out.contains("opaqueREV1"));
+
+        // evt3: the literal-key continuation is still the armed path from
+        // evt1 and must redact.
+        let evt3_out =
+            redactor.redact_json_line("{\"delta.text\":\"Basic opaqueREV2\"}\n");
+        assert!(!evt3_out.contains("opaqueREV2"));
     }
 
     #[test]
