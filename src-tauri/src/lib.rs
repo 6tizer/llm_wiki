@@ -8,6 +8,7 @@ mod types;
 use panic_guard::run_guarded;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::Manager;
 
 const APP_STATE_FILE_NAME: &str = "app-state.json";
@@ -275,7 +276,9 @@ fn setup_macos_tray(app: &mut tauri::App) -> tauri::Result<()> {
             if event.id() == "show" {
                 show_main_window(app);
             } else if event.id() == "quit" {
-                app.exit(0);
+                let app_handle = app.clone();
+                tauri::async_runtime::block_on(kill_all_agent_subprocesses(&app_handle));
+                app_handle.exit(0);
             }
         })
         .on_tray_icon_event(|tray, event| {
@@ -338,6 +341,60 @@ fn migrate_legacy_app_state(current_app_data_dir: &Path) {
             }
         }
         return;
+    }
+}
+
+/// Hard cap on `kill_all_agent_subprocesses`. `app.exit(0)` (tray Quit,
+/// the macOS window-close "quit" behavior, the non-macOS confirmed-quit
+/// dialog) terminates this process immediately and skips Rust `Drop`, so
+/// `kill_on_drop` on every spawned `claude`/`codex`/agent-sidecar child
+/// never fires and they — plus any grandchild tool subprocesses under
+/// their process groups — would otherwise become orphans. This bound
+/// exists so a wedged pipe or hung subprocess can't turn "click Quit"
+/// into an indefinite hang; if cleanup doesn't finish in time we log and
+/// exit anyway.
+const AGENT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Best-effort kill of every tracked `claude` CLI process, `codex` CLI
+/// process, and agent sidecar before the app exits. MUST be called (and
+/// its future driven to completion — see the `tauri::async_runtime::
+/// block_on` call sites in the sync tray/window-close handlers below, or
+/// a plain `.await` from the async non-macOS confirm-quit path) BEFORE
+/// `app.exit(0)` / `window.destroy()`, since nothing runs after those
+/// calls return.
+async fn kill_all_agent_subprocesses(app: &tauri::AppHandle) {
+    let claude_state = app.try_state::<commands::claude_cli::ClaudeCliState>();
+    let codex_state = app.try_state::<commands::codex_cli::CodexCliState>();
+    let agent_state = app.try_state::<commands::agent::AgentState>();
+
+    let cleanup = async {
+        tokio::join!(
+            async {
+                if let Some(state) = claude_state.as_ref() {
+                    state.kill_all().await;
+                }
+            },
+            async {
+                if let Some(state) = codex_state.as_ref() {
+                    state.kill_all().await;
+                }
+            },
+            async {
+                if let Some(state) = agent_state.as_ref() {
+                    state.kill_all().await;
+                }
+            },
+        );
+    };
+
+    if tokio::time::timeout(AGENT_SHUTDOWN_TIMEOUT, cleanup)
+        .await
+        .is_err()
+    {
+        eprintln!(
+            "[shutdown] agent subprocess cleanup did not finish within {:?}; exiting anyway",
+            AGENT_SHUTDOWN_TIMEOUT
+        );
     }
 }
 
@@ -528,7 +585,11 @@ pub fn run() {
                     match window.app_handle().state::<CloseBehaviorState>().get() {
                         CloseBehavior::Quit => {
                             api.prevent_close();
-                            window.app_handle().exit(0);
+                            let app_handle = window.app_handle().clone();
+                            tauri::async_runtime::block_on(kill_all_agent_subprocesses(
+                                &app_handle,
+                            ));
+                            app_handle.exit(0);
                         }
                         CloseBehavior::Hide => {
                             let _ = window.hide();
@@ -553,6 +614,7 @@ pub fn run() {
                             .blocking_show();
 
                         if confirmed {
+                            kill_all_agent_subprocesses(&app).await;
                             let _ = win.destroy();
                         }
                     });
