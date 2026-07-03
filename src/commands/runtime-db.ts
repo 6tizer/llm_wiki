@@ -469,6 +469,23 @@ export interface RuntimeProfilePoolList {
   circuitBreakers: RuntimeProfileCircuitBreakerRecord[]
 }
 
+/**
+ * Secretless model-call plan forwarded to Rust. `provider`/`apiMode`/
+ * `model` are cross-checked against the claimed profile server-side but
+ * are NEVER used to pick the request destination — the Rust command
+ * re-derives the URL and auth header entirely from the stored profile.
+ * `body` is the already-built provider request body (see
+ * `src/lib/llm-providers.ts`); it must never contain the secret or a
+ * final destination URL.
+ */
+export interface RuntimeModelCallForwardRequest {
+  claimId: string
+  provider: string
+  apiMode: RuntimeProfileApiMode
+  model: string
+  body: unknown
+}
+
 export interface RuntimeProfileProbeResult {
   profile?: RuntimeProfileRecord | null
   status: RuntimeProfileCapabilityStatus
@@ -648,6 +665,12 @@ export function runtimeProfileProbe(
   request: RuntimeProfileProbeRequest,
 ): Promise<RuntimeProfileProbeResult> {
   return invoke<RuntimeProfileProbeResult>("runtime_profile_probe", { request })
+}
+
+export function runtimeModelCallForward(
+  request: RuntimeModelCallForwardRequest,
+): Promise<string> {
+  return invoke<string>("runtime_model_call_forward", { request })
 }
 
 export function runtimeProfilePoolClaim(

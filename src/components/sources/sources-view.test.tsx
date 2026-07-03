@@ -72,10 +72,13 @@ describe("SourcesView bulk prepare entry", () => {
     await click(container.querySelector("button[aria-label='Plan bulk prepare']")!)
     await flush()
 
-    expect(bulkRuntimeEntryMocks.enqueueBulkKnowledgePrepareJobs).toHaveBeenCalledWith([
-      { sourcePath: "/project/raw/sources/a.md" },
-      { sourcePath: "/project/raw/sources/nested/b.md" },
-    ])
+    expect(bulkRuntimeEntryMocks.enqueueBulkKnowledgePrepareJobs).toHaveBeenCalledWith(
+      [
+        { sourcePath: "/project/raw/sources/a.md" },
+        { sourcePath: "/project/raw/sources/nested/b.md" },
+      ],
+      {},
+    )
     expect(sourceLifecycleMocks.enqueueSourceIngest).not.toHaveBeenCalled()
     expect(sourceLifecycleMocks.importSourceFiles).not.toHaveBeenCalled()
     expect(sourceLifecycleMocks.importSourceFolder).not.toHaveBeenCalled()
