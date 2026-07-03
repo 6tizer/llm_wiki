@@ -324,11 +324,18 @@ export interface LintReport {
 /** Categorize lint result as auto-fixable or human-only.
  *  Matches the logic in lint-fixer.ts isFixable() plus severity filter. */
 function classifyFixability(result: LintResult): "auto" | "human" {
+  // Orphan deletion is destructive (cascades to every page that references
+  // it) and the report-driven auto-fix path (fixLintReport -> fixOrphan)
+  // writes through with zero confirmation. Route it to humanItems so it's
+  // never silently included in an unattended auto-fix run -- this mirrors
+  // the explicit orphan filter fixAllLintResults already applies before its
+  // own auto-fix pass.
+  if (result.type === "orphan") return "human"
   if (result.type === "semantic") {
     const detail = result.detail.toLowerCase()
     if (detail.startsWith("[suggestion]")) return "human"
   }
-  // All structural issues and semantic non-suggestions are auto-fixable
+  // All remaining structural issues and semantic non-suggestions are auto-fixable
   return "auto"
 }
 

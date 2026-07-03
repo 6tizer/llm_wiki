@@ -391,6 +391,77 @@ describe("mergeDuplicateGroup", () => {
     ).rejects.toThrow(/at least 2/)
   })
 
+  it("throws when two group members resolve to the same file path (SPEC-11 D6 bug4)", async () => {
+    // Simulates the entities/x.md vs concepts/x.md collision: the caller's
+    // slug->path resolution collapsed two intended-distinct group members
+    // onto the same path. mergeDuplicateGroup must refuse rather than
+    // merge/delete based on ambiguous slug->path bookkeeping.
+    await expect(
+      mergeDuplicateGroup(
+        {
+          group: [
+            { slug: "x", path: "wiki/entities/x.md", content: PAGE("type: entity", "ax") },
+            { slug: "y", path: "wiki/entities/x.md", content: PAGE("type: entity", "bx") },
+          ],
+          canonicalSlug: "x",
+          otherWikiPages: [],
+        },
+        vi.fn(),
+      ),
+    ).rejects.toThrow(/same file|refusing to merge/i)
+  })
+
+  it("rejects an empty LLM merge response and does not compute pagesToDelete (bug2)", async () => {
+    const llm = vi.fn().mockResolvedValue("")
+    await expect(
+      mergeDuplicateGroup(
+        {
+          group: [
+            { slug: "a", path: "wiki/entities/a.md", content: PAGE("type: entity\ntitle: A", "long body a with plenty of descriptive content to be realistic") },
+            { slug: "b", path: "wiki/entities/b.md", content: PAGE("type: entity\ntitle: B", "long body b with plenty of descriptive content to be realistic") },
+          ],
+          canonicalSlug: "a",
+          otherWikiPages: [],
+        },
+        llm,
+      ),
+    ).rejects.toThrow(/validation/i)
+  })
+
+  it("rejects a truncated LLM merge response (no closing frontmatter) (bug2)", async () => {
+    const llm = vi.fn().mockResolvedValue("---\ntype: entity\ntitle: A\nthis got cut off")
+    await expect(
+      mergeDuplicateGroup(
+        {
+          group: [
+            { slug: "a", path: "wiki/entities/a.md", content: PAGE("type: entity\ntitle: A", "long body a with plenty of descriptive content to be realistic") },
+            { slug: "b", path: "wiki/entities/b.md", content: PAGE("type: entity\ntitle: B", "long body b with plenty of descriptive content to be realistic") },
+          ],
+          canonicalSlug: "a",
+          otherWikiPages: [],
+        },
+        llm,
+      ),
+    ).rejects.toThrow(/validation/i)
+  })
+
+  it("rejects an implausibly short LLM merge response relative to the inputs (bug2)", async () => {
+    const llm = vi.fn().mockResolvedValue("---\ntype: entity\n---\nhi")
+    await expect(
+      mergeDuplicateGroup(
+        {
+          group: [
+            { slug: "a", path: "wiki/entities/a.md", content: PAGE("type: entity\ntitle: A", "long body a with plenty of descriptive content to be realistic, repeated to be long enough".repeat(3)) },
+            { slug: "b", path: "wiki/entities/b.md", content: PAGE("type: entity\ntitle: B", "long body b with plenty of descriptive content to be realistic") },
+          ],
+          canonicalSlug: "a",
+          otherWikiPages: [],
+        },
+        llm,
+      ),
+    ).rejects.toThrow(/validation/i)
+  })
+
   it("merges bodies via LLM, unions sources/tags/related, stamps updated", async () => {
     const pageA = PAGE(
       'type: entity\ntitle: Accumulibacter\ncreated: 2026-04-09\nupdated: 2026-04-09\ntags: [microbiology, ebpr]\nrelated: [dpao, vfa]\nsources: ["doc-A.pdf"]',

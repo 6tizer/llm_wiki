@@ -182,23 +182,37 @@ export async function executeMerge(
 ): Promise<MergeResult> {
   const pp = normalizePath(projectPath)
 
-  // 1. Resolve each group slug to its actual on-disk path + content
+  // 1. Resolve each group slug to its actual on-disk path + content.
+  // Two different files can share a bare filename across wiki directories
+  // (wiki/entities/x.md vs wiki/concepts/x.md) — collect every path that
+  // matches a given slug instead of the last-write-wins Map<string,string>
+  // this used to be, so a collision is detected and rejected rather than
+  // silently resolving to whichever file happened to be enumerated last
+  // (SPEC-11 D6 bug4).
   const allPages = await loadAllWikiPages(pp)
-  const pathBySlug = new Map<string, string>()
+  const pathsBySlug = new Map<string, string[]>()
   for (const p of allPages) {
     const base = p.path.split("/").pop() ?? ""
-    if (base.endsWith(".md")) {
-      pathBySlug.set(base.slice(0, -3), p.path)
-    }
+    if (!base.endsWith(".md")) continue
+    const slug = base.slice(0, -3)
+    const paths = pathsBySlug.get(slug) ?? []
+    paths.push(p.path)
+    pathsBySlug.set(slug, paths)
   }
   const groupPages: { slug: string; path: string; content: string }[] = []
   for (const slug of group.slugs) {
-    const relPath = pathBySlug.get(slug)
-    if (!relPath) {
+    const candidatePaths = pathsBySlug.get(slug) ?? []
+    if (candidatePaths.length === 0) {
       throw new Error(
         `Slug "${slug}" not found on disk — was the page deleted between detection and merge?`,
       )
     }
+    if (candidatePaths.length > 1) {
+      throw new Error(
+        `Slug "${slug}" matches multiple files (${candidatePaths.join(", ")}) — cannot safely resolve which page this merge refers to. Rename one of the pages so filenames are unique across the wiki, then retry.`,
+      )
+    }
+    const relPath = candidatePaths[0]
     const page = allPages.find((p) => p.path === relPath)
     if (!page) {
       throw new Error(`Internal: page lookup miss for ${relPath}`)
