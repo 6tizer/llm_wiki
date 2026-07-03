@@ -65,6 +65,25 @@ describe("agent permission helpers", () => {
     })
   })
 
+  it("does not write an empty updatedPermissions allow-list", () => {
+    const emptySuggestions = permissionRequest({ suggestions: [] })
+    const decision = buildAgentPermissionDecision("allow_permanent", emptySuggestions)
+
+    expect(decision).toEqual({
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+    })
+    expect(decision).not.toHaveProperty("updatedPermissions")
+
+    const missingSuggestions = permissionRequest({ suggestions: undefined })
+    const decisionWithoutSuggestions = buildAgentPermissionDecision(
+      "allow_permanent",
+      missingSuggestions,
+    )
+
+    expect(decisionWithoutSuggestions).not.toHaveProperty("updatedPermissions")
+  })
+
   it("formats circular input previews safely", () => {
     const value: Record<string, unknown> = { command: "pwd" }
     value.self = value

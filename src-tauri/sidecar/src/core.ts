@@ -7,7 +7,7 @@ import {
 	buildPermissionOptions,
 	getAllowedWikiTools,
 	isWikiToolName,
-	shouldAllowWikiTool,
+	resolveWikiToolDecision,
 	type AgentPermissionPolicy,
 } from "./agent-policy.js";
 import { createLlmWikiMcpServer } from "./wiki-tools.js";
@@ -203,21 +203,28 @@ export function createRequestHandler({
 			const canUseTool: CanUseTool | undefined = permissionBridge
 				? async (toolName, input, options) => {
 						if (isWikiToolName(toolName)) {
-							const decision = shouldAllowWikiTool({
+							const decision = resolveWikiToolDecision({
 								toolName,
 								enableWriteTools,
+								permissionPolicy,
 							});
-							if (decision.allowed) {
+							if (decision.decision === "allow") {
 								return {
 									behavior: "allow" as const,
 									toolUseID: options.toolUseID,
 								};
 							}
-							return {
-								behavior: "deny" as const,
-								message: decision.reason,
-								toolUseID: options.toolUseID,
-							};
+							if (decision.decision === "deny") {
+								return {
+									behavior: "deny" as const,
+									message: decision.reason,
+									toolUseID: options.toolUseID,
+								};
+							}
+							// decision.decision === "ask": fall through to the same
+							// approval flow used for non-Wiki tools so the user sees
+							// an agent_permission_request prompt before the write
+							// proceeds.
 						}
 						return permissionBridge.requestPermission(
 							req.streamId,

@@ -352,7 +352,7 @@ test("query request uses intent override as system prompt when no system prompt 
 	);
 });
 
-test("canUseTool pre-approves allowed Wiki tools and denies disabled Wiki writes", async () => {
+test("canUseTool pre-approves allowed Wiki read tools and denies disabled Wiki writes without prompting", async () => {
 	let capturedInput: Parameters<QueryFn>[0] | undefined;
 	let bridgeCalls = 0;
 	const queryFn: QueryFn = async function* (input) {
@@ -367,7 +367,7 @@ test("canUseTool pre-approves allowed Wiki tools and denies disabled Wiki writes
 		permissionBridge: {
 			requestPermission: async () => {
 				bridgeCalls += 1;
-				throw new Error("bridge should not be called for Wiki tools");
+				throw new Error("bridge should not be called when writes are disabled");
 			},
 			handleResponse: () => {},
 			rejectStream: () => {},
@@ -412,6 +412,229 @@ test("canUseTool pre-approves allowed Wiki tools and denies disabled Wiki writes
 		},
 	);
 	assert.equal(bridgeCalls, 0);
+});
+
+test("canUseTool routes Wiki write tools through the permission bridge under the default policy", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const bridgeCalls: Array<{
+		streamId: string;
+		toolName: string;
+		input: Record<string, unknown>;
+		toolUseID: string;
+	}> = [];
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async (streamId, toolName, input, options) => {
+				bridgeCalls.push({
+					streamId,
+					toolName,
+					input,
+					toolUseID: options.toolUseID,
+				});
+				return {
+					behavior: "deny",
+					message: "denied by user",
+					toolUseID: options.toolUseID,
+				};
+			},
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: true,
+		},
+	});
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	const signal = new AbortController().signal;
+
+	// Attack scenario: an agent (possibly steered by a prompt-injected
+	// instruction) tries to write to the wiki. Under the default policy this
+	// MUST NOT be silently allowed — it must surface as a real permission
+	// request, and if the user denies it, the write must not proceed.
+	const decision = await canUseTool(
+		"mcp__llm_wiki__update_page",
+		{ path: "wiki/index.md", contents: "attacker controlled" },
+		{ signal, toolUseID: "tool-write-1" },
+	);
+
+	assert.deepEqual(bridgeCalls, [
+		{
+			streamId: "stream-1",
+			toolName: "mcp__llm_wiki__update_page",
+			input: { path: "wiki/index.md", contents: "attacker controlled" },
+			toolUseID: "tool-write-1",
+		},
+	]);
+	assert.deepEqual(decision, {
+		behavior: "deny",
+		message: "denied by user",
+		toolUseID: "tool-write-1",
+	});
+});
+
+test("canUseTool allows a Wiki write once the permission bridge approves it", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async (_streamId, _toolName, _input, options) => ({
+				behavior: "allow",
+				toolUseID: options.toolUseID,
+			}),
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: true,
+		},
+	});
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	const decision = await canUseTool(
+		"mcp__llm_wiki__update_page",
+		{ path: "wiki/index.md", contents: "approved update" },
+		{ signal: new AbortController().signal, toolUseID: "tool-write-2" },
+	);
+
+	assert.deepEqual(decision, {
+		behavior: "allow",
+		toolUseID: "tool-write-2",
+	});
+});
+
+test("canUseTool denies Wiki writes under the restricted policy without ever asking the bridge", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	let bridgeCalls = 0;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async () => {
+				bridgeCalls += 1;
+				throw new Error("bridge should not be called under restricted policy");
+			},
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: true,
+			permissionPolicy: "restricted",
+		},
+	});
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	const decision = await canUseTool(
+		"mcp__llm_wiki__update_page",
+		{ path: "wiki/index.md" },
+		{ signal: new AbortController().signal, toolUseID: "tool-write-3" },
+	);
+
+	assert.deepEqual(decision, {
+		behavior: "deny",
+		message: "Wiki write tools are restricted",
+		toolUseID: "tool-write-3",
+	});
+	assert.equal(bridgeCalls, 0);
+});
+
+test("canUseTool fast-path allows Wiki writes under bypass policies without asking the bridge", async () => {
+	for (const permissionPolicy of ["bypass", "bypassPermissions"] as const) {
+		let capturedInput: Parameters<QueryFn>[0] | undefined;
+		let bridgeCalls = 0;
+		const queryFn: QueryFn = async function* (input) {
+			capturedInput = input;
+		};
+
+		const handleRequest = createRequestHandler({
+			queryFn,
+			send: () => {},
+			error: () => {},
+			env: {},
+			permissionBridge: {
+				requestPermission: async () => {
+					bridgeCalls += 1;
+					throw new Error("bridge should not be called under bypass policy");
+				},
+				handleResponse: () => {},
+				rejectStream: () => {},
+				hasPending: () => false,
+			},
+		});
+
+		await handleRequest({
+			...baseRequest,
+			options: {
+				...baseRequest.options,
+				projectPath: "/tmp/wiki",
+				enableWikiTools: true,
+				enableWriteTools: true,
+				permissionPolicy,
+			},
+		});
+
+		const canUseTool = capturedInput?.options?.canUseTool;
+		assert.ok(canUseTool);
+		const decision = await canUseTool(
+			"mcp__llm_wiki__update_page",
+			{ path: "wiki/index.md" },
+			{ signal: new AbortController().signal, toolUseID: "tool-write-4" },
+		);
+
+		assert.deepEqual(decision, {
+			behavior: "allow",
+			toolUseID: "tool-write-4",
+		});
+		assert.equal(bridgeCalls, 0);
+	}
 });
 
 test("canUseTool asks permission bridge for non-Wiki tools", async () => {

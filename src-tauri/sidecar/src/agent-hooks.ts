@@ -11,7 +11,7 @@ import type { AgentMessage } from "./types.js";
 import {
 	isWikiToolName,
 	previewToolInput,
-	shouldAllowWikiTool,
+	resolveWikiToolDecision,
 	type AgentPermissionPolicy,
 } from "./agent-policy.js";
 
@@ -41,9 +41,14 @@ export function createLlmWikiHooks(
 						const event = input as PreToolUseHookInput;
 						if (!isWikiToolName(event.tool_name)) return {};
 						toolCalls += 1;
-						const decision = shouldAllowWikiTool({
+						// Same single-point decision function canUseTool (core.ts)
+						// uses, so this hook and the SDK's own permission gate can
+						// never disagree about whether a Wiki write requires
+						// approval.
+						const decision = resolveWikiToolDecision({
 							toolName: event.tool_name,
 							enableWriteTools: context.enableWriteTools,
+							permissionPolicy: context.permissionPolicy,
 						});
 						send("tool_event", {
 							phase: "pre",
@@ -52,13 +57,21 @@ export function createLlmWikiHooks(
 							inputPreview: previewToolInput(event.tool_input),
 							permissionPolicy: context.permissionPolicy,
 						});
-						if (!decision.allowed) {
+						if (decision.decision === "deny") {
 							failedToolCalls += 1;
 							return {
 								hookSpecificOutput: {
 									hookEventName: "PreToolUse" as const,
 									permissionDecision: "deny" as const,
 									permissionDecisionReason: decision.reason,
+								},
+							};
+						}
+						if (decision.decision === "ask") {
+							return {
+								hookSpecificOutput: {
+									hookEventName: "PreToolUse" as const,
+									permissionDecision: "ask" as const,
 								},
 							};
 						}

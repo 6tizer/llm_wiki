@@ -4,7 +4,7 @@ import {
 	buildPermissionOptions,
 	getAllowedWikiTools,
 	previewToolInput,
-	shouldAllowWikiTool,
+	resolveWikiToolDecision,
 } from "./agent-policy.js";
 
 test("default permission policy keeps built-in Claude Code tools available", () => {
@@ -111,63 +111,100 @@ test("allowed Wiki tools follow write mode", () => {
 	);
 });
 
-test("wiki tool preflight denies non-wiki and disabled write tools", () => {
+test("wiki tool decision denies non-wiki tools and disabled writes", () => {
 	assert.deepEqual(
-		shouldAllowWikiTool({
+		resolveWikiToolDecision({
 			toolName: "Bash",
 			enableWriteTools: true,
+			permissionPolicy: "default",
 		}),
-		{ allowed: false, reason: "Tool is not an LLM Wiki tool" },
+		{ decision: "deny", reason: "Tool is not an LLM Wiki tool" },
 	);
+	for (const toolName of [
+		"mcp__llm_wiki__update_page",
+		"mcp__llm_wiki__ingest_source",
+		"mcp__llm_wiki__run_deep_research",
+		"mcp__llm_wiki__sweep_reviews",
+		"mcp__llm_wiki__okf_import",
+	]) {
+		assert.deepEqual(
+			resolveWikiToolDecision({
+				toolName,
+				enableWriteTools: false,
+				permissionPolicy: "default",
+			}),
+			{ decision: "deny", reason: "Wiki write tools are disabled" },
+		);
+	}
+});
+
+test("wiki tool decision fast-path allows read tools regardless of policy", () => {
+	for (const permissionPolicy of [
+		"default",
+		"restricted",
+		"bypass",
+		"bypassPermissions",
+	] as const) {
+		assert.deepEqual(
+			resolveWikiToolDecision({
+				toolName: "mcp__llm_wiki__read_page",
+				enableWriteTools: false,
+				permissionPolicy,
+			}),
+			{ decision: "allow" },
+		);
+		assert.deepEqual(
+			resolveWikiToolDecision({
+				toolName: "mcp__llm_wiki__merge_duplicate_group",
+				enableWriteTools: true,
+				permissionPolicy,
+			}),
+			{ decision: "allow" },
+		);
+	}
+});
+
+test("wiki tool decision routes write tools through the permission bridge under the default policy", () => {
 	assert.deepEqual(
-		shouldAllowWikiTool({
+		resolveWikiToolDecision({
 			toolName: "mcp__llm_wiki__update_page",
-			enableWriteTools: false,
+			enableWriteTools: true,
+			permissionPolicy: "default",
 		}),
-		{ allowed: false, reason: "Wiki write tools are disabled" },
+		{ decision: "ask" },
 	);
 	assert.deepEqual(
-		shouldAllowWikiTool({
-			toolName: "mcp__llm_wiki__ingest_source",
-			enableWriteTools: false,
+		resolveWikiToolDecision({
+			toolName: "mcp__llm_wiki__run_pipeline",
+			enableWriteTools: true,
+			permissionPolicy: "default",
 		}),
-		{ allowed: false, reason: "Wiki write tools are disabled" },
+		{ decision: "ask" },
 	);
+});
+
+test("wiki tool decision denies write tools under the restricted policy even when writes are enabled", () => {
 	assert.deepEqual(
-		shouldAllowWikiTool({
-			toolName: "mcp__llm_wiki__run_deep_research",
-			enableWriteTools: false,
+		resolveWikiToolDecision({
+			toolName: "mcp__llm_wiki__update_page",
+			enableWriteTools: true,
+			permissionPolicy: "restricted",
 		}),
-		{ allowed: false, reason: "Wiki write tools are disabled" },
+		{ decision: "deny", reason: "Wiki write tools are restricted" },
 	);
-	assert.deepEqual(
-		shouldAllowWikiTool({
-			toolName: "mcp__llm_wiki__sweep_reviews",
-			enableWriteTools: false,
-		}),
-		{ allowed: false, reason: "Wiki write tools are disabled" },
-	);
-	assert.deepEqual(
-		shouldAllowWikiTool({
-			toolName: "mcp__llm_wiki__okf_import",
-			enableWriteTools: false,
-		}),
-		{ allowed: false, reason: "Wiki write tools are disabled" },
-	);
-	assert.deepEqual(
-		shouldAllowWikiTool({
-			toolName: "mcp__llm_wiki__read_page",
-			enableWriteTools: false,
-		}),
-		{ allowed: true },
-	);
-	assert.deepEqual(
-		shouldAllowWikiTool({
-			toolName: "mcp__llm_wiki__merge_duplicate_group",
-			enableWriteTools: false,
-		}),
-		{ allowed: true },
-	);
+});
+
+test("wiki tool decision allows write tools without prompting under bypass policies", () => {
+	for (const permissionPolicy of ["bypass", "bypassPermissions"] as const) {
+		assert.deepEqual(
+			resolveWikiToolDecision({
+				toolName: "mcp__llm_wiki__update_page",
+				enableWriteTools: true,
+				permissionPolicy,
+			}),
+			{ decision: "allow" },
+		);
+	}
 });
 
 test("tool input preview omits raw contents", () => {
