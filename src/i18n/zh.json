@@ -428,6 +428,8 @@
     "saved": "已保存",
     "savedTick": "已保存 ✓",
     "changeHint": "改动会在保存后应用。",
+    "saveFailed": "以下设置保存失败：{{keys}}",
+    "saveFailedRustLockedNote": "可能要到下次启动才会生效",
     "language": "语言",
     "languageHint": "界面语言（Wiki 内容语言以原始资料为准）",
     "categories": {
@@ -470,6 +472,8 @@
         "apiKeyPlaceholderCustom": "无 Key 可留空（本地模型）",
         "apiKeyPlaceholder": "请输入 API Key",
         "savedBadge": "已保存",
+        "saveFailedBadge": "保存失败",
+        "saveFailedTitle": "保存失败：{{message}}",
         "configuredBadge": "已配置",
         "activeBadge": "● 活跃",
         "useModel": "使用 {{model}}",
@@ -669,6 +673,8 @@
         "configuredBadge": "已配置",
         "activeBadge": "活跃",
         "savedBadge": "已保存",
+        "saveFailedBadge": "保存失败",
+        "saveFailedTitle": "保存失败：{{message}}",
         "instanceUrl": "实例 URL",
         "firecrawlLabel": "Firecrawl",
         "firecrawlHint": "通过 Firecrawl 进行网页搜索；API Key 可选，但推荐填写以获得更高额度。",
@@ -989,7 +995,8 @@
         "openDownload": "打开下载页",
         "later": "稍后",
         "autoCheck": "应用启动时自动检查更新（每 6 小时最多一次）",
-        "appDescription": "一个由 LLM 驱动的个人知识库。源代码："
+        "appDescription": "一个由 LLM 驱动的个人知识库。源代码：",
+        "saveFailed": "保存更新检查偏好失败：{{message}}"
       }
     }
   },

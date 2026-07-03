@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button"
 import { API_SERVER_HEALTH_URL, API_SERVER_PORT } from "@/lib/api-server-constants"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { checkForUpdates, toLatestReleaseUrl } from "@/lib/update-check"
-import { saveUpdateCheckState } from "@/lib/project-store"
+import { saveUpdateCheckState, type PersistedUpdateCheckState } from "@/lib/project-store"
+import { persistSetting } from "@/lib/store-helpers"
 
 interface ApiHealth {
   enabled?: boolean
@@ -16,11 +17,25 @@ interface ApiHealth {
   allowUnauthenticated?: boolean
 }
 
+function capturePersistedUpdateState(): PersistedUpdateCheckState {
+  const state = useUpdateStore.getState()
+  return {
+    enabled: state.enabled,
+    lastCheckedAt: state.lastCheckedAt,
+    dismissedVersion: state.dismissedVersion,
+  }
+}
+
+function applyPersistedUpdateState(state: PersistedUpdateCheckState): void {
+  useUpdateStore.getState().hydrate(state)
+}
+
 export function AboutSection() {
   const { t } = useTranslation()
   const [clipStatus, setClipStatus] = useState<string>("...")
   const [apiStatus, setApiStatus] = useState<string>("...")
   const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null)
+  const [updateSaveError, setUpdateSaveError] = useState<string | null>(null)
   const updateStore = useUpdateStore()
 
   useEffect(() => {
@@ -52,6 +67,32 @@ export function AboutSection() {
     }
   }, [])
 
+  const handleUpdateSaveError = useCallback((error: unknown) => {
+    setUpdateSaveError(error instanceof Error ? error.message : String(error))
+  }, [])
+
+  // Persists a partial update to the on-disk update-check state.
+  // persistSetting's `set` (applyPersistedUpdateState) already applies
+  // the merged value optimistically and reverts it on failure, so
+  // callers don't also need their own direct setEnabled/setDismissed/etc
+  // call — that would just be a redundant duplicate of the same write.
+  const persistUpdateCheckPatch = useCallback(
+    async (patch: Partial<PersistedUpdateCheckState>) => {
+      const prev = capturePersistedUpdateState()
+      const ok = await persistSetting(
+        prev,
+        { ...prev, ...patch },
+        applyPersistedUpdateState,
+        saveUpdateCheckState,
+        capturePersistedUpdateState,
+        { onError: handleUpdateSaveError },
+      )
+      if (ok) setUpdateSaveError(null)
+      return ok
+    },
+    [handleUpdateSaveError],
+  )
+
   const handleCheckNow = useCallback(async () => {
     useUpdateStore.getState().setChecking(true)
     const result = await checkForUpdates({
@@ -63,34 +104,19 @@ export function AboutSection() {
     // On a manual check, wipe any prior "dismissed" memo so that if
     // the user re-clicks they see the banner again for the same
     // version — a manual check implies "I want to see this now".
-    useUpdateStore.getState().setDismissed(null)
-    await saveUpdateCheckState({
-      enabled: useUpdateStore.getState().enabled,
-      lastCheckedAt: now,
-      dismissedVersion: null,
-    })
-  }, [])
+    await persistUpdateCheckPatch({ lastCheckedAt: now, dismissedVersion: null })
+  }, [persistUpdateCheckPatch])
 
   const handleDismiss = useCallback(async () => {
     const result = useUpdateStore.getState().lastResult
     if (result?.kind !== "available") return
-    useUpdateStore.getState().setDismissed(result.remote)
-    await saveUpdateCheckState({
-      enabled: useUpdateStore.getState().enabled,
-      lastCheckedAt: useUpdateStore.getState().lastCheckedAt ?? Date.now(),
-      dismissedVersion: result.remote,
-    })
-  }, [])
+    await persistUpdateCheckPatch({ dismissedVersion: result.remote })
+  }, [persistUpdateCheckPatch])
 
   const handleToggleAutoCheck = useCallback(async () => {
     const next = !useUpdateStore.getState().enabled
-    useUpdateStore.getState().setEnabled(next)
-    await saveUpdateCheckState({
-      enabled: next,
-      lastCheckedAt: useUpdateStore.getState().lastCheckedAt,
-      dismissedVersion: useUpdateStore.getState().dismissedVersion,
-    })
-  }, [])
+    await persistUpdateCheckPatch({ enabled: next })
+  }, [persistUpdateCheckPatch])
 
   const apiStatusDisplay = (() => {
     if (apiStatus === "running" && apiHealth?.enabled === false) {
@@ -206,6 +232,12 @@ export function AboutSection() {
           />
           {t("settings.sections.about.autoCheck")}
         </label>
+
+        {updateSaveError && (
+          <p className="text-xs text-destructive">
+            {t("settings.sections.about.saveFailed", { message: updateSaveError })}
+          </p>
+        )}
       </div>
 
       <div className="rounded-md border p-4 text-sm">

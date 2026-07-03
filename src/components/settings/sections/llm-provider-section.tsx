@@ -11,6 +11,7 @@ import { resolveConfig } from "../preset-resolver"
 import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
 import { AZURE_OPENAI_API_VERSION } from "@/lib/azure-openai"
 import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/lib/connection-tests"
+import { persistMany } from "@/lib/store-helpers"
 
 export function LlmProviderSection() {
   const { t } = useTranslation()
@@ -23,45 +24,102 @@ export function LlmProviderSection() {
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [savedId, setSavedId] = useState<string | null>(null)
+  const [errorId, setErrorId] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   function toggleExpand(id: string) {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
-  async function persist(newConfigs: typeof providerConfigs, newActive: string | null) {
-    const { saveProviderConfigs, saveActivePresetId, saveLlmConfig } = await import(
-      "@/lib/project-store"
-    )
-    await saveProviderConfigs(newConfigs)
-    await saveActivePresetId(newActive)
-    if (newActive) {
-      const preset = LLM_PRESETS.find((p) => p.id === newActive)
-      if (preset) {
-        const resolved = resolveConfig(preset, newConfigs[newActive], llmConfig)
-        setLlmConfig(resolved)
-        await saveLlmConfig(resolved)
-      }
-    }
+  function reportSaveError(id: string, error: unknown) {
+    setErrorId(id)
+    setErrorMessage(error instanceof Error ? error.message : String(error))
   }
 
-  function updateOverride(id: string, patch: ProviderOverride) {
+  // llmConfig is NOT independently persisted from here. App.tsx's boot
+  // init always re-resolves it fresh from providerConfigs[activePresetId]
+  // + the preset definition whenever a preset is active (see the
+  // `savedActivePreset` branch in App.tsx's init effect) — the only
+  // case these two handlers ever touch llmConfig at all. So a
+  // `saveLlmConfig` call here would be a redundant cache write with zero
+  // effect on next-boot state, AND a second disk write that can fail on
+  // its own with no way to roll back the first write that already
+  // landed — a real memory/disk split (Codex P2-1). providerConfigs
+  // (updateOverride) and activePresetId (toggleActive) are each this
+  // action's single authoritative write; llmConfig only gets an
+  // optimistic in-memory projection so the running app picks up the
+  // change immediately, reverted in lockstep if that one write fails.
+
+  async function updateOverride(id: string, patch: ProviderOverride) {
     const merged: ProviderOverride = { ...(providerConfigs[id] ?? {}), ...patch }
     const next = { ...providerConfigs, [id]: merged }
-    setProviderConfigs(next)
-    persist(next, activePresetId).catch(() => {})
-    // If this preset is active, refresh the resolved LlmConfig live.
-    if (id === activePresetId) {
-      const preset = LLM_PRESETS.find((p) => p.id === id)
-      if (preset) setLlmConfig(resolveConfig(preset, merged, llmConfig))
+    const prevProviderConfigs = providerConfigs
+    const prevLlmConfig = llmConfig
+    // activePresetId itself never changes here, so it's never re-written.
+    const preset = id === activePresetId ? LLM_PRESETS.find((p) => p.id === id) : undefined
+    const resolvedLlm = preset ? resolveConfig(preset, merged, llmConfig) : null
+
+    const ok = await persistMany(
+      () => {
+        setProviderConfigs(next)
+        if (resolvedLlm) setLlmConfig(resolvedLlm)
+      },
+      () => {
+        setProviderConfigs(prevProviderConfigs)
+        if (resolvedLlm) setLlmConfig(prevLlmConfig)
+      },
+      async () => {
+        const { saveProviderConfigs } = await import("@/lib/project-store")
+        await saveProviderConfigs(next)
+      },
+      () => {
+        // Compare-and-revert: this handler fires without awaiting a
+        // prior call (rapid edits), so by the time persist rejects a
+        // later call may have already applied (or even saved) a newer
+        // value. Only revert if nothing has moved past what WE applied.
+        const state = useWikiStore.getState()
+        return state.providerConfigs === next && (!resolvedLlm || state.llmConfig === resolvedLlm)
+      },
+      { onError: (error) => reportSaveError(id, error) },
+    )
+    if (ok) {
+      setErrorId((cur) => (cur === id ? null : cur))
+      setSavedId(id)
+      setTimeout(() => setSavedId((cur) => (cur === id ? null : cur)), 1500)
     }
-    setSavedId(id)
-    setTimeout(() => setSavedId((cur) => (cur === id ? null : cur)), 1500)
   }
 
-  function toggleActive(id: string) {
+  async function toggleActive(id: string) {
     const next = id === activePresetId ? null : id
-    setActivePresetId(next)
-    persist(providerConfigs, next).catch(() => {})
+    const prevActivePresetId = activePresetId
+    const prevLlmConfig = llmConfig
+    const activatedPreset = next ? LLM_PRESETS.find((p) => p.id === next) : undefined
+    const resolvedLlm = next && activatedPreset
+      ? resolveConfig(activatedPreset, providerConfigs[next], llmConfig)
+      : null
+
+    const ok = await persistMany(
+      () => {
+        setActivePresetId(next)
+        if (resolvedLlm) setLlmConfig(resolvedLlm)
+      },
+      () => {
+        setActivePresetId(prevActivePresetId)
+        if (resolvedLlm) setLlmConfig(prevLlmConfig)
+      },
+      async () => {
+        // providerConfigs is unchanged by activation — nothing to
+        // resave there either. activePresetId is the only write.
+        const { saveActivePresetId } = await import("@/lib/project-store")
+        await saveActivePresetId(next)
+      },
+      () => {
+        const state = useWikiStore.getState()
+        return state.activePresetId === next && (!resolvedLlm || state.llmConfig === resolvedLlm)
+      },
+      { onError: (error) => reportSaveError(id, error) },
+    )
+    if (ok) setErrorId((cur) => (cur === id ? null : cur))
   }
 
   return (
@@ -82,6 +140,7 @@ export function LlmProviderSection() {
             isActive={activePresetId === preset.id}
             isExpanded={!!expanded[preset.id]}
             savedHere={savedId === preset.id}
+            errorHere={errorId === preset.id ? errorMessage : null}
             onToggleActive={() => toggleActive(preset.id)}
             onToggleExpand={() => toggleExpand(preset.id)}
             onChange={(patch) => updateOverride(preset.id, patch)}
@@ -98,6 +157,7 @@ interface PresetRowProps {
   isActive: boolean
   isExpanded: boolean
   savedHere: boolean
+  errorHere: string | null
   onToggleActive: () => void
   onToggleExpand: () => void
   onChange: (patch: ProviderOverride) => void
@@ -114,6 +174,7 @@ function PresetRow({
   isActive,
   isExpanded,
   savedHere,
+  errorHere,
   onToggleActive,
   onToggleExpand,
   onChange,
@@ -221,6 +282,14 @@ function PresetRow({
             )}
             {savedHere && (
               <span className="shrink-0 text-[10px] text-emerald-600">{t("settings.sections.llm.savedBadge")}</span>
+            )}
+            {errorHere && (
+              <span
+                className="shrink-0 text-[10px] text-destructive"
+                title={t("settings.sections.llm.saveFailedTitle", { message: errorHere })}
+              >
+                {t("settings.sections.llm.saveFailedBadge")}
+              </span>
             )}
           </div>
           {preset.hint && (

@@ -428,6 +428,8 @@
     "saved": "Saved",
     "savedTick": "Saved ✓",
     "changeHint": "Changes apply after saving.",
+    "saveFailed": "Some settings failed to save: {{keys}}",
+    "saveFailedRustLockedNote": "may not take effect until the next launch",
     "language": "Language",
     "languageHint": "Interface language (wiki content follows source material language)",
     "categories": {
@@ -470,6 +472,8 @@
         "apiKeyPlaceholderCustom": "Leave empty if no key (local models)",
         "apiKeyPlaceholder": "Enter your API key",
         "savedBadge": "saved",
+        "saveFailedBadge": "save failed",
+        "saveFailedTitle": "Save failed: {{message}}",
         "configuredBadge": "configured",
         "activeBadge": "● active",
         "useModel": "Use {{model}}",
@@ -669,6 +673,8 @@
         "configuredBadge": "Configured",
         "activeBadge": "Active",
         "savedBadge": "Saved",
+        "saveFailedBadge": "Save failed",
+        "saveFailedTitle": "Save failed: {{message}}",
         "instanceUrl": "Instance URL",
         "firecrawlLabel": "Firecrawl",
         "firecrawlHint": "Web search via Firecrawl; API key is optional but recommended for higher limits.",
@@ -989,7 +995,8 @@
         "openDownload": "Open download page",
         "later": "Later",
         "autoCheck": "Check for updates automatically on startup (at most once every 6 hours)",
-        "appDescription": "An LLM-driven personal knowledge base. Source:"
+        "appDescription": "An LLM-driven personal knowledge base. Source:",
+        "saveFailed": "Failed to save update-check preference: {{message}}"
       }
     }
   },

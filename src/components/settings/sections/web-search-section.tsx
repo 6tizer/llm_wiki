@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { normalizeAnyTxtConfig } from "@/lib/anytxt-search";
+import { persistSetting } from "@/lib/store-helpers";
 import {
 	resolveSearchConfig,
 	SEARXNG_CATEGORY_OPTIONS,
@@ -64,6 +65,28 @@ const SEARCH_PROVIDERS = [
 	},
 ] as const;
 
+function SaveFailedBadge({
+	id,
+	errorId,
+	errorMessage,
+	t,
+}: {
+	id: string;
+	errorId: string | null;
+	errorMessage: string | null;
+	t: (key: string, opts?: Record<string, unknown>) => string;
+}) {
+	if (errorId !== id || !errorMessage) return null;
+	return (
+		<span
+			className="shrink-0 text-[10px] text-destructive"
+			title={t("settings.sections.webSearch.saveFailedTitle", { message: errorMessage })}
+		>
+			{t("settings.sections.webSearch.saveFailedBadge")}
+		</span>
+	);
+}
+
 export function WebSearchSection() {
 	const { t } = useTranslation();
 	const searchApiConfig = useWikiStore((s) => s.searchApiConfig);
@@ -74,11 +97,30 @@ export function WebSearchSection() {
 	const showBroadAnyTxtWarning = isBroadAnyTxtFilterDir(anyTxtFilterDir);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [savedId, setSavedId] = useState<string | null>(null);
+	const [errorId, setErrorId] = useState<string | null>(null);
+	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-	async function persist(next: SearchApiConfig) {
+	async function saveSearchConfig(next: SearchApiConfig) {
 		const { saveSearchApiConfig } = await import("@/lib/project-store");
-		setSearchApiConfig(next);
 		await saveSearchApiConfig(next);
+	}
+
+	async function persistNext(id: string, next: SearchApiConfig): Promise<boolean> {
+		const ok = await persistSetting(
+			searchApiConfig,
+			next,
+			setSearchApiConfig,
+			saveSearchConfig,
+			() => useWikiStore.getState().searchApiConfig,
+			{
+				onError: (error) => {
+					setErrorId(id);
+					setErrorMessage(error instanceof Error ? error.message : String(error));
+				},
+			},
+		);
+		if (ok) setErrorId((cur) => (cur === id ? null : cur));
+		return ok;
 	}
 
 	function updateProvider(
@@ -92,22 +134,26 @@ export function WebSearchSection() {
 			...resolvedConfig,
 			providerConfigs: nextConfigs,
 		});
-		persist(next).catch(() => {});
-		setSavedId(id);
-		setTimeout(() => setSavedId((cur) => (cur === id ? null : cur)), 1500);
+		void persistNext(id, next).then((ok) => {
+			if (!ok) return;
+			setSavedId(id);
+			setTimeout(() => setSavedId((cur) => (cur === id ? null : cur)), 1500);
+		});
 	}
 
 	function toggleActive(id: Exclude<SearchProvider, "none">) {
 		const nextProvider = resolvedConfig.provider === id ? "none" : id;
-		persist(
+		void persistNext(
+			id,
 			resolveSearchConfig({ ...resolvedConfig, provider: nextProvider }),
-		).catch(() => {});
+		);
 	}
 
 	function updateDeepResearchSource(deepResearchSource: DeepResearchSource) {
-		persist(
+		void persistNext(
+			"deepResearchSource",
 			resolveSearchConfig({ ...resolvedConfig, deepResearchSource }),
-		).catch(() => {});
+		);
 	}
 
 	function updateAnyTxt(patch: AnyTxtConfig) {
@@ -118,12 +164,14 @@ export function WebSearchSection() {
 				...patch,
 			},
 		});
-		persist(next).catch(() => {});
-		setSavedId("anytxt");
-		setTimeout(
-			() => setSavedId((cur) => (cur === "anytxt" ? null : cur)),
-			1500,
-		);
+		void persistNext("anytxt", next).then((ok) => {
+			if (!ok) return;
+			setSavedId("anytxt");
+			setTimeout(
+				() => setSavedId((cur) => (cur === "anytxt" ? null : cur)),
+				1500,
+			);
+		});
 	}
 
 	return (
@@ -166,6 +214,11 @@ export function WebSearchSection() {
 						</button>
 					))}
 				</div>
+				{errorId === "deepResearchSource" && errorMessage && (
+					<p className="text-xs text-destructive">
+						{t("settings.sections.webSearch.saveFailedTitle", { message: errorMessage })}
+					</p>
+				)}
 			</div>
 
       <div className="space-y-3 rounded-lg border p-3">
@@ -182,6 +235,7 @@ export function WebSearchSection() {
                 {t("settings.sections.webSearch.savedBadge")}
               </span>
             )}
+            <SaveFailedBadge id="anytxt" errorId={errorId} errorMessage={errorMessage} t={t} />
             {anyTxtConfig.enabled && (
               <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
                 {t("settings.sections.webSearch.activeBadge")}
@@ -332,6 +386,7 @@ export function WebSearchSection() {
 												{t("settings.sections.webSearch.savedBadge")}
 											</span>
 										)}
+										<SaveFailedBadge id={provider.id} errorId={errorId} errorMessage={errorMessage} t={t} />
 									</div>
 									<div className="mt-0.5 truncate text-xs text-muted-foreground">
 										{providerHint}
