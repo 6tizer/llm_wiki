@@ -6004,39 +6004,80 @@ pub(crate) fn sanitize_profile_pool_text_for_log(value: &str) -> String {
 
 const SECRET_REDACTION_MARKER: &str = "[REDACTED]";
 
+// Bare scheme/keyword tokens that, when themselves consumed as a carried-over
+// secret value (i.e. they immediately follow "Authorization:"/"Bearer"/an
+// api-key field name), mean the actual credential is one token further along
+// ("Authorization: Basic <credential>"), so the carry must be extended by one
+// more token instead of ending on the scheme word.
+const AUTH_SCHEME_WORDS: &[&str] = &["basic", "digest", "negotiate", "ntlm", "token", "bearer"];
+
 struct SecretTokenClass {
     is_secret: bool,
     next_token_is_secret_value: bool,
 }
 
-fn token_has_tp_secret(lower: &str) -> bool {
-    let mut rest = lower;
-    while let Some(idx) = rest.find("tp-") {
-        let after = &rest[idx + 3..];
-        let run_len = after
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
-            .count();
-        if run_len >= 12 {
+// True when `needle` occurs in `lower` at a position not preceded by an
+// alphanumeric char (or at the very start of the token). This is what lets
+// `key=[sk-...]` / `[AIza...]` be caught by a single check instead of an
+// enumeration of delimiter chars, while `risk-`/`task-` (needle preceded by a
+// letter) stay unmatched.
+fn token_has_boundary_match(lower: &str, needle: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(rel_idx) = lower[search_from..].find(needle) {
+        let idx = search_from + rel_idx;
+        let boundary = idx == 0
+            || lower[..idx]
+                .chars()
+                .next_back()
+                .map(|c| !c.is_ascii_alphanumeric())
+                .unwrap_or(true);
+        if boundary {
             return true;
         }
-        rest = &rest[idx + 3..];
+        search_from = idx + needle.len();
+    }
+    false
+}
+
+// Real gateway keys (see litellm/config.yaml) look like
+// `tp-sw0ia7x8u1f6q2alk14bw5613jith6io0yjefem02tzniq6z` — a long run of
+// lowercase alphanumerics with no internal separators. The `[A-Za-z0-9_-]`
+// run + alnum-count-only-of-≥12 rule below is deliberately a superset of
+// that shape (it also matches dash/underscore-segmented keys such as
+// `tp-ab12cd34-ef56-gh78`) while still keeping short real-world words like
+// `tp-link`/`tp-1a2b` unredacted. The boundary check kills the `http-...`
+// false positive (`http-` contains `tp-` but preceded by an alphanumeric
+// char).
+fn token_has_tp_secret(lower: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(rel_idx) = lower[search_from..].find("tp-") {
+        let idx = search_from + rel_idx;
+        let boundary = idx == 0
+            || lower[..idx]
+                .chars()
+                .next_back()
+                .map(|c| !c.is_ascii_alphanumeric())
+                .unwrap_or(true);
+        if boundary {
+            let after = &lower[idx + 3..];
+            let run: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            let alnum_count = run.chars().filter(|c| c.is_ascii_alphanumeric()).count();
+            if alnum_count >= 12 {
+                return true;
+            }
+        }
+        search_from = idx + 3;
     }
     false
 }
 
 fn classify_secret_token(lower: &str) -> SecretTokenClass {
     let has_secret_ref = lower.contains("llm-wiki-profile-secret:");
-    let has_google_api_key = lower.starts_with("aiza")
-        || lower.contains("=aiza")
-        || lower.contains(":aiza")
-        || lower.contains("\"aiza")
-        || lower.contains("'aiza");
-    let has_sk_secret = lower.starts_with("sk-")
-        || lower.contains("=sk-")
-        || lower.contains(":sk-")
-        || lower.contains("\"sk-")
-        || lower.contains("'sk-");
+    let has_google_api_key = token_has_boundary_match(lower, "aiza");
+    let has_sk_secret = token_has_boundary_match(lower, "sk-");
     let has_tp_secret = token_has_tp_secret(lower);
     let has_bearer =
         lower == "bearer" || lower.starts_with("bearer:") || lower.starts_with("bearer=");
@@ -6101,39 +6142,147 @@ fn redact_profile_pool_text(value: &str) -> String {
     redact_secrets_preserving_format(&collapsed)
 }
 
+// Carries `redact_next` state across multiple `redact_line` calls so a
+// scheme/key-name token that ends one line (e.g. a bare "Authorization:")
+// still redacts the credential that arrives as the first token of the next
+// line, instead of resetting per call like the stateless wrapper below.
+pub(crate) struct SecretRedactor {
+    redact_next: bool,
+}
+
+impl SecretRedactor {
+    pub(crate) fn new() -> Self {
+        Self { redact_next: false }
+    }
+
+    // Drops any pending carry from a prior line/segment. Used after a JSON
+    // line is redacted structurally (per string value) so that structural
+    // pass's independence doesn't get contaminated by, or contaminate,
+    // unrelated plain-text lines on the same stream.
+    pub(crate) fn reset(&mut self) {
+        self.redact_next = false;
+    }
+
+    // Redacts secret-looking tokens in `line` while preserving all original
+    // whitespace exactly (multiple spaces, indentation, tabs), so it is safe
+    // to use on JSONL/chat lines where whitespace inside string values is
+    // literal content.
+    pub(crate) fn redact_line(&mut self, line: &str) -> String {
+        let mut out = String::with_capacity(line.len());
+        for piece in line.split_inclusive(char::is_whitespace) {
+            let trailing_ws = piece
+                .chars()
+                .last()
+                .filter(|c| c.is_whitespace())
+                .map(|c| c.len_utf8());
+            let (word, ws) = match trailing_ws {
+                Some(ws_len) => piece.split_at(piece.len() - ws_len),
+                None => (piece, ""),
+            };
+            if word.is_empty() {
+                out.push_str(ws);
+                continue;
+            }
+            let lower = word.to_ascii_lowercase();
+            let entered_with_carry = self.redact_next;
+            let class = classify_secret_token(&lower);
+            let redacted = entered_with_carry || class.is_secret;
+            let is_scheme_word = AUTH_SCHEME_WORDS.contains(&lower.as_str());
+            self.redact_next =
+                class.next_token_is_secret_value || (entered_with_carry && is_scheme_word);
+            if redacted {
+                out.push_str(SECRET_REDACTION_MARKER);
+            } else {
+                out.push_str(word);
+            }
+            out.push_str(ws);
+        }
+        out
+    }
+
+    // JSON-aware line redaction for a stateful stream (stdout/stderr reader
+    // loops): a successfully parsed JSON line is redacted structurally
+    // (per string value, see `redact_secrets_in_json_line`) and resets the
+    // carry state, since the structural pass doesn't participate in
+    // cross-token carry-over. A line that fails to parse as JSON falls back
+    // to `redact_line` on `self` so carry-over from a still-open scheme
+    // header on a prior plain-text line is preserved.
+    pub(crate) fn redact_json_line(&mut self, line: &str) -> String {
+        match try_redact_json_line(line) {
+            Some(redacted) => {
+                self.reset();
+                redacted
+            }
+            None => self.redact_line(line),
+        }
+    }
+}
+
 /// Redacts secret-looking tokens in `line` while preserving all original
 /// whitespace exactly (multiple spaces, indentation, tabs), so it is safe to
 /// use on JSONL/chat lines where whitespace inside string values is literal
-/// content.
+/// content. Stateless convenience wrapper over `SecretRedactor` for
+/// single-string use; streaming callers that need carry-over across lines
+/// (e.g. an `Authorization:` header split across reader lines) should hold
+/// their own `SecretRedactor` instead.
 pub(crate) fn redact_secrets_preserving_format(line: &str) -> String {
-    let mut redact_next = false;
-    let mut out = String::with_capacity(line.len());
-    for piece in line.split_inclusive(char::is_whitespace) {
-        let trailing_ws = piece
-            .chars()
-            .last()
-            .filter(|c| c.is_whitespace())
-            .map(|c| c.len_utf8());
-        let (word, ws) = match trailing_ws {
-            Some(ws_len) => piece.split_at(piece.len() - ws_len),
-            None => (piece, ""),
-        };
-        if word.is_empty() {
-            out.push_str(ws);
-            continue;
-        }
-        let lower = word.to_ascii_lowercase();
-        let class = classify_secret_token(&lower);
-        let redacted = redact_next || class.is_secret;
-        redact_next = class.next_token_is_secret_value;
-        if redacted {
-            out.push_str(SECRET_REDACTION_MARKER);
-        } else {
-            out.push_str(word);
-        }
-        out.push_str(ws);
+    SecretRedactor::new().redact_line(line)
+}
+
+// Attempts JSON-aware redaction: parses `line` (minus any trailing
+// newline/carriage-return) as a JSON value and redacts every JSON *string*
+// value in place (keys and non-string values are left untouched), then
+// re-serializes. Returns `None` on parse failure so callers can fall back to
+// token-level redaction (using their own stateful `SecretRedactor` when one
+// is available, since a parse failure means the JSON contract broke and we
+// no longer have structural boundaries to reset state on).
+fn try_redact_json_line(line: &str) -> Option<String> {
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+    let trailing = &line[trimmed.len()..];
+    let mut value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let mut changed = false;
+    redact_json_value(&mut value, &mut changed);
+    if !changed {
+        return Some(line.to_string());
     }
-    out
+    let mut serialized = serde_json::to_string(&value).ok()?;
+    serialized.push_str(trailing);
+    Some(serialized)
+}
+
+fn redact_json_value(value: &mut serde_json::Value, changed: &mut bool) {
+    match value {
+        serde_json::Value::String(text) => {
+            let redacted = redact_secrets_preserving_format(text);
+            if redacted != *text {
+                *changed = true;
+                *text = redacted;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json_value(item, changed);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for entry in map.values_mut() {
+                redact_json_value(entry, changed);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// JSON-line-aware secret redaction for sidecar/CLI stdout, which is a
+/// JSONL protocol the frontend `JSON.parse()`s per line. Redacting whole
+/// whitespace-delimited tokens (as `redact_secrets_preserving_format` does)
+/// destroys minified JSON with no internal whitespace — the entire line
+/// becomes one "token" and gets replaced wholesale, breaking the parse. This
+/// parses the line, redacts only JSON string *values*, and re-serializes
+/// (key order is not preserved, which is fine — the frontend only parses).
+/// Falls back to whole-line token redaction when the line isn't valid JSON.
+pub(crate) fn redact_secrets_in_json_line(line: &str) -> String {
+    try_redact_json_line(line).unwrap_or_else(|| redact_secrets_preserving_format(line))
 }
 
 fn truncate_profile_pool_text(value: &str) -> String {
@@ -11652,6 +11801,118 @@ mod tests {
     fn redact_secrets_preserving_format_roundtrips_when_no_secrets() {
         let line = "  no secrets here,\tjust  plain   text\n";
         assert_eq!(redact_secrets_preserving_format(line), line);
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_nested_minified_string_value() {
+        let line = "{\"type\":\"tool_call\",\"input\":{\"apiKey\":\"sk-test000aaaabbbbccccdddd\",\"note\":\"ok\"}}\n";
+        let redacted = redact_secrets_in_json_line(line);
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["type"], "tool_call");
+        assert_eq!(parsed["input"]["apiKey"], "[REDACTED]");
+        assert_eq!(parsed["input"]["note"], "ok");
+        assert!(redacted.ends_with('\n'));
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_returns_no_secret_json_byte_identical() {
+        let line = "{\"type\":\"status\",\"input\":{\"note\":\"ok\"}}\n";
+        assert_eq!(redact_secrets_in_json_line(line), line);
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_falls_back_to_token_redaction_for_non_json() {
+        let line = "not json at all key=sk-test000aaaabbbbccccdddd trailing\n";
+        let redacted = redact_secrets_in_json_line(line);
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(redacted.starts_with("not json at all "));
+        assert!(redacted.ends_with("trailing\n"));
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_redacts_bracket_wrapped_sk_and_aiza() {
+        let redacted_sk =
+            redact_secrets_preserving_format("key=[sk-test000aaaabbbbccccdddd] end");
+        assert!(!redacted_sk.contains("sk-test000aaaabbbbccccdddd"));
+        assert!(redacted_sk.contains("[REDACTED]"));
+
+        let redacted_google =
+            redact_secrets_preserving_format("[AIzaTest000aaaabbbbccccdddd] end");
+        assert!(!redacted_google.contains("AIzaTest000aaaabbbbccccdddd"));
+        assert!(redacted_google.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_redacts_authorization_basic_scheme_credential() {
+        let redacted =
+            redact_secrets_preserving_format("Authorization: Basic dGVzdDAwMA== next");
+        assert!(!redacted.contains("dGVzdDAwMA=="));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(redacted.ends_with(" next"));
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_keeps_lookalike_hyphen_words() {
+        assert_eq!(
+            redact_secrets_preserving_format("risk-assessment"),
+            "risk-assessment"
+        );
+        assert_eq!(redact_secrets_preserving_format("task-list"), "task-list");
+        assert_eq!(
+            redact_secrets_preserving_format("http-keepaliveconnectionmanager"),
+            "http-keepaliveconnectionmanager"
+        );
+    }
+
+    #[test]
+    fn secret_redactor_carries_state_across_lines() {
+        let mut redactor = SecretRedactor::new();
+        let first = redactor.redact_line("set authorization:\n");
+        assert_eq!(first, "set [REDACTED]\n");
+        let second = redactor.redact_line("gatewaycredentialvalue\n");
+        assert_eq!(second, "[REDACTED]\n");
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_redacts_hyphen_segmented_tp_key() {
+        // Real litellm gateway keys (litellm/config.yaml) are a single
+        // unbroken alnum run after "tp-", e.g.
+        // tp-sw0ia7x8u1f6q2alk14bw5613jith6io0yjefem02tzniq6z. The rule here
+        // is deliberately a superset that also catches dash/underscore
+        // segmented forms (UUID-like keys) by counting alnum chars across
+        // the whole run.
+        let redacted = redact_secrets_preserving_format("tp-ab12cd34-ef56-gh78 tail");
+        assert!(!redacted.contains("tp-ab12cd34-ef56-gh78"));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(redacted.ends_with(" tail"));
+
+        // "tp-link-archer-c7" (a router model name) has exactly 12
+        // alphanumeric chars across its dash segments (link=4, archer=6,
+        // c7=2), which crosses the >=12 threshold under the same rule. This
+        // is an accepted false positive: the real gateway key format has no
+        // dashes at all, so favoring over-redaction of rare hyphenated
+        // product names over under-redacting a real key is the safer
+        // tradeoff.
+        let router_redacted = redact_secrets_preserving_format("tp-link-archer-c7 tail");
+        assert!(!router_redacted.contains("tp-link-archer-c7"));
+        assert!(router_redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_detects_later_tp_occurrence_in_one_token() {
+        // Single whitespace-delimited token with two "tp-" occurrences. The
+        // first occurrence's run is cut short by the ":" delimiter (only 2
+        // alnum chars, "ab" -- below the 12 threshold); the second
+        // occurrence, right after the ":", has a long unbroken alnum run.
+        // token_has_tp_secret must keep scanning past the first
+        // non-matching occurrence instead of stopping there.
+        let token = "tp-ab:tp-longenoughsecretvalue123";
+        let redacted = redact_secrets_preserving_format(token);
+        assert_eq!(redacted, "[REDACTED]");
     }
 
     #[test]

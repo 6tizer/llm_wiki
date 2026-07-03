@@ -488,9 +488,10 @@ pub async fn agent_spawn(
         let mut stderr_reader = BufReader::new(stderr).lines();
 
         let stderr_task = tokio::spawn(async move {
+            let mut redactor = runtime_db::SecretRedactor::new();
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
-                let sanitized = runtime_db::redact_secrets_preserving_format(&line);
+                let sanitized = redactor.redact_line(&line);
                 eprintln!("[agent-sidecar stderr] {sanitized}");
                 collected.push_str(&sanitized);
                 collected.push('\n');
@@ -498,8 +499,14 @@ pub async fn agent_spawn(
             collected
         });
 
+        // Sidecar stdout is JSONL (one JSON.stringify'd event per line, see
+        // sidecar/src/main.ts) that the frontend JSON.parses per line —
+        // whole-token redaction would turn a secret-bearing minified line
+        // into a single unparseable token, so this uses the JSON-aware,
+        // structural redactor instead.
+        let mut stdout_redactor = runtime_db::SecretRedactor::new();
         while let Ok(Some(line)) = reader.next_line().await {
-            let sanitized = runtime_db::redact_secrets_preserving_format(&line);
+            let sanitized = stdout_redactor.redact_json_line(&line);
             let _ = app_for_task.emit(&topic, &sanitized);
         }
 

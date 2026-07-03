@@ -31,6 +31,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::cli_resolver::{child_path_env, find_cli_command};
+use crate::commands::runtime_db;
 
 /// Shared state holding running `claude` child processes keyed by the
 /// frontend-generated stream id. Registered via .manage() in lib.rs.
@@ -373,19 +374,28 @@ pub async fn claude_cli_spawn(
         // Also echo each line to the tauri dev terminal so the developer
         // can watch the CLI's stderr live while iterating.
         let stderr_task = tokio::spawn(async move {
+            let mut redactor = runtime_db::SecretRedactor::new();
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
-                eprintln!("[claude-cli stderr] {line}");
-                collected.push_str(&line);
+                let sanitized = redactor.redact_line(&line);
+                eprintln!("[claude-cli stderr] {sanitized}");
+                collected.push_str(&sanitized);
                 collected.push('\n');
             }
             collected
         });
 
+        // `claude -p --output-format stream-json` emits one JSON object per
+        // stdout line, which the frontend JSON.parses per line — whole-token
+        // redaction would turn a secret-bearing minified line into a single
+        // unparseable token, so this uses the JSON-aware, structural
+        // redactor instead.
+        let mut stdout_redactor = runtime_db::SecretRedactor::new();
         loop {
             match reader.next_line().await {
                 Ok(Some(line)) => {
-                    if app.emit(&topic, line).is_err() {
+                    let sanitized = stdout_redactor.redact_json_line(&line);
+                    if app.emit(&topic, sanitized).is_err() {
                         break;
                     }
                 }
