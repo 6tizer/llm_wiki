@@ -5,13 +5,71 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { saveReviewItems, saveLintItems, saveChatHistory } from "./persist"
 
-const reviewTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const lintTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const chatTimers = new Map<string, ReturnType<typeof setTimeout>>()
+type AutoSaveKind = "review" | "lint" | "chat"
+
+/**
+ * A pending debounced write. `generation` is the project generation token
+ * (see wiki-store.projectGeneration) captured when this entry was queued;
+ * `snapshot` is the data to write — captured at queue time, not re-read
+ * from the live store when the timer fires or when flushed. Both guard
+ * against the same failure mode: a project switch happening while this
+ * entry is still sitting in its debounce window.
+ */
+interface AutoSaveEntry<Snapshot> {
+  timer: ReturnType<typeof setTimeout>
+  generation: number
+  snapshot: Snapshot
+}
+
+/**
+ * One save channel's state and behavior, type-erased to `unknown` so
+ * flushAutoSave/cancelAutoSaveTimers can iterate all channels uniformly.
+ * queueProjectAutoSave (called from setupAutoSave) still gets a fully
+ * typed `timers` map per call site, so callers never see `unknown`.
+ */
+interface AutoSaveChannel {
+  kind: AutoSaveKind
+  timers: Map<string, AutoSaveEntry<unknown>>
+  run: (projectPath: string, snapshot: unknown) => Promise<void>
+}
+
+const reviewTimers = new Map<string, AutoSaveEntry<ReturnType<typeof useReviewStore.getState>["items"]>>()
+const lintTimers = new Map<string, AutoSaveEntry<ReturnType<typeof useLintStore.getState>["items"]>>()
+interface ChatSnapshot {
+  conversations: ReturnType<typeof useChatStore.getState>["conversations"]
+  messages: ReturnType<typeof useChatStore.getState>["messages"]
+}
+const chatTimers = new Map<string, AutoSaveEntry<ChatSnapshot>>()
+
 const saveErrorLastSeen = new Map<string, number>()
 const SAVE_ERROR_DEBOUNCE_MS = 5000
 
-type AutoSaveKind = "review" | "lint" | "chat"
+function asUnknownEntryMap<Snapshot>(
+  timers: Map<string, AutoSaveEntry<Snapshot>>
+): Map<string, AutoSaveEntry<unknown>> {
+  return timers as unknown as Map<string, AutoSaveEntry<unknown>>
+}
+
+const channels: AutoSaveChannel[] = [
+  {
+    kind: "review",
+    timers: asUnknownEntryMap(reviewTimers),
+    run: (projectPath, snapshot) => saveReviewItems(projectPath, snapshot as ReturnType<typeof useReviewStore.getState>["items"]),
+  },
+  {
+    kind: "lint",
+    timers: asUnknownEntryMap(lintTimers),
+    run: (projectPath, snapshot) => saveLintItems(projectPath, snapshot as ReturnType<typeof useLintStore.getState>["items"]),
+  },
+  {
+    kind: "chat",
+    timers: asUnknownEntryMap(chatTimers),
+    run: (projectPath, snapshot) => {
+      const chatSnapshot = snapshot as ChatSnapshot
+      return saveChatHistory(projectPath, chatSnapshot.conversations, chatSnapshot.messages)
+    },
+  },
+]
 
 function autoSaveKindLabel(kind: AutoSaveKind): string {
   if (kind === "review") return "Review"
@@ -49,7 +107,7 @@ function surfaceAutoSaveError(projectPath: string, kind: AutoSaveKind, err: unkn
 }
 
 function queueProjectAutoSave<Snapshot>(
-  timers: Map<string, ReturnType<typeof setTimeout>>,
+  timers: Map<string, AutoSaveEntry<Snapshot>>,
   kind: AutoSaveKind,
   delayMs: number,
   snapshot: Snapshot,
@@ -58,16 +116,84 @@ function queueProjectAutoSave<Snapshot>(
   const projectPath = useWikiStore.getState().project?.path
   if (!projectPath) return
 
-  const existingTimer = timers.get(projectPath)
-  if (existingTimer) clearTimeout(existingTimer)
+  const generation = useWikiStore.getState().projectGeneration
+
+  const existing = timers.get(projectPath)
+  if (existing) clearTimeout(existing.timer)
 
   const timer = setTimeout(() => {
     timers.delete(projectPath)
+    // Guard against the project having switched between when this entry
+    // was queued and when it fires. resetProjectState cancels timers for
+    // the outgoing project synchronously, but this is the last line of
+    // defense against any path that re-queues a write after that — and,
+    // via the generation check, against the same project path being
+    // closed and reopened (a plain path comparison would miss that).
+    const current = useWikiStore.getState()
+    if (current.project?.path !== projectPath || current.projectGeneration !== generation) {
+      console.debug(
+        `[auto-save] dropping stale ${kind} save for "${projectPath}" — project switched before the debounce fired`
+      )
+      return
+    }
     save(projectPath, snapshot)
       .then(() => saveErrorLastSeen.delete(`${projectPath}:${kind}`))
       .catch((err) => surfaceAutoSaveError(projectPath, kind, err))
   }, delayMs)
-  timers.set(projectPath, timer)
+  timers.set(projectPath, { timer, generation, snapshot })
+}
+
+/**
+ * Immediately runs any pending debounced save for `projectPath` across all
+ * three auto-save channels (review/lint/chat), bypassing the debounce
+ * timer. Used by resetProjectState to flush the outgoing project's last
+ * real edit to disk before its stores are cleared — otherwise that edit
+ * would sit in a setTimeout that never fires with the right data (the
+ * store it reads from is about to be reset to empty).
+ *
+ * Writes the snapshot captured when the entry was queued, not whatever
+ * the live store holds at flush time — the two can differ (e.g. a
+ * streaming chat update queued a snapshot, then more streaming content
+ * landed in the live store before the flush ran).
+ *
+ * Only flushes timers that are actually pending for `projectPath`; other
+ * projects' pending timers are left untouched.
+ */
+export async function flushAutoSave(projectPath: string): Promise<void> {
+  const tasks: Promise<void>[] = []
+
+  for (const channel of channels) {
+    const entry = channel.timers.get(projectPath)
+    if (!entry) continue
+    clearTimeout(entry.timer)
+    channel.timers.delete(projectPath)
+    tasks.push(
+      channel.run(projectPath, entry.snapshot)
+        .then(() => { saveErrorLastSeen.delete(`${projectPath}:${channel.kind}`) })
+        .catch((err) => surfaceAutoSaveError(projectPath, channel.kind, err))
+    )
+  }
+
+  await Promise.allSettled(tasks)
+}
+
+/**
+ * Cancels any pending debounced save timers for `projectPath` without
+ * running them. Used by resetProjectState right after clearing the
+ * Zustand stores: those clears look like real edits to auto-save's
+ * subscribers and would otherwise re-queue an empty-array write for the
+ * project that just left — this stops that write before it can fire.
+ *
+ * Only removes the entry for `projectPath`; other projects keep their
+ * pending timers untouched.
+ */
+export function cancelAutoSaveTimers(projectPath: string): void {
+  for (const channel of channels) {
+    const entry = channel.timers.get(projectPath)
+    if (!entry) continue
+    clearTimeout(entry.timer)
+    channel.timers.delete(projectPath)
+  }
 }
 
 export function setupAutoSave(): void {
