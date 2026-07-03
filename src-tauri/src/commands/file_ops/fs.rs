@@ -611,11 +611,14 @@ fn extract_docx_with_library(path: &str) -> Result<String, String> {
     }
 }
 
-fn read_zip_file(archive: &mut zip::ZipArchive<fs::File>, name: &str) -> Option<String> {
-    let mut file = archive.by_name(name).ok()?;
-    let mut content = String::new();
-    file.read_to_string(&mut content).ok()?;
-    Some(content)
+fn read_zip_file(archive: &mut zip::ZipArchive<fs::File>, name: &str) -> Result<String, String> {
+    use super::extract_images::{read_zip_entry_capped, MAX_DECOMPRESSED_ENTRY_BYTES};
+
+    let mut entry = archive
+        .by_name(name)
+        .map_err(|e| format!("zip entry '{name}' not found: {e}"))?;
+    let bytes = read_zip_entry_capped(&mut entry, MAX_DECOMPRESSED_ENTRY_BYTES)?;
+    String::from_utf8(bytes).map_err(|e| format!("zip entry '{name}' is not valid UTF-8: {e}"))
 }
 
 fn decode_xml_entities(text: &str) -> String {
@@ -630,8 +633,7 @@ fn decode_xml_entities(text: &str) -> String {
 
 /// Extract DOCX to Markdown preserving headings, paragraphs, lists, tables, bold/italic.
 fn extract_docx_markdown(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, String> {
-    let xml = read_zip_file(archive, "word/document.xml")
-        .ok_or_else(|| "No document.xml found".to_string())?;
+    let xml = read_zip_file(archive, "word/document.xml")?;
 
     let mut result = String::new();
     let mut i = 0;
@@ -840,8 +842,11 @@ fn extract_pptx_markdown(archive: &mut zip::ZipArchive<fs::File>) -> Result<Stri
 
     for (idx, slide_name) in slide_names.iter().enumerate() {
         let xml = match read_zip_file(archive, slide_name) {
-            Some(x) => x,
-            None => continue,
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("[extract_pptx_markdown] skipping slide '{slide_name}': {e}");
+                continue;
+            }
         };
 
         result.push_str(&format!("## Slide {}\n\n", idx + 1));
@@ -968,8 +973,7 @@ fn extract_spreadsheet(path: &str) -> Result<String, String> {
 
 /// Extract OpenDocument format text (basic).
 fn extract_odf_text(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, String> {
-    let xml =
-        read_zip_file(archive, "content.xml").ok_or_else(|| "No content.xml found".to_string())?;
+    let xml = read_zip_file(archive, "content.xml")?;
 
     let mut result = String::new();
     let mut in_tag = false;
