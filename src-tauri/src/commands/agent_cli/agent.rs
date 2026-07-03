@@ -22,6 +22,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 
+use super::cli_resolver::{kill_process_group, KillSignal};
 use crate::api_server;
 use crate::commands::file_sync::ProjectRootState;
 use crate::commands::profile_secrets::OsSecretStore;
@@ -1290,11 +1291,201 @@ mod tests {
         assert!(token.is_none());
         assert!(args.api_token.is_none());
     }
+
+    /// Orphan + timeout-fallback regression for the app-shutdown path:
+    /// `AgentState::kill_all` must drain every tracked stream and
+    /// actually terminate the underlying process, even though nothing in
+    /// this test speaks the sidecar's JSON kill protocol (so the graceful
+    /// branch necessarily times out and falls through to the SIGKILL
+    /// process-group kill).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_state_kill_all_drains_map_and_terminates_tracked_process() {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        cmd.process_group(0);
+        let mut child = cmd.spawn().expect("spawn fake sidecar");
+        let stdin = child.stdin.take().expect("stdin handle");
+        let pid = child.id().expect("pid") as i32;
+
+        let state = AgentState::default();
+        state.children.lock().await.insert(
+            "stream-1".to_string(),
+            AgentProcess {
+                child,
+                stdin: Arc::new(Mutex::new(stdin)),
+            },
+        );
+
+        state.kill_all().await;
+
+        assert!(state.children.lock().await.is_empty());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(!alive, "fake sidecar process survived kill_all");
+    }
+
+    /// Concurrency regression reproducing the correctness probe: several
+    /// wedged sidecar streams (leader ignores SIGTERM, each with its own
+    /// backgrounded descendant that also ignores SIGTERM, and stdin never
+    /// drained so the graceful JSON-kill handshake never completes) must
+    /// all be cleaned up within ~one grace period, not one grace period
+    /// *per* stream — and none of their descendants may be left as
+    /// orphans.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_state_kill_all_terminates_multiple_wedged_streams_concurrently_without_orphans(
+    ) {
+        const WEDGED_STREAM_COUNT: usize = 3;
+        let state = AgentState::default();
+        let mut descendant_pids = Vec::with_capacity(WEDGED_STREAM_COUNT);
+        let mut marker_paths = Vec::with_capacity(WEDGED_STREAM_COUNT);
+
+        for i in 0..WEDGED_STREAM_COUNT {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before Unix epoch")
+                .as_nanos();
+            let marker_path = std::env::temp_dir().join(format!(
+                "llm-wiki-agent-kill-all-wedged-{i}-{}-{nanos}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&marker_path);
+            let script = format!(
+                "trap '' TERM; sh -c 'trap \"\" TERM; exec sleep 30' & echo $! > {}; wait",
+                marker_path.to_string_lossy()
+            );
+            let mut cmd = tokio::process::Command::new("sh");
+            cmd.arg("-c")
+                .arg(script)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true);
+            cmd.process_group(0);
+            let mut child = cmd.spawn().expect("spawn wedged sidecar");
+            let stdin = child.stdin.take().expect("stdin handle");
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let descendant_pid: i32 = loop {
+                if let Ok(contents) = std::fs::read_to_string(&marker_path) {
+                    if let Ok(pid) = contents.trim().parse::<i32>() {
+                        break pid;
+                    }
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "descendant pid marker never appeared"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            descendant_pids.push(descendant_pid);
+            marker_paths.push(marker_path);
+
+            state.children.lock().await.insert(
+                format!("stream-{i}"),
+                AgentProcess {
+                    child,
+                    stdin: Arc::new(Mutex::new(stdin)),
+                },
+            );
+        }
+
+        let start = std::time::Instant::now();
+        state.kill_all().await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            state.children.lock().await.is_empty(),
+            "kill_all must drain every tracked stream"
+        );
+        assert!(
+            elapsed < AGENT_GRACEFUL_KILL_GRACE_PERIOD + std::time::Duration::from_secs(2),
+            "kill_all took {elapsed:?} for {WEDGED_STREAM_COUNT} wedged streams — should bound \
+             to ~O(grace period) via concurrent kill, not serialize per stream"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        for (i, pid) in descendant_pids.into_iter().enumerate() {
+            let alive = unsafe { libc::kill(pid, 0) == 0 };
+            assert!(
+                !alive,
+                "descendant {i} (pid {pid}) survived AgentState::kill_all"
+            );
+        }
+        for marker_path in marker_paths {
+            let _ = std::fs::remove_file(&marker_path);
+        }
+    }
 }
 
-#[tauri::command]
-pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Result<(), String> {
-    if let Some(mut process) = state.children.lock().await.remove(&stream_id) {
+/// Short timeout for writing the sidecar's own `{"type":"kill"}` message
+/// (see sidecar/src/core.ts `handleRequest`) to its stdin. Local pipe
+/// writes are effectively instant; this only fires if the pipe is already
+/// wedged, in which case the SIGKILL fallback below takes over anyway.
+const AGENT_GRACEFUL_KILL_STDIN_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long to wait for the sidecar to exit on its own after the graceful
+/// kill message. sidecar/src/main.ts aborts the SDK query immediately and
+/// self-exits ~250ms after going idle, so this is a generous margin before
+/// escalating to a SIGKILL of its process group.
+const AGENT_GRACEFUL_KILL_GRACE_PERIOD: Duration = Duration::from_secs(2);
+const AGENT_GRACEFUL_KILL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Kill one agent sidecar stream. Tries the sidecar's own graceful abort
+/// protocol first: writes `{"type":"kill","streamId":...}` to its stdin
+/// (core.ts's `handleRequest` aborts the SDK query, releases the
+/// app-tool/permission bridges, and main.ts self-exits once idle), which
+/// gives any in-flight tool/file write a chance to unwind instead of
+/// being truncated mid-write. If the sidecar hasn't exited within
+/// AGENT_GRACEFUL_KILL_GRACE_PERIOD (stdin was already wedged, the
+/// sidecar hung, etc.), falls back to the existing hard SIGKILL
+/// process-group kill. No-op if `stream_id` is unknown (already exited or
+/// already killed elsewhere).
+async fn kill_agent_stream(state: &AgentState, stream_id: &str) -> Result<(), String> {
+    let stdin = {
+        let map = state.children.lock().await;
+        map.get(stream_id)
+            .map(|process| Arc::clone(&process.stdin))
+    };
+
+    if let Some(stdin) = stdin {
+        let line = serde_json::json!({
+            "type": "kill",
+            "streamId": stream_id,
+        })
+        .to_string()
+            + "\n";
+        {
+            let mut guard = stdin.lock().await;
+            let _ = tokio::time::timeout(
+                AGENT_GRACEFUL_KILL_STDIN_TIMEOUT,
+                write_stdin_capped(&mut guard, &line),
+            )
+            .await;
+        }
+
+        // The stdout-drain task spawned in agent_spawn removes the stream
+        // from state.children and reaps the child once it observes stdout
+        // EOF (i.e. once the sidecar has actually exited) — poll for that
+        // rather than duplicating the reap here.
+        let deadline = tokio::time::Instant::now() + AGENT_GRACEFUL_KILL_GRACE_PERIOD;
+        loop {
+            if !state.children.lock().await.contains_key(stream_id) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(AGENT_GRACEFUL_KILL_POLL_INTERVAL).await;
+        }
+    }
+
+    if let Some(mut process) = state.children.lock().await.remove(stream_id) {
         kill_agent_tree(&mut process.child)
             .map_err(|e| format!("Failed to kill agent sidecar: {e}"))?;
         // Reap the killed child so it doesn't linger as a zombie. The
@@ -1306,38 +1497,49 @@ pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Resu
     Ok(())
 }
 
-/// Kill the agent sidecar AND its descendants.
+#[tauri::command]
+pub async fn agent_kill(state: State<'_, AgentState>, stream_id: String) -> Result<(), String> {
+    kill_agent_stream(&state, &stream_id).await
+}
+
+impl AgentState {
+    /// Gracefully kill every tracked sidecar stream, then hard-kill
+    /// whatever's still alive — concurrently across streams rather than
+    /// one at a time. `kill_agent_stream` can take up to
+    /// AGENT_GRACEFUL_KILL_GRACE_PERIOD per stream; awaiting them
+    /// sequentially would make the whole call scale linearly with the
+    /// number of tracked streams and blow through callers' own overall
+    /// shutdown timeout (see `AGENT_SHUTDOWN_TIMEOUT` in lib.rs) before
+    /// the last streams are even signaled. Used only during app shutdown
+    /// (see `kill_all_agent_subprocesses` in lib.rs): `app.exit(0)`
+    /// terminates the process immediately without running Rust `Drop`
+    /// impls, so `kill_on_drop` on these `tokio::process::Child`s never
+    /// fires and they — plus any grandchild tool subprocesses under
+    /// their process groups — would otherwise become orphans.
+    pub(crate) async fn kill_all(&self) {
+        let stream_ids: Vec<String> = self.children.lock().await.keys().cloned().collect();
+        futures::future::join_all(
+            stream_ids
+                .iter()
+                .map(|stream_id| kill_agent_stream(self, stream_id)),
+        )
+        .await;
+    }
+}
+
+/// Kill the agent sidecar AND its descendants with SIGKILL. No grace
+/// period — this is the hard-stop fallback used once graceful shutdown
+/// (see `kill_agent_stream`) has already been attempted or skipped.
 ///
 /// On Unix the sidecar is spawned in its own process group (see the
 /// `process_group(0)` call in agent_spawn, which makes the child the
 /// leader of a new group whose pgid == child pid), so we send SIGKILL to
-/// the whole group. We use `kill(-pgid, sig)` (the negative-pid form of
-/// `kill(2)`, which targets the process group) rather than `killpg`:
-/// `killpg(pgrp, sig)` expects a *positive* pgrp and internally negates
-/// it — passing a negative value to `killpg` is undefined. The negative
-/// form of `kill` is the documented, portable way to signal a group.
-/// This reaps the sidecar + all its descendants (tool subprocesses) that
-/// the direct-child `Child::kill` (SIGKILL on the leader only) would
-/// orphan. On non-Unix we fall back to killing the direct child.
+/// the whole group via the shared `kill_process_group` helper. This reaps
+/// the sidecar + all its descendants (tool subprocesses) that the
+/// direct-child `Child::kill` (SIGKILL on the leader only) would orphan.
+/// On non-Unix we fall back to killing the direct child.
 fn kill_agent_tree(child: &mut tokio::process::Child) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        if let Some(pid) = child.id() {
-            // kill(-pgid, sig) → signal the process group whose pgid == pid.
-            // Safe: a libc syscall. ESRCH just means the group already
-            // exited, so we treat it as success.
-            let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
-            if rc != 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(err);
-                }
-            }
-            return Ok(());
-        }
-    }
-    // Non-Unix, or Unix child with no pid (already gone): direct kill.
-    child.start_kill()
+    kill_process_group(child, KillSignal::Kill)
 }
 
 /// Hard timeout for stdin writes to the sidecar. A blocked/full pipe would

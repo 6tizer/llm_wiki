@@ -30,7 +30,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use super::cli_resolver::{child_path_env, find_cli_command};
+use super::cli_resolver::{
+    child_path_env, find_cli_command, graceful_kill_process_group, kill_all_tracked_children,
+    kill_process_group, KillSignal, GRACEFUL_KILL_GRACE_PERIOD,
+};
 use crate::commands::runtime_db;
 
 /// Shared state holding running `claude` child processes keyed by the
@@ -292,6 +295,14 @@ pub async fn claude_cli_spawn(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    // Put `claude` in its OWN process group (setpgid(0,0)) on Unix so
+    // claude_cli_kill, the spawn-timeout watchdog, and app-exit cleanup
+    // can kill the whole tree — claude may spawn its own child
+    // subprocesses that killing only the direct child would orphan.
+    // Mirrors the same call in agent_spawn (commands/agent_cli/agent.rs).
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn claude: {e}"))?;
@@ -489,7 +500,10 @@ async fn kill_child_for_claude_timeout(
     match child.try_wait() {
         Ok(Some(_status)) => false,
         Ok(None) => {
-            let _ = child.start_kill();
+            // SIGKILL the whole process group, not just `claude` itself —
+            // see the process_group(0) call in claude_cli_spawn. A plain
+            // start_kill() would orphan any tool subprocess claude forked.
+            let _ = kill_process_group(child, KillSignal::Kill);
             timed_out.store(true, Ordering::SeqCst);
             true
         }
@@ -583,20 +597,37 @@ async fn resolve_claude_working_directory(value: Option<String>) -> Result<PathB
 
 /// Kill a running child registered under `stream_id`. Called on
 /// AbortSignal in the frontend. No-op if the id is unknown (e.g. the
-/// process already exited).
+/// process already exited). SIGTERMs claude's whole process group first
+/// (a chance for it, and any tool subprocess it spawned, to shut down
+/// cleanly), then escalates to SIGKILL if it's still alive after
+/// GRACEFUL_KILL_GRACE_PERIOD. Doesn't need an explicit wait() after
+/// that: `graceful_kill_process_group`'s own try_wait() polling already
+/// reaps the child once it exits, and kill_on_drop covers the
+/// non-Unix / already-exited fallback when `child` drops at the end of
+/// this block.
 #[tauri::command]
 pub async fn claude_cli_kill(
     state: State<'_, ClaudeCliState>,
     stream_id: String,
 ) -> Result<(), String> {
     if let Some(mut child) = state.children.lock().await.remove(&stream_id) {
-        let _ = child.start_kill();
-        // Don't wait() here — the stdout-drain task already holds a
-        // wait future elsewhere when it can. Dropping the handle is
-        // enough; kill_on_drop ensures the SIGKILL is sent.
+        graceful_kill_process_group(&mut child, GRACEFUL_KILL_GRACE_PERIOD).await;
     }
     abort_claude_timeout_task(&state.timeout_tasks, &stream_id).await;
     Ok(())
+}
+
+impl ClaudeCliState {
+    /// SIGTERM-then-SIGKILL every tracked `claude` child's process group,
+    /// concurrently (see `kill_all_tracked_children`). Used only during
+    /// app shutdown (see `kill_all_agent_subprocesses` in lib.rs):
+    /// `app.exit(0)` terminates immediately without running Rust `Drop`
+    /// impls, so `kill_on_drop` never fires and these children — plus
+    /// any grandchild tool subprocesses under their process groups —
+    /// would otherwise become orphans.
+    pub(crate) async fn kill_all(&self) {
+        kill_all_tracked_children(&self.children).await;
+    }
 }
 
 #[cfg(test)]
@@ -880,6 +911,11 @@ mod tests {
     fn platform_shell_command(script: &str) -> Command {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(script);
+        // Mirrors the process_group(0) call in claude_cli_spawn: the
+        // timeout watchdog now kills the whole process group (see
+        // kill_child_for_claude_timeout), which only reaches this test
+        // child if it's the leader of its own group.
+        cmd.process_group(0);
         cmd
     }
 
@@ -955,5 +991,61 @@ mod tests {
         assert_eq!(resolved, dir.canonicalize().expect("canonical tempdir"));
 
         std::fs::remove_dir_all(&dir).expect("cleanup temp dir");
+    }
+
+    /// Process-group symmetry for the app-shutdown path: a "claude"-shaped
+    /// leader that forked a grandchild subprocess must have BOTH killed by
+    /// `ClaudeCliState::kill_all`, not just the direct child.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_cli_state_kill_all_terminates_group_including_descendant() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before Unix epoch")
+            .as_nanos();
+        let marker_path = std::env::temp_dir().join(format!(
+            "llm-wiki-claude-kill-all-grandchild-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker_path);
+        let script = format!(
+            "sleep 30 & echo $! > {}; wait",
+            marker_path.to_string_lossy()
+        );
+        let mut cmd = platform_shell_command(&script);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn fake claude leader");
+
+        let state = ClaudeCliState::default();
+        state
+            .children
+            .lock()
+            .await
+            .insert("stream-1".to_string(), child);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let grandchild_pid: i32 = loop {
+            if let Ok(contents) = std::fs::read_to_string(&marker_path) {
+                if let Ok(pid) = contents.trim().parse::<i32>() {
+                    break pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild pid marker file never appeared"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        state.kill_all().await;
+        assert!(state.children.lock().await.is_empty());
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let alive = unsafe { libc::kill(grandchild_pid, 0) == 0 };
+        assert!(!alive, "grandchild survived ClaudeCliState::kill_all");
+        let _ = std::fs::remove_file(&marker_path);
     }
 }

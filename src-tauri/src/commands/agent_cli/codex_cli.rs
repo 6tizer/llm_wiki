@@ -20,7 +20,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use super::cli_resolver::{child_path_env, find_cli_command};
+use super::cli_resolver::{
+    child_path_env, find_cli_command, graceful_kill_process_group, kill_all_tracked_children,
+    kill_process_group, KillSignal, GRACEFUL_KILL_GRACE_PERIOD,
+};
 use crate::commands::runtime_db;
 
 pub struct CodexCliState {
@@ -170,6 +173,14 @@ pub async fn codex_cli_spawn(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    // Put `codex` in its OWN process group (setpgid(0,0)) on Unix so
+    // codex_cli_kill, the spawn-timeout watchdog, and app-exit cleanup
+    // can kill the whole tree — codex may spawn its own child
+    // subprocesses that killing only the direct child would orphan.
+    // Mirrors the same call in agent_spawn (commands/agent_cli/agent.rs).
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn codex: {e}"))?;
@@ -220,7 +231,11 @@ pub async fn codex_cli_spawn(
             let mut children = timeout_children.lock().await;
             if let Some(child) = children.get_mut(&timeout_stream_id) {
                 timeout_flag.store(true, Ordering::SeqCst);
-                let _ = child.start_kill();
+                // SIGKILL the whole process group, not just `codex` itself
+                // — see the process_group(0) call above. A plain
+                // start_kill() would orphan any tool subprocess codex
+                // forked.
+                let _ = kill_process_group(child, KillSignal::Kill);
             }
         }
         timeout_tasks.lock().await.remove(&timeout_task_stream_id);
@@ -408,16 +423,34 @@ async fn resolve_codex_working_directory(value: Option<String>) -> Result<PathBu
         .map_err(|e| format!("Failed to canonicalize Codex CLI working directory {raw}: {e}"))
 }
 
+/// Kill a running child registered under `stream_id`. No-op if the id is
+/// unknown (e.g. the process already exited). SIGTERMs codex's whole
+/// process group first (a chance for it, and any tool subprocess it
+/// spawned, to shut down cleanly), then escalates to SIGKILL if it's
+/// still alive after GRACEFUL_KILL_GRACE_PERIOD.
 #[tauri::command]
 pub async fn codex_cli_kill(
     state: State<'_, CodexCliState>,
     stream_id: String,
 ) -> Result<(), String> {
     if let Some(mut child) = state.children.lock().await.remove(&stream_id) {
-        let _ = child.start_kill();
+        graceful_kill_process_group(&mut child, GRACEFUL_KILL_GRACE_PERIOD).await;
     }
     abort_timeout_task(&state.timeout_tasks, &stream_id).await;
     Ok(())
+}
+
+impl CodexCliState {
+    /// SIGTERM-then-SIGKILL every tracked `codex` child's process group,
+    /// concurrently (see `kill_all_tracked_children`). Used only during
+    /// app shutdown (see `kill_all_agent_subprocesses` in lib.rs):
+    /// `app.exit(0)` terminates immediately without running Rust `Drop`
+    /// impls, so `kill_on_drop` never fires and these children — plus
+    /// any grandchild tool subprocesses under their process groups —
+    /// would otherwise become orphans.
+    pub(crate) async fn kill_all(&self) {
+        kill_all_tracked_children(&self.children).await;
+    }
 }
 
 #[cfg(test)]
@@ -677,5 +710,64 @@ mod tests {
             .await
             .expect("valid project path");
         assert_eq!(resolved, dir.canonicalize().expect("canonical tempdir"));
+    }
+
+    /// Process-group symmetry for the app-shutdown path: a "codex"-shaped
+    /// leader that forked a grandchild subprocess must have BOTH killed by
+    /// `CodexCliState::kill_all`, not just the direct child.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_cli_state_kill_all_terminates_group_including_descendant() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before Unix epoch")
+            .as_nanos();
+        let marker_path = std::env::temp_dir().join(format!(
+            "llm-wiki-codex-kill-all-grandchild-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker_path);
+        let script = format!(
+            "sleep 30 & echo $! > {}; wait",
+            marker_path.to_string_lossy()
+        );
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        cmd.process_group(0);
+        let child = cmd.spawn().expect("spawn fake codex leader");
+
+        let state = CodexCliState::default();
+        state
+            .children
+            .lock()
+            .await
+            .insert("stream-1".to_string(), child);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let grandchild_pid: i32 = loop {
+            if let Ok(contents) = std::fs::read_to_string(&marker_path) {
+                if let Ok(pid) = contents.trim().parse::<i32>() {
+                    break pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild pid marker file never appeared"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        state.kill_all().await;
+        assert!(state.children.lock().await.is_empty());
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let alive = unsafe { libc::kill(grandchild_pid, 0) == 0 };
+        assert!(!alive, "grandchild survived CodexCliState::kill_all");
+        let _ = std::fs::remove_file(&marker_path);
     }
 }
