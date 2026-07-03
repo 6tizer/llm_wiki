@@ -22,7 +22,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 
-use super::cli_resolver::{kill_process_group, KillSignal};
+use super::cli_resolver::{apply_env_allowlist, child_path_env, kill_process_group, KillSignal};
 use crate::api_server;
 use crate::commands::file_sync::ProjectRootState;
 use crate::commands::profile_secrets::OsSecretStore;
@@ -451,12 +451,34 @@ pub async fn agent_spawn(
         "[agent_spawn] stream_id={}, model={:?}, base_url={:?}",
         args.stream_id, args.model, logged_base_url
     );
-    let sidecar_cmd = find_sidecar_command(&app)?;
+    // Resolve the enhanced (login-shell-augmented) PATH once and use it for
+    // BOTH the "is node on PATH" availability check below AND the PATH
+    // actually handed to the spawned process. Checking against one PATH
+    // (previously the raw ambient one via `which::which`) while spawning
+    // with another would let the dev-fallback `node <entry.js>` command
+    // resolve during the check yet fail to spawn (or vice versa).
+    let path_env = child_path_env().await;
+    let node_on_path = match path_env.as_deref() {
+        Some(p) => which::which_in("node", Some(p), ".").is_ok(),
+        None => which::which("node").is_ok(),
+    };
+    let sidecar_cmd = find_sidecar_command(&app, node_on_path)?;
 
     let mut cmd = Command::new(&sidecar_cmd[0]);
     if sidecar_cmd.len() > 1 {
         cmd.args(&sidecar_cmd[1..]);
     }
+
+    // The sidecar previously inherited the full ambient environment (no
+    // allowlist, no explicit PATH). `apply_env_allowlist` locks that down;
+    // unlike claude/codex it needs no provider-secret passthrough — the
+    // sidecar receives provider config via stdin JSON
+    // (`applyAgentProfileEnv`), not ambient env — so PATH (required for the
+    // dev `node <entry.js>` fallback to find the `node` interpreter) is the
+    // only thing that must be set explicitly afterward.
+    apply_env_allowlist(&mut cmd, &[]);
+    let effective_path_env = path_env.unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+    cmd.env("PATH", effective_path_env);
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1617,10 +1639,10 @@ pub fn agent_detect(app: AppHandle) -> Result<bool, String> {
     ))
 }
 
-fn find_sidecar_command(app: &AppHandle) -> Result<Vec<String>, String> {
+fn find_sidecar_command(app: &AppHandle, node_on_path: bool) -> Result<Vec<String>, String> {
     let resource_dir = app.path().resource_dir().ok();
     let cwd = std::env::current_dir().map_err(|e| format!("Cannot resolve sidecar path: {e}"))?;
-    resolve_sidecar_command(resource_dir.as_deref(), &cwd, which::which("node").is_ok())
+    resolve_sidecar_command(resource_dir.as_deref(), &cwd, node_on_path)
 }
 
 fn sidecar_binary_name() -> &'static str {

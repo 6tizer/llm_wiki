@@ -39,6 +39,23 @@ pub(crate) async fn child_path_env() -> Option<String> {
     None
 }
 
+/// `child_path_env()` returns `None` when it can't improve on the ambient
+/// PATH — on Windows always, and on non-Windows whenever the login-shell
+/// PATH probe times out. Those are exactly the cases where falling back to
+/// the ambient PATH the app process already inherited is correct: PATH is
+/// deliberately excluded from `BASE_ENV_ALLOWLIST` (it needs this dedicated
+/// resolution, not the raw ambient copy `apply_env_allowlist` would give
+/// unrelated allowlisted vars), so without this fallback a spawned CLI
+/// would end up with no PATH at all after `apply_env_allowlist`'s
+/// `env_clear` — a functional regression, not a security tightening (PATH
+/// was always meant to pass through).
+pub(crate) fn child_path_env_override(path_env: Option<String>) -> (&'static str, String) {
+    (
+        "PATH",
+        path_env.unwrap_or_else(|| std::env::var("PATH").unwrap_or_default()),
+    )
+}
+
 #[cfg(not(windows))]
 fn merge_child_path_env(shell_path: &str, inherited_path: Option<&str>) -> String {
     match inherited_path {
@@ -183,6 +200,177 @@ fn parse_shell_path_output(stdout: &str) -> Option<String> {
     None
 }
 
+// ── Ambient env allowlist for spawned dev CLIs (claude/codex/sidecar) ──
+//
+// `apply_env_allowlist` (below) `env_clear`s the child and repopulates it
+// ONLY from the categories enumerated across this section, so a spawned
+// CLI can't see whatever the user has stashed in their shell for unrelated
+// tools (`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, any other
+// `*_TOKEN`/`*_KEY`/`*_SECRET`, cloud-provider `*_*` blocks, etc.) — those
+// are exactly what this allowlist exists to keep OUT.
+//
+// What IS covered, and why each category is a legitimate ambient need for
+// a locally-installed dev CLI (not a caller-supplied secret this app is
+// responsible for gating):
+//   - **OS baseline** (`BASE_ENV_ALLOWLIST`, platform-specific): shell/user
+//     identity, temp dir, locale — needed for the CLI's own config/cache
+//     lookup and to not break entirely post-`env_clear`.
+//   - **SSH agent** (`SSH_AGENT_ENV_ALLOWLIST`): `git` operations the CLI
+//     shells out to (pull/push over SSH) need to reach the user's running
+//     ssh-agent, or they hang on a publickey/passphrase prompt with no
+//     interactive terminal to answer it.
+//   - **XDG base directories** (`XDG_ENV_ALLOWLIST`, Unix only): some CLIs
+//     and their Node dependencies read config/cache from an XDG override
+//     rather than assuming `$HOME/.config`; without these, HOME alone
+//     doesn't reproduce the user's actual config location.
+//   - **Terminal** (`TERMINAL_ENV_ALLOWLIST`): output formatting / color
+//     capability detection — cosmetic, not sensitive.
+//   - **Network / TLS-CA** (`NETWORK_TLS_ENV_ALLOWLIST`): corporate proxy
+//     and custom-CA trust config the CLI's (or its Node runtime's) own HTTP
+//     client needs to reach the network at all.
+//
+// Explicitly and permanently excluded, not just "not yet added":
+//   - `NODE_OPTIONS` — a code/flag injection vector (`--require`,
+//     `--inspect`, etc.), not a passive setting; passing it through would
+//     let ambient env execute arbitrary code in the spawned Node process.
+//   - `GIT_SSH_COMMAND` — lets the value replace the SSH invocation
+//     entirely, i.e. run an arbitrary command; `SSH_AUTH_SOCK` gets the
+//     legitimate agent-forwarding need without this.
+//   - Any credential-shaped ambient var (`*_TOKEN`, `*_KEY`, `*_SECRET`,
+//     `AWS_*`, `GITHUB_*`, `GH_*`, …) — these are precisely the unrelated
+//     secrets this allowlist is designed to keep from leaking into an
+//     LLM-driven subprocess.
+//
+// When something new needs to pass through, it belongs in one of the
+// categories above (or a new, equally-explicit one) — not tacked on ad hoc.
+
+/// OS/locale variables every spawned CLI needs regardless of provider —
+/// split by platform because POSIX and Windows use entirely disjoint sets
+/// of baseline env vars for config/cache/temp-dir resolution. A POSIX-only
+/// list applied under `env_clear` on Windows would silently strip
+/// `claude.cmd`/`codex.cmd` (and the Node runtime backing them) of
+/// `SystemRoot`/`APPDATA`/etc., breaking config lookup, temp dirs, and in
+/// some cases process startup entirely — this was PR6b's original gap
+/// (allowlist design never accounted for Windows). Deliberately excludes
+/// `PATH` on both platforms — callers set that separately via
+/// `child_path_env`/`child_path_env_override` since it needs a computed
+/// value (login-shell-resolved on non-Windows), not a raw ambient copy.
+#[cfg(not(windows))]
+pub(crate) const BASE_ENV_ALLOWLIST: &[&str] = &[
+    "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "USER", "LOGNAME",
+];
+
+#[cfg(windows)]
+pub(crate) const BASE_ENV_ALLOWLIST: &[&str] = &[
+    "SystemRoot",
+    "ComSpec",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "PATHEXT",
+    "windir",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USERNAME",
+    "NUMBER_OF_PROCESSORS",
+];
+
+/// SSH agent socket/PID. Not platform-cfg'd — OpenSSH for Windows uses the
+/// same `SSH_AUTH_SOCK` convention (a named pipe path rather than a Unix
+/// socket path, but the same env var), so one shared list covers both.
+/// Without this, a `git` pull/push over SSH that `claude`/`codex` shells
+/// out to can't reach the user's running ssh-agent and hangs waiting for
+/// an interactive publickey/passphrase prompt that never comes.
+const SSH_AGENT_ENV_ALLOWLIST: &[&str] = &["SSH_AUTH_SOCK", "SSH_AGENT_PID"];
+
+/// XDG base-directory overrides — Unix-only convention (no Windows
+/// equivalent, hence the empty `#[cfg(windows)]` arm). Some CLIs and their
+/// Node dependencies resolve config/cache/data dirs from these rather than
+/// assuming `$HOME/.config` etc.; `HOME` alone doesn't reproduce the user's
+/// actual config location when they've set an XDG override.
+#[cfg(not(windows))]
+const XDG_ENV_ALLOWLIST: &[&str] = &[
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+];
+
+#[cfg(windows)]
+const XDG_ENV_ALLOWLIST: &[&str] = &[];
+
+/// Terminal capability detection for CLI output formatting — cosmetic
+/// (colors/box-drawing fallback), not a sensitive or configuration value.
+const TERMINAL_ENV_ALLOWLIST: &[&str] = &["TERM", "COLORTERM"];
+
+/// Corporate-proxy / TLS-CA env every spawned CLI can use — this is network
+/// transport configuration, not a provider secret, so unlike
+/// `CLAUDE_PROVIDER_ENV_ALLOWLIST`/`CODEX_PROVIDER_ENV_ALLOWLIST` it belongs
+/// here once rather than duplicated in each provider-specific list. The
+/// agent sidecar benefits too — its own HTTP calls to the LLM API need the
+/// same proxy/CA config even though it gets provider credentials a
+/// different way (stdin JSON).
+///
+/// - **Proxy** (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` + their
+///   lowercase Unix-convention variants): plenty of real corporate-proxy
+///   setups export ONLY the lowercase form, which is a different env var
+///   name than its uppercase counterpart, not a fallback for it — omitting
+///   either case would silently break `claude`/`codex`/the sidecar behind
+///   such a proxy the moment `env_clear` took over.
+/// - **TLS/CA**: `SSL_CERT_FILE`/`SSL_CERT_DIR` (OpenSSL-family single-file
+///   vs. directory-of-certs forms, in case `claude`/`codex` ever do native
+///   TLS) + `NODE_EXTRA_CA_CERTS`/`NODE_TLS_REJECT_UNAUTHORIZED` —
+///   **all three spawn targets (`claude`, `codex`, the agent sidecar) are
+///   Node or Node-backed processes, and Node does NOT read
+///   `SSL_CERT_FILE`/`SSL_CERT_DIR`** to extend its trust store; it reads
+///   `NODE_EXTRA_CA_CERTS` instead. Without it, a corporate TLS-inspecting
+///   proxy or self-signed internal CA breaks cert validation for all three
+///   even though the OpenSSL-style vars are set. `NODE_TLS_REJECT_UNAUTHORIZED`
+///   is included for the (less common, but real) environments that need it
+///   to disable strict validation entirely.
+const NETWORK_TLS_ENV_ALLOWLIST: &[&str] = &[
+    // Proxy — uppercase
+    "NO_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    // Proxy — lowercase Unix convention
+    "no_proxy",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    // TLS/CA
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+];
+
+/// Wipes the child's inherited environment and repopulates it from the
+/// explicit, categorized allowlist above instead. Spawned CLIs (`claude`,
+/// `codex`, the agent sidecar) run arbitrary user-directed tool calls, so
+/// blindly inheriting the whole app-process environment would hand them
+/// every secret any other part of the app (or its own launch environment)
+/// happens to have stashed in env vars. `extra_passthrough` layers
+/// provider-specific keys (API keys, base URLs) on top of this common set.
+pub(crate) fn apply_env_allowlist(cmd: &mut tokio::process::Command, extra_passthrough: &[&str]) {
+    cmd.env_clear();
+    for key in BASE_ENV_ALLOWLIST
+        .iter()
+        .chain(SSH_AGENT_ENV_ALLOWLIST.iter())
+        .chain(XDG_ENV_ALLOWLIST.iter())
+        .chain(TERMINAL_ENV_ALLOWLIST.iter())
+        .chain(NETWORK_TLS_ENV_ALLOWLIST.iter())
+        .chain(extra_passthrough.iter())
+    {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
+        }
+    }
+}
+
 /// Signal to send when killing a child's process group. Kept name-agnostic
 /// (rather than raw `libc::c_int`) so callers on non-Unix — where
 /// `kill_process_group` always falls back to `Child::start_kill()` — don't
@@ -318,6 +506,343 @@ pub(crate) async fn kill_all_tracked_children(
         graceful_kill_process_group(&mut child, GRACEFUL_KILL_GRACE_PERIOD).await;
     }))
     .await;
+}
+
+#[cfg(test)]
+mod env_allowlist_tests {
+    use super::{apply_env_allowlist, child_path_env_override};
+
+    // Serializes the tests below since `std::env::set_var`/`remove_var`
+    // mutate process-wide state and `cargo test` runs tests in the same
+    // binary concurrently by default. Mirrors the pattern in proxy.rs.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn env_keys(cmd: &tokio::process::Command) -> std::collections::HashSet<String> {
+        cmd.as_std()
+            .get_envs()
+            .filter_map(|(k, v)| v.map(|_| k.to_string_lossy().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn drops_non_allowlisted_vars() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let canary_key = "LLM_WIKI_TEST_CANARY_NOT_ALLOWLISTED";
+        std::env::set_var(canary_key, "leak-me");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        let keys = env_keys(&cmd);
+        std::env::remove_var(canary_key);
+        assert!(
+            !keys.contains(canary_key),
+            "non-allowlisted var must not reach the child"
+        );
+    }
+
+    #[test]
+    fn passes_through_base_allowlist_hit() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        // `HOME`/`USERPROFILE` is in BASE_ENV_ALLOWLIST on every platform
+        // (see the `#[cfg(windows)]`/`#[cfg(not(windows))]` split there) —
+        // picking the platform-appropriate key keeps this test meaningful
+        // instead of just failing outright on a hypothetical Windows run.
+        #[cfg(not(windows))]
+        let key = "HOME";
+        #[cfg(windows)]
+        let key = "USERPROFILE";
+        let prior = std::env::var(key).ok();
+        std::env::set_var(key, "/tmp/llm-wiki-allowlist-test-home");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(
+            envs.get(key).map(String::as_str),
+            Some("/tmp/llm-wiki-allowlist-test-home"),
+            "allowlisted var must pass through with its current value"
+        );
+    }
+
+    /// Regression (Codex external-review P2-2): PR6b's original
+    /// `BASE_ENV_ALLOWLIST` was POSIX-only (`HOME`/`SHELL`/`USER`/...),
+    /// which under `env_clear` would strip Windows CLIs of `SystemRoot`,
+    /// `APPDATA`, etc. entirely. This only compiles/runs on an actual
+    /// Windows target, but it pins the platform-specific list's shape so a
+    /// future edit can't silently drop the Windows baseline again.
+    #[cfg(windows)]
+    #[test]
+    fn windows_base_allowlist_covers_windows_baseline_vars() {
+        use super::BASE_ENV_ALLOWLIST;
+        for expected in [
+            "SystemRoot",
+            "ComSpec",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "TEMP",
+            "TMP",
+        ] {
+            assert!(
+                BASE_ENV_ALLOWLIST.contains(&expected),
+                "Windows BASE_ENV_ALLOWLIST must include {expected}"
+            );
+        }
+    }
+
+    /// Proxy env is shared across all callers (BASE, not per-provider) so
+    /// `apply_env_allowlist(cmd, &[])` — used verbatim by the agent
+    /// sidecar — must still pass it through with no `extra_passthrough`.
+    #[test]
+    fn passes_through_network_proxy_allowlist_hit_with_no_extra_passthrough() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let key = "HTTP_PROXY";
+        let prior = std::env::var(key).ok();
+        std::env::set_var(key, "http://proxy.test:8080");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(
+            envs.get(key).map(String::as_str),
+            Some("http://proxy.test:8080"),
+            "network-proxy allowlist entries must pass through even with an empty extra_passthrough"
+        );
+    }
+
+    /// Regression (Codex external-review P2): the lowercase Unix proxy
+    /// convention (`http_proxy`/`https_proxy`/`no_proxy`/`all_proxy`) is a
+    /// DIFFERENT env var name than its uppercase counterpart — plenty of
+    /// real setups export only the lowercase form — so it needs its own
+    /// allowlist entry, not just the uppercase one.
+    #[test]
+    fn passes_through_lowercase_network_proxy_allowlist_hit() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let key = "http_proxy";
+        let prior = std::env::var(key).ok();
+        std::env::set_var(key, "http://lowercase-proxy.test:8080");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(
+            envs.get(key).map(String::as_str),
+            Some("http://lowercase-proxy.test:8080"),
+            "lowercase proxy env must pass through as its own allowlist entry"
+        );
+    }
+
+    /// Regression (Codex external-review P2): `claude`/`codex`/the sidecar
+    /// are all Node or Node-backed processes, and Node reads
+    /// `NODE_EXTRA_CA_CERTS` (not `SSL_CERT_FILE`) to extend its trust
+    /// store — a corporate TLS-inspecting proxy or self-signed internal CA
+    /// would otherwise break cert validation even with `SSL_CERT_FILE` set.
+    #[test]
+    fn passes_through_node_extra_ca_certs_allowlist_hit() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let key = "NODE_EXTRA_CA_CERTS";
+        let prior = std::env::var(key).ok();
+        std::env::set_var(key, "/etc/ssl/corp-ca-bundle.pem");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(
+            envs.get(key).map(String::as_str),
+            Some("/etc/ssl/corp-ca-bundle.pem"),
+            "NODE_EXTRA_CA_CERTS must pass through — Node's actual custom-CA env var"
+        );
+    }
+
+    /// Regression (Codex external-review P2, allowlist enumeration round
+    /// 5): a `git` pull/push over SSH that `claude`/`codex` shells out to
+    /// needs to reach the user's running ssh-agent via `SSH_AUTH_SOCK`, or
+    /// it hangs on a publickey/passphrase prompt with no terminal to answer
+    /// it.
+    #[test]
+    fn passes_through_ssh_auth_sock_allowlist_hit() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let key = "SSH_AUTH_SOCK";
+        let prior = std::env::var(key).ok();
+        std::env::set_var(key, "/tmp/ssh-agent.sock");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(
+            envs.get(key).map(String::as_str),
+            Some("/tmp/ssh-agent.sock"),
+            "SSH_AUTH_SOCK must pass through so shelled-out git-over-SSH can reach the agent"
+        );
+    }
+
+    /// XDG base-directory override — Unix-only category (`XDG_ENV_ALLOWLIST`
+    /// is empty on Windows, which has no XDG convention).
+    #[cfg(not(windows))]
+    #[test]
+    fn passes_through_xdg_config_home_allowlist_hit() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let key = "XDG_CONFIG_HOME";
+        let prior = std::env::var(key).ok();
+        std::env::set_var(key, "/tmp/xdg-config-override");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+
+        match prior {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(
+            envs.get(key).map(String::as_str),
+            Some("/tmp/xdg-config-override"),
+            "XDG_CONFIG_HOME must pass through — HOME alone doesn't reproduce an XDG override"
+        );
+    }
+
+    /// Pins the security boundary this whole allowlist exists for: unrelated
+    /// cloud/VCS credentials the user has in their shell for OTHER tools
+    /// must never reach an LLM-driven subprocess, regardless of how many
+    /// legitimate categories get added to the allowlist over time. If this
+    /// ever starts failing, something added a credential-shaped var to the
+    /// allowlist by mistake.
+    #[test]
+    fn drops_credential_shaped_canary_vars_even_with_extra_passthrough() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let canaries = ["AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "GH_TOKEN"];
+        for key in canaries {
+            std::env::set_var(key, "leak-me");
+        }
+
+        let mut cmd = tokio::process::Command::new("true");
+        // Even with an unrelated extra_passthrough entry, the canaries
+        // themselves are never in any list, so they must still be dropped.
+        apply_env_allowlist(&mut cmd, &["ANTHROPIC_API_KEY"]);
+
+        let keys = env_keys(&cmd);
+        for key in canaries {
+            std::env::remove_var(key);
+        }
+        for key in canaries {
+            assert!(
+                !keys.contains(key),
+                "credential-shaped canary '{key}' must never pass through the allowlist"
+            );
+        }
+    }
+
+    #[test]
+    fn extra_passthrough_is_additive_to_base_allowlist() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let key = "LLM_WIKI_TEST_PROVIDER_KEY";
+        std::env::set_var(key, "provider-secret");
+
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[key]);
+
+        let keys = env_keys(&cmd);
+        std::env::remove_var(key);
+        assert!(
+            keys.contains(key),
+            "extra_passthrough entries must pass through alongside the base allowlist"
+        );
+    }
+
+    /// Provider env (allowlist) must be applied before the caller's own PATH
+    /// override, so a later explicit `.env("PATH", ..)` call always wins —
+    /// `env_clear` only needs to run once, up front.
+    #[test]
+    fn allowlist_then_path_override_preserves_explicit_path() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let mut cmd = tokio::process::Command::new("true");
+        apply_env_allowlist(&mut cmd, &[]);
+        cmd.env("PATH", "/custom/bin");
+
+        let envs: std::collections::HashMap<String, String> = cmd
+            .as_std()
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .collect();
+        assert_eq!(envs.get("PATH").map(String::as_str), Some("/custom/bin"));
+    }
+
+    #[test]
+    fn child_path_env_override_targets_path() {
+        assert_eq!(
+            child_path_env_override(Some("/opt/homebrew/bin:/usr/bin".to_string())),
+            ("PATH", "/opt/homebrew/bin:/usr/bin".to_string())
+        );
+    }
+
+    /// Regression (PR6b gate P1): `child_path_env()` returns `None` on
+    /// Windows always, and on non-Windows whenever the login-shell PATH
+    /// probe times out. Post-`apply_env_allowlist` (which `env_clear`s and
+    /// deliberately excludes PATH from its allowlist), that `None` MUST
+    /// fall back to the ambient PATH rather than leaving the child with no
+    /// PATH at all — this is the shared helper `claude_cli.rs` and
+    /// `codex_cli.rs` both call for their PATH override.
+    #[test]
+    fn child_path_env_override_falls_back_to_ambient_path_when_none() {
+        let ambient = std::env::var("PATH").unwrap_or_default();
+        assert_eq!(child_path_env_override(None), ("PATH", ambient));
+    }
 }
 
 #[cfg(all(test, not(windows)))]
