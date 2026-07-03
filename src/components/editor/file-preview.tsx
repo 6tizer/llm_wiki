@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { convertFileSrc } from "@tauri-apps/api/core"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -34,12 +34,16 @@ export function FilePreview({ filePath, textContent }: FilePreviewProps) {
   const fileName = getFileName(filePath)
 
   switch (category) {
+    // `key={filePath}` forces React to remount on file change rather than
+    // reuse the instance — these three carry an internal `broken` state
+    // (set by `onError`) that must not survive a switch to a different,
+    // perfectly valid file.
     case "image":
-      return <ImagePreview filePath={filePath} fileName={fileName} />
+      return <ImagePreview key={filePath} filePath={filePath} fileName={fileName} />
     case "video":
-      return <VideoPreview filePath={filePath} fileName={fileName} />
+      return <VideoPreview key={filePath} filePath={filePath} fileName={fileName} />
     case "audio":
-      return <AudioPreview filePath={filePath} fileName={fileName} />
+      return <AudioPreview key={filePath} filePath={filePath} fileName={fileName} />
     case "pdf":
       return <TextPreview filePath={filePath} content={textContent} label="PDF (extracted text)" />
     case "code":
@@ -55,17 +59,46 @@ export function FilePreview({ filePath, textContent }: FilePreviewProps) {
   }
 }
 
+// Falls back to a placeholder when `convertFileSrc` resolves to a path
+// outside the asset-protocol scope (e.g. project just closed, or a stale
+// path from before a project switch) — the webview would otherwise show a
+// broken-media icon. Different from search-view.tsx's precedent (silent
+// opacity-hide onto a bg-muted thumbnail slot): this is a full-page single
+// preview, so a wordless blank is worse UX than an explicit placeholder.
+function BrokenMediaPlaceholder({
+  icon: Icon,
+  fileName,
+}: {
+  icon: typeof FileText
+  fileName: string
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 text-center">
+      <Icon className="h-16 w-16 text-muted-foreground/30" />
+      <p className="text-sm text-muted-foreground">
+        Preview unavailable for &ldquo;{fileName}&rdquo;
+      </p>
+    </div>
+  )
+}
+
 function ImagePreview({ filePath, fileName }: { filePath: string; fileName: string }) {
   const src = convertFileSrc(filePath)
+  const [broken, setBroken] = useState(false)
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 text-xs text-muted-foreground">{filePath}</div>
       <div className="flex flex-1 items-center justify-center overflow-auto rounded-lg bg-muted/30">
-        <img
-          src={src}
-          alt={fileName}
-          className="max-h-full max-w-full object-contain"
-        />
+        {broken ? (
+          <BrokenMediaPlaceholder icon={ImageIcon} fileName={fileName} />
+        ) : (
+          <img
+            src={src}
+            alt={fileName}
+            className="max-h-full max-w-full object-contain"
+            onError={() => setBroken(true)}
+          />
+        )}
       </div>
     </div>
   )
@@ -73,17 +106,23 @@ function ImagePreview({ filePath, fileName }: { filePath: string; fileName: stri
 
 function VideoPreview({ filePath, fileName }: { filePath: string; fileName: string }) {
   const src = convertFileSrc(filePath)
+  const [broken, setBroken] = useState(false)
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 text-xs text-muted-foreground">{filePath}</div>
       <div className="flex flex-1 items-center justify-center overflow-auto rounded-lg bg-black">
-        <video
-          src={src}
-          controls
-          className="max-h-full max-w-full"
-        >
-          <track kind="captions" label={fileName} />
-        </video>
+        {broken ? (
+          <BrokenMediaPlaceholder icon={Film} fileName={fileName} />
+        ) : (
+          <video
+            src={src}
+            controls
+            className="max-h-full max-w-full"
+            onError={() => setBroken(true)}
+          >
+            <track kind="captions" label={fileName} />
+          </video>
+        )}
       </div>
     </div>
   )
@@ -91,14 +130,21 @@ function VideoPreview({ filePath, fileName }: { filePath: string; fileName: stri
 
 function AudioPreview({ filePath, fileName }: { filePath: string; fileName: string }) {
   const src = convertFileSrc(filePath)
+  const [broken, setBroken] = useState(false)
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
       <div className="text-xs text-muted-foreground">{filePath}</div>
-      <Music className="h-16 w-16 text-muted-foreground/50" />
-      <p className="text-sm font-medium">{fileName}</p>
-      <audio src={src} controls className="w-full max-w-md">
-        <track kind="captions" label={fileName} />
-      </audio>
+      {broken ? (
+        <BrokenMediaPlaceholder icon={Music} fileName={fileName} />
+      ) : (
+        <>
+          <Music className="h-16 w-16 text-muted-foreground/50" />
+          <p className="text-sm font-medium">{fileName}</p>
+          <audio src={src} controls className="w-full max-w-md" onError={() => setBroken(true)}>
+            <track kind="captions" label={fileName} />
+          </audio>
+        </>
+      )}
     </div>
   )
 }

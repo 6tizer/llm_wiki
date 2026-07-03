@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use chrono::Local;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::panic_guard::run_guarded;
@@ -10,12 +10,15 @@ use crate::types::wiki::WikiProject;
 
 #[tauri::command]
 pub fn create_project(
+    app: AppHandle,
     name: String,
     path: String,
     root_state: State<'_, crate::commands::file_sync::ProjectRootState>,
 ) -> Result<WikiProject, String> {
     run_guarded("create_project", || {
-        create_project_impl(name, path, &root_state)
+        let project = create_project_impl(name, path, &root_state)?;
+        apply_asset_scope_switch(&app, root_state.get());
+        Ok(project)
     })
 }
 
@@ -266,6 +269,7 @@ related: []
 
 #[tauri::command]
 pub fn open_project(
+    app: AppHandle,
     path: String,
     root_state: State<'_, crate::commands::file_sync::ProjectRootState>,
 ) -> Result<WikiProject, String> {
@@ -282,6 +286,8 @@ pub fn open_project(
             root_state.set(root.to_path_buf());
         }
 
+        apply_asset_scope_switch(&app, root_state.get());
+
         // Derive project name from the directory name
         let name = root
             .file_name()
@@ -295,6 +301,39 @@ pub fn open_project(
             path: path.replace('\\', "/"),
         })
     })
+}
+
+/// Grants the asset-protocol scope access to the newly-opened project root.
+/// The scope starts fail-closed (`tauri.conf.json` scope: []), so this is a
+/// large tightening over the old `["**"]` even though it only ever grows
+/// within a session.
+///
+/// Deliberately does NOT forbid the previous root. Tauri's scope is
+/// increase-only with no unforbid API, and forbid takes precedence over
+/// allow — so a `forbid` here would be permanent: reopening that same
+/// project later (A → B → A) would re-`allow` A, but the earlier `forbid`
+/// from the A → B switch still wins, permanently breaking `asset://` media
+/// previews for a project the user is legitimately back in. What
+/// accumulates instead is the set of project directories the user has
+/// actively opened THIS session — bounded, low-sensitivity (these are
+/// projects they already chose to open), and strictly better than the
+/// previous `["**"]`. The real enforcement boundary for reads is the fs
+/// command sandbox (`ProjectRootState`) plus, for markdown image rendering,
+/// `markdown-image-resolver`'s `isInsideProject` allowlist — both scoped to
+/// the CURRENT root regardless of what asset-protocol has accumulated.
+///
+/// Scope errors are logged, not propagated: the project is already open by
+/// the time this runs, and failing the whole command over an asset-protocol
+/// registration issue would block legitimate work for no security benefit.
+fn apply_asset_scope_switch(app: &AppHandle, new_root: Option<std::path::PathBuf>) {
+    let Some(new) = new_root else { return };
+    if let Err(e) = app.asset_protocol_scope().allow_directory(&new, true) {
+        eprintln!(
+            "apply_asset_scope_switch: failed to allow new root '{}': {}",
+            new.display(),
+            e
+        );
+    }
 }
 
 #[tauri::command]

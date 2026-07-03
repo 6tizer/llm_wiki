@@ -12,6 +12,43 @@ use super::path_safety::validate_within_project;
 use crate::panic_guard::run_guarded;
 use crate::types::wiki::FileNode;
 
+/// DOCX parsing loads the whole file into memory via `docx_rs::read_docx`
+/// (no streaming API). Capped to bound worst-case memory use from a
+/// maliciously or accidentally huge `.docx` in the project tree.
+const MAX_DOCX_INPUT_BYTES: u64 = 64 * 1024 * 1024;
+/// Base64 inflates the source bytes by ~1/3, and the result crosses the IPC
+/// boundary to the webview as one JSON string — costlier per byte than a
+/// plain hash-and-discard read, so this stays capped even though it shares
+/// `MAX_HASH_BYTES`'s (file_sync.rs) order of magnitude.
+const MAX_BASE64_READ_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Stats `fs_path` and rejects it if larger than `cap_bytes`, otherwise
+/// returns its size. `label` is what shows up in the error message (the
+/// caller's original, pre-sandbox-validation path string, so errors
+/// reference what the user/frontend passed in rather than an internal
+/// canonicalized one); `kind` is a short type label (e.g. "DOCX") prefixed
+/// into both the stat-failure and over-cap messages. Shared by the two
+/// full-file-read paths that need a size cap (`extract_docx_with_library`,
+/// `read_file_as_base64`) so they produce one consistent error format
+/// instead of two hand-written ones.
+fn reject_if_over_cap(
+    fs_path: impl AsRef<Path>,
+    label: &str,
+    cap_bytes: u64,
+    kind: &str,
+) -> Result<u64, String> {
+    let size = fs::metadata(fs_path)
+        .map_err(|e| format!("Failed to stat {} '{}': {}", kind, label, e))?
+        .len();
+    if size > cap_bytes {
+        return Err(format!(
+            "{} '{}' is {} bytes, exceeding the {}-byte limit",
+            kind, label, size, cap_bytes
+        ));
+    }
+    Ok(size)
+}
+
 /// Validate a path against the project root. Write/delete commands fail-closed
 /// when the root is unknown (no project open); read commands degrade to
 /// allowing the path (legacy behavior) so project-open flows still work.
@@ -484,6 +521,7 @@ fn extract_office_text(path: &str, ext: &str) -> Result<String, String> {
 
 /// Extract DOCX using docx-rs library for proper structural parsing.
 fn extract_docx_with_library(path: &str) -> Result<String, String> {
+    reject_if_over_cap(path, path, MAX_DOCX_INPUT_BYTES, "DOCX")?;
     let bytes = fs::read(path).map_err(|e| format!("Failed to read DOCX '{}': {}", path, e))?;
     let docx = docx_rs::read_docx(&bytes)
         .map_err(|e| format!("Failed to parse DOCX '{}': {:?}", path, e))?;
@@ -1530,7 +1568,7 @@ pub async fn create_directory(
 /// Unknown extensions fall back to `application/octet-stream`,
 /// which all major vision endpoints accept (Anthropic / OpenAI both
 /// also support that as a generic fallback).
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileBase64 {
     pub base64: String,
@@ -1542,36 +1580,40 @@ pub async fn read_file_as_base64(
     path: String,
     state: State<'_, ProjectRootState>,
 ) -> Result<FileBase64, String> {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_guarded("read_file_as_base64", || {
-            let bytes =
-                fs::read(&validated).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-            let ext = validated
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let mime_type = match ext.as_str() {
-                "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
-                "gif" => "image/gif",
-                "webp" => "image/webp",
-                "bmp" => "image/bmp",
-                "tiff" | "tif" => "image/tiff",
-                "svg" => "image/svg+xml",
-                _ => "application/octet-stream",
-            }
-            .to_string();
-            Ok(FileBase64 {
-                base64: B64.encode(&bytes),
-                mime_type,
-            })
+            read_file_as_base64_validated(validated, path)
         })
     })
     .await
     .map_err(|e| format!("read_file_as_base64 blocking task join error: {e}"))?
+}
+
+fn read_file_as_base64_validated(validated: PathBuf, path: String) -> Result<FileBase64, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    reject_if_over_cap(&validated, &path, MAX_BASE64_READ_BYTES, "file")?;
+    let bytes = fs::read(&validated).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+    let ext = validated
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime_type = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+    Ok(FileBase64 {
+        base64: B64.encode(&bytes),
+        mime_type,
+    })
 }
 
 /// Cheap existence check without reading or classifying the file.
@@ -2437,5 +2479,80 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Creates a file of exactly `size` bytes without writing `size` bytes
+    /// of real data — `set_len` punches a sparse hole, so this stays fast
+    /// even at the 64MiB cap boundary tested below.
+    fn tmp_sized_file(name: &str, size: u64) -> PathBuf {
+        let path = tmp_path(name);
+        let f = fs::File::create(&path).unwrap();
+        f.set_len(size).unwrap();
+        path
+    }
+
+    #[test]
+    fn extract_docx_with_library_rejects_input_over_cap() {
+        let path = tmp_sized_file("docx-over-cap.docx", MAX_DOCX_INPUT_BYTES + 1);
+        let err = extract_docx_with_library(&path.to_string_lossy()).unwrap_err();
+        assert!(
+            err.contains("exceeding"),
+            "expected a size-limit error, got: {err}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    /// The size gate must accept exactly-at-cap input — only later parsing
+    /// (this sparse file isn't a real DOCX) should fail it.
+    #[test]
+    fn extract_docx_with_library_allows_input_at_exact_cap() {
+        let path = tmp_sized_file("docx-at-cap.docx", MAX_DOCX_INPUT_BYTES);
+        let err = extract_docx_with_library(&path.to_string_lossy()).unwrap_err();
+        assert!(
+            !err.contains("exceeding"),
+            "size gate should not reject exact-cap input: {err}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_file_as_base64_validated_encodes_small_file() {
+        let path = tmp_path("base64-small").with_extension("png");
+        fs::write(&path, b"image-bytes").unwrap();
+
+        let result =
+            read_file_as_base64_validated(path.clone(), path.to_string_lossy().to_string())
+                .unwrap();
+
+        assert_eq!(result.mime_type, "image/png");
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        assert_eq!(B64.decode(result.base64).unwrap(), b"image-bytes");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_file_as_base64_validated_rejects_input_over_cap() {
+        let path = tmp_sized_file("base64-over-cap.bin", MAX_BASE64_READ_BYTES + 1);
+        let err =
+            read_file_as_base64_validated(path.clone(), path.to_string_lossy().to_string())
+                .unwrap_err();
+        assert!(
+            err.contains("exceeding"),
+            "expected a size-limit error, got: {err}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_file_as_base64_validated_allows_input_at_exact_cap() {
+        let path = tmp_sized_file("base64-at-cap.bin", MAX_BASE64_READ_BYTES);
+        let result =
+            read_file_as_base64_validated(path.clone(), path.to_string_lossy().to_string())
+                .unwrap();
+
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let decoded = B64.decode(result.base64).unwrap();
+        assert_eq!(decoded.len() as u64, MAX_BASE64_READ_BYTES);
+        let _ = fs::remove_file(&path);
     }
 }

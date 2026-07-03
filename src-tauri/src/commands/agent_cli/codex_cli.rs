@@ -21,10 +21,26 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::cli_resolver::{
-    child_path_env, find_cli_command, graceful_kill_process_group, kill_all_tracked_children,
-    kill_process_group, KillSignal, GRACEFUL_KILL_GRACE_PERIOD,
+    apply_env_allowlist, child_path_env, child_path_env_override, find_cli_command,
+    graceful_kill_process_group, kill_all_tracked_children, kill_process_group, KillSignal,
+    GRACEFUL_KILL_GRACE_PERIOD,
 };
 use crate::commands::runtime_db;
+
+/// Provider env `codex` reads directly — same rationale as
+/// `CLAUDE_PROVIDER_ENV_ALLOWLIST` in claude_cli.rs: cc-switch-style
+/// terminal provider setups have no application-layer injection point for
+/// `codex`, so ambient env is the only way to point it at a non-default
+/// endpoint/key/home dir. Proxy/TLS-CA env is NOT duplicated here — see
+/// `NETWORK_TLS_ENV_ALLOWLIST` in cli_resolver.rs.
+const CODEX_PROVIDER_ENV_ALLOWLIST: &[&str] = &[
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "CODEX_HOME",
+    "CODEX_API_KEY",
+    "CODEX_ACCESS_TOKEN",
+    "CODEX_CA_CERTIFICATE",
+];
 
 pub struct CodexCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
@@ -100,9 +116,9 @@ pub async fn codex_cli_detect() -> Result<DetectResult, String> {
     let path_str = path.to_string_lossy().to_string();
     let mut cmd = Command::new(&path);
     suppress_windows_console(&mut cmd);
-    if let Some(path_env) = child_path_env().await {
-        cmd.env("PATH", path_env);
-    }
+    apply_env_allowlist(&mut cmd, CODEX_PROVIDER_ENV_ALLOWLIST);
+    let (path_key, path_value) = child_path_env_override(child_path_env().await);
+    cmd.env(path_key, path_value);
     let output = tokio::time::timeout(Duration::from_secs(3), cmd.arg("--version").output()).await;
 
     match output {
@@ -162,9 +178,9 @@ pub async fn codex_cli_spawn(
     let codex = find_codex_command().await?;
     let mut cmd = Command::new(&codex);
     suppress_windows_console(&mut cmd);
-    if let Some(path_env) = child_path_env().await {
-        cmd.env("PATH", path_env);
-    }
+    apply_env_allowlist(&mut cmd, CODEX_PROVIDER_ENV_ALLOWLIST);
+    let (path_key, path_value) = child_path_env_override(child_path_env().await);
+    cmd.env(path_key, path_value);
     cmd.args(build_codex_cli_args(&model, isolate_local_config));
     cmd.current_dir(&working_directory);
 

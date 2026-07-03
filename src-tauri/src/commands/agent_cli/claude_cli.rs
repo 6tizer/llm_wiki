@@ -31,10 +31,27 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::cli_resolver::{
-    child_path_env, find_cli_command, graceful_kill_process_group, kill_all_tracked_children,
-    kill_process_group, KillSignal, GRACEFUL_KILL_GRACE_PERIOD,
+    apply_env_allowlist, child_path_env, child_path_env_override, find_cli_command,
+    graceful_kill_process_group, kill_all_tracked_children, kill_process_group, KillSignal,
+    GRACEFUL_KILL_GRACE_PERIOD,
 };
 use crate::commands::runtime_db;
+
+/// Provider env `claude` reads directly (no application-layer injection
+/// point exists for these — cc-switch and similar terminal-provider setups
+/// rely on ambient env being the only way to point `claude` at a
+/// non-Anthropic-default endpoint/model/key). Proxy/TLS-CA env
+/// (`NO_PROXY`/`HTTP(S)_PROXY`/`SSL_CERT_FILE`/`NODE_EXTRA_CA_CERTS`/etc.) is
+/// NOT duplicated here — it's network transport config, not a provider
+/// secret, so it lives once in `apply_env_allowlist`'s shared
+/// `NETWORK_TLS_ENV_ALLOWLIST`.
+const CLAUDE_PROVIDER_ENV_ALLOWLIST: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+];
 
 /// Shared state holding running `claude` child processes keyed by the
 /// frontend-generated stream id. Registered via .manage() in lib.rs.
@@ -135,10 +152,6 @@ fn claude_stdin_event(role: &str, content: &[serde_json::Value]) -> serde_json::
     })
 }
 
-fn child_path_env_override(path_env: Option<String>) -> Option<(&'static str, String)> {
-    path_env.map(|value| ("PATH", value))
-}
-
 async fn find_claude_command() -> Result<PathBuf, String> {
     find_cli_command("claude", &["claude.cmd", "claude.exe"]).await
 }
@@ -174,9 +187,9 @@ pub async fn claude_cli_detect() -> Result<DetectResult, String> {
 
     let mut cmd = Command::new(&path);
     suppress_windows_console(&mut cmd);
-    if let Some((key, value)) = child_path_env_override(child_path_env().await) {
-        cmd.env(key, value);
-    }
+    apply_env_allowlist(&mut cmd, CLAUDE_PROVIDER_ENV_ALLOWLIST);
+    let (path_key, path_value) = child_path_env_override(child_path_env().await);
+    cmd.env(path_key, path_value);
     let output = tokio::time::timeout(Duration::from_secs(3), cmd.arg("--version").output()).await;
 
     match output {
@@ -284,9 +297,9 @@ pub async fn claude_cli_spawn(
     let claude = find_claude_command().await?;
     let mut cmd = Command::new(&claude);
     suppress_windows_console(&mut cmd);
-    if let Some((key, value)) = child_path_env_override(child_path_env().await) {
-        cmd.env(key, value);
-    }
+    apply_env_allowlist(&mut cmd, CLAUDE_PROVIDER_ENV_ALLOWLIST);
+    let (path_key, path_value) = child_path_env_override(child_path_env().await);
+    cmd.env(path_key, path_value);
     cmd.args(build_claude_cli_args(&model, isolate_local_config));
     cmd.current_dir(&working_directory);
 
@@ -705,14 +718,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn claude_child_path_env_override_targets_path() {
-        assert_eq!(
-            child_path_env_override(Some("/opt/homebrew/bin:/usr/bin".to_string())),
-            Some(("PATH", "/opt/homebrew/bin:/usr/bin".to_string()))
-        );
-        assert_eq!(child_path_env_override(None), None);
-    }
+    // `child_path_env_override`'s tests moved to cli_resolver.rs — it now
+    // lives there, shared with codex_cli.rs.
 
     #[test]
     fn claude_args_do_not_isolate_local_config_by_default() {
