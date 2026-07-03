@@ -6,11 +6,40 @@ import {
   runtimeTimelineList,
   type RuntimeDbHealthState,
   type RuntimeJobList,
+  type RuntimeJobRecord,
+  type RuntimeJobState,
   type RuntimeProgressList,
   type RuntimeProfilePoolList,
   type RuntimeStagingArtifactList,
   type RuntimeTimelineList,
 } from "@/commands/runtime-db"
+import { MARKDOWN_CONFLICT_REPAIR_KIND } from "@/commands/markdown-commit-repair"
+import {
+  BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+  BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+} from "@/core-runtime/parallel-knowledge"
+
+/**
+ * SPEC-5-FIX PR5: these three job kinds are produced by the bulk-knowledge
+ * pipeline (staging artifact repair, long-document map-reduce repair, and
+ * Markdown commit conflict repair) but have no registered consumer yet --
+ * they are structural orphans by design (see spec-5-fix-pipeline-wiring.md
+ * PR5). Rather than leaving them silently invisible, runtime diagnostics
+ * surfaces how many are pending/failed per kind so the gap is queryable
+ * instead of a silent black hole.
+ */
+export const REPAIR_JOB_KINDS = [
+  BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
+  BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
+  MARKDOWN_CONFLICT_REPAIR_KIND,
+] as const
+
+const PENDING_REPAIR_JOB_STATES: readonly RuntimeJobState[] = [
+  "queued",
+  "running",
+  "paused",
+  "retry-wait",
+]
 
 export type RuntimeDiagnosticsStatus =
   | RuntimeDbHealthState
@@ -30,6 +59,12 @@ export interface RuntimeDiagnosticsSection<T> {
   readonly error: string | null
 }
 
+export interface RuntimeRepairJobKindSummary {
+  readonly kind: string
+  readonly pendingCount: number
+  readonly failedCount: number
+}
+
 export interface RuntimeDiagnosticsSummary {
   readonly queuedJobCount: number
   readonly activeJobCount: number
@@ -43,6 +78,10 @@ export interface RuntimeDiagnosticsSummary {
   readonly stagingArtifactCount: number
   readonly activeProfileClaimCount: number
   readonly circuitBreakerCount: number
+  /** Total pending (queued/running/paused/retry-wait) repair jobs across all unconsumed repair kinds. */
+  readonly repairJobPendingCount: number
+  /** Per-kind breakdown for the unconsumed repair job kinds (see REPAIR_JOB_KINDS). */
+  readonly repairJobsByKind: readonly RuntimeRepairJobKindSummary[]
 }
 
 export interface RuntimeDiagnosticsSnapshot {
@@ -123,6 +162,7 @@ function summarizeRuntimeDiagnostics(
   profilePool: RuntimeDiagnosticsSection<RuntimeProfilePoolList>,
 ): RuntimeDiagnosticsSummary {
   const jobRows = jobs.data?.jobs ?? []
+  const repairJobsByKind = summarizeRepairJobsByKind(jobRows)
 
   return {
     queuedJobCount: jobRows.filter((job) => job.state === "queued").length,
@@ -137,7 +177,26 @@ function summarizeRuntimeDiagnostics(
     stagingArtifactCount: stagingArtifacts.data?.artifacts.length ?? 0,
     activeProfileClaimCount: profilePool.data?.activeClaims.length ?? 0,
     circuitBreakerCount: profilePool.data?.circuitBreakers.length ?? 0,
+    repairJobPendingCount: repairJobsByKind.reduce(
+      (sum, entry) => sum + entry.pendingCount,
+      0,
+    ),
+    repairJobsByKind,
   }
+}
+
+function summarizeRepairJobsByKind(
+  jobRows: readonly RuntimeJobRecord[],
+): RuntimeRepairJobKindSummary[] {
+  return REPAIR_JOB_KINDS.map((kind) => {
+    const rows = jobRows.filter((job) => job.kind === kind)
+    return {
+      kind,
+      pendingCount: rows.filter((job) => PENDING_REPAIR_JOB_STATES.includes(job.state))
+        .length,
+      failedCount: rows.filter((job) => job.state === "failed").length,
+    }
+  })
 }
 
 function describeError(error: unknown): string {

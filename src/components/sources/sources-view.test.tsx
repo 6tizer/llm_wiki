@@ -29,11 +29,21 @@ const bulkRuntimeEntryMocks = vi.hoisted(() => ({
   enqueueBulkKnowledgePrepareJobs: vi.fn(),
 }))
 
+// SPEC-5-FIX PR5: runBulkKnowledgePrepare now also drives a commit-integration
+// pass. Mocked wholesale here (same pattern as bulk-runtime-entry above) so
+// this component test doesn't need to stand up the runtime-db/fs surface
+// commit-integration's default adapters touch -- that surface is exercised
+// directly in commit-integration.test.ts.
+const commitIntegrationMocks = vi.hoisted(() => ({
+  commitPendingStagingArtifacts: vi.fn(),
+}))
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }))
 vi.mock("@/commands/fs", () => fsMocks)
 vi.mock("@/lib/source-lifecycle", () => sourceLifecycleMocks)
 vi.mock("@/lib/project-file-sync", () => projectFileSyncMocks)
 vi.mock("@/lib/parallel-knowledge/bulk-runtime-entry", () => bulkRuntimeEntryMocks)
+vi.mock("@/lib/parallel-knowledge/commit-integration", () => commitIntegrationMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -48,6 +58,21 @@ describe("SourcesView bulk prepare entry", () => {
       enqueuedJobs: [],
       skippedDuplicateJobIds: [],
       failedJobs: [],
+    })
+    commitIntegrationMocks.commitPendingStagingArtifacts.mockResolvedValue({
+      listedArtifacts: 0,
+      attemptedArtifacts: 0,
+      committed: 0,
+      merged: 0,
+      conflicted: 0,
+      rejected: 0,
+      skipped: 0,
+      retryable: 0,
+      repairJobs: 0,
+      cleanedArtifacts: 0,
+      markersRecorded: 0,
+      progressEvents: 0,
+      errors: [],
     })
     act(() => {
       useWikiStore.getState().setProject({

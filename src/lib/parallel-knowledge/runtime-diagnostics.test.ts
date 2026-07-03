@@ -43,6 +43,12 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
         stagingArtifactCount: 0,
         activeProfileClaimCount: 0,
         circuitBreakerCount: 0,
+        repairJobPendingCount: 0,
+        repairJobsByKind: [
+          { kind: "bulk-knowledge-artifact-repair", pendingCount: 0, failedCount: 0 },
+          { kind: "bulk-knowledge-map-reduce-repair", pendingCount: 0, failedCount: 0 },
+          { kind: "markdown-conflict-repair", pendingCount: 0, failedCount: 0 },
+        ],
       },
     })
   })
@@ -150,6 +156,12 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
       stagingArtifactCount: 1,
       activeProfileClaimCount: 1,
       circuitBreakerCount: 1,
+      repairJobPendingCount: 0,
+      repairJobsByKind: [
+        { kind: "bulk-knowledge-artifact-repair", pendingCount: 0, failedCount: 0 },
+        { kind: "bulk-knowledge-map-reduce-repair", pendingCount: 0, failedCount: 0 },
+        { kind: "markdown-conflict-repair", pendingCount: 0, failedCount: 0 },
+      ],
     })
   })
 
@@ -236,7 +248,43 @@ describe("captureRuntimeDiagnosticsSnapshot", () => {
       stagingArtifactCount: 0,
       activeProfileClaimCount: 0,
       circuitBreakerCount: 0,
+      repairJobPendingCount: 0,
+      repairJobsByKind: [
+        { kind: "bulk-knowledge-artifact-repair", pendingCount: 0, failedCount: 0 },
+        { kind: "bulk-knowledge-map-reduce-repair", pendingCount: 0, failedCount: 0 },
+        { kind: "markdown-conflict-repair", pendingCount: 0, failedCount: 0 },
+      ],
     })
+  })
+
+  it("surfaces pending/failed counts for the unconsumed repair job kinds (SPEC-5-FIX PR5)", async () => {
+    const snapshot = await captureRuntimeDiagnosticsSnapshot(
+      makeAdapters({
+        jobs: {
+          enabled: true,
+          status: "healthy",
+          jobs: [
+            job("artifact-repair-1", "queued", "bulk-knowledge-artifact-repair"),
+            job("artifact-repair-2", "failed", "bulk-knowledge-artifact-repair"),
+            job("map-reduce-repair-1", "retry-wait", "bulk-knowledge-map-reduce-repair"),
+            job("conflict-repair-1", "queued", "markdown-conflict-repair"),
+            job("conflict-repair-2", "completed", "markdown-conflict-repair"),
+            job("unrelated-1", "queued", "bulk-knowledge-prepare"),
+          ],
+          leases: [],
+        },
+      }),
+    )
+
+    expect(snapshot.summary.repairJobPendingCount).toBe(3)
+    expect(snapshot.summary.repairJobsByKind).toEqual([
+      { kind: "bulk-knowledge-artifact-repair", pendingCount: 1, failedCount: 1 },
+      { kind: "bulk-knowledge-map-reduce-repair", pendingCount: 1, failedCount: 0 },
+      { kind: "markdown-conflict-repair", pendingCount: 1, failedCount: 0 },
+    ])
+    // These orphan kinds don't add to the "normal" job-state summary meaning.
+    expect(snapshot.summary.queuedJobCount).toBe(3)
+    expect(snapshot.summary.failedJobCount).toBe(1)
   })
 })
 
@@ -282,10 +330,11 @@ function job(
     | "failed"
     | "completed"
     | "cancelled",
+  kind: string = "bulk-knowledge-prepare",
 ) {
   return {
     jobId,
-    kind: "bulk-knowledge-prepare",
+    kind,
     payload: "{}",
     state,
     attempt: 0,

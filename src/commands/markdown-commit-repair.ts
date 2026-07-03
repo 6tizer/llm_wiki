@@ -7,7 +7,7 @@ import {
   runtimeStagingArtifactRecord,
 } from "./runtime-db"
 
-const MARKDOWN_CONFLICT_REPAIR_KIND = "markdown-conflict-repair"
+export const MARKDOWN_CONFLICT_REPAIR_KIND = "markdown-conflict-repair"
 const MARKDOWN_CONFLICT_REPAIR_MAX_ATTEMPTS = 3
 const MARKDOWN_CONFLICT_REPAIR_OWNER = "markdown-commit"
 const MARKDOWN_CONFLICT_REPAIR_STRATEGY = "manual-review-first"

@@ -341,6 +341,40 @@ describe("parallel knowledge commit integration", () => {
     expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
   })
 
+  it("marks an append committed before audit/marker recording (SPEC-5-FIX PR5 crash-window narrowing)", async () => {
+    // Append cannot safely reconcile a crash-after-write retry the way
+    // create/update do (see the "routes append conflicts to repair" tests
+    // above -- content-level matches must still go to repair). So instead
+    // the fix shrinks the reprocessing window: markArtifactCommitted must
+    // happen for append *before* audit/marker recording, so a later failure
+    // in that recording never leaves the artifact "pending" (and therefore
+    // never re-processable into a false "conflicted" misjudgement).
+    const base = "# Existing\n"
+    const staged = "## Added\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent(staged),
+      operationIntent: "append",
+      baseHash: await hashMarkdownContent(base),
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: staged })
+    runtime.appendEvent = async () => {
+      throw new Error("transient-audit-append-failure")
+    }
+    const files = fakeFiles({ "Wiki/Page.md": base })
+
+    const result = await commitPendingStagingArtifacts({ runtime, files })
+
+    // The write + commit-mark already happened -- proven by both the merged
+    // content landing on disk and markArtifactCommitted having been called
+    // -- despite the later audit failure being surfaced (visibly, not
+    // silently) in result.errors instead of being swallowed.
+    expect(files.files.get("Wiki/Page.md")).toBe(`${base}${staged}`)
+    expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
+    expect(result.errors).toEqual([
+      "commit-artifact-failed:artifact-1: transient-audit-append-failure",
+    ])
+  })
+
   it("marks deterministic rejected artifacts failed instead of retrying forever", async () => {
     const markdown = "# Page\n"
     const artifact = await stagingArtifact({
