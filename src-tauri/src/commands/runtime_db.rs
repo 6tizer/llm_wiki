@@ -6208,11 +6208,34 @@ fn redact_profile_pool_text(value: &str) -> String {
 // line, instead of resetting per call like the stateless wrapper below.
 pub(crate) struct SecretRedactor {
     redact_next: bool,
+    // Key-scoped carry for the JSON structural path (`redact_json_line`):
+    // the set of object keys whose most recently redacted string value
+    // ended armed (e.g. a bare "Authorization:" split across two streamed
+    // events). Scoped by key — not global — because streaming agent output
+    // interleaves protocol fields (e.g. "type":"content_block_delta")
+    // between text deltas on the same event; a global carry would consume
+    // itself on those unrelated fields and corrupt them (the exact P1
+    // regression an earlier round fixed). Independent of `redact_next`,
+    // which only serves the plain-text/parse-failure fallback path.
+    json_carry: std::collections::HashSet<String>,
 }
 
 impl SecretRedactor {
     pub(crate) fn new() -> Self {
-        Self { redact_next: false }
+        Self {
+            redact_next: false,
+            json_carry: std::collections::HashSet::new(),
+        }
+    }
+
+    // Scratch instance for a single seeded `redact_line` pass over one JSON
+    // string value (see `redact_json_value_inner`) — reuses `redact_line`'s
+    // consume/re-arm token semantics without a second copy of its loop.
+    fn with_redact_next(redact_next: bool) -> Self {
+        Self {
+            redact_next,
+            json_carry: std::collections::HashSet::new(),
+        }
     }
 
     // Redacts secret-looking tokens in `line` while preserving all original
@@ -6260,8 +6283,14 @@ impl SecretRedactor {
     // earlier malformed line (e.g. a bare "Authorization:") stays armed for
     // the next non-JSON line. A line that fails to parse as JSON falls back
     // to `redact_line` on `self`, which both reads and updates the carry.
+    //
+    // The structural path has its own, separate carry: `self.json_carry`,
+    // scoped per object key so a credential split across two streamed JSON
+    // events (e.g. `{"text":"Authorization:"}` then
+    // `{"text":"Basic <token>"}`) still gets caught — see
+    // `redact_json_value_inner`.
     pub(crate) fn redact_json_line(&mut self, line: &str) -> String {
-        match try_redact_json_line(line) {
+        match try_redact_json_line(line, &mut self.json_carry) {
             Some(redacted) => redacted,
             None => self.redact_line(line),
         }
@@ -6285,13 +6314,18 @@ pub(crate) fn redact_secrets_preserving_format(line: &str) -> String {
 // re-serializes. Returns `None` on parse failure so callers can fall back to
 // token-level redaction (using their own stateful `SecretRedactor` when one
 // is available, since a parse failure means the JSON contract broke and we
-// no longer have structural boundaries to reset state on).
-fn try_redact_json_line(line: &str) -> Option<String> {
+// no longer have structural boundaries to reset state on). `carry` is the
+// caller's key-scoped cross-event carry (see `SecretRedactor::json_carry`);
+// it is read and updated in place by `redact_json_value`.
+fn try_redact_json_line(
+    line: &str,
+    carry: &mut std::collections::HashSet<String>,
+) -> Option<String> {
     let trimmed = line.trim_end_matches(['\r', '\n']);
     let trailing = &line[trimmed.len()..];
     let mut value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
     let mut changed = false;
-    redact_json_value(&mut value, &mut changed);
+    redact_json_value(&mut value, &mut changed, carry);
     if !changed {
         return Some(line.to_string());
     }
@@ -6318,11 +6352,30 @@ pub(crate) fn key_is_credential_bearing(key: &str) -> bool {
     class.is_secret || class.next_token_is_secret_value
 }
 
-fn redact_json_value(value: &mut serde_json::Value, changed: &mut bool) {
-    redact_json_value_inner(value, changed, false);
+fn redact_json_value(
+    value: &mut serde_json::Value,
+    changed: &mut bool,
+    carry: &mut std::collections::HashSet<String>,
+) {
+    redact_json_value_inner(value, changed, false, None, carry);
 }
 
-fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, force_redact: bool) {
+// `enclosing_key` is the JSON object key whose value this string/array/etc.
+// is (or, for a string nested inside an array, the key that owns the
+// array) — `None` for values with no enclosing key (top-level scalars).
+// It scopes `carry`: a string value seeds its stateful redaction pass from
+// `carry.contains(enclosing_key)` and updates that same entry afterward, so
+// a credential split across two streamed JSON events under the SAME key
+// (e.g. `{"text":"Authorization:"}` then `{"text":"Basic <token>"}`) is
+// still caught, while unrelated keys on an intervening event (e.g.
+// `"type":"content_block_delta"`) never consume or touch it.
+fn redact_json_value_inner(
+    value: &mut serde_json::Value,
+    changed: &mut bool,
+    force_redact: bool,
+    enclosing_key: Option<&str>,
+    carry: &mut std::collections::HashSet<String>,
+) {
     match value {
         serde_json::Value::String(text) => {
             if force_redact {
@@ -6331,7 +6384,16 @@ fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, fo
                     *text = SECRET_REDACTION_MARKER.to_string();
                 }
             } else {
-                let redacted = redact_secrets_preserving_format(text);
+                let armed = enclosing_key.is_some_and(|key| carry.contains(key));
+                let mut redactor = SecretRedactor::with_redact_next(armed);
+                let redacted = redactor.redact_line(text);
+                if let Some(key) = enclosing_key {
+                    if redactor.redact_next {
+                        carry.insert(key.to_string());
+                    } else {
+                        carry.remove(key);
+                    }
+                }
                 if redacted != *text {
                     *changed = true;
                     *text = redacted;
@@ -6340,7 +6402,7 @@ fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, fo
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                redact_json_value_inner(item, changed, force_redact);
+                redact_json_value_inner(item, changed, force_redact, enclosing_key, carry);
             }
         }
         serde_json::Value::Number(_) | serde_json::Value::Bool(_) if force_redact => {
@@ -6367,7 +6429,7 @@ fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, fo
             for (key, mut entry) in std::mem::take(map) {
                 let key_is_secret = token_looks_like_secret_value(&key.to_ascii_lowercase());
                 let force_redact = force_redact || key_is_secret || key_is_credential_bearing(&key);
-                redact_json_value_inner(&mut entry, changed, force_redact);
+                redact_json_value_inner(&mut entry, changed, force_redact, Some(&key), carry);
                 let key = if key_is_secret {
                     *changed = true;
                     SECRET_REDACTION_MARKER.to_string()
@@ -12159,6 +12221,81 @@ mod tests {
         // the carry from line 1 survived line 2.
         let line3 = redactor.redact_json_line("bearecredentialvalue\n");
         assert_eq!(line3, "[REDACTED]\n");
+    }
+
+    #[test]
+    fn secret_redactor_json_line_carries_credential_across_split_events_same_key() {
+        let mut redactor = SecretRedactor::new();
+        redactor.redact_json_line("{\"text\":\"Authorization:\"}\n");
+        let second = redactor.redact_json_line("{\"text\":\"Basic opaquevalue1234\"}\n");
+        assert!(!second.contains("opaquevalue1234"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_carries_api_key_assignment_across_split_events() {
+        let mut redactor = SecretRedactor::new();
+        redactor.redact_json_line("{\"text\":\"api_key=\"}\n");
+        let second = redactor.redact_json_line("{\"text\":\"opaquevalue5678\"}\n");
+        assert!(!second.contains("opaquevalue5678"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_key_scoped_carry_survives_unrelated_protocol_event() {
+        let mut redactor = SecretRedactor::new();
+        redactor.redact_json_line("{\"text\":\"Authorization:\"}\n");
+
+        // An intervening streaming-protocol event that never touches the
+        // "text" key must round-trip byte-identical: the carry is scoped to
+        // "text", so "type"/"index" (unarmed keys) are untouched.
+        let protocol_line = "{\"type\":\"content_block_delta\",\"index\":0}\n";
+        let protocol_out = redactor.redact_json_line(protocol_line);
+        assert_eq!(protocol_out, protocol_line);
+
+        // The "text" carry must still be armed after the intervening event.
+        let third = redactor.redact_json_line("{\"text\":\"Basic opaquevalue9999\"}\n");
+        assert!(!third.contains("opaquevalue9999"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_carry_does_not_cross_into_a_different_key() {
+        let mut redactor = SecretRedactor::new();
+        redactor.redact_json_line("{\"text\":\"Authorization:\"}\n");
+
+        // A sibling key on a later event must not be consumed by the "text"
+        // carry — the opaque value under "other" survives untouched.
+        let other_line = "{\"other\":\"opaquevalueAAAA\"}\n";
+        let other_out = redactor.redact_json_line(other_line);
+        assert_eq!(other_out, other_line);
+
+        // The "text" carry must still be armed afterward.
+        let third = redactor.redact_json_line("{\"text\":\"Basic opaquevalueBBBB\"}\n");
+        assert!(!third.contains("opaquevalueBBBB"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_no_arm_control_round_trips_byte_identical() {
+        let mut redactor = SecretRedactor::new();
+        let line = "{\"text\":\"hello world\"}\n";
+        assert_eq!(redactor.redact_json_line(line), line);
+        assert_eq!(redactor.redact_json_line(line), line);
+    }
+
+    #[test]
+    fn secret_redactor_json_line_arming_value_itself_gets_redacted_not_silently_dropped() {
+        // A bare "Authorization:" value is itself classified as a secret
+        // token by `classify_secret_token` (pre-existing, tested behavior —
+        // see `secret_redactor_carries_state_across_lines` below), so this
+        // is NOT a byte-identical round trip: the trigger word is replaced
+        // by the marker in addition to arming the "text" carry for the next
+        // event. `changed` tracking must reflect that real text mutation.
+        let mut redactor = SecretRedactor::new();
+        let redacted = redactor.redact_json_line("{\"text\":\"Authorization:\"}\n");
+        assert_ne!(redacted, "{\"text\":\"Authorization:\"}\n");
+        assert!(redacted.contains("[REDACTED]"));
+
+        // Arming still carries into the next event under the same key.
+        let second = redactor.redact_json_line("{\"text\":\"Basic opaquevalueCCCC\"}\n");
+        assert!(!second.contains("opaquevalueCCCC"));
     }
 
     #[test]
