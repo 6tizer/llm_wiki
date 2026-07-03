@@ -22,9 +22,16 @@ export function buildAgentPermissionDecision(
     }
   }
   if (action === "allow_permanent") {
+    const suggestions = payload.suggestions
     return {
       behavior: "allow",
-      updatedPermissions: payload.suggestions ?? [],
+      // An empty suggestions array must not be written back as
+      // `updatedPermissions: []` — the SDK treats an explicit empty array as
+      // "wipe the permission list", which would silently produce a blank
+      // allow-list. Omit the field entirely when there is nothing to persist.
+      ...(suggestions && suggestions.length > 0
+        ? { updatedPermissions: suggestions }
+        : {}),
       decisionClassification: "user_permanent",
     }
   }

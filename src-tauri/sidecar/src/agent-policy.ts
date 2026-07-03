@@ -106,17 +106,49 @@ export function isWriteWikiToolName(toolName: string): boolean {
 	return WRITE_TOOL_NAMES.has(toolName);
 }
 
-export function shouldAllowWikiTool(args: {
+/**
+ * Single-point decision for whether a Wiki tool call may proceed.
+ *
+ * - "allow": fast-path approve, no user prompt (read tools, or write tools
+ *   under a policy that explicitly bypasses approval).
+ * - "deny": fast-path reject, no user prompt (not a Wiki tool, writes
+ *   disabled, or policy is "restricted").
+ * - "ask": must be routed through the permission bridge / approval dialog
+ *   before proceeding (the "default" policy for write tools).
+ *
+ * Both canUseTool (core.ts) and the PreToolUse hook (agent-hooks.ts) must
+ * call this instead of duplicating the policy logic, so the two gates can
+ * never disagree.
+ */
+export type WikiToolDecision =
+	| { decision: "allow" }
+	| { decision: "deny"; reason: string }
+	| { decision: "ask" };
+
+export function resolveWikiToolDecision(args: {
 	toolName: string;
 	enableWriteTools: boolean;
-}): { allowed: true } | { allowed: false; reason: string } {
+	permissionPolicy: AgentPermissionPolicy;
+}): WikiToolDecision {
 	if (!isWikiToolName(args.toolName)) {
-		return { allowed: false, reason: "Tool is not an LLM Wiki tool" };
+		return { decision: "deny", reason: "Tool is not an LLM Wiki tool" };
 	}
-	if (isWriteWikiToolName(args.toolName) && !args.enableWriteTools) {
-		return { allowed: false, reason: "Wiki write tools are disabled" };
+	if (!isWriteWikiToolName(args.toolName)) {
+		return { decision: "allow" };
 	}
-	return { allowed: true };
+	if (!args.enableWriteTools) {
+		return { decision: "deny", reason: "Wiki write tools are disabled" };
+	}
+	if (args.permissionPolicy === "restricted") {
+		return { decision: "deny", reason: "Wiki write tools are restricted" };
+	}
+	if (
+		args.permissionPolicy === "bypass" ||
+		args.permissionPolicy === "bypassPermissions"
+	) {
+		return { decision: "allow" };
+	}
+	return { decision: "ask" };
 }
 
 export function previewToolInput(input: unknown): Record<string, unknown> {
