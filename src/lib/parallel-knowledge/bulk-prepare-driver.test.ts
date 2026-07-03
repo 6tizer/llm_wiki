@@ -5,6 +5,7 @@ import type { RuntimeJobClaim, RuntimeProfilePoolClaim, RuntimeProfilePoolList }
 const runtimeMocks = vi.hoisted(() => ({
   runtimeJobClaimByKind: vi.fn(),
   runtimeJobCreate: vi.fn(),
+  runtimeJobHeartbeat: vi.fn(),
   runtimeJobComplete: vi.fn(),
   runtimeJobFail: vi.fn(),
   runtimeProfilePoolClaim: vi.fn(),

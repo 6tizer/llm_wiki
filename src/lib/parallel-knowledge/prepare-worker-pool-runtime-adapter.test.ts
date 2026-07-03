@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { BULK_KNOWLEDGE_PREPARE_JOB_KIND } from "@/core-runtime/parallel-knowledge"
 import type {
   RuntimeJobClaim,
@@ -9,6 +9,7 @@ import type {
 const runtimeMocks = vi.hoisted(() => ({
   runtimeJobClaimByKind: vi.fn(),
   runtimeJobCreate: vi.fn(),
+  runtimeJobHeartbeat: vi.fn(),
   runtimeJobComplete: vi.fn(),
   runtimeJobFail: vi.fn(),
   runtimeProfilePoolClaim: vi.fn(),
@@ -26,6 +27,56 @@ describe("prepare worker default runtime adapter", () => {
     for (const mock of Object.values(runtimeMocks)) {
       mock.mockReset()
     }
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("renews the job lease through the runtimeJobHeartbeat wrapper while a slow executor is running", async () => {
+    const { runPrepareWorkerPool } = await import("./prepare-worker-pool")
+    runtimeMocks.runtimeJobClaimByKind.mockResolvedValue(jobClaim("job-1"))
+    runtimeMocks.runtimeProfilePoolList.mockResolvedValue(healthyPool())
+    runtimeMocks.runtimeProfilePoolClaim.mockResolvedValue(profileClaim("job-1"))
+    runtimeMocks.runtimeProfilePoolRelease.mockResolvedValue({
+      claim: profileClaim("job-1").claim,
+      circuitBreaker: null,
+    })
+    runtimeMocks.runtimeJobComplete.mockResolvedValue({
+      ...jobClaim("job-1").job,
+      state: "completed",
+    })
+    runtimeMocks.runtimeJobHeartbeat.mockResolvedValue(jobClaim("job-1"))
+    runtimeMocks.runtimeProgressAppend.mockImplementation(async (request) => ({
+      progress: {
+        jobId: request.jobId ?? "job-1",
+        progressKey: request.progressKey,
+        payload: request.payload,
+        updatedAtMs: 1,
+      },
+      event: null,
+    }))
+
+    let resolveExecutor: (() => void) | undefined
+    const poolPromise = runPrepareWorkerPool({
+      concurrency: 1,
+      maxJobs: 1,
+      workerIdPrefix: "integration-worker",
+      executor: () =>
+        new Promise((resolve) => {
+          resolveExecutor = () => resolve({ status: "success" })
+        }),
+    })
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(runtimeMocks.runtimeJobHeartbeat).toHaveBeenCalledWith({
+      jobId: "job-1",
+      leaseId: "lease-job-1",
+    })
+
+    resolveExecutor?.()
+    await poolPromise
   })
 
   it("routes prepare job claims and profile claims through runtime-db wrappers", async () => {
