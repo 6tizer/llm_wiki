@@ -6208,17 +6208,33 @@ fn redact_profile_pool_text(value: &str) -> String {
 // line, instead of resetting per call like the stateless wrapper below.
 pub(crate) struct SecretRedactor {
     redact_next: bool,
-    // Key-scoped carry for the JSON structural path (`redact_json_line`):
-    // the set of object keys whose most recently redacted string value
-    // ended armed (e.g. a bare "Authorization:" split across two streamed
-    // events). Scoped by key — not global — because streaming agent output
-    // interleaves protocol fields (e.g. "type":"content_block_delta")
-    // between text deltas on the same event; a global carry would consume
-    // itself on those unrelated fields and corrupt them (the exact P1
-    // regression an earlier round fixed). Independent of `redact_next`,
-    // which only serves the plain-text/parse-failure fallback path.
+    // Path-scoped carry for the JSON structural path (`redact_json_line`):
+    // the set of dotted JSON paths from the document root (e.g.
+    // "delta.text") whose most recently redacted string value ended armed
+    // (e.g. a bare "Authorization:" split across two streamed events).
+    // Scoped by full path — not bare leaf key name, and not global.
+    // Streaming agent output interleaves protocol fields (e.g.
+    // "type":"content_block_delta") between text deltas on the same event;
+    // a global carry would consume itself on those unrelated fields and
+    // corrupt them (the exact P1 regression an earlier round fixed). A bare
+    // leaf-name carry (an earlier round) would instead let unrelated
+    // top-level/nested fields that happen to share a leaf name (e.g.
+    // top-level "text" vs. "delta.text") steal or falsely arm each other's
+    // carry — a second, subtler P1/P2 this round's path-scoping fixes.
+    // Independent of `redact_next`, which only serves the
+    // plain-text/parse-failure fallback path.
     json_carry: std::collections::HashSet<String>,
 }
+
+// Defensive cap on `json_carry` growth: a pathological/adversarial stream
+// with an unbounded number of distinct armed JSON paths would otherwise
+// grow the carry set for the lifetime of the reader loop. 128 distinct
+// concurrently-armed paths is far beyond any realistic credential-split
+// pattern, so once the cap is reached, arming a NEW path is skipped
+// (fail-open toward *less* carry, not toward leaking — the in-line
+// same-event redaction pass still applies regardless of carry state).
+// Re-arming/removing a path already tracked is unaffected by the cap.
+const JSON_CARRY_MAX_KEYS: usize = 128;
 
 impl SecretRedactor {
     pub(crate) fn new() -> Self {
@@ -6285,8 +6301,8 @@ impl SecretRedactor {
     // to `redact_line` on `self`, which both reads and updates the carry.
     //
     // The structural path has its own, separate carry: `self.json_carry`,
-    // scoped per object key so a credential split across two streamed JSON
-    // events (e.g. `{"text":"Authorization:"}` then
+    // scoped per dotted JSON path so a credential split across two streamed
+    // JSON events (e.g. `{"text":"Authorization:"}` then
     // `{"text":"Basic <token>"}`) still gets caught — see
     // `redact_json_value_inner`.
     pub(crate) fn redact_json_line(&mut self, line: &str) -> String {
@@ -6360,20 +6376,29 @@ fn redact_json_value(
     redact_json_value_inner(value, changed, false, None, carry);
 }
 
-// `enclosing_key` is the JSON object key whose value this string/array/etc.
-// is (or, for a string nested inside an array, the key that owns the
-// array) — `None` for values with no enclosing key (top-level scalars).
-// It scopes `carry`: a string value seeds its stateful redaction pass from
-// `carry.contains(enclosing_key)` and updates that same entry afterward, so
-// a credential split across two streamed JSON events under the SAME key
-// (e.g. `{"text":"Authorization:"}` then `{"text":"Basic <token>"}`) is
-// still caught, while unrelated keys on an intervening event (e.g.
-// `"type":"content_block_delta"`) never consume or touch it.
+// `enclosing_path` is the dotted JSON path (from the document root) of the
+// object key whose value this string/array/etc. is (or, for a string nested
+// inside an array, the path of the key that owns the array — array levels
+// do NOT append a path segment, so items in an array under `delta.text` all
+// share path "delta.text") — `None` for values with no enclosing key
+// (top-level scalars). It scopes `carry`: a string value seeds its stateful
+// redaction pass from `carry.contains(enclosing_path)` and updates that
+// same entry afterward, so a credential split across two streamed JSON
+// events under the SAME path (e.g. `{"text":"Authorization:"}` then
+// `{"text":"Basic <token>"}`, or `{"delta":{"text":"Authorization:"}}` then
+// `{"delta":{"text":"Basic <token>"}}`) is still caught, while a different
+// path — including one that merely shares a bare leaf key name (e.g.
+// top-level "text" vs. "delta.text") — on an intervening or later event
+// never consumes or touches it. Scoping by bare leaf key name instead of
+// full path (an earlier round) let unrelated paths steal/falsely-arm each
+// other's carry; this is the fix for that. A key containing a literal "."
+// can alias a different structural path in the dotted-path encoding — an
+// accepted, narrow imprecision for a redaction heuristic.
 fn redact_json_value_inner(
     value: &mut serde_json::Value,
     changed: &mut bool,
     force_redact: bool,
-    enclosing_key: Option<&str>,
+    enclosing_path: Option<&str>,
     carry: &mut std::collections::HashSet<String>,
 ) {
     match value {
@@ -6384,14 +6409,19 @@ fn redact_json_value_inner(
                     *text = SECRET_REDACTION_MARKER.to_string();
                 }
             } else {
-                let armed = enclosing_key.is_some_and(|key| carry.contains(key));
+                let armed = enclosing_path.is_some_and(|path| carry.contains(path));
                 let mut redactor = SecretRedactor::with_redact_next(armed);
                 let redacted = redactor.redact_line(text);
-                if let Some(key) = enclosing_key {
+                if let Some(path) = enclosing_path {
                     if redactor.redact_next {
-                        carry.insert(key.to_string());
+                        // Re-arming a path already tracked is always
+                        // allowed; only a brand-new path is subject to the
+                        // cap (see `JSON_CARRY_MAX_KEYS`).
+                        if carry.contains(path) || carry.len() < JSON_CARRY_MAX_KEYS {
+                            carry.insert(path.to_string());
+                        }
                     } else {
-                        carry.remove(key);
+                        carry.remove(path);
                     }
                 }
                 if redacted != *text {
@@ -6402,7 +6432,7 @@ fn redact_json_value_inner(
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                redact_json_value_inner(item, changed, force_redact, enclosing_key, carry);
+                redact_json_value_inner(item, changed, force_redact, enclosing_path, carry);
             }
         }
         serde_json::Value::Number(_) | serde_json::Value::Bool(_) if force_redact => {
@@ -6429,7 +6459,14 @@ fn redact_json_value_inner(
             for (key, mut entry) in std::mem::take(map) {
                 let key_is_secret = token_looks_like_secret_value(&key.to_ascii_lowercase());
                 let force_redact = force_redact || key_is_secret || key_is_credential_bearing(&key);
-                redact_json_value_inner(&mut entry, changed, force_redact, Some(&key), carry);
+                // Build this key's full dotted path from its parent's path
+                // (`None` at the document root, so a top-level key's path
+                // is just the bare key name with no leading dot).
+                let child_path = match enclosing_path {
+                    Some(parent) => format!("{parent}.{key}"),
+                    None => key.clone(),
+                };
+                redact_json_value_inner(&mut entry, changed, force_redact, Some(&child_path), carry);
                 let key = if key_is_secret {
                     *changed = true;
                     SECRET_REDACTION_MARKER.to_string()
@@ -12296,6 +12333,83 @@ mod tests {
         // Arming still carries into the next event under the same key.
         let second = redactor.redact_json_line("{\"text\":\"Basic opaquevalueCCCC\"}\n");
         assert!(!second.contains("opaquevalueCCCC"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_carries_credential_across_split_events_same_nested_path() {
+        // Same-path nested carry: `delta.text` -> `delta.text` must still be
+        // caught, same as the flat `text` -> `text` case above.
+        let mut redactor = SecretRedactor::new();
+        redactor.redact_json_line("{\"delta\":{\"text\":\"Authorization:\"}}\n");
+        let second =
+            redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueNESTED\"}}\n");
+        assert!(!second.contains("opaqueNESTED"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_path_scoped_carry_not_stolen_by_leaf_name_collision() {
+        // Reproduces the round-6 P1/P2 regression: a bare leaf-name carry
+        // (keyed on "text" alone, ignoring structural path) lets an
+        // unrelated top-level "text" field steal and consume the carry
+        // armed by a nested "delta.text" field, so the true continuation
+        // under "delta.text" then leaks verbatim. Path-scoped carry must
+        // keep "text" and "delta.text" independent.
+        let mut redactor = SecretRedactor::new();
+
+        // evt1: arms the carry for path "delta.text".
+        redactor.redact_json_line("{\"delta\":{\"text\":\"Authorization:\"}}\n");
+
+        // evt2: unrelated TOP-LEVEL "text" field (path "text", not
+        // "delta.text") must round-trip byte-identical — it must not steal
+        // or consume the "delta.text" carry.
+        let evt2_line = "{\"text\":\"ordinary benign sentence.\"}\n";
+        let evt2_out = redactor.redact_json_line(evt2_line);
+        assert_eq!(evt2_out, evt2_line);
+
+        // evt3: the true continuation under "delta.text" — the carry must
+        // still be armed (untouched by evt2) and redact the split secret.
+        let evt3_out =
+            redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueSECRETXYZ\"}}\n");
+        assert!(!evt3_out.contains("opaqueSECRETXYZ"));
+    }
+
+    #[test]
+    fn secret_redactor_json_line_top_level_text_does_not_over_redact_after_nested_arm() {
+        // Companion to the leak repro above: after a nested "delta.text"
+        // arm, an unrelated top-level "text" event with its own would-be
+        // credential value must not be over-redacted by the nested carry
+        // (the P2 half of the round-6 regression).
+        let mut redactor = SecretRedactor::new();
+        redactor.redact_json_line("{\"delta\":{\"text\":\"Authorization:\"}}\n");
+
+        let evt2_line = "{\"text\":\"Basic opaqueTOPLEVEL\"}\n";
+        let evt2_out = redactor.redact_json_line(evt2_line);
+        assert_eq!(evt2_out, evt2_line);
+    }
+
+    #[test]
+    fn secret_redactor_json_line_json_carry_growth_is_capped() {
+        // Arm exactly JSON_CARRY_MAX_KEYS (128) distinct top-level paths —
+        // fills the carry to capacity without exceeding it.
+        let mut redactor = SecretRedactor::new();
+        for i in 0..128 {
+            let line = format!("{{\"k{i:03}\":\"Authorization:\"}}\n");
+            redactor.redact_json_line(&line);
+        }
+
+        // A 129th distinct path arrives once the cap is already full: its
+        // arming insert is skipped (fail-open toward less carry), so its
+        // continuation is NOT redacted.
+        redactor.redact_json_line("{\"k128\":\"Authorization:\"}\n");
+        let over_cap_continuation =
+            redactor.redact_json_line("{\"k128\":\"Basic opaqueOVERCAP\"}\n");
+        assert!(over_cap_continuation.contains("opaqueOVERCAP"));
+
+        // An early path armed before the cap was reached is unaffected by
+        // the later skipped insert — still armed, still redacts.
+        let early_continuation =
+            redactor.redact_json_line("{\"k000\":\"Basic opaqueEARLY\"}\n");
+        assert!(!early_continuation.contains("opaqueEARLY"));
     }
 
     #[test]
