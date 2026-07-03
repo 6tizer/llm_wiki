@@ -5022,9 +5022,10 @@ fn runtime_commit_budget_claim_for_project(
         if let Some(job_id) = request.job_id.as_deref() {
             ensure_job_exists(&tx, job_id)?;
         }
+        expire_commit_budget_claims_tx(&tx, now)?;
         ensure_path_budget(&tx, &affected_path, now)?;
-        ensure_commit_total_capacity(&tx)?;
-        ensure_commit_path_available(&tx, &affected_path.resource_key)?;
+        ensure_commit_total_capacity(&tx, now)?;
+        ensure_commit_path_available(&tx, &affected_path.resource_key, now)?;
 
         insert_commit_budget_claim_row(
             &tx,
@@ -7655,15 +7656,25 @@ fn ensure_profile_claim_id_available_tx(
     }
 }
 
-fn expire_profile_claims_tx(tx: &Transaction<'_>, now: i64) -> Result<(), String> {
+/// Shared by `expire_profile_claims_tx` and `expire_commit_budget_claims_tx`:
+/// flips any active claim row in `table` whose TTL has lapsed to `expired`.
+/// `table` is always one of our own hardcoded table names, never user input.
+fn expire_claims_by_ttl_tx(
+    tx: &Transaction<'_>,
+    table: &str,
+    error_label: &str,
+    now: i64,
+) -> Result<(), String> {
     tx.execute(
-        "UPDATE runtime_profile_claims
-         SET status = ?2
-         WHERE status = ?1 AND expires_at_ms <= ?3",
+        &format!("UPDATE {table} SET status = ?2 WHERE status = ?1 AND expires_at_ms <= ?3"),
         params![ACTIVE_CLAIM_STATUS, EXPIRED_CLAIM_STATUS, now],
     )
-    .map_err(|err| format!("profile-pool-expire-claims-failed: {err}"))?;
+    .map_err(|err| format!("{error_label}-expire-claims-failed: {err}"))?;
     Ok(())
+}
+
+fn expire_profile_claims_tx(tx: &Transaction<'_>, now: i64) -> Result<(), String> {
+    expire_claims_by_ttl_tx(tx, "runtime_profile_claims", "profile-pool", now)
 }
 
 fn active_profile_claim_count_tx(
@@ -7819,7 +7830,18 @@ fn ensure_path_budget(
     Ok(())
 }
 
-fn ensure_commit_total_capacity(tx: &Transaction<'_>) -> Result<(), String> {
+/// Flips any active commit budget claim (total or path scope) whose TTL has
+/// lapsed to `expired`. Called at the start of every claim transaction so a
+/// worker that crashed without releasing its claim cannot permanently pin
+/// commit-total capacity or a commit-path slot — mirrors
+/// `expire_profile_claims_tx` for the profile pool. This table only ever
+/// holds commit budget rows (see the `scope` CHECK constraint), so no extra
+/// scope filter is needed.
+fn expire_commit_budget_claims_tx(tx: &Transaction<'_>, now: i64) -> Result<(), String> {
+    expire_claims_by_ttl_tx(tx, "runtime_resource_budget_claims", "commit-budget", now)
+}
+
+fn ensure_commit_total_capacity(tx: &Transaction<'_>, now: i64) -> Result<(), String> {
     let capacity = tx
         .query_row(
             "SELECT capacity
@@ -7833,11 +7855,12 @@ fn ensure_commit_total_capacity(tx: &Transaction<'_>) -> Result<(), String> {
         .query_row(
             "SELECT COALESCE(SUM(amount), 0)
              FROM runtime_resource_budget_claims
-             WHERE scope = ?1 AND resource_key = ?2 AND status = ?3",
+             WHERE scope = ?1 AND resource_key = ?2 AND status = ?3 AND expires_at_ms > ?4",
             params![
                 COMMIT_TOTAL_SCOPE,
                 COMMIT_TOTAL_RESOURCE_KEY,
-                ACTIVE_CLAIM_STATUS
+                ACTIVE_CLAIM_STATUS,
+                now
             ],
             |row| row.get::<_, i64>(0),
         )
@@ -7849,13 +7872,17 @@ fn ensure_commit_total_capacity(tx: &Transaction<'_>) -> Result<(), String> {
     }
 }
 
-fn ensure_commit_path_available(tx: &Transaction<'_>, resource_key: &str) -> Result<(), String> {
+fn ensure_commit_path_available(
+    tx: &Transaction<'_>,
+    resource_key: &str,
+    now: i64,
+) -> Result<(), String> {
     let active_count = tx
         .query_row(
             "SELECT COUNT(*)
              FROM runtime_resource_budget_claims
-             WHERE scope = ?1 AND resource_key = ?2 AND status = ?3",
-            params![COMMIT_PATH_SCOPE, resource_key, ACTIVE_CLAIM_STATUS],
+             WHERE scope = ?1 AND resource_key = ?2 AND status = ?3 AND expires_at_ms > ?4",
+            params![COMMIT_PATH_SCOPE, resource_key, ACTIVE_CLAIM_STATUS, now],
             |row| row.get::<_, i64>(0),
         )
         .map_err(|err| format!("commit-path-budget-check-failed: {err}"))?;
@@ -15298,6 +15325,226 @@ mod tests {
         )
         .expect("reclaim expired path");
         assert_eq!(reclaimed.resource_key, "wiki/a.md");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    /// Regression coverage for the crash-orphan deadlock: a worker that dies
+    /// after claiming (without ever calling the dead-code manual expire path
+    /// or releasing) must not permanently pin the commit path budget. The
+    /// claim path itself must self-heal purely by TTL, with no manual expire
+    /// call anywhere in this test.
+    #[test]
+    fn commit_budget_path_self_heals_after_ttl_without_manual_expire() {
+        let project = temp_project("commit-budget-path-self-heal");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim path");
+
+        let still_locked = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-2"),
+            100 + DEFAULT_LEASE_TTL_MS - 1,
+        )
+        .expect_err("orphaned claim still blocks the path before ttl elapses");
+        assert!(still_locked.starts_with("commit-path-already-claimed"));
+
+        let healed = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-2"),
+            100 + DEFAULT_LEASE_TTL_MS,
+        )
+        .expect("orphaned claim self-heals once its ttl elapses, with no manual expire call");
+        assert_eq!(healed.resource_key, "wiki/a.md");
+        assert!(healed.claims.iter().all(|claim| claim.claim_id == "claim-2"));
+
+        // The stale claim-1 rows must be flipped to 'expired' in place (not
+        // merely filtered at read time), otherwise the commit-path unique
+        // index would have rejected the claim-2 insert above.
+        let list = runtime_commit_budget_list_for_project(Some(&project), true).expect("list");
+        assert_eq!(list.claims.len(), 2);
+        assert!(list.claims.iter().all(|claim| claim.claim_id == "claim-2"));
+
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let expired_claim1_rows: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_resource_budget_claims
+                 WHERE claim_id = 'claim-1' AND status = 'expired'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count expired claim-1 rows");
+        assert_eq!(expired_claim1_rows, 2);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    /// Same self-heal requirement as above, but for the global commit-total
+    /// capacity counter rather than a single path: two crash-orphaned claims
+    /// pin `DEFAULT_COMMIT_TOTAL_CAPACITY` (2) forever unless the SUM query
+    /// also excludes expired rows. No manual expire call is made.
+    #[test]
+    fn commit_budget_total_capacity_self_heals_after_ttl_without_manual_expire() {
+        let project = temp_project("commit-budget-total-self-heal");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-1"),
+            100,
+        )
+        .expect("claim first path");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/b.md", "claim-2"),
+            100,
+        )
+        .expect("claim second path");
+
+        let exhausted = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/c.md", "claim-3"),
+            100 + DEFAULT_LEASE_TTL_MS - 1,
+        )
+        .expect_err("total capacity still pinned by orphans before ttl elapses");
+        assert!(exhausted.starts_with("commit-total-budget-exhausted"));
+
+        let healed = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/c.md", "claim-3"),
+            100 + DEFAULT_LEASE_TTL_MS,
+        )
+        .expect("total capacity self-heals once orphans' ttl elapses, with no manual expire call");
+        assert_eq!(healed.resource_key, "wiki/c.md");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    /// Guards against a crash between the two paired inserts in
+    /// `runtime_commit_budget_claim_for_project`: only one of the two rows
+    /// (commit-path here) ever made it to disk for the dead claim. The bulk
+    /// expire sweep operates row-by-row and must clean up this unpaired
+    /// orphan too, without `ensure_claim_pair` choking on it, so a fresh,
+    /// well-formed pair can be claimed once the ttl elapses.
+    #[test]
+    fn commit_budget_single_row_orphan_self_heals_after_ttl() {
+        let project = temp_project("commit-budget-single-row-orphan");
+        fs::create_dir_all(&project).expect("create temp project");
+        with_runtime_writer(|| {
+            let connection = open_resource_budget_runtime_locked(&project)?;
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO runtime_resource_budgets (
+                        scope, resource_key, display_key, capacity, created_at_ms, updated_at_ms
+                    ) VALUES ('commit-path', 'wiki/a.md', 'wiki/a.md', 1, 100, 100)",
+                    [],
+                )
+                .expect("seed path budget");
+            connection
+                .execute(
+                    "INSERT INTO runtime_resource_budget_claims (
+                        claim_id, scope, resource_key, display_key, holder, amount,
+                        acquired_at_ms, expires_at_ms, status
+                    ) VALUES ('claim-orphan', 'commit-path', 'wiki/a.md', 'wiki/a.md',
+                              'tester:crashed', 1, ?1, ?2, 'active')",
+                    params![100i64, 100i64 + DEFAULT_LEASE_TTL_MS],
+                )
+                .expect("seed lone path-scope orphan row (no matching commit-total row)");
+            Ok(())
+        })
+        .expect("seed single-row orphan");
+
+        let still_locked = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-2"),
+            100 + DEFAULT_LEASE_TTL_MS - 1,
+        )
+        .expect_err("lone orphan row still blocks the path before ttl elapses");
+        assert!(still_locked.starts_with("commit-path-already-claimed"));
+
+        let healed = runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-2"),
+            100 + DEFAULT_LEASE_TTL_MS,
+        )
+        .expect("single-row orphan self-heals once its ttl elapses");
+        assert_eq!(healed.claims.len(), 2);
+        assert!(healed.claims.iter().all(|claim| claim.claim_id == "claim-2"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    /// Two real threads race to claim the same resource key at the instant
+    /// its orphaned predecessor crosses its ttl. `RUNTIME_DB_WRITE_LOCK` (a
+    /// process-level mutex) serializes the claim transactions, so this test
+    /// exercises business-layer serialized contention rather than genuine
+    /// concurrent arbitration at the SQLite unique-index layer: the second
+    /// thread blocks on the mutex and then observes the ordinary
+    /// commit-path-already-claimed rejection. Exactly one thread must win;
+    /// the loser must get a clean, typed rejection (not a panic, not a
+    /// deadlock, not a double-active row).
+    #[test]
+    fn commit_budget_concurrent_claims_on_expired_path_only_one_succeeds() {
+        let project = temp_project("commit-budget-concurrent-expired");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_commit_budget_claim_for_project(
+            Some(&project),
+            true,
+            commit_claim_request("wiki/a.md", "claim-orphan"),
+            100,
+        )
+        .expect("seed orphaned claim");
+
+        let now = 100 + DEFAULT_LEASE_TTL_MS;
+        let shared_project = Arc::new(project.clone());
+        let barrier = Arc::new(Barrier::new(2));
+        let claim_ids = ["claim-a", "claim-b"];
+        let handles = claim_ids
+            .into_iter()
+            .map(|claim_id| {
+                let project = Arc::clone(&shared_project);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    runtime_commit_budget_claim_for_project(
+                        Some(project.as_path()),
+                        true,
+                        commit_claim_request("wiki/a.md", claim_id),
+                        now,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("claim thread"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        assert!(results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .all(|error| error.starts_with("commit-path-already-claimed")));
+
+        let list = runtime_commit_budget_list_for_project(Some(&project), true).expect("list");
+        assert_eq!(
+            list.claims
+                .iter()
+                .filter(|claim| claim.scope == COMMIT_PATH_SCOPE
+                    && claim.resource_key == "wiki/a.md")
+                .count(),
+            1,
+            "exactly one active path claim must remain, never zero or two"
+        );
         let _ = fs::remove_dir_all(project);
     }
 
