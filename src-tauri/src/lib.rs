@@ -403,6 +403,12 @@ pub fn run() {
             app.manage(commands::file_sync::ProjectRootState::default());
             app.manage(commands::agent::AgentState::default());
             api_server::start_api_server(app.handle().clone());
+            // Core-runtime background scheduler: reclaims runtime jobs stuck
+            // `running` after their active lease expired (crashed worker,
+            // stalled heartbeat). See SPEC-5-FIX PR3 /
+            // commands::runtime_db::start_lease_reclaim_scheduler for why
+            // this lives here rather than as a frontend timer.
+            commands::runtime_db::start_lease_reclaim_scheduler(app.handle().clone());
             #[cfg(target_os = "macos")]
             if let Err(err) = setup_macos_tray(app) {
                 eprintln!("[tray] could not initialize macOS tray; continuing without tray: {err}");
