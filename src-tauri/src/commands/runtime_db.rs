@@ -6002,78 +6002,138 @@ pub(crate) fn sanitize_profile_pool_text_for_log(value: &str) -> String {
     truncate_profile_pool_text(&redact_profile_pool_text(&trimmed))
 }
 
+const SECRET_REDACTION_MARKER: &str = "[REDACTED]";
+
+struct SecretTokenClass {
+    is_secret: bool,
+    next_token_is_secret_value: bool,
+}
+
+fn token_has_tp_secret(lower: &str) -> bool {
+    let mut rest = lower;
+    while let Some(idx) = rest.find("tp-") {
+        let after = &rest[idx + 3..];
+        let run_len = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .count();
+        if run_len >= 12 {
+            return true;
+        }
+        rest = &rest[idx + 3..];
+    }
+    false
+}
+
+fn classify_secret_token(lower: &str) -> SecretTokenClass {
+    let has_secret_ref = lower.contains("llm-wiki-profile-secret:");
+    let has_google_api_key = lower.starts_with("aiza")
+        || lower.contains("=aiza")
+        || lower.contains(":aiza")
+        || lower.contains("\"aiza")
+        || lower.contains("'aiza");
+    let has_sk_secret = lower.starts_with("sk-")
+        || lower.contains("=sk-")
+        || lower.contains(":sk-")
+        || lower.contains("\"sk-")
+        || lower.contains("'sk-");
+    let has_tp_secret = token_has_tp_secret(lower);
+    let has_bearer =
+        lower == "bearer" || lower.starts_with("bearer:") || lower.starts_with("bearer=");
+    let has_authorization = lower == "authorization"
+        || lower.starts_with("authorization:")
+        || lower.starts_with("authorization=");
+    let has_api_key = lower == "x-api-key"
+        || lower == "api-key"
+        || lower == "apikey"
+        || lower == "api_key"
+        || lower == "x-goog-api-key"
+        || lower == "google_api_key"
+        || lower == "anthropic_api_key"
+        || lower == "anthropic_auth_token"
+        || lower.starts_with("x-api-key:")
+        || lower.starts_with("x-api-key=")
+        || lower.starts_with("api-key:")
+        || lower.starts_with("api-key=")
+        || lower.starts_with("apikey:")
+        || lower.starts_with("apikey=")
+        || lower.starts_with("api_key:")
+        || lower.starts_with("api_key=")
+        || lower.starts_with("x-goog-api-key:")
+        || lower.starts_with("x-goog-api-key=")
+        || lower.starts_with("google_api_key:")
+        || lower.starts_with("google_api_key=")
+        || lower.starts_with("anthropic_api_key:")
+        || lower.starts_with("anthropic_api_key=")
+        || lower.starts_with("anthropic_auth_token:")
+        || lower.starts_with("anthropic_auth_token=")
+        || lower.contains("\"apikey\"")
+        || lower.contains("\"api_key\"")
+        || lower.contains("\"api-key\"")
+        || lower.contains("\"anthropic_api_key\"")
+        || lower.contains("\"anthropic_auth_token\"")
+        || lower.contains("'apikey'")
+        || lower.contains("'api_key'")
+        || lower.contains("'api-key'")
+        || lower.contains("'anthropic_api_key'")
+        || lower.contains("'anthropic_auth_token'");
+    let is_secret = has_secret_ref
+        || has_google_api_key
+        || has_sk_secret
+        || has_tp_secret
+        || has_bearer
+        || has_authorization
+        || has_api_key;
+    let next_token_is_secret_value = has_bearer || has_authorization || has_api_key;
+    SecretTokenClass {
+        is_secret,
+        next_token_is_secret_value,
+    }
+}
+
 fn redact_profile_pool_text(value: &str) -> String {
+    // sanitize_profile_pool_text_for_log (the only production caller) already
+    // collapses whitespace via split_whitespace().join(" ") before calling
+    // this, so redacting on that pre-collapsed single-space form and
+    // delegating to redact_secrets_preserving_format is equivalent to the
+    // previous standalone whitespace-collapsing implementation.
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    redact_secrets_preserving_format(&collapsed)
+}
+
+/// Redacts secret-looking tokens in `line` while preserving all original
+/// whitespace exactly (multiple spaces, indentation, tabs), so it is safe to
+/// use on JSONL/chat lines where whitespace inside string values is literal
+/// content.
+pub(crate) fn redact_secrets_preserving_format(line: &str) -> String {
     let mut redact_next = false;
-    value
-        .split_whitespace()
-        .map(|token| {
-            let lower = token.to_ascii_lowercase();
-            let has_secret_ref = lower.contains("llm-wiki-profile-secret:");
-            let has_google_api_key = lower.starts_with("aiza")
-                || lower.contains("=aiza")
-                || lower.contains(":aiza")
-                || lower.contains("\"aiza")
-                || lower.contains("'aiza");
-            let has_sk_secret = lower.starts_with("sk-")
-                || lower.contains("=sk-")
-                || lower.contains(":sk-")
-                || lower.contains("\"sk-")
-                || lower.contains("'sk-");
-            let has_bearer =
-                lower == "bearer" || lower.starts_with("bearer:") || lower.starts_with("bearer=");
-            let has_authorization = lower == "authorization"
-                || lower.starts_with("authorization:")
-                || lower.starts_with("authorization=");
-            let has_api_key = lower == "x-api-key"
-                || lower == "api-key"
-                || lower == "apikey"
-                || lower == "api_key"
-                || lower == "x-goog-api-key"
-                || lower == "google_api_key"
-                || lower == "anthropic_api_key"
-                || lower == "anthropic_auth_token"
-                || lower.starts_with("x-api-key:")
-                || lower.starts_with("x-api-key=")
-                || lower.starts_with("api-key:")
-                || lower.starts_with("api-key=")
-                || lower.starts_with("apikey:")
-                || lower.starts_with("apikey=")
-                || lower.starts_with("api_key:")
-                || lower.starts_with("api_key=")
-                || lower.starts_with("x-goog-api-key:")
-                || lower.starts_with("x-goog-api-key=")
-                || lower.starts_with("google_api_key:")
-                || lower.starts_with("google_api_key=")
-                || lower.starts_with("anthropic_api_key:")
-                || lower.starts_with("anthropic_api_key=")
-                || lower.starts_with("anthropic_auth_token:")
-                || lower.starts_with("anthropic_auth_token=")
-                || lower.contains("\"apikey\"")
-                || lower.contains("\"api_key\"")
-                || lower.contains("\"api-key\"")
-                || lower.contains("\"anthropic_api_key\"")
-                || lower.contains("\"anthropic_auth_token\"")
-                || lower.contains("'apikey'")
-                || lower.contains("'api_key'")
-                || lower.contains("'api-key'")
-                || lower.contains("'anthropic_api_key'")
-                || lower.contains("'anthropic_auth_token'");
-            let redacted = redact_next
-                || has_secret_ref
-                || has_google_api_key
-                || has_sk_secret
-                || has_bearer
-                || has_authorization
-                || has_api_key;
-            redact_next = has_bearer || has_authorization || has_api_key;
-            if redacted {
-                "[REDACTED]"
-            } else {
-                token
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::with_capacity(line.len());
+    for piece in line.split_inclusive(char::is_whitespace) {
+        let trailing_ws = piece
+            .chars()
+            .last()
+            .filter(|c| c.is_whitespace())
+            .map(|c| c.len_utf8());
+        let (word, ws) = match trailing_ws {
+            Some(ws_len) => piece.split_at(piece.len() - ws_len),
+            None => (piece, ""),
+        };
+        if word.is_empty() {
+            out.push_str(ws);
+            continue;
+        }
+        let lower = word.to_ascii_lowercase();
+        let class = classify_secret_token(&lower);
+        let redacted = redact_next || class.is_secret;
+        redact_next = class.next_token_is_secret_value;
+        if redacted {
+            out.push_str(SECRET_REDACTION_MARKER);
+        } else {
+            out.push_str(word);
+        }
+        out.push_str(ws);
+    }
+    out
 }
 
 fn truncate_profile_pool_text(value: &str) -> String {
@@ -11538,6 +11598,60 @@ mod tests {
             "flask-error api-key-not-configured"
         );
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn redact_profile_pool_text_redacts_tp_gateway_key() {
+        let redacted =
+            redact_profile_pool_text("gateway key=tp-test000aaaabbbbccccdddd in use");
+        assert!(!redacted.contains("tp-test000aaaabbbbccccdddd"));
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_profile_pool_text_keeps_short_tp_prefixed_words() {
+        assert_eq!(
+            redact_profile_pool_text("tp-link router and tp-1a2b device"),
+            "tp-link router and tp-1a2b device"
+        );
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_keeps_whitespace_layout() {
+        let line = "  indented   line with sk-test000aaaabbbbccccdddd embedded\ttab";
+        let redacted = redact_secrets_preserving_format(line);
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(redacted.starts_with("  indented   line with "));
+        assert!(redacted.ends_with("embedded\ttab"));
+        // sk- tokens do not carry over to the next token, so only the
+        // secret token itself is swapped for the marker; every other byte
+        // (including whitespace) is unchanged.
+        assert_eq!(
+            redacted.len(),
+            line.len() - "sk-test000aaaabbbbccccdddd".len() + "[REDACTED]".len()
+        );
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_redacts_jsonl_chat_line() {
+        // ANTHROPIC_AUTH_TOKEN=... is a key=value pair, so the existing
+        // carry-over behavior also redacts the following token ("ok"); the
+        // tp- token is independently detected and does not carry over, so
+        // "done" survives untouched.
+        let line = "  {\"text\":\"Set ANTHROPIC_AUTH_TOKEN=sk-test000aaaabbbbccccdddd  ok  tp-test000aaaabbbbccccdddd  done\"}\n";
+        let redacted = redact_secrets_preserving_format(line);
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+        assert!(!redacted.contains("tp-test000aaaabbbbccccdddd"));
+        assert!(redacted.starts_with("  {\"text\":\"Set "));
+        assert!(redacted.ends_with("  done\"}\n"));
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_roundtrips_when_no_secrets() {
+        let line = "  no secrets here,\tjust  plain   text\n";
+        assert_eq!(redact_secrets_preserving_format(line), line);
     }
 
     #[test]

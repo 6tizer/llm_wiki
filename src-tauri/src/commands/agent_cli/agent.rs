@@ -490,15 +490,17 @@ pub async fn agent_spawn(
         let stderr_task = tokio::spawn(async move {
             let mut collected = String::new();
             while let Ok(Some(line)) = stderr_reader.next_line().await {
-                eprintln!("[agent-sidecar stderr] {line}");
-                collected.push_str(&line);
+                let sanitized = runtime_db::redact_secrets_preserving_format(&line);
+                eprintln!("[agent-sidecar stderr] {sanitized}");
+                collected.push_str(&sanitized);
                 collected.push('\n');
             }
             collected
         });
 
         while let Ok(Some(line)) = reader.next_line().await {
-            let _ = app_for_task.emit(&topic, &line);
+            let sanitized = runtime_db::redact_secrets_preserving_format(&line);
+            let _ = app_for_task.emit(&topic, &sanitized);
         }
 
         let stderr_output = stderr_task.await.unwrap_or_default();
