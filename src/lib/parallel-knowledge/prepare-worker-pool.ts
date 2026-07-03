@@ -11,11 +11,13 @@ import {
   type LongDocumentReduceResult,
   type ValidatedPrepareArtifact,
 } from "@/core-runtime/parallel-knowledge"
+import { JOB_RUNTIME_DEFAULTS } from "@/core-runtime/contract"
 import {
   runtimeJobClaimByKind,
   runtimeJobComplete,
   runtimeJobCreate,
   runtimeJobFail,
+  runtimeJobHeartbeat,
   runtimeProfilePoolClaim,
   runtimeProfilePoolList,
   runtimeProfilePoolRelease,
@@ -84,6 +86,7 @@ export type PrepareModelCallExecutor = (
 export interface PrepareWorkerRuntimeAdapter {
   claimJobByKind(request: RuntimeJobClaimByKindRequest): Promise<RuntimeJobClaim>
   createJob(request: RuntimeJobCreateRequest): Promise<RuntimeJobRecord>
+  heartbeat(request: RuntimeJobLeaseRequest): Promise<RuntimeJobClaim>
   completeJob(request: RuntimeJobLeaseRequest): Promise<RuntimeJobRecord>
   failJob(request: RuntimeJobFailRequest): Promise<RuntimeJobRecord>
   profilePoolList(request: RuntimeProfilePoolListRequest): Promise<RuntimeProfilePoolList>
@@ -126,6 +129,7 @@ export interface PrepareWorkerPoolResult {
 const defaultRuntime: PrepareWorkerRuntimeAdapter = {
   claimJobByKind: runtimeJobClaimByKind,
   createJob: runtimeJobCreate,
+  heartbeat: runtimeJobHeartbeat,
   completeJob: runtimeJobComplete,
   failJob: runtimeJobFail,
   profilePoolList: runtimeProfilePoolList,
@@ -176,7 +180,12 @@ export async function runPrepareWorkerPool(
       signal: options.signal,
     }),
   )
-  await Promise.all(workers)
+  const settled = await Promise.allSettled(workers)
+  for (const outcome of settled) {
+    if (outcome.status === "rejected") {
+      result.errors.push(`prepare-worker-crashed: ${errorMessage(outcome.reason)}`)
+    }
+  }
   return result
 }
 
@@ -193,7 +202,11 @@ async function runPrepareWorker(context: PrepareWorkerContext): Promise<void> {
   while (!context.signal?.aborted && context.reserveClaim()) {
     const claim = await claimNextPrepareJob(context)
     if (!claim) return
-    await processPrepareJob(context, claim)
+    try {
+      await processPrepareJob(context, claim)
+    } catch (err) {
+      context.result.errors.push(`prepare-job-crashed: ${errorMessage(err)}`)
+    }
   }
 }
 
@@ -235,7 +248,13 @@ async function processPrepareJob(
     return
   }
 
-  const poolStatus = await getHealthyProfilePool(context)
+  let poolStatus: RuntimeDbHealthState
+  try {
+    poolStatus = await getHealthyProfilePool(context)
+  } catch (err) {
+    await failForProfileUnavailable(context, claim, errorMessage(err))
+    return
+  }
   if (poolStatus !== "healthy") {
     await failForProfileUnavailable(context, claim, `profile pool is ${poolStatus}`)
     return
@@ -259,11 +278,13 @@ async function processPrepareJob(
   if (outcome.status === "success") {
     const stored = await storeSuccessfulArtifacts(context, claim, outcome, profileClaim)
     if (!stored) return
-    await context.runtime.profilePoolRelease({
+    await releaseProfilePool(context, {
       claimId: profileClaim.claimId,
       outcome: "success",
     })
-    await context.runtime.completeJob(leaseRequest(claim))
+    await safeCall(context, "complete-job-failed", () =>
+      context.runtime.completeJob(leaseRequest(claim)),
+    )
     context.result.completedJobs += 1
     await appendWorkerProgress(context, claim, "bulk-prepare:job-completed", {
       profileId: profileClaim.profileId,
@@ -273,7 +294,7 @@ async function processPrepareJob(
 
   if (outcome.status === "rate-limited") {
     context.result.rateLimited += 1
-    await context.runtime.profilePoolRelease({
+    await releaseProfilePool(context, {
       claimId: profileClaim.claimId,
       outcome: "rate-limited",
       retryAfterMs: outcome.retryAfterMs,
@@ -288,7 +309,7 @@ async function processPrepareJob(
     return
   }
 
-  await context.runtime.profilePoolRelease({
+  await releaseProfilePool(context, {
     claimId: profileClaim.claimId,
     outcome: "error",
     circuitOpenMs: outcome.circuitOpenMs,
@@ -376,7 +397,7 @@ async function handleArtifactStoreFailure(
     context.result.errors.push(`artifact-cleanup-failed: ${errorMessage(err)}`)
   }
   await createArtifactRepairJob(context, claim, error)
-  await context.runtime.profilePoolRelease({
+  await releaseProfilePool(context, {
     claimId: profileClaim.claimId,
     outcome: "success",
     reason: "bulk-prepare-local-artifact-store-failed",
@@ -458,7 +479,7 @@ async function handleMapReduceRepairFailure(
   } catch (err) {
     context.result.errors.push(`map-reduce-repair-cleanup-failed: ${errorMessage(err)}`)
   }
-  await context.runtime.profilePoolRelease({
+  await releaseProfilePool(context, {
     claimId: profileClaim.claimId,
     outcome: "success",
     reason: "bulk-prepare-local-map-reduce-repair-failed",
@@ -486,12 +507,20 @@ async function getHealthyProfilePool(
   }
 }
 
+/**
+ * Runs the model-call executor while heartbeating the claimed job's lease so
+ * a slow LLM call spanning the lease TTL doesn't cause a later
+ * completeJob/failJob to be rejected as lease-expired. The heartbeat stops
+ * the instant the executor settles, before any bookkeeping (complete/fail)
+ * runs, so no heartbeat races a terminal job state.
+ */
 async function runExecutor(
   context: PrepareWorkerContext,
   claim: RuntimeJobClaim,
   payload: BulkKnowledgePrepareJobPayload,
   profileClaim: RuntimeProfilePoolClaim,
 ): Promise<PrepareModelCallOutcome> {
+  const stopHeartbeat = startJobHeartbeat(context, claim)
   try {
     return await context.executor({
       workerId: context.workerId,
@@ -502,6 +531,40 @@ async function runExecutor(
     })
   } catch (err) {
     return { status: "error", error: errorMessage(err) }
+  } finally {
+    stopHeartbeat()
+  }
+}
+
+function startJobHeartbeat(
+  context: PrepareWorkerContext,
+  claim: RuntimeJobClaim,
+): () => void {
+  let stopped = false
+  let pending: Promise<void> | null = null
+
+  const tick = () => {
+    if (stopped || pending) return
+    pending = context.runtime
+      .heartbeat({ jobId: claim.job.jobId, leaseId: claim.lease.leaseId })
+      .then(() => undefined)
+      .catch((err) => {
+        if (!stopped) {
+          context.result.errors.push(`heartbeat-failed: ${errorMessage(err)}`)
+        }
+      })
+      .finally(() => {
+        pending = null
+      })
+  }
+
+  const timer = setInterval(tick, JOB_RUNTIME_DEFAULTS.heartbeatMinIntervalMs)
+  const unrefable = timer as unknown as { unref?: () => void }
+  unrefable.unref?.()
+
+  return () => {
+    stopped = true
+    clearInterval(timer)
   }
 }
 
@@ -533,11 +596,13 @@ async function failClaimedJob(
   await appendWorkerProgress(context, claim, detail.type ?? "bulk-prepare:job-failed", {
     ...progressDetails,
   })
-  await context.runtime.failJob({
-    ...leaseRequest(claim),
-    error,
-    retryAfterMs: detail.retryAfterMs,
-  })
+  await safeCall(context, "fail-job-failed", () =>
+    context.runtime.failJob({
+      ...leaseRequest(claim),
+      error,
+      retryAfterMs: detail.retryAfterMs,
+    }),
+  )
   context.result.failedJobs += 1
 }
 
@@ -635,17 +700,45 @@ async function appendWorkerProgress(
   type: string,
   details: Record<string, unknown> = {},
 ): Promise<void> {
-  await context.runtime.progressAppend({
-    jobId: claim.job.jobId,
-    progressKey: `bulk-prepare:worker:${context.workerId}`,
-    payload: JSON.stringify({
-      type,
-      workerId: context.workerId,
+  await safeCall(context, "progress-append-failed", () =>
+    context.runtime.progressAppend({
       jobId: claim.job.jobId,
-      ...details,
+      progressKey: `bulk-prepare:worker:${context.workerId}`,
+      payload: JSON.stringify({
+        type,
+        workerId: context.workerId,
+        jobId: claim.job.jobId,
+        ...details,
+      }),
+      durable: true,
     }),
-    durable: true,
-  })
+  )
+}
+
+function releaseProfilePool(
+  context: PrepareWorkerContext,
+  request: RuntimeProfilePoolReleaseRequest,
+): Promise<void> {
+  return safeCall(context, "profile-pool-release-failed", () =>
+    context.runtime.profilePoolRelease(request),
+  )
+}
+
+/**
+ * Runs a bookkeeping runtime call (complete/fail/progress/profile-release)
+ * without letting a transient failure escape and tear down the whole
+ * worker/pool. Failures are recorded in `result.errors` instead of thrown.
+ */
+async function safeCall(
+  context: PrepareWorkerContext,
+  label: string,
+  fn: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await fn()
+  } catch (err) {
+    context.result.errors.push(`${label}: ${errorMessage(err)}`)
+  }
 }
 
 function parsePreparePayload(payload: string): BulkKnowledgePrepareJobPayload {

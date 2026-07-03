@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   BULK_KNOWLEDGE_ARTIFACT_REPAIR_JOB_KIND,
   BULK_KNOWLEDGE_MAP_REDUCE_REPAIR_JOB_KIND,
@@ -189,6 +189,7 @@ function createRuntime(claims: RuntimeJobClaim[]): PrepareWorkerRuntimeAdapter &
   const calls: Record<string, unknown[]> = {
     claimJobByKind: [],
     createJob: [],
+    heartbeat: [],
     completeJob: [],
     failJob: [],
     profilePoolList: [],
@@ -212,6 +213,11 @@ function createRuntime(claims: RuntimeJobClaim[]): PrepareWorkerRuntimeAdapter &
       calls.sequence.push("createJob")
       calls.createJob.push(request)
       return { ...jobClaim("repair-1").job, kind: request.kind, payload: request.payload }
+    },
+    async heartbeat(request) {
+      calls.sequence.push("heartbeat")
+      calls.heartbeat.push(request)
+      return jobClaim(request.jobId, request.leaseId)
     },
     async completeJob(request) {
       calls.sequence.push("completeJob")
@@ -1032,5 +1038,227 @@ describe("runPrepareWorkerPool validation", () => {
         concurrency: 0,
       }),
     ).rejects.toThrow("bulk-prepare-concurrency-invalid")
+  })
+})
+
+describe("job heartbeat during long model-call executor runs", () => {
+  it("renews the claimed job lease on a fixed interval while the executor is running, and stops once it settles", async () => {
+    vi.useFakeTimers()
+    try {
+      const runtime = createRuntime([jobClaim("job-1")])
+      let resolveExecutor: (() => void) | undefined
+      const executor: PrepareModelCallExecutor = () =>
+        new Promise((resolve) => {
+          resolveExecutor = () => resolve({ status: "success" })
+        })
+
+      const poolPromise = runPrepareWorkerPool({
+        runtime,
+        executor,
+        concurrency: 1,
+        maxJobs: 1,
+      })
+
+      // Let the worker claim the job, claim a profile, and reach the
+      // (still-pending) executor call.
+      await vi.advanceTimersByTimeAsync(0)
+      expect(runtime.calls.heartbeat).toEqual([])
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(runtime.calls.heartbeat).toEqual([{ jobId: "job-1", leaseId: "lease-job-1" }])
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(runtime.calls.heartbeat).toHaveLength(2)
+
+      // Simulate the slow LLM call spanning the 120s lease TTL: keep
+      // heartbeating well past it, and completeJob must still succeed.
+      await vi.advanceTimersByTimeAsync(115_000)
+      expect(runtime.calls.heartbeat.length).toBeGreaterThanOrEqual(23)
+
+      resolveExecutor?.()
+      const result = await poolPromise
+      expect(result).toMatchObject({ completedJobs: 1, failedJobs: 0, errors: [] })
+      expect(runtime.calls.completeJob).toEqual([{ jobId: "job-1", leaseId: "lease-job-1" }])
+
+      const heartbeatCountAtCompletion = runtime.calls.heartbeat.length
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(runtime.calls.heartbeat).toHaveLength(heartbeatCountAtCompletion)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stops heartbeating immediately when the executor fails, before the job is marked failed", async () => {
+    vi.useFakeTimers()
+    try {
+      const runtime = createRuntime([jobClaim("job-1")])
+      let rejectExecutor: ((err: Error) => void) | undefined
+      const executor: PrepareModelCallExecutor = () =>
+        new Promise((_resolve, reject) => {
+          rejectExecutor = reject
+        })
+
+      const poolPromise = runPrepareWorkerPool({
+        runtime,
+        executor,
+        concurrency: 1,
+        maxJobs: 1,
+      })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(runtime.calls.heartbeat).toHaveLength(1)
+
+      rejectExecutor?.(new Error("provider timeout"))
+      const result = await poolPromise
+      expect(result).toMatchObject({ failedJobs: 1, completedJobs: 0 })
+
+      const heartbeatCountAtFailure = runtime.calls.heartbeat.length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(runtime.calls.heartbeat).toHaveLength(heartbeatCountAtFailure)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("bookkeeping resilience", () => {
+  it("does not reject the pool and still counts the job complete when completeJob bookkeeping throws", async () => {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.completeJob = async (request) => {
+      runtime.calls.sequence.push("completeJob")
+      runtime.calls.completeJob.push(request)
+      throw new Error("lease-expired: job-1")
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({ status: "success" }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result.completedJobs).toBe(1)
+    expect(result.errors).toEqual([
+      expect.stringContaining("complete-job-failed: lease-expired: job-1"),
+    ])
+    expect(runtime.calls.profilePoolRelease).toEqual([
+      { claimId: "claim-job-1", outcome: "success" },
+    ])
+  })
+
+  it("does not reject the pool when profilePoolRelease bookkeeping throws on the success path", async () => {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.profilePoolRelease = async (request) => {
+      runtime.calls.sequence.push("profilePoolRelease")
+      runtime.calls.profilePoolRelease.push(request)
+      throw new Error("profile-pool-release-unavailable")
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({ status: "success" }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result.completedJobs).toBe(1)
+    expect(result.errors).toEqual([
+      expect.stringContaining("profile-pool-release-failed: profile-pool-release-unavailable"),
+    ])
+    expect(runtime.calls.completeJob).toEqual([{ jobId: "job-1", leaseId: "lease-job-1" }])
+  })
+
+  it("does not reject the pool when progress-append bookkeeping throws", async () => {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.progressAppend = async (request) => {
+      runtime.calls.sequence.push("progressAppend")
+      runtime.calls.progressAppend.push(request)
+      throw new Error("progress-append-unavailable")
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({ status: "success" }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result.completedJobs).toBe(1)
+    expect(result.errors.filter((e) => e.startsWith("progress-append-failed"))).toHaveLength(2)
+  })
+
+  it("does not reject the pool when failJob bookkeeping throws on the failure path", async () => {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.failJob = async (request) => {
+      runtime.calls.sequence.push("failJob")
+      runtime.calls.failJob.push(request)
+      throw new Error("lease-expired: job-1")
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({ status: "error", error: "provider 500" }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result.failedJobs).toBe(1)
+    expect(result.errors).toEqual([
+      expect.stringContaining("fail-job-failed: lease-expired: job-1"),
+    ])
+  })
+
+  it("fails the job instead of crashing the pool when the profile pool health check throws unexpectedly", async () => {
+    const runtime = createRuntime([jobClaim("job-1")])
+    runtime.profilePoolList = async (request) => {
+      runtime.calls.profilePoolList.push(request)
+      throw new Error("profile-pool-list-unavailable")
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({ status: "success" }),
+      concurrency: 1,
+      maxJobs: 1,
+    })
+
+    expect(result).toMatchObject({ claimedJobs: 1, failedJobs: 1, profileUnavailable: 1 })
+    expect(runtime.calls.profilePoolClaim).toEqual([])
+    expect(runtime.calls.failJob).toEqual([
+      {
+        jobId: "job-1",
+        leaseId: "lease-job-1",
+        error: "profile-unavailable: profile-pool-list-unavailable",
+        retryAfterMs: undefined,
+      },
+    ])
+  })
+})
+
+describe("sibling worker isolation", () => {
+  it("keeps one worker's unexpected job failure from crashing or discarding results from sibling workers", async () => {
+    const runtime = createRuntime([jobClaim("job-1"), jobClaim("job-2")])
+    let call = 0
+    runtime.profilePoolList = async (request) => {
+      runtime.calls.profilePoolList.push(request)
+      call += 1
+      if (call === 1) throw new Error("profile-pool-list-unavailable")
+      return healthyPool()
+    }
+
+    const result = await runPrepareWorkerPool({
+      runtime,
+      executor: async () => ({ status: "success" }),
+      concurrency: 2,
+      maxJobs: 2,
+    })
+
+    expect(result.claimedJobs).toBe(2)
+    expect(result.completedJobs).toBe(1)
+    expect(result.failedJobs).toBe(1)
+    expect(result.profileUnavailable).toBe(1)
+    // The pool must still return the full aggregated result rather than
+    // reject or drop the sibling worker's outcome.
+    expect(result.errors).toEqual([])
   })
 })
