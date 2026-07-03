@@ -31,7 +31,7 @@ tauri-plugin-store = "2.4.2"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tiny_http = "0.12"
-zip = "2"
+zip = { version = "2", default-features = false, features = ["deflate", "deflate64"] }
 calamine = "0.34.0"
 docx-rs = "0.4.20"
 lancedb = "0.27.2"
@@ -71,6 +71,9 @@ walkdir = "2"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 wiremock = "0.6"
+
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.release]
 codegen-units = 1
