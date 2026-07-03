@@ -6011,6 +6011,25 @@ const SECRET_REDACTION_MARKER: &str = "[REDACTED]";
 // more token instead of ending on the scheme word.
 const AUTH_SCHEME_WORDS: &[&str] = &["basic", "digest", "negotiate", "ntlm", "token", "bearer"];
 
+// JSON-object key / URL-query-param names that name a credential field
+// beyond the header/scheme-style names AUTH_SCHEME_WORDS and
+// classify_secret_token's api_key/authorization/bearer checks already
+// cover. Exact-name matching only — same rationale as AUTH_SCHEME_WORDS —
+// so `secretary`/`token_count`/`max_tokens` are never caught by substring
+// match.
+const CREDENTIAL_FIELD_NAMES: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "api_secret",
+    "client_secret",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "session_token",
+    "private_key",
+];
+
 struct SecretTokenClass {
     is_secret: bool,
     next_token_is_secret_value: bool,
@@ -6074,6 +6093,29 @@ fn token_has_tp_secret(lower: &str) -> bool {
     false
 }
 
+// True when `lower` names one of CREDENTIAL_FIELD_NAMES at the START of the
+// token followed by a `:`/`=` separator, or as a quoted JSON/py-literal key
+// anywhere in the token (`"password"`/`'password'`) — the same
+// starts_with/contains separator idiom `has_api_key` above uses, applied to
+// this second name list. Deliberately anchored to the token START (unlike
+// `token_has_boundary_match`, which the sk-/tp- detectors use to find a
+// marker anywhere inside a token): a name+separator match anywhere inside a
+// longer compound token (e.g. an unredacted `access_token=...` query param
+// sitting inside a whole URL that is itself one whitespace token) must not
+// condemn the entire surrounding token. Several of these names (`secret`,
+// `password`) are also ordinary English words, so unlike `has_api_key`
+// there is no bare exact-match case here: a lone `secret` token in prose
+// ("the secret is safe") must not arm redaction — only
+// `secret=`/`secret:`/quoted-key forms do.
+fn token_has_credential_field_separator(lower: &str) -> bool {
+    CREDENTIAL_FIELD_NAMES.iter().any(|name| {
+        lower.starts_with(format!("{name}:").as_str())
+            || lower.starts_with(format!("{name}=").as_str())
+            || lower.contains(format!("\"{name}\"").as_str())
+            || lower.contains(format!("'{name}'").as_str())
+    })
+}
+
 fn classify_secret_token(lower: &str) -> SecretTokenClass {
     let has_secret_ref = lower.contains("llm-wiki-profile-secret:");
     let has_google_api_key = token_has_boundary_match(lower, "aiza");
@@ -6118,14 +6160,17 @@ fn classify_secret_token(lower: &str) -> SecretTokenClass {
         || lower.contains("'api-key'")
         || lower.contains("'anthropic_api_key'")
         || lower.contains("'anthropic_auth_token'");
+    let has_credential_field = token_has_credential_field_separator(lower);
     let is_secret = has_secret_ref
         || has_google_api_key
         || has_sk_secret
         || has_tp_secret
         || has_bearer
         || has_authorization
-        || has_api_key;
-    let next_token_is_secret_value = has_bearer || has_authorization || has_api_key;
+        || has_api_key
+        || has_credential_field;
+    let next_token_is_secret_value =
+        has_bearer || has_authorization || has_api_key || has_credential_field;
     SecretTokenClass {
         is_secret,
         next_token_is_secret_value,
@@ -6254,15 +6299,18 @@ fn try_redact_json_line(line: &str) -> Option<String> {
     Some(serialized)
 }
 
-// True when a JSON object key names a credential-bearing field, so its
-// direct value should be redacted unconditionally rather than token-scanned
-// (a value like a base64 blob or opaque ID has no sk-/tp-/aiza marker for
-// the token scanner to catch). Exact-name matching only — no substring
-// match — so `token_count`/`max_tokens`/`tokenizer` are never caught by the
-// bare `token` scheme word.
-fn key_is_credential_bearing(key: &str) -> bool {
+// True when a JSON object key (or, via `redact_url_userinfo_for_log`'s
+// query-param redaction, a URL query-param name) names a credential-bearing
+// field, so its direct value should be redacted unconditionally rather than
+// token-scanned (a value like a base64 blob or opaque ID has no sk-/tp-/aiza
+// marker for the token scanner to catch). Exact-name matching only — no
+// substring match — so `token_count`/`max_tokens`/`tokenizer`/`secretary`
+// are never caught by the bare `token`/`secret` scheme words.
+pub(crate) fn key_is_credential_bearing(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
-    if AUTH_SCHEME_WORDS.contains(&lower.as_str()) {
+    if AUTH_SCHEME_WORDS.contains(&lower.as_str())
+        || CREDENTIAL_FIELD_NAMES.contains(&lower.as_str())
+    {
         return true;
     }
     let class = classify_secret_token(&lower);
@@ -6291,7 +6339,7 @@ fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, fo
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                redact_json_value_inner(item, changed, false);
+                redact_json_value_inner(item, changed, force_redact);
             }
         }
         serde_json::Value::Object(map) => {
@@ -6313,7 +6361,7 @@ fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, fo
             let mut rebuilt = serde_json::Map::with_capacity(map.len());
             for (key, mut entry) in std::mem::take(map) {
                 let key_is_secret = token_looks_like_secret_value(&key.to_ascii_lowercase());
-                let force_redact = key_is_secret || key_is_credential_bearing(&key);
+                let force_redact = force_redact || key_is_secret || key_is_credential_bearing(&key);
                 redact_json_value_inner(&mut entry, changed, force_redact);
                 let key = if key_is_secret {
                     *changed = true;
@@ -11914,6 +11962,88 @@ mod tests {
     fn redact_secrets_in_json_line_keeps_token_lookalike_keys_untouched() {
         let line = "{\"token_count\":42,\"max_tokens\":\"1000\",\"tokenizer\":\"gpt2\"}\n";
         assert_eq!(SecretRedactor::new().redact_json_line(line), line);
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_keeps_secretary_key_untouched() {
+        let line = "{\"secretary\":\"alice\"}\n";
+        assert_eq!(SecretRedactor::new().redact_json_line(line), line);
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_nested_array_under_credential_key() {
+        let line = "{\"api_key\":[\"opaque-item-one\",\"opaque-item-two\"]}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaque-item-one"));
+        assert!(!redacted.contains("opaque-item-two"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["api_key"][0], "[REDACTED]");
+        assert_eq!(parsed["api_key"][1], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_nested_object_under_authorization_key() {
+        let line = "{\"authorization\":{\"value\":\"opaquevalue000\",\"scheme\":\"basic\"}}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaquevalue000"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["authorization"]["value"], "[REDACTED]");
+        assert_eq!(parsed["authorization"]["scheme"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_array_of_objects_under_credential_key() {
+        let line = "{\"api_key\":[{\"k\":\"opaquevalue000\"}],\"note\":\"ok\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaquevalue000"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["api_key"][0]["k"], "[REDACTED]");
+        // The sibling "note" key sits outside the credential-bearing
+        // subtree, so it must be unaffected by the propagated force flag.
+        assert_eq!(parsed["note"], "ok");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_common_credential_field_names() {
+        for key in ["password", "secret", "access_token", "client_secret"] {
+            let line = format!("{{\"{key}\":\"opaquevalue000\"}}\n");
+            let redacted = SecretRedactor::new().redact_json_line(&line);
+            assert!(
+                !redacted.contains("opaquevalue000"),
+                "key {key} should have redacted its value"
+            );
+            let trimmed = redacted.trim_end_matches(['\r', '\n']);
+            let parsed: serde_json::Value =
+                serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+            assert_eq!(parsed[key], "[REDACTED]", "key {key} should be [REDACTED]");
+        }
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_redacts_token_stream_password_assignment() {
+        // The name=value pair is a single whitespace token, so (matching
+        // the existing ANTHROPIC_AUTH_TOKEN=... precedent above) the whole
+        // token is swapped for the marker and, since the separator form
+        // also arms next_token_is_secret_value, so is the token after it —
+        // this test only asserts the credential itself never survives.
+        let redacted = redact_secrets_preserving_format("set password=hunter2opaque now");
+        assert!(!redacted.contains("hunter2opaque"));
+        assert!(redacted.contains("[REDACTED]"));
+        assert!(redacted.starts_with("set "));
+    }
+
+    #[test]
+    fn redact_secrets_preserving_format_keeps_bare_secret_word_in_prose() {
+        assert_eq!(
+            redact_secrets_preserving_format("the secret is safe"),
+            "the secret is safe"
+        );
     }
 
     #[test]

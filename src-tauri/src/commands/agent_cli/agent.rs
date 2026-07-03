@@ -30,6 +30,34 @@ use crate::commands::runtime_db;
 const SIDECAR_PLACEHOLDER_PREFIX: &[u8] = b"Placeholder for Tauri resource validation.";
 const AGENT_PROFILE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
 
+// Redacts credential-named query-param values (`?api_key=...`,
+// `&access_token=...`) whose value is an opaque token/session id with no
+// sk-/tp-/aiza marker for `redact_secrets_preserving_format` below to catch
+// on its own. Splits on `?` then `&` then the first `=` in each param and
+// swaps the value for the marker when the param name (case-insensitive) is
+// credential-bearing, reusing the same name list JSON redaction uses rather
+// than duplicating it here. A trailing `#fragment` on the last param's
+// value is swallowed along with it when that param is credential-bearing
+// (acceptable: it still means no credential-named value leaks); a fragment
+// on a non-credential param is left untouched.
+fn redact_url_query_param_credentials(url: &str) -> String {
+    let Some(query_start) = url.find('?') else {
+        return url.to_string();
+    };
+    let (before, query) = url.split_at(query_start + 1);
+    let redacted_query = query
+        .split('&')
+        .map(|param| match param.split_once('=') {
+            Some((name, _value)) if runtime_db::key_is_credential_bearing(name) => {
+                format!("{name}=[REDACTED]")
+            }
+            _ => param.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{before}{redacted_query}")
+}
+
 fn redact_url_userinfo_for_log(url: &str) -> String {
     let authority_start = url
         .find("://")
@@ -47,9 +75,12 @@ fn redact_url_userinfo_for_log(url: &str) -> String {
         None => url.to_string(),
     };
     // Userinfo masking alone misses secrets carried in the query string
-    // (e.g. `?api_key=sk-...`), which this diagnostic log line otherwise
-    // reproduces verbatim. The only caller (agent_spawn) uses this purely
-    // for logging, so it's fine for the result to no longer be a valid URL.
+    // (e.g. `?api_key=sk-...`, or `?api_key=<opaque value>` with no marker
+    // for the token-stream pass below to catch), which this diagnostic log
+    // line otherwise reproduces verbatim. The only caller (agent_spawn)
+    // uses this purely for logging, so it's fine for the result to no
+    // longer be a valid URL.
+    let masked = redact_url_query_param_credentials(&masked);
     runtime_db::redact_secrets_preserving_format(&masked)
 }
 
@@ -845,6 +876,34 @@ mod tests {
             "https://api.example.com/v1?api_key=sk-test000aaaabbbbccccdddd",
         );
         assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+    }
+
+    #[test]
+    fn redact_url_userinfo_for_log_redacts_opaque_credential_named_query_param() {
+        // No sk-/tp-/AIza marker in the value, so only the query-param-name
+        // check (not the whitespace-token marker scan) can catch this.
+        let redacted = redact_url_userinfo_for_log(
+            "https://gw.example.com/v1?api_key=OpaqueNoMarkers987654321",
+        );
+        assert!(!redacted.contains("OpaqueNoMarkers987654321"));
+        assert!(redacted.starts_with("https://gw.example.com/v1?api_key="));
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_url_userinfo_for_log_redacts_only_credential_named_query_param() {
+        let redacted = redact_url_userinfo_for_log(
+            "https://gw.example.com/v1?q=hello&access_token=OpaqueNoMarkers987654321",
+        );
+        assert!(redacted.contains("q=hello"));
+        assert!(!redacted.contains("OpaqueNoMarkers987654321"));
+        assert!(redacted.contains("access_token=[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_url_userinfo_for_log_control_url_without_credentials_is_byte_identical() {
+        let url = "https://gw.example.com/v1?q=hello&page=2";
+        assert_eq!(redact_url_userinfo_for_log(url), url);
     }
 
     fn args_with_optional_fields_none() -> AgentSpawnArgs {
