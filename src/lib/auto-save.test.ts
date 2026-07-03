@@ -50,7 +50,7 @@ function conversation(id: string): Conversation {
 
 async function setupFreshAutoSave() {
   vi.resetModules()
-  const [{ setupAutoSave }, { useWikiStore }, { useLintStore }, { useReviewStore }, { useChatStore }, { useActivityStore }] =
+  const [{ setupAutoSave, flushAutoSave }, { useWikiStore }, { useLintStore }, { useReviewStore }, { useChatStore }, { useActivityStore }] =
     await Promise.all([
       import("./auto-save"),
       import("@/stores/wiki-store"),
@@ -68,7 +68,7 @@ async function setupFreshAutoSave() {
   useChatStore.getState().setStreaming(false)
   useActivityStore.setState({ items: [] })
   setupAutoSave()
-  return { useWikiStore, useLintStore, useReviewStore, useChatStore, useActivityStore }
+  return { useWikiStore, useLintStore, useReviewStore, useChatStore, useActivityStore, flushAutoSave }
 }
 
 function autoSaveErrors(items: ActivityItem[]): ActivityItem[] {
@@ -91,7 +91,6 @@ describe("setupAutoSave", () => {
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useLintStore.getState().setItems([item])
-    useWikiStore.getState().setProject(project("B", "/tmp/b"))
 
     await vi.advanceTimersByTimeAsync(1000)
 
@@ -100,12 +99,13 @@ describe("setupAutoSave", () => {
   })
 
   it("keeps pending debounced lint saves isolated by project path", async () => {
-    const { useWikiStore, useLintStore } = await setupFreshAutoSave()
+    const { useWikiStore, useLintStore, flushAutoSave } = await setupFreshAutoSave()
     const itemA = lintItem("lint-a")
     const itemB = lintItem("lint-b")
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useLintStore.getState().setItems([itemA])
+    await flushAutoSave("/tmp/a")
     useWikiStore.getState().setProject(project("B", "/tmp/b"))
     useLintStore.getState().setItems([])
     useLintStore.getState().setItems([itemB])
@@ -135,7 +135,6 @@ describe("setupAutoSave", () => {
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useReviewStore.getState().setItems([item])
-    useWikiStore.getState().setProject(project("B", "/tmp/b"))
 
     await vi.advanceTimersByTimeAsync(1000)
 
@@ -144,12 +143,13 @@ describe("setupAutoSave", () => {
   })
 
   it("keeps pending debounced review saves isolated by project path", async () => {
-    const { useWikiStore, useReviewStore } = await setupFreshAutoSave()
+    const { useWikiStore, useReviewStore, flushAutoSave } = await setupFreshAutoSave()
     const itemA = reviewItem("review-a")
     const itemB = reviewItem("review-b")
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useReviewStore.getState().setItems([itemA])
+    await flushAutoSave("/tmp/a")
     useWikiStore.getState().setProject(project("B", "/tmp/b"))
     useReviewStore.getState().setItems([itemB])
 
@@ -166,7 +166,6 @@ describe("setupAutoSave", () => {
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useChatStore.getState().setConversations([conv])
-    useWikiStore.getState().setProject(project("B", "/tmp/b"))
 
     await vi.advanceTimersByTimeAsync(2000)
 
@@ -175,12 +174,13 @@ describe("setupAutoSave", () => {
   })
 
   it("keeps pending debounced chat saves isolated by project path", async () => {
-    const { useWikiStore, useChatStore } = await setupFreshAutoSave()
+    const { useWikiStore, useChatStore, flushAutoSave } = await setupFreshAutoSave()
     const convA = conversation("conv-a")
     const convB = conversation("conv-b")
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useChatStore.getState().setConversations([convA])
+    await flushAutoSave("/tmp/a")
     useWikiStore.getState().setProject(project("B", "/tmp/b"))
     useChatStore.getState().setConversations([convB])
 
@@ -318,11 +318,12 @@ describe("setupAutoSave", () => {
 
   it("keeps failure debounce isolated by project path", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
-    const { useWikiStore, useReviewStore, useActivityStore } = await setupFreshAutoSave()
+    const { useWikiStore, useReviewStore, useActivityStore, flushAutoSave } = await setupFreshAutoSave()
     persistMocks.saveReviewItems.mockRejectedValue(new Error("review failed"))
 
     useWikiStore.getState().setProject(project("A", "/tmp/a"))
     useReviewStore.getState().setItems([reviewItem("review-a")])
+    await flushAutoSave("/tmp/a")
     useWikiStore.getState().setProject(project("B", "/tmp/b"))
     useReviewStore.getState().setItems([reviewItem("review-b")])
 

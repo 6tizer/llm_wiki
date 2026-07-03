@@ -1,11 +1,18 @@
 import { runStructuralLint } from "@/lib/lint"
 import { normalizePath } from "@/lib/path-utils"
 import { useLintStore } from "@/stores/lint-store"
+import { useWikiStore } from "@/stores/wiki-store"
 
 let pendingProjectPath: string | null = null
 let pendingPaths = new Set<string>()
 let timer: ReturnType<typeof setTimeout> | null = null
 let running = false
+// Set true by clearAgentStructuralLintQueue() while a scan is in flight, so
+// drainQueue can discard that scan's results even if, for some reason, the
+// project generation check below did not also change. The generation check
+// is the primary guard (it also catches the same project path being closed
+// and reopened); this flag is a second, independent line of defense.
+let runningScanStale = false
 
 function snapshotPaths(): string[] {
   return [...pendingPaths].sort()
@@ -23,6 +30,11 @@ async function drainQueue(): Promise<void> {
   if (running || !pendingProjectPath || pendingPaths.size === 0) return
 
   running = true
+  runningScanStale = false
+  // Captured at scan start, not read again until the scan resolves — this
+  // is what lets us tell whether a project switch happened while the scan
+  // (a real async Rust call) was in flight.
+  const scanGeneration = useWikiStore.getState().projectGeneration
   const projectPath = pendingProjectPath
   const paths = snapshotPaths()
   pendingPaths = new Set()
@@ -34,6 +46,17 @@ async function drainQueue(): Promise<void> {
 
   try {
     const results = await runStructuralLint(normalizePath(projectPath))
+    if (runningScanStale || useWikiStore.getState().projectGeneration !== scanGeneration) {
+      // The active project changed while this scan was running. These
+      // results describe a project that is no longer active — writing
+      // them (via replaceAgentItems, which auto-save would then persist
+      // under whatever project is active now) would silently corrupt
+      // that project's lint data. Discard instead.
+      console.debug(
+        `[agent-lint-queue] discarding stale scan results for "${projectPath}" — project switched while the scan was in flight`
+      )
+      return
+    }
     useLintStore.getState().replaceAgentItems(results)
     useLintStore.getState().setAgentLintState({
       status: "done",
@@ -41,6 +64,7 @@ async function drainQueue(): Promise<void> {
       updatedAt: Date.now(),
     })
   } catch (err) {
+    if (runningScanStale || useWikiStore.getState().projectGeneration !== scanGeneration) return
     useLintStore.getState().setAgentLintState({
       status: "failed",
       paths,
@@ -49,7 +73,7 @@ async function drainQueue(): Promise<void> {
     })
   } finally {
     running = false
-    if (pendingPaths.size > 0) schedule(0)
+    if (!runningScanStale && pendingPaths.size > 0) schedule(0)
   }
 }
 
@@ -77,5 +101,6 @@ export function clearAgentStructuralLintQueue(): void {
   timer = null
   pendingProjectPath = null
   pendingPaths = new Set()
+  if (running) runningScanStale = true
   running = false
 }

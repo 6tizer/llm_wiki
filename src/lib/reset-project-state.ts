@@ -12,8 +12,34 @@ import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useResearchStore } from "@/stores/research-store"
+import { useLintStore } from "@/stores/lint-store"
+import { useWikiStore } from "@/stores/wiki-store"
+import { flushAutoSave, cancelAutoSaveTimers } from "@/lib/auto-save"
 
 export async function resetProjectState(): Promise<void> {
+  // Bump the project generation token first, before anything else runs.
+  // This marks every async write queued under the old generation (auto-save
+  // debounce timers, in-flight agent lint scans) as stale from this point
+  // on, so it can be dropped on arrival instead of landing on whatever
+  // project happens to be active — including the case where the same
+  // project path is closed and reopened, which a naive path comparison
+  // alone would not catch.
+  useWikiStore.getState().bumpProjectGeneration()
+
+  // Capture the outgoing project's path before anything below flips
+  // useWikiStore.project. auto-save's subscribers key their debounce
+  // timers by this path, so it is what flushAutoSave/cancelAutoSaveTimers
+  // need to target the right entries.
+  const outgoingPath = useWikiStore.getState().project?.path
+
+  // Flush any pending debounced save for the outgoing project BEFORE
+  // clearing the stores below — otherwise the most recent real edit
+  // (still sitting in a setTimeout) would never be written: the store it
+  // reads from is about to be reset to empty.
+  if (outgoingPath) {
+    await flushAutoSave(outgoingPath)
+  }
+
   // Zustand stores — clear all per-project data (synchronous)
   useChatStore.getState().clearAgentPermissionRequests()
   useChatStore.setState({
@@ -40,6 +66,16 @@ export async function resetProjectState(): Promise<void> {
     tasks: [],
     panelOpen: false,
   })
+
+  useLintStore.getState().clearItems()
+
+  // The clears above look like real edits to auto-save's subscribers,
+  // which would otherwise re-queue an empty-array write for the outgoing
+  // project a few seconds from now and clobber its real data on disk.
+  // Cancel those before they can fire.
+  if (outgoingPath) {
+    cancelAutoSaveTimers(outgoingPath)
+  }
 
   // Module-level caches — load in parallel and clear each, surfacing any
   // failure instead of swallowing it.

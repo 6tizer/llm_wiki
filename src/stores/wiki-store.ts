@@ -352,6 +352,17 @@ interface WikiState {
 	mineruConfig: MineruConfig
 	apiConfig: ApiConfig
 	dataVersion: number
+	/**
+	 * Monotonically increasing token bumped once per resetProjectState()
+	 * call (i.e. once per project switch, regardless of whether the new
+	 * project's path differs from the old one). Async work queued before
+	 * a switch (auto-save debounce timers, in-flight agent lint scans)
+	 * captures the generation at queue/start time and re-checks it before
+	 * writing anything, so a stale write can never land on a project that
+	 * is no longer active — even a naive path comparison would miss the
+	 * same project being closed and reopened.
+	 */
+	projectGeneration: number
 
 	setProject: (project: WikiProject | null) => void
 	setFileTree: (tree: FileNode[]) => void
@@ -374,6 +385,8 @@ interface WikiState {
 	setMineruConfig: (config: MineruConfig) => void
 	setApiConfig: (config: ApiConfig) => void
 	bumpDataVersion: () => void
+	/** Bump the project generation token. Called once by resetProjectState(). */
+	bumpProjectGeneration: () => void
 }
 
 export const useWikiStore = create<WikiState>((set) => ({
@@ -401,6 +414,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	activePresetId: null,
 
 	dataVersion: 0,
+	projectGeneration: 0,
 
 	setProject: (project) => set({ project }),
 	setFileTree: (fileTree) => set({ fileTree }),
@@ -504,6 +518,8 @@ export const useWikiStore = create<WikiState>((set) => ({
 	setApiConfig: (apiConfig) => set({ apiConfig }),
 	bumpDataVersion: () =>
 		set((state) => ({ dataVersion: state.dataVersion + 1 })),
+	bumpProjectGeneration: () =>
+		set((state) => ({ projectGeneration: state.projectGeneration + 1 })),
 }));
 
 export type {
