@@ -38,15 +38,19 @@ fn redact_url_userinfo_for_log(url: &str) -> String {
     let rest = &url[authority_start..];
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..authority_end];
-    let Some(userinfo_end) = authority.rfind('@') else {
-        return url.to_string();
+    let masked = match authority.rfind('@') {
+        Some(userinfo_end) => format!(
+            "{}***@{}",
+            &url[..authority_start],
+            &url[authority_start + userinfo_end + 1..],
+        ),
+        None => url.to_string(),
     };
-
-    format!(
-        "{}***@{}",
-        &url[..authority_start],
-        &url[authority_start + userinfo_end + 1..],
-    )
+    // Userinfo masking alone misses secrets carried in the query string
+    // (e.g. `?api_key=sk-...`), which this diagnostic log line otherwise
+    // reproduces verbatim. The only caller (agent_spawn) uses this purely
+    // for logging, so it's fine for the result to no longer be a valid URL.
+    runtime_db::redact_secrets_preserving_format(&masked)
 }
 
 /// Shared state holding running agent sidecar processes keyed by stream id.
@@ -833,6 +837,14 @@ mod tests {
             "https://api.example.com/v1"
         );
         assert_eq!(redact_url_userinfo_for_log("user:token@host"), "***@host");
+    }
+
+    #[test]
+    fn redact_url_userinfo_for_log_redacts_query_param_secrets() {
+        let redacted = redact_url_userinfo_for_log(
+            "https://api.example.com/v1?api_key=sk-test000aaaabbbbccccdddd",
+        );
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
     }
 
     fn args_with_optional_fields_none() -> AgentSpawnArgs {

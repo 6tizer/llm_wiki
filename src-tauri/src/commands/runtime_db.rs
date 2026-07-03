@@ -6132,6 +6132,20 @@ fn classify_secret_token(lower: &str) -> SecretTokenClass {
     }
 }
 
+// True when `lower` itself looks like a secret VALUE (an embedded secret
+// reference, a Google API key, or an sk-/tp- prefixed key) — as opposed to
+// a bare field NAME like `api_key`/`authorization`/`bearer`, which merely
+// names a credential field and is not itself secret. `classify_secret_token`
+// conflates the two (both make `is_secret` true, since both mean "redact
+// the associated value"), which is correct for token-stream redaction but
+// wrong for deciding whether a JSON object KEY string is the leaked secret.
+fn token_looks_like_secret_value(lower: &str) -> bool {
+    lower.contains("llm-wiki-profile-secret:")
+        || token_has_boundary_match(lower, "aiza")
+        || token_has_boundary_match(lower, "sk-")
+        || token_has_tp_secret(lower)
+}
+
 fn redact_profile_pool_text(value: &str) -> String {
     // sanitize_profile_pool_text_for_log (the only production caller) already
     // collapses whitespace via split_whitespace().join(" ") before calling
@@ -6153,14 +6167,6 @@ pub(crate) struct SecretRedactor {
 impl SecretRedactor {
     pub(crate) fn new() -> Self {
         Self { redact_next: false }
-    }
-
-    // Drops any pending carry from a prior line/segment. Used after a JSON
-    // line is redacted structurally (per string value) so that structural
-    // pass's independence doesn't get contaminated by, or contaminate,
-    // unrelated plain-text lines on the same stream.
-    pub(crate) fn reset(&mut self) {
-        self.redact_next = false;
     }
 
     // Redacts secret-looking tokens in `line` while preserving all original
@@ -6201,18 +6207,16 @@ impl SecretRedactor {
     }
 
     // JSON-aware line redaction for a stateful stream (stdout/stderr reader
-    // loops): a successfully parsed JSON line is redacted structurally
-    // (per string value, see `redact_secrets_in_json_line`) and resets the
-    // carry state, since the structural pass doesn't participate in
-    // cross-token carry-over. A line that fails to parse as JSON falls back
-    // to `redact_line` on `self` so carry-over from a still-open scheme
-    // header on a prior plain-text line is preserved.
+    // loops): a successfully parsed JSON line is redacted structurally (per
+    // key/value, see `try_redact_json_line`) and does NOT touch
+    // `self.redact_next` — the structural pass doesn't participate in (and
+    // must not consume) cross-line carry-over, so a stranded trigger from an
+    // earlier malformed line (e.g. a bare "Authorization:") stays armed for
+    // the next non-JSON line. A line that fails to parse as JSON falls back
+    // to `redact_line` on `self`, which both reads and updates the carry.
     pub(crate) fn redact_json_line(&mut self, line: &str) -> String {
         match try_redact_json_line(line) {
-            Some(redacted) => {
-                self.reset();
-                redacted
-            }
+            Some(redacted) => redacted,
             None => self.redact_line(line),
         }
     }
@@ -6250,39 +6254,79 @@ fn try_redact_json_line(line: &str) -> Option<String> {
     Some(serialized)
 }
 
+// True when a JSON object key names a credential-bearing field, so its
+// direct value should be redacted unconditionally rather than token-scanned
+// (a value like a base64 blob or opaque ID has no sk-/tp-/aiza marker for
+// the token scanner to catch). Exact-name matching only — no substring
+// match — so `token_count`/`max_tokens`/`tokenizer` are never caught by the
+// bare `token` scheme word.
+fn key_is_credential_bearing(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    if AUTH_SCHEME_WORDS.contains(&lower.as_str()) {
+        return true;
+    }
+    let class = classify_secret_token(&lower);
+    class.is_secret || class.next_token_is_secret_value
+}
+
 fn redact_json_value(value: &mut serde_json::Value, changed: &mut bool) {
+    redact_json_value_inner(value, changed, false);
+}
+
+fn redact_json_value_inner(value: &mut serde_json::Value, changed: &mut bool, force_redact: bool) {
     match value {
         serde_json::Value::String(text) => {
-            let redacted = redact_secrets_preserving_format(text);
-            if redacted != *text {
-                *changed = true;
-                *text = redacted;
+            if force_redact {
+                if text.as_str() != SECRET_REDACTION_MARKER {
+                    *changed = true;
+                    *text = SECRET_REDACTION_MARKER.to_string();
+                }
+            } else {
+                let redacted = redact_secrets_preserving_format(text);
+                if redacted != *text {
+                    *changed = true;
+                    *text = redacted;
+                }
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                redact_json_value(item, changed);
+                redact_json_value_inner(item, changed, false);
             }
         }
         serde_json::Value::Object(map) => {
-            for entry in map.values_mut() {
-                redact_json_value(entry, changed);
+            // Profile pools key data by credential in a few places, so a
+            // dumped map can leak a secret through the KEY, not just the
+            // value (`{"sk-live...":"ok"}`). Keys can't be renamed via
+            // `iter_mut` (only values are mutable there), so this rebuilds
+            // the object: a key that itself looks like a secret VALUE
+            // (`token_looks_like_secret_value`, not merely a credential
+            // field NAME like `api_key`/`authorization`/`token`) is swapped
+            // for the marker and its value is force-redacted too;
+            // everything else keeps today's key-context behavior.
+            //
+            // Two distinct secret keys in one object both become the same
+            // literal marker key, so the second `insert` silently drops the
+            // first entry. That's an acceptable lossy outcome for a
+            // redaction path — the goal is "no secret survives", not
+            // "every original entry survives".
+            let mut rebuilt = serde_json::Map::with_capacity(map.len());
+            for (key, mut entry) in std::mem::take(map) {
+                let key_is_secret = token_looks_like_secret_value(&key.to_ascii_lowercase());
+                let force_redact = key_is_secret || key_is_credential_bearing(&key);
+                redact_json_value_inner(&mut entry, changed, force_redact);
+                let key = if key_is_secret {
+                    *changed = true;
+                    SECRET_REDACTION_MARKER.to_string()
+                } else {
+                    key
+                };
+                rebuilt.insert(key, entry);
             }
+            *map = rebuilt;
         }
         _ => {}
     }
-}
-
-/// JSON-line-aware secret redaction for sidecar/CLI stdout, which is a
-/// JSONL protocol the frontend `JSON.parse()`s per line. Redacting whole
-/// whitespace-delimited tokens (as `redact_secrets_preserving_format` does)
-/// destroys minified JSON with no internal whitespace — the entire line
-/// becomes one "token" and gets replaced wholesale, breaking the parse. This
-/// parses the line, redacts only JSON string *values*, and re-serializes
-/// (key order is not preserved, which is fine — the frontend only parses).
-/// Falls back to whole-line token redaction when the line isn't valid JSON.
-pub(crate) fn redact_secrets_in_json_line(line: &str) -> String {
-    try_redact_json_line(line).unwrap_or_else(|| redact_secrets_preserving_format(line))
 }
 
 fn truncate_profile_pool_text(value: &str) -> String {
@@ -11806,7 +11850,7 @@ mod tests {
     #[test]
     fn redact_secrets_in_json_line_redacts_nested_minified_string_value() {
         let line = "{\"type\":\"tool_call\",\"input\":{\"apiKey\":\"sk-test000aaaabbbbccccdddd\",\"note\":\"ok\"}}\n";
-        let redacted = redact_secrets_in_json_line(line);
+        let redacted = SecretRedactor::new().redact_json_line(line);
         assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
         let trimmed = redacted.trim_end_matches(['\r', '\n']);
         let parsed: serde_json::Value =
@@ -11820,17 +11864,127 @@ mod tests {
     #[test]
     fn redact_secrets_in_json_line_returns_no_secret_json_byte_identical() {
         let line = "{\"type\":\"status\",\"input\":{\"note\":\"ok\"}}\n";
-        assert_eq!(redact_secrets_in_json_line(line), line);
+        assert_eq!(SecretRedactor::new().redact_json_line(line), line);
     }
 
     #[test]
     fn redact_secrets_in_json_line_falls_back_to_token_redaction_for_non_json() {
         let line = "not json at all key=sk-test000aaaabbbbccccdddd trailing\n";
-        let redacted = redact_secrets_in_json_line(line);
+        let redacted = SecretRedactor::new().redact_json_line(line);
         assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
         assert!(redacted.contains("[REDACTED]"));
         assert!(redacted.starts_with("not json at all "));
         assert!(redacted.ends_with("trailing\n"));
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_opaque_api_key_value_by_key_context() {
+        let line = "{\"api_key\":\"opaquevalue000\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaquevalue000"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["api_key"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_opaque_authorization_value_by_key_context() {
+        let line = "{\"Authorization\":\"Basic opaquevalue000\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaquevalue000"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["Authorization"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_opaque_token_value_by_key_context() {
+        let line = "{\"token\":\"opaquevalue000\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaquevalue000"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["token"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_keeps_token_lookalike_keys_untouched() {
+        let line = "{\"token_count\":42,\"max_tokens\":\"1000\",\"tokenizer\":\"gpt2\"}\n";
+        assert_eq!(SecretRedactor::new().redact_json_line(line), line);
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_nested_credential_key() {
+        let line = "{\"config\":{\"anthropic_auth_token\":\"opaquevalue000\"}}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("opaquevalue000"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["config"]["anthropic_auth_token"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_redacts_secret_object_key() {
+        let line = "{\"sk-test000aaaabbbbccccdddd\":\"v1\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert_eq!(parsed["[REDACTED]"], "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_two_secret_keys_do_not_panic_and_leak_nothing() {
+        let line = "{\"sk-test000aaaabbbbccccdddd\":\"v1\",\"sk-other111aaaabbbbccccdddd\":\"v2\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
+        assert!(!redacted.contains("sk-other111aaaabbbbccccdddd"));
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        // Both original keys collapse to the same marker key, so the second
+        // insert silently drops the first entry — acceptable for a
+        // redaction sink (see the comment on the object branch). What
+        // matters here is that this doesn't panic and no secret survives.
+        let _parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+    }
+
+    #[test]
+    fn redact_secrets_in_json_line_keeps_credential_field_name_keys_literal() {
+        // The key name "api_key" merely NAMES a credential field; it is not
+        // itself a secret pattern, so only its value is force-redacted
+        // (existing key-context behavior) — the key string stays literal.
+        let line = "{\"api_key\":\"x\"}\n";
+        let redacted = SecretRedactor::new().redact_json_line(line);
+        let trimmed = redacted.trim_end_matches(['\r', '\n']);
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).expect("redacted line must still be valid JSON");
+        assert!(parsed.as_object().unwrap().contains_key("api_key"));
+        assert_eq!(parsed["api_key"], "[REDACTED]");
+    }
+
+    #[test]
+    fn secret_redactor_json_line_does_not_consume_carry_from_prior_malformed_line() {
+        let mut redactor = SecretRedactor::new();
+        // Line 1: non-JSON, ends with a bare "authorization:" trigger.
+        let line1 = redactor.redact_json_line("stray authorization:\n");
+        assert_eq!(line1, "stray [REDACTED]\n");
+
+        // Line 2: valid JSON with no secrets. Must NOT consume/reset the
+        // carry armed by line 1 (Fix B: JSON success path leaves
+        // `redact_next` untouched).
+        let json_line = "{\"note\":\"ok\"}\n";
+        let line2 = redactor.redact_json_line(json_line);
+        assert_eq!(line2, json_line);
+
+        // Line 3: non-JSON bare credential value — still redacted because
+        // the carry from line 1 survived line 2.
+        let line3 = redactor.redact_json_line("bearecredentialvalue\n");
+        assert_eq!(line3, "[REDACTED]\n");
     }
 
     #[test]
