@@ -170,6 +170,46 @@ describe("parallel knowledge commit integration", () => {
     expect(runtime.calls.repairs).toEqual([])
   })
 
+  it("commits on retry once the commit-path claim self-heals (regression for orphaned-claim lockout)", async () => {
+    // Regression coverage for SPEC-5-FIX PR4: a crashed worker can leave an
+    // orphaned "active" commit-path claim behind. isRetryableBudgetRejection
+    // must keep classifying that as retryable (not terminal) so the caller
+    // retries on a later pass -- and once the Rust-side claim layer self-
+    // heals past the claim's ttl, the retried commit must actually succeed
+    // end to end. This test intentionally does not touch
+    // isRetryableBudgetRejection itself.
+    const markdown = "# Busy\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent(markdown),
+      targetPath: "Wiki/Busy.md",
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: markdown })
+    const realClaimBudget = runtime.claimBudget
+    let claimAttempts = 0
+    runtime.claimBudget = async (request) => {
+      claimAttempts += 1
+      if (claimAttempts === 1) {
+        // Simulates the still-orphaned claim rejecting the first attempt.
+        throw new Error("commit-path-already-claimed: wiki/busy.md")
+      }
+      // Simulates the claim layer self-healing (ttl elapsed) by the retry.
+      return realClaimBudget(request)
+    }
+    const files = fakeFiles()
+
+    const firstPass = await commitPendingStagingArtifacts({ runtime, files })
+    expect(firstPass.retryable).toBe(1)
+    expect(firstPass.committed).toBe(0)
+    expect(firstPass.rejected).toBe(0)
+    expect(runtime.calls.committedArtifacts).toEqual([])
+
+    const secondPass = await commitPendingStagingArtifacts({ runtime, files })
+    expect(secondPass.committed).toBe(1)
+    expect(secondPass.retryable).toBe(0)
+    expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
+    expect(claimAttempts).toBe(2)
+  })
+
   it("uses normalized target keys to avoid same-pass same-path concurrency", async () => {
     const markdown = "# Page\n"
     const first = await stagingArtifact({
