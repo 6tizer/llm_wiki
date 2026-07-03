@@ -109,13 +109,23 @@ export function SourcesView() {
       const result = await runBulkKnowledgePrepare(
         sourceFilePaths.map((sourcePath) => ({ sourcePath })),
       )
+      // SPEC-5-FIX PR5: commitPendingStagingArtifacts is now wired in as the
+      // driver's third stage (after enqueue + worker pool), so its errors
+      // need the same visibility as the other two stages. This surfaces the
+      // raw commit-stage errors (data only) -- distinguishing "queued,
+      // waiting for a worker" from "looks stuck" is PR6 UI-判定 scope, not
+      // this change.
+      const stageErrors = [
+        ...result.workerPool.errors,
+        ...result.commit.errors,
+      ]
       if (result.enqueue.failedJobs.length > 0) {
         setRuntimePlanError(t("sources.bulkPrepareFailed", {
           count: result.enqueue.failedJobs.length,
           total: result.enqueue.plan.jobs.length,
         }))
-      } else if (result.workerPool.errors.length > 0) {
-        setRuntimePlanError(result.workerPool.errors.join("; "))
+      } else if (stageErrors.length > 0) {
+        setRuntimePlanError(stageErrors.join("; "))
       }
     } catch (err) {
       setRuntimePlanError(String(err))

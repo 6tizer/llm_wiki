@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { BULK_KNOWLEDGE_PREPARE_JOB_KIND } from "@/core-runtime/parallel-knowledge"
 import type { RuntimeJobClaim, RuntimeProfilePoolClaim, RuntimeProfilePoolList } from "@/commands/runtime-db"
+import type { CommitIntegrationRuntimeAdapter } from "./commit-integration"
 
 const runtimeMocks = vi.hoisted(() => ({
   runtimeJobClaimByKind: vi.fn(),
@@ -14,6 +15,17 @@ const runtimeMocks = vi.hoisted(() => ({
   runtimeProgressAppend: vi.fn(),
   runtimeStagingArtifactsClearPendingForJob: vi.fn(),
   runtimeStagingArtifactStore: vi.fn(),
+  // Referenced by commit-integration.ts's module-scope defaultRuntime object
+  // (only constructed, never called, since every test below passes an
+  // explicit commitRuntime override -- see emptyCommitRuntime()).
+  runtimeCommitBudgetClaim: vi.fn(),
+  runtimeCommitBudgetRelease: vi.fn(),
+  runtimeDerivedStaleMarkerRecord: vi.fn(),
+  runtimeEventAppend: vi.fn(),
+  runtimeStagingArtifactCommitSuccess: vi.fn(),
+  runtimeStagingArtifactList: vi.fn(),
+  runtimeStagingArtifactRecord: vi.fn(),
+  runtimeStagingArtifactReadBody: vi.fn(),
 }))
 
 vi.mock("@/commands/runtime-db", () => runtimeMocks)
@@ -74,6 +86,48 @@ function healthyPool(): RuntimeProfilePoolList {
   return { enabled: true, status: "healthy", activeClaims: [], circuitBreakers: [] }
 }
 
+/**
+ * The bulk-prepare-driver tests mock "@/commands/runtime-db" wholesale (see
+ * runtimeMocks above), so commit-integration's own default runtime-db
+ * adapter (which needs several exports that mock doesn't define) can't be
+ * exercised here -- that's covered by commit-integration.test.ts directly.
+ * This fake just proves the driver wires the commit stage in and surfaces
+ * its result; it reports zero pending staging artifacts so none of the
+ * other adapter methods are ever invoked.
+ */
+function emptyCommitRuntime(): CommitIntegrationRuntimeAdapter {
+  return {
+    listStagingArtifacts: async () => ({ enabled: true, status: "healthy", artifacts: [] }),
+    readStagingArtifactBody: async () => {
+      throw new Error("unexpected: readStagingArtifactBody")
+    },
+    claimBudget: async () => {
+      throw new Error("unexpected: claimBudget")
+    },
+    releaseBudget: async () => {
+      throw new Error("unexpected: releaseBudget")
+    },
+    appendEvent: async () => {
+      throw new Error("unexpected: appendEvent")
+    },
+    recordDerivedStaleMarker: async () => {
+      throw new Error("unexpected: recordDerivedStaleMarker")
+    },
+    markArtifactCommitted: async () => {
+      throw new Error("unexpected: markArtifactCommitted")
+    },
+    markArtifactFailed: async () => {
+      throw new Error("unexpected: markArtifactFailed")
+    },
+    routeConflictRepair: async () => {
+      throw new Error("unexpected: routeConflictRepair")
+    },
+    appendProgress: async () => {
+      throw new Error("unexpected: appendProgress")
+    },
+  }
+}
+
 describe("runBulkKnowledgePrepare", () => {
   beforeEach(() => {
     for (const mock of Object.values(runtimeMocks)) {
@@ -124,7 +178,7 @@ describe("runBulkKnowledgePrepare", () => {
 
     const result = await runBulkKnowledgePrepare(
       [{ sourcePath: "/project/raw/sources/a.md" }],
-      { executor, concurrency: 1, maxJobs: 1 },
+      { executor, concurrency: 1, maxJobs: 1, commitRuntime: emptyCommitRuntime() },
     )
 
     expect(result.enqueue.enqueuedJobs).toHaveLength(1)
@@ -134,6 +188,7 @@ describe("runBulkKnowledgePrepare", () => {
       claimId: "claim-bulk-prepare-job",
       outcome: "success",
     })
+    expect(result.commit).toMatchObject({ listedArtifacts: 0, attemptedArtifacts: 0 })
   })
 
   it("does not automatically pick up jobs enqueued by a later, unrelated call (known PR1 boundary)", async () => {
@@ -159,7 +214,7 @@ describe("runBulkKnowledgePrepare", () => {
 
     const result = await runBulkKnowledgePrepare(
       [{ sourcePath: "/project/raw/sources/a.md" }],
-      { executor, concurrency: 1, maxJobs: 1 },
+      { executor, concurrency: 1, maxJobs: 1, commitRuntime: emptyCommitRuntime() },
     )
 
     // The pool ran but found nothing queued at the moment it looked (the
@@ -167,5 +222,9 @@ describe("runBulkKnowledgePrepare", () => {
     // or retry for later enqueues.
     expect(executor).not.toHaveBeenCalled()
     expect(result.workerPool.idleWorkers).toBe(1)
+    // The commit stage inherits the same single-pass boundary: it only
+    // drains what's pending staging at the moment this call's commit list
+    // snapshot is taken.
+    expect(result.commit).toMatchObject({ listedArtifacts: 0, attemptedArtifacts: 0 })
   })
 })

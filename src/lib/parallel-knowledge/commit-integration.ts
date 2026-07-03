@@ -376,11 +376,56 @@ function reconcileAlreadyCommitted(
   return commitResult
 }
 
+/**
+ * SPEC-5-FIX PR5 append crash-window narrowing: unlike create/update (which
+ * self-heal a crash-after-write retry by comparing currentHash===artifactHash
+ * in `reconcileAlreadyCommitted`), an append re-run against an
+ * already-merged target file has no safe content-level reconciliation --
+ * `currentHash` reflects the merged result, never the staged-only hash, so
+ * retrying `commitMarkdownArtifact` for append legitimately cannot tell
+ * "already applied by us" apart from "changed by someone else" without
+ * inspecting content (which the routes-append-conflicts-to-repair tests in
+ * commit-integration.test.ts intentionally forbid -- a coincidental content
+ * match must still go to repair, not self-heal).
+ *
+ * The real fix is to shrink the window during which the staging artifact is
+ * still "pending" (and therefore re-processable) after the write succeeds.
+ * For create/update/skipped-delete we keep audit+marker recording before the
+ * commit-success mark (see the non-append branch below and the "keeps the
+ * artifact pending when derived marker recording fails" regression test) --
+ * that ordering lets a transient marker failure be retried safely because
+ * those operations are idempotent to re-run. Append is not: leaving it
+ * "pending" while audit/marker recording completes is exactly the window
+ * that lets a crash (or transient marker failure) trigger a false
+ * "conflicted" misjudgement on the next pass. So for append we flip
+ * artifact-committed immediately after the write succeeds, before
+ * audit/marker recording, collapsing the reprocessing window to nothing.
+ *
+ * Trade-off (documented per SPEC-5-FIX PR5 commander decision): if the
+ * process crashes in the now-much-smaller gap between markArtifactCommitted
+ * succeeding and the audit event / derived stale marker being recorded, that
+ * marker is lost for this artifact (it will never be "pending" again). This
+ * is accepted as a bounded, documented residual risk -- a single DB write's
+ * width -- traded against eliminating the append false-conflict misjudgement
+ * (which today additionally loses the marker via the "conflicted" branch,
+ * which never records derived markers, *and* creates a spurious repair job).
+ */
 async function appendEventMarkersAndCleanup(
   context: ProcessContext,
   artifact: MarkdownCommitArtifact,
   commitResult: MarkdownCommitOperationResult,
 ): Promise<void> {
+  if (artifact.operationIntent === "append") {
+    await context.runtime.markArtifactCommitted(artifact.artifactId)
+    context.result.cleanedArtifacts += 1
+    const event = await appendAuditEvent(context, artifact, commitResult)
+    await recordDerivedMarkers(context, artifact, commitResult, event.eventId)
+    await appendProgress(context, artifact, commitResult.result, {
+      eventId: event.eventId,
+    })
+    return
+  }
+
   const event = await appendAuditEvent(context, artifact, commitResult)
   await recordDerivedMarkers(context, artifact, commitResult, event.eventId)
   await context.runtime.markArtifactCommitted(artifact.artifactId)
