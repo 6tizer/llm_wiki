@@ -106,7 +106,23 @@ export function SearchView() {
     embeddingBucket?.status === "dirty" ||
     embeddingBucket?.status === "building" ||
     embeddingBucket?.status === "failed"
-  const showFallbackBanner = hasSearched && !searching && (retrievalMode !== "hybrid" || embeddingNotReady)
+  // Closeout hotfix P0 #2: the ONE combined banner conflated two different
+  // situations with one ("keyword-only") message, which was actively wrong
+  // for the second case — see below. Split into two independently-gated
+  // banners, both suppressed entirely when the user has never turned
+  // embedding on (`enabled: false` is a deliberate, persistent choice, not
+  // a transient degradation worth nagging about).
+  const embeddingEnabled = useWikiStore((s) => s.embeddingConfig.enabled)
+  // a) THIS query actually fell back to keyword-only retrieval — accurate
+  //    to say so.
+  const showKeywordFallbackBanner =
+    hasSearched && !searching && embeddingEnabled && retrievalMode !== "hybrid"
+  // b) THIS query DID come back `hybrid` (real vector hits were used), but
+  //    the embedding layer is dirty/building/failed — the index backing
+  //    NEXT query may be stale/rebuilding/incomplete. Saying "keyword-only"
+  //    here would be false: we just rendered hybrid results.
+  const showStaleIndexBanner =
+    hasSearched && !searching && embeddingEnabled && retrievalMode === "hybrid" && embeddingNotReady
 
   // Flatten + dedupe images across results. Two results referencing
   // the same image (e.g. the source-summary AND a concept page that
@@ -247,13 +263,23 @@ export function SearchView() {
         </div>
       </div>
 
-      {showFallbackBanner && (
+      {showKeywordFallbackBanner && (
         <div
           className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-200"
           data-testid="search-fallback-banner"
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{t("search.fallbackBanner")}</span>
+        </div>
+      )}
+
+      {showStaleIndexBanner && (
+        <div
+          className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-200"
+          data-testid="search-stale-index-banner"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{t("search.staleIndexBanner")}</span>
         </div>
       )}
 

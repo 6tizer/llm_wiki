@@ -28,6 +28,7 @@ const runtimeDbMocks = vi.hoisted(() => ({
   runtimeJobPause: vi.fn(),
   runtimeJobResume: vi.fn(),
   runtimeDbHealth: vi.fn(),
+  runtimeDerivedMarkerReleaseBatch: vi.fn(),
 }))
 
 vi.mock("@/commands/runtime-db", () => runtimeDbMocks)
@@ -268,6 +269,143 @@ describe("RuntimeJobsSection", () => {
     expect(container.querySelectorAll("button[aria-label='Cancel']")).toHaveLength(4)
     expect(container.querySelector("[data-testid='runtime-job-row-job-failed'] button")).toBeNull()
     expect(container.querySelector("[data-testid='runtime-job-row-job-completed'] button")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("releases a cancelled derived-rebuild job's claimed markers as cancelled (closeout hotfix P1 #3)", async () => {
+    const derivedRebuildJob: RuntimeJobRecord = {
+      ...job("rebuild-1", "running"),
+      kind: "derived-rebuild",
+      payload: JSON.stringify({
+        layer: "embedding",
+        affectedPath: "wiki/a.md",
+        markerIds: ["marker-1", "marker-2"],
+        baseVersion: "base",
+        inputHash: null,
+        reason: "commit",
+      }),
+    }
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([derivedRebuildJob]))
+    runtimeDbMocks.runtimeJobCancel.mockResolvedValue({ ...derivedRebuildJob, state: "cancelled" })
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    await click(container.querySelector("button[aria-label='Cancel']")!)
+    await flush()
+
+    expect(runtimeDbMocks.runtimeJobCancel).toHaveBeenCalledWith("rebuild-1")
+    expect(runtimeDbMocks.runtimeDerivedMarkerReleaseBatch).toHaveBeenCalledWith({
+      jobId: "rebuild-1",
+      markerIds: ["marker-1", "marker-2"],
+      targetStatus: "cancelled",
+    })
+
+    unmount(root)
+  })
+
+  it("does not touch derived markers when cancelling a non derived-rebuild job", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([job("job-queued", "queued")]))
+    runtimeDbMocks.runtimeJobCancel.mockResolvedValue({ ...job("job-queued", "cancelled") })
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    await click(container.querySelector("button[aria-label='Cancel']")!)
+    await flush()
+
+    expect(runtimeDbMocks.runtimeJobCancel).toHaveBeenCalledWith("job-queued")
+    expect(runtimeDbMocks.runtimeDerivedMarkerReleaseBatch).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("cancelling a derived-rebuild job with a corrupted/unparsable payload does not crash — release is skipped, a warning is logged, and the cancel itself still succeeds (closeout hotfix P2)", async () => {
+    const corruptJob: RuntimeJobRecord = {
+      ...job("rebuild-bad", "running"),
+      kind: "derived-rebuild",
+      payload: "{not-json",
+    }
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([corruptJob]))
+    runtimeDbMocks.runtimeJobCancel.mockResolvedValue({ ...corruptJob, state: "cancelled" })
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    await click(container.querySelector("button[aria-label='Cancel']")!)
+    await flush()
+
+    expect(runtimeDbMocks.runtimeJobCancel).toHaveBeenCalledWith("rebuild-bad")
+    expect(runtimeDbMocks.runtimeDerivedMarkerReleaseBatch).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+    // Cancel itself must not be treated as failed — no action error banner,
+    // and refreshNow's own re-fetch went through (proves cancelJob's try
+    // block ran to completion instead of throwing out of the payload parse).
+    expect(container.querySelector("[data-testid='runtime-jobs-error']")).toBeNull()
+    expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(2)
+
+    warnSpy.mockRestore()
+    unmount(root)
+  })
+
+  it("cancel itself still succeeds even when releasing the cancelled derived-rebuild markers rejects (closeout hotfix P2: best-effort release must not surface as a cancel failure)", async () => {
+    const derivedRebuildJob: RuntimeJobRecord = {
+      ...job("rebuild-2", "running"),
+      kind: "derived-rebuild",
+      payload: JSON.stringify({
+        layer: "embedding",
+        affectedPath: "wiki/a.md",
+        markerIds: ["marker-1"],
+        baseVersion: "base",
+        inputHash: null,
+        reason: "commit",
+      }),
+    }
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([derivedRebuildJob]))
+    runtimeDbMocks.runtimeJobCancel.mockResolvedValue({ ...derivedRebuildJob, state: "cancelled" })
+    runtimeDbMocks.runtimeDerivedMarkerReleaseBatch.mockRejectedValueOnce(new Error("release failed"))
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    await click(container.querySelector("button[aria-label='Cancel']")!)
+    await flush()
+
+    expect(runtimeDbMocks.runtimeDerivedMarkerReleaseBatch).toHaveBeenCalledWith({
+      jobId: "rebuild-2",
+      markerIds: ["marker-1"],
+      targetStatus: "cancelled",
+    })
+    expect(warnSpy).toHaveBeenCalled()
+    expect(container.querySelector("[data-testid='runtime-jobs-error']")).toBeNull()
+    expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(2)
+
+    warnSpy.mockRestore()
+    unmount(root)
+  })
+
+  it("hides the Cancel button for anchor job kinds (auto-ingest-marker-event / manual-rebuild-marker-event) even while queued", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
+      { ...job("anchor-ingest", "queued"), kind: "auto-ingest-marker-event" },
+      { ...job("anchor-manual", "queued"), kind: "manual-rebuild-marker-event" },
+      job("job-queued", "queued"),
+    ]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    expect(
+      container.querySelector("[data-testid='runtime-job-row-anchor-ingest'] button[aria-label='Cancel']"),
+    ).toBeNull()
+    expect(
+      container.querySelector("[data-testid='runtime-job-row-anchor-manual'] button[aria-label='Cancel']"),
+    ).toBeNull()
+    expect(
+      container.querySelector("[data-testid='runtime-job-row-job-queued'] button[aria-label='Cancel']"),
+    ).not.toBeNull()
 
     unmount(root)
   })

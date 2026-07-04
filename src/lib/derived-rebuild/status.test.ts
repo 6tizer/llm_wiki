@@ -87,19 +87,19 @@ describe("bucketDerivedLayerStatus", () => {
     })
   })
 
-  it("priority: building beats failed and dirty when a layer has all three at once", () => {
+  it("priority: building beats failed and dirty when a layer has all three at once (across different paths, post per-path reduction)", () => {
     const buckets = bucketDerivedLayerStatus([
-      marker({ layer: "embedding", status: "pending" }),
-      marker({ layer: "embedding", status: "failed" }),
-      marker({ layer: "embedding", status: "claimed" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "pending" }),
+      marker({ layer: "embedding", affectedPath: "wiki/b.md", status: "failed" }),
+      marker({ layer: "embedding", affectedPath: "wiki/c.md", status: "claimed" }),
     ])
     expect(buckets.embedding?.status).toBe("building")
   })
 
-  it("priority: failed beats dirty when a layer has both pending and failed markers (decision 1's explicit adversarial case)", () => {
+  it("priority: failed beats dirty when a layer has both pending and failed markers on different paths (decision 1's explicit adversarial case)", () => {
     const buckets = bucketDerivedLayerStatus([
-      marker({ layer: "embedding", status: "pending" }),
-      marker({ layer: "embedding", status: "failed" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "pending" }),
+      marker({ layer: "embedding", affectedPath: "wiki/b.md", status: "failed" }),
     ])
     expect(buckets.embedding?.status).toBe("failed")
   })
@@ -109,18 +109,18 @@ describe("bucketDerivedLayerStatus", () => {
     expect(buckets.embedding?.status).toBe("dirty")
   })
 
-  it("priority: building beats a cancelled marker", () => {
+  it("priority: building beats a cancelled marker on a different path", () => {
     const buckets = bucketDerivedLayerStatus([
-      marker({ layer: "embedding", status: "cancelled" }),
-      marker({ layer: "embedding", status: "claimed" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "cancelled" }),
+      marker({ layer: "embedding", affectedPath: "wiki/b.md", status: "claimed" }),
     ])
     expect(buckets.embedding?.status).toBe("building")
   })
 
-  it("priority: failed beats a cancelled marker", () => {
+  it("priority: failed beats a cancelled marker on a different path", () => {
     const buckets = bucketDerivedLayerStatus([
-      marker({ layer: "embedding", status: "cancelled" }),
-      marker({ layer: "embedding", status: "failed" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "cancelled" }),
+      marker({ layer: "embedding", affectedPath: "wiki/b.md", status: "failed" }),
     ])
     expect(buckets.embedding?.status).toBe("failed")
   })
@@ -164,6 +164,39 @@ describe("bucketDerivedLayerStatus", () => {
     expect(buckets.synthesis?.status).toBe("ready")
   })
 
+  it("per-path latest-wins: an old failed marker superseded by a newer done marker for the SAME path converges to ready (closeout hotfix P0 #1 — no marker-table GC means old failed rows never disappear)", () => {
+    const buckets = bucketDerivedLayerStatus([
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "failed", markedAtMs: 100, markerId: "m1" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "done", markedAtMs: 200, markerId: "m2", updatedAtMs: 200 }),
+    ])
+    expect(buckets.embedding?.status).toBe("ready")
+  })
+
+  it("per-path latest-wins: an old failed marker for a DIFFERENT path still pins the layer at failed even when another path has a newer done marker", () => {
+    const buckets = bucketDerivedLayerStatus([
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "failed", markedAtMs: 100, markerId: "m1" }),
+      marker({ layer: "embedding", affectedPath: "wiki/b.md", status: "done", markedAtMs: 200, markerId: "m2", updatedAtMs: 200 }),
+    ])
+    expect(buckets.embedding?.status).toBe("failed")
+  })
+
+  it("per-path reduction combines with cross-path priority: one path's latest is building, another's latest is failed — building wins", () => {
+    const buckets = bucketDerivedLayerStatus([
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "failed", markedAtMs: 100, markerId: "m1" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "claimed", markedAtMs: 200, markerId: "m2" }),
+      marker({ layer: "embedding", affectedPath: "wiki/b.md", status: "failed", markedAtMs: 150, markerId: "m3" }),
+    ])
+    expect(buckets.embedding?.status).toBe("building")
+  })
+
+  it("per-path latest-wins tie-break matches the backend cursor order (marked_at_ms ASC, marker_id ASC — greatest marker_id wins on a tie)", () => {
+    const buckets = bucketDerivedLayerStatus([
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "failed", markedAtMs: 100, markerId: "m1" }),
+      marker({ layer: "embedding", affectedPath: "wiki/a.md", status: "done", markedAtMs: 100, markerId: "m2", updatedAtMs: 100 }),
+    ])
+    expect(buckets.embedding?.status).toBe("ready")
+  })
+
   it("ignores markers for hidden layers (graph/search) entirely", () => {
     const buckets = bucketDerivedLayerStatus([
       marker({ layer: "graph", status: "failed" }),
@@ -185,8 +218,8 @@ describe("fetchAllDerivedStaleMarkers", () => {
       calls += 1
       return list([marker({ layer: "embedding" })])
     }
-    const all = await fetchAllDerivedStaleMarkers({ list: listFn })
-    expect(all).toHaveLength(1)
+    const result = await fetchAllDerivedStaleMarkers({ list: listFn })
+    expect(result.markers).toHaveLength(1)
     expect(calls).toBe(1)
   })
 
@@ -204,8 +237,8 @@ describe("fetchAllDerivedStaleMarkers", () => {
       expect(request.sinceMarkerId).toBe("m1")
       return list([page2])
     }
-    const all = await fetchAllDerivedStaleMarkers({ list: listFn })
-    expect(all.map((m) => m.markerId)).toEqual(["m1", "m2"])
+    const result = await fetchAllDerivedStaleMarkers({ list: listFn })
+    expect(result.markers.map((m) => m.markerId)).toEqual(["m1", "m2"])
     expect(call).toBe(2)
   })
 
@@ -215,8 +248,28 @@ describe("fetchAllDerivedStaleMarkers", () => {
       call += 1
       return list([marker({ layer: "embedding", markerId: `m${call}` })], { markedAtMs: call, markerId: `m${call}` })
     }
-    const all = await fetchAllDerivedStaleMarkers({ list: listFn, maxPages: 3 })
+    const result = await fetchAllDerivedStaleMarkers({ list: listFn, maxPages: 3 })
     expect(call).toBe(3)
-    expect(all).toHaveLength(3)
+    expect(result.markers).toHaveLength(3)
+  })
+
+  it("surfaces enabled:true/status:healthy from the first page alongside the markers", async () => {
+    const listFn = async () => list([marker({ layer: "embedding" })])
+    const result = await fetchAllDerivedStaleMarkers({ list: listFn })
+    expect(result.enabled).toBe(true)
+    expect(result.status).toBe("healthy")
+  })
+
+  it("surfaces enabled:false/status:disabled from a successful (non-rejected) response without paging further (closeout hotfix P1 gate-fix: the work-runtime-disabled response resolves, it never rejects)", async () => {
+    let calls = 0
+    const listFn = async () => {
+      calls += 1
+      return { enabled: false, status: "disabled" as const, markers: [], nextCursor: null }
+    }
+    const result = await fetchAllDerivedStaleMarkers({ list: listFn })
+    expect(result.enabled).toBe(false)
+    expect(result.status).toBe("disabled")
+    expect(result.markers).toEqual([])
+    expect(calls).toBe(1)
   })
 })

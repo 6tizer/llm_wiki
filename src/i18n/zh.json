@@ -369,7 +369,8 @@
     "placeholder": "搜索 Wiki 页面...",
     "noResults": "未找到相关结果",
     "startSearching": "输入关键词搜索 Wiki 页面",
-    "fallbackBanner": "向量索引尚未就绪——当前仅展示关键词检索结果。"
+    "fallbackBanner": "向量索引尚未就绪——当前仅展示关键词检索结果。",
+    "staleIndexBanner": "向量索引可能已过期或正在重建——结果可能不完整。"
   },
   "lint": {
     "title": "Wiki 检查",

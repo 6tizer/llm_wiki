@@ -40,6 +40,7 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
   const { t } = useTranslation()
   const buckets = useDerivedLayerStore((state) => state.buckets)
   const error = useDerivedLayerStore((state) => state.error)
+  const runtimeDisabled = useDerivedLayerStore((state) => state.runtimeDisabled)
   const loadSnapshot = useDerivedLayerStore((state) => state.loadSnapshot)
 
   // Mirror `runtime-jobs-section.tsx`'s `refresh`: without a project, clear
@@ -47,7 +48,7 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
   // project to scope its fetch to).
   const poll = useCallback(async () => {
     if (!project) {
-      useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null })
+      useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false })
       return
     }
     await loadSnapshot()
@@ -78,7 +79,17 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
         </div>
       )}
 
-      {error && (
+      {project && runtimeDisabled && (
+        <div
+          className="flex items-start gap-2 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+          data-testid="derived-status-runtime-disabled"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{t("settings.sections.derivedStatus.runtimeDisabled")}</span>
+        </div>
+      )}
+
+      {project && !runtimeDisabled && error && (
         <div
           className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200"
           data-testid="derived-status-error"
@@ -89,6 +100,7 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
       )}
 
       {project &&
+        !runtimeDisabled &&
         VISIBLE_DERIVED_LAYERS.map((layer) => (
           <LayerCard
             key={layer}

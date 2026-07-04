@@ -13,6 +13,7 @@ import { JOB_RUNTIME_DEFAULTS } from "@/core-runtime/contract"
 const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
   getQueueSummary: vi.fn(),
+  getDedupQueueSummary: vi.fn(),
   embedPage: vi.fn(),
   removePageEmbedding: vi.fn(),
   runtimeJobList: vi.fn(),
@@ -28,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/commands/fs", () => ({ readFile: mocks.readFile }))
 vi.mock("@/lib/ingest-queue", () => ({ getQueueSummary: mocks.getQueueSummary }))
+vi.mock("@/lib/dedup-queue", () => ({ getQueueSummary: mocks.getDedupQueueSummary }))
 vi.mock("@/lib/embedding", () => ({
   embedPage: mocks.embedPage,
   removePageEmbedding: mocks.removePageEmbedding,
@@ -85,6 +87,7 @@ function claimFor(jobId: string, payload: Record<string, unknown>) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.getQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, completed: 0, total: 0 })
+  mocks.getDedupQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, total: 0 })
   mocks.runtimeJobList.mockResolvedValue(emptyJobList())
   mocks.runtimeDerivedStaleMarkerList.mockResolvedValue(emptyMarkerList())
   mocks.runtimeJobClaimByKind.mockRejectedValue(NO_QUEUED_JOB)
@@ -321,6 +324,18 @@ describe("embedding-consumer — busy backoff (SPEC-6 PR2 decision 2)", () => {
 
     startEmbeddingConsumer(PROJECT)
     await vi.waitFor(() => expect(mocks.getQueueSummary).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(mocks.runtimeJobList).not.toHaveBeenCalled()
+    expect(mocks.runtimeDerivedStaleMarkerList).not.toHaveBeenCalled()
+    expect(mocks.runtimeJobClaimByKind).not.toHaveBeenCalled()
+  })
+
+  it("skips the entire tick when the dedup queue is actively processing for this project (closeout hotfix P1 #4)", async () => {
+    mocks.getDedupQueueSummary.mockReturnValue({ pending: 0, processing: 1, failed: 0, total: 1 })
+
+    startEmbeddingConsumer(PROJECT)
+    await vi.waitFor(() => expect(mocks.getDedupQueueSummary).toHaveBeenCalled())
     await new Promise((resolve) => setTimeout(resolve, 10))
 
     expect(mocks.runtimeJobList).not.toHaveBeenCalled()

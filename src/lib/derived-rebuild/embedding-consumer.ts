@@ -52,7 +52,8 @@ import {
   parseDerivedRebuildJobPayload,
   type DerivedRebuildJobPayload,
 } from "@/core-runtime/derived-rebuild"
-import { getQueueSummary } from "@/lib/ingest-queue"
+import { getQueueSummary as getIngestQueueSummary } from "@/lib/ingest-queue"
+import { getQueueSummary as getDedupQueueSummary } from "@/lib/dedup-queue"
 import { isAbsolutePath, normalizePath } from "@/lib/path-utils"
 import { extractPageTitle, isRootStructuralWikiPagePath, wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -158,7 +159,12 @@ async function runTick(generation: number): Promise<void> {
   // not per-path) because ingest's source path and a marker's wiki
   // affectedPath live in different namespaces with no cheap correlation.
   // Markers stay pending and converge on a later tick.
-  if (getQueueSummary().processing > 0) return
+  //
+  // Closeout hotfix P1 #4: dedup merges (`dedup-runner.ts`, queued via
+  // `dedup-queue.ts`) rewrite the SAME wiki pages non-atomically — same
+  // race class as ingest, just a different queue — so the busy check must
+  // cover both, not just ingest's.
+  if (getIngestQueueSummary().processing > 0 || getDedupQueueSummary().processing > 0) return
   assertCurrentRun(generation)
 
   await recoverRetryWaitJobs(generation)

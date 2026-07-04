@@ -13,7 +13,7 @@ import { useDerivedLayerStore } from "./derived-layer-store"
 describe("derived layer store", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null })
+    useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false })
   })
 
   it("loadSnapshot fetches all markers in one call and buckets them per layer", async () => {
@@ -53,6 +53,37 @@ describe("derived layer store", () => {
     const state = useDerivedLayerStore.getState()
     expect(state.error).toBe("db is damaged")
     expect(state.buckets).toBeNull()
+    expect(state.runtimeDisabled).toBe(false)
+  })
+
+  it("loadSnapshot sets runtimeDisabled (not error) when the work runtime feature flag is off — reading it off the SUCCESSFUL response's enabled:false, not a rejection (closeout hotfix P1 gate-fix: runtime_derived_stale_marker_list_for_project resolves Ok({enabled:false}), it never rejects for this case)", async () => {
+    mocks.runtimeDerivedStaleMarkerList.mockResolvedValue({
+      enabled: false,
+      status: "disabled",
+      markers: [],
+      nextCursor: null,
+    })
+
+    await useDerivedLayerStore.getState().loadSnapshot()
+
+    const state = useDerivedLayerStore.getState()
+    expect(state.runtimeDisabled).toBe(true)
+    expect(state.error).toBeNull()
+    expect(state.buckets).toBeNull()
+  })
+
+  it("loadSnapshot clears a stale runtimeDisabled flag once the runtime becomes enabled and a snapshot succeeds", async () => {
+    useDerivedLayerStore.setState({ runtimeDisabled: true })
+    mocks.runtimeDerivedStaleMarkerList.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      markers: [],
+      nextCursor: null,
+    })
+
+    await useDerivedLayerStore.getState().loadSnapshot()
+
+    expect(useDerivedLayerStore.getState().runtimeDisabled).toBe(false)
   })
 
   it("setLayerBucket replaces only the targeted layer's bucket", () => {
