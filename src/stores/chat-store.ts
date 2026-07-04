@@ -217,7 +217,6 @@ interface ChatState {
     stats?: AgentStreamStats,
     options?: FinishAgentStreamMessageOptions
   ) => void
-  setAgentToolCalls: (messageId: string, toolCalls: AgentToolCallRecord[]) => void
   updateAgentProgress: (messageId: string, event: AgentToolCallRecord) => void
   appendAgentWikiChange: (messageId: string, payload: AgentWikiChangedPayload) => void
   markAgentMessageRewindable: (messageId: string, payload: AgentRewindablePatch) => void
@@ -640,13 +639,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ),
       }
     }),
-
-  setAgentToolCalls: (messageId, toolCalls) =>
-    set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === messageId ? { ...m, toolCalls } : m
-      ),
-    })),
 
   updateAgentProgress: (messageId, event) =>
     set((state) => ({

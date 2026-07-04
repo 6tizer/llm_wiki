@@ -442,48 +442,6 @@ fn resolve_agent_profile_claim(
     Ok(Some((owner, config)))
 }
 
-fn apply_agent_profile_config(
-    args: &mut AgentSpawnArgs,
-    project_root: Option<&Path>,
-    runtime_enabled: bool,
-) -> Result<Option<AgentProfileClaimOwner>, String> {
-    let Some((owner, config)) = resolve_agent_profile_claim(
-        project_root,
-        runtime_enabled,
-        args.agent_profile_id.as_deref(),
-        args.agent_profile_claim_id.as_deref(),
-    )?
-    else {
-        return Ok(None);
-    };
-    args.model = Some(config.agent_sdk_model_id);
-    args.base_url = config.endpoint;
-    args.agent_profile_auth_style = Some(config.auth_style);
-    args.api_key = config.secret_value;
-    Ok(Some(owner))
-}
-
-fn apply_agent_profile_config_for_rewind(
-    args: &mut AgentRewindSessionArgs,
-    project_root: Option<&Path>,
-    runtime_enabled: bool,
-) -> Result<Option<AgentProfileClaimOwner>, String> {
-    let Some((owner, config)) = resolve_agent_profile_claim(
-        project_root,
-        runtime_enabled,
-        args.agent_profile_id.as_deref(),
-        args.agent_profile_claim_id.as_deref(),
-    )?
-    else {
-        return Ok(None);
-    };
-    args.model = Some(config.agent_sdk_model_id);
-    args.base_url = config.endpoint;
-    args.agent_profile_auth_style = Some(config.auth_style);
-    args.api_key = config.secret_value;
-    Ok(Some(owner))
-}
-
 fn start_agent_profile_claim_renewer(owner: AgentProfileClaimOwner) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -540,8 +498,21 @@ pub async fn agent_spawn(
 ) -> Result<(), String> {
     let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
     let project_root = root_state.get();
-    let profile_claim_owner =
-        apply_agent_profile_config(&mut args, project_root.as_deref(), runtime_enabled)?;
+    let profile_claim_owner = match resolve_agent_profile_claim(
+        project_root.as_deref(),
+        runtime_enabled,
+        args.agent_profile_id.as_deref(),
+        args.agent_profile_claim_id.as_deref(),
+    )? {
+        Some((owner, config)) => {
+            args.model = Some(config.agent_sdk_model_id);
+            args.base_url = config.endpoint;
+            args.agent_profile_auth_style = Some(config.auth_style);
+            args.api_key = config.secret_value;
+            Some(owner)
+        }
+        None => None,
+    };
     let logged_base_url = args.base_url.as_deref().map(redact_url_userinfo_for_log);
     eprintln!(
         "[agent_spawn] stream_id={}, model={:?}, base_url={:?}",
@@ -581,11 +552,21 @@ pub async fn agent_rewind_session(
 ) -> Result<(), String> {
     let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
     let project_root = root_state.get();
-    let profile_claim_owner = apply_agent_profile_config_for_rewind(
-        &mut args,
+    let profile_claim_owner = match resolve_agent_profile_claim(
         project_root.as_deref(),
         runtime_enabled,
-    )?;
+        args.agent_profile_id.as_deref(),
+        args.agent_profile_claim_id.as_deref(),
+    )? {
+        Some((owner, config)) => {
+            args.model = Some(config.agent_sdk_model_id);
+            args.base_url = config.endpoint;
+            args.agent_profile_auth_style = Some(config.auth_style);
+            args.api_key = config.secret_value;
+            Some(owner)
+        }
+        None => None,
+    };
     let logged_base_url = args.base_url.as_deref().map(redact_url_userinfo_for_log);
     eprintln!(
         "[agent_rewind_session] stream_id={}, agent_session_id={}, model={:?}, base_url={:?}",
@@ -1696,8 +1677,8 @@ mod tests {
     #[test]
     fn rewind_session_request_never_serializes_profile_claim_fields() {
         // agentProfileId/agentProfileClaimId are consumed by
-        // apply_agent_profile_config_for_rewind before the request is built
-        // (mirrors AgentSpawnArgs — see
+        // resolve_agent_profile_claim (inlined in agent_rewind_session)
+        // before the request is built (mirrors AgentSpawnArgs — see
         // agent_profile_claim_fields_are_not_serialized_to_sidecar_request
         // above) and must never reach the sidecar request payload.
         let mut args = rewind_session_args_with_optional_fields_none();

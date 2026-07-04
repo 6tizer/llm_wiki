@@ -34,6 +34,28 @@ const VERIFIED_READ_ONLY_WIKI_TOOLS = new Set<string>(
 const KNOWN_WRITE_WIKI_TOOLS = new Set<string>(WRITE_WIKI_TOOLS);
 
 /**
+ * Every wiki tool name this module has an explicit, tested opinion about —
+ * exported (only) so the frontend's drift-guard test
+ * (src/lib/agent/wiki-tool-write-gate.test.ts) can assert its hand-copied
+ * duplicate (wiki-tool-write-gate.ts — the frontend can't import sidecar
+ * source in production, since it's a separately-built Node package) still
+ * covers every name agent-policy.ts's READ/WRITE lists know about. Today
+ * this always equals READ_WIKI_TOOLS ∪ WRITE_WIKI_TOOLS by construction
+ * (VERIFIED_READ_ONLY_WIKI_TOOLS and KNOWN_WRITE_WIKI_TOOLS above are both
+ * derived from those lists), but it's exported as its own concrete list —
+ * not re-derived by the test from the same imports — so a future refactor
+ * that de-derives one of those sets can't silently drift without the test
+ * noticing.
+ */
+export const KNOWN_WIKI_TOOL_NAMES: readonly string[] = Array.from(
+	new Set<string>([
+		...KNOWN_WRITE_WIKI_TOOLS,
+		...CONDITIONAL_WRITE_WIKI_TOOLS,
+		...VERIFIED_READ_ONLY_WIKI_TOOLS,
+	]),
+);
+
+/**
  * Single-authority classifier for the rewind fail-closed gate (SPEC-7 PR2):
  * does this tool call represent a wiki-file write that the SDK's native
  * checkpoint/rewindFiles mechanism does NOT cover? (E2 probe: native

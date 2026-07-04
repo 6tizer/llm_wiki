@@ -485,33 +485,6 @@ describe("chat store agent data model", () => {
     })
   })
 
-  it("setAgentToolCalls replaces one message's tool calls only", () => {
-    const convId = useChatStore.getState().createConversation()
-    useChatStore.setState({
-      messages: [
-        makeAssistantMessage("m1", convId),
-        makeAssistantMessage("m2", convId),
-      ],
-    })
-
-    useChatStore.getState().setAgentToolCalls("m1", [
-      {
-        toolName: "wiki_read",
-        toolUseId: "tool-1",
-        phase: "pre",
-      },
-    ])
-
-    expect(useChatStore.getState().messages[0].toolCalls).toEqual([
-      {
-        toolName: "wiki_read",
-        toolUseId: "tool-1",
-        phase: "pre",
-      },
-    ])
-    expect(useChatStore.getState().messages[1].toolCalls).toBeUndefined()
-  })
-
   it("updateAgentProgress upserts by toolUseId and overwrites status fields", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({
