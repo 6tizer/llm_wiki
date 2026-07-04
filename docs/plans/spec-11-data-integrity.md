@@ -1,6 +1,6 @@
 # SPEC-11: Data Integrity Hardening / 数据完整性加固
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：`spec-5-8-post-review-findings.md` 二（D1-D8 数据丢失 P0，D8 即 settings 静默保存）+ 三（数据丢失/一致性 P1） | 依赖：SPEC-1 store boundary、SPEC-3 commit layer | 执行顺序：与 SPEC-10 并行；D1-D3 建议高优先级，先于 SPEC-6/7 实现
+> 类型：阶段 SPEC | 状态：completed via #262/#263/#256/#270/#274/#268/#275/#272/#273 | 覆盖：`spec-5-8-post-review-findings.md` 二（D1-D8 数据丢失 P0，D8 即 settings 静默保存）+ 三（数据丢失/一致性 P1） | 依赖：SPEC-1 store boundary、SPEC-3 commit layer | 执行顺序：已完成，SPEC-6 解锁
 
 ## 目标与成功标准
 
@@ -30,14 +30,14 @@
 
 ## 预期 PR 拆分
 
-1. **D1 切项目清历史**：切项目前取消/flush 延迟保存，或写入前校验目标项目仍当前；`resetProjectState` 捕获 outgoing 项目路径；lint items 一致清理。
-2. **D2 编辑器防抖串写**：自动保存按 `selectedFile` 隔离，切文件时清理定时器；`writeFile` 失败有 UI 反馈；评估 dataVersion 重同步避免光标/撤销历史丢失。
-3. **D3 分块死循环**（独立小 hotfix）：`tokenizeAtoms` 非表格 `|` 行推进修复 + 回归测试（长段落含单行 `|`）。
-4. **characterization tests**（独立先合）：`autoIngestImpl` 四路径、`writeFileBlocks`/`executeIngestWrites` 当前行为、`sweepWikiReferences` 两处当前行为——与 SPEC-8 同批，先合并。
-5. **D4/D5 ingest 写入安全**（在 4 保护下）：取消清理区分新建 vs 合并页面；`executeIngestWrites` 委托 `writeFileBlocks`；`index`/`overview` 遗留死参数清理。
-6. **D6 + lint/dedup 输出校验**：orphan 移出 auto 分类；LLM 输出整页覆盖/删除前完整性校验；autofix 各入口共享锁；跨目录 slug key 用完整路径。
-7. **source-lifecycle / 删除一致性**：`index.md`/`log.md` 读改写接入 `withProjectLock`；删除失败不清引用、不中止整批；file-sync 启动路径 delete+create 合并策略对齐。
-8. **settings 持久化 + App 启动**：抽 `persistSetting` helper 替换 18+ 处静默保存；`settings-view.handleSave` 多步失败有反馈/回滚；App `init()` 分步隔离；项目打开并发保护；Settings 六子面板抽 `useProjectPersistedResource` 加项目护栏与取消；search-view 请求序列号/AbortController。
+1. **D1 切项目清历史**：切项目前取消/flush 延迟保存，或写入前校验目标项目仍当前；`resetProjectState` 捕获 outgoing 项目路径；lint items 一致清理。（#262，merged）
+2. **D2 编辑器防抖串写**：自动保存按 `selectedFile` 隔离，切文件时清理定时器；`writeFile` 失败有 UI 反馈；评估 dataVersion 重同步避免光标/撤销历史丢失。（#263，merged）
+3. **D3 分块死循环**（独立小 hotfix）：`tokenizeAtoms` 非表格 `|` 行推进修复 + 回归测试（长段落含单行 `|`）。（#256，merged）
+4. **characterization tests**（独立先合）：`autoIngestImpl` 四路径、`writeFileBlocks`/`executeIngestWrites` 当前行为、`sweepWikiReferences` 两处当前行为——与 SPEC-8 同批，先合并。（#270，merged）
+5. **D4/D5 ingest 写入安全**（在 4 保护下）：取消清理区分新建 vs 合并页面；`executeIngestWrites` 委托 `writeFileBlocks`；`index`/`overview` 遗留死参数清理。（#274，merged）
+6. **D6 + lint/dedup 输出校验**：orphan 移出 auto 分类；LLM 输出整页覆盖/删除前完整性校验；autofix 各入口共享锁；跨目录 slug key 用完整路径。（#268，merged）
+7. **source-lifecycle / 删除一致性**：`index.md`/`log.md` 读改写接入 `withProjectLock`；删除失败不清引用、不中止整批；file-sync 启动路径 delete+create 合并策略对齐。（#275，merged）
+8. **settings 持久化 + App 启动**：抽 `persistSetting` helper 替换 18+ 处静默保存；`settings-view.handleSave` 多步失败有反馈/回滚；App `init()` 分步隔离；项目打开并发保护；Settings 六子面板抽 `useProjectPersistedResource` 加项目护栏与取消；search-view 请求序列号/AbortController。（#272/#273，merged）
 
 ## 验证策略
 
@@ -53,7 +53,14 @@
 
 ## Gate 结论摘要
 
-本 SPEC 来自 `spec-5-8-post-review-findings.md` 的深度 review 证据。涉及 `autoIngestImpl`/`writeFileBlocks`/`sweepWikiReferences` 的 PR 必须证明 behavior unchanged 且先合并 characterization tests。实现 PR 必须重新按 PR-level workflow 跑 GitNexus impact、focused tests、Simplicity、Tester、Reviewer 和 detect。
+本 SPEC 来自 `spec-5-8-post-review-findings.md` 的深度 review 证据。涉及 `autoIngestImpl`/`writeFileBlocks`/`sweepWikiReferences` 的 PR 必须证明 behavior unchanged 且先合并 characterization tests。实现 PR 必须重新按 PR-level workflow 跑 GitNexus impact、focused tests、Simplicity、Tester、Reviewer 和 detect。合并落点：PR1-PR8 已通过 #262/#263/#256/#270/#274/#268/#275/#272/#273 合并。
+
+## Closeout follow-ups
+
+- PR7b：chain B `title=""` 修复，需要 file-sync 删除前快照设计。
+- S8：UI 组件项目切换护栏，复用 D1 模式。
+- S10：两条清理链 media 门禁不一致，需产品决策。
+- S5：跨文件 sweep 非事务，留给 SPEC-6 derived-rebuild。
 
 ## Non-goals / Follow-up
 

@@ -1,6 +1,6 @@
 # SPEC-5-FIX: Parallel Pipeline Wiring / 并行流水线接线与 Runtime Ledger Hardening
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：`spec-5-8-post-review-findings.md` 一 + 二（P0-pool / P0-budget）+ 三（并行流水线 / runtime P1）| 依赖：SPEC-2 runtime ledger、SPEC-3 commit layer、SPEC-5 parallel pipeline | 执行顺序：SPEC-6 硬前提，优先于 SPEC-6/7 实现
+> 类型：阶段 SPEC | 状态：completed via #258/#259/#260/#264/#267/#269 | 覆盖：`spec-5-8-post-review-findings.md` 一 + 二（P0-pool / P0-budget）+ 三（并行流水线 / runtime P1）| 依赖：SPEC-2 runtime ledger、SPEC-3 commit layer、SPEC-5 parallel pipeline | 执行顺序：已完成，SPEC-6 解锁
 
 ## 目标与成功标准
 
@@ -28,12 +28,12 @@ SPEC-5 PR1-PR6 已把 batch planner、prepare worker pool、staging validator、
 
 ## 预期 PR 拆分
 
-1. **worker pool driver + PrepareModelCallExecutor 接线**：把 `runPrepareWorkerPool` 接到 job 认领驱动，落地生产级 executor（走 model-call profile pool），Sources "批量准备" 端到端跑通。
-2. **worker heartbeat + bookkeeping 抗崩溃**：worker 续租 lease；`completeJob`/`failJob`/`progressAppend` try/catch 化并记 `result.errors`；`processPrepareJob` while 循环容错，sibling worker 不被单点异常连带 reject；早失败路径释放 profile claim。
-3. **lease 回收调度器**：提升 `runtime_job_lease_timeout_for_project` 出 dead-code，注册周期 tick，卡死 job 自动回收；补对应 headless contract test。
-4. **commit budget 自愈**：容量检查过滤 expired claim（或接线 `runtime_commit_budget_expire_for_project`），孤儿 claim 不再永久锁死 targetPath；`isRetryableBudgetRejection` 对已自愈的 claim 行为正确。
-5. **commit integration 接线 + append 自愈 + repair 消费者**：`commitPendingStagingArtifacts` 接入端到端；append 提交崩溃后可自愈或安全走 repair；prepare/map-reduce/conflict repair job 落地消费者或显式标记 pending。
-6. **UI 卡死可见性**：Runtime Diagnostics / Runtime Jobs 区分"awaiting worker"与"疑似卡死"（基于 heartbeat/expiresAt 陈旧检测），修正 `prepareWaitingForWorker` 系统级 progress 误判和多 planId `Math.max` 进度失真。
+1. **worker pool driver + PrepareModelCallExecutor 接线**：把 `runPrepareWorkerPool` 接到 job 认领驱动，落地生产级 executor（走 model-call profile pool），Sources "批量准备" 端到端跑通。（#258，merged）
+2. **worker heartbeat + bookkeeping 抗崩溃**：worker 续租 lease；`completeJob`/`failJob`/`progressAppend` try/catch 化并记 `result.errors`；`processPrepareJob` while 循环容错，sibling worker 不被单点异常连带 reject；早失败路径释放 profile claim。（#259，merged）
+3. **lease 回收调度器**：提升 `runtime_job_lease_timeout_for_project` 出 dead-code，注册周期 tick，卡死 job 自动回收；补对应 headless contract test。（#260，merged）
+4. **commit budget 自愈**：容量检查过滤 expired claim（或接线 `runtime_commit_budget_expire_for_project`），孤儿 claim 不再永久锁死 targetPath；`isRetryableBudgetRejection` 对已自愈的 claim 行为正确。（#264，merged）
+5. **commit integration 接线 + append 自愈 + repair 消费者**：`commitPendingStagingArtifacts` 接入端到端；append 提交崩溃后可自愈或安全走 repair；prepare/map-reduce/conflict repair job 落地消费者或显式标记 pending。（#267，merged）
+6. **UI 卡死可见性**：Runtime Diagnostics / Runtime Jobs 区分"awaiting worker"与"疑似卡死"（基于 heartbeat/expiresAt 陈旧检测），修正 `prepareWaitingForWorker` 系统级 progress 误判和多 planId `Math.max` 进度失真。（#269，merged）
 
 ## 验证策略
 
@@ -46,7 +46,7 @@ SPEC-5 PR1-PR6 已把 batch planner、prepare worker pool、staging validator、
 
 ## Gate 结论摘要
 
-本 SPEC 来自 `spec-5-8-post-review-findings.md` 的深度 review 证据。实现 PR 必须重新按 PR-level workflow 跑 GitNexus impact、focused tests、Simplicity、Tester、Reviewer 和 detect；不能复用本 docs PR 的 gate 作为代码验收。合并标准：无 unresolved P0/P1/P2、修复该 PR scoped P3、CI green 后由 Commander 合并。
+本 SPEC 来自 `spec-5-8-post-review-findings.md` 的深度 review 证据。实现 PR 必须重新按 PR-level workflow 跑 GitNexus impact、focused tests、Simplicity、Tester、Reviewer 和 detect；不能复用本 docs PR 的 gate 作为代码验收。合并落点：PR1-PR6 已通过 #258/#259/#260/#264/#267/#269 合并，SPEC-6 已解锁。
 
 ## Non-goals / Follow-up
 

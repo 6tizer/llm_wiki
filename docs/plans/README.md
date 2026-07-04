@@ -1,6 +1,6 @@
 # Plans Index
 
-> 类型：计划索引 | 更新：2026-07-01 | owner：LLM Wiki commander / planner
+> 类型：计划索引 | 更新：2026-07-04 | owner：LLM Wiki commander / planner
 
 ## 当前有效计划
 
@@ -55,9 +55,9 @@
 | [SPEC-5/pr5-long-document-map-reduce-plan.md](./SPEC-5/pr5-long-document-map-reduce-plan.md) | SPEC-5 PR5 执行计划：Long-document map-reduce analysis、partial draft、chunk repair route。 | merged |
 | [SPEC-5/pr6-progress-ui-plan.md](./SPEC-5/pr6-progress-ui-plan.md) | SPEC-5 PR6 执行计划：Progress / ETA / pause / resume / cancel UI、Runtime Diagnostics closeout。 | merged |
 | [spec-5-8-post-review-findings.md](./spec-5-8-post-review-findings.md) | 2026-07 全仓深度 review 证据（14 个 P0 + P1/P2 + 精简清单）；已分流到 SPEC-5-FIX/10/11 并回灌 SPEC-6/7/8。 | evidence / consumed |
-| [spec-5-fix-pipeline-wiring.md](./spec-5-fix-pipeline-wiring.md) | SPEC-5 并行流水线生产接线 + worker heartbeat / lease 回收 / commit-budget 自愈 / repair 消费者。 | planned |
-| [spec-10-security-hardening.md](./spec-10-security-hardening.md) | 安全加固：沙箱逃逸、clip server 鉴权、stdout 密钥泄露、权限绕过、子进程清理、能力面收敛。 | planned |
-| [spec-11-data-integrity.md](./spec-11-data-integrity.md) | 数据完整性：切项目清历史、编辑器串写、分块死循环、ingest/lint/dedup 误删覆盖、settings 静默保存。 | planned |
+| [spec-5-fix-pipeline-wiring.md](./spec-5-fix-pipeline-wiring.md) | SPEC-5 并行流水线生产接线 + worker heartbeat / lease 回收 / commit-budget 自愈 / repair 消费者。 | completed |
+| [spec-10-security-hardening.md](./spec-10-security-hardening.md) | 安全加固：沙箱逃逸、clip server 鉴权、stdout 密钥泄露、权限绕过、子进程清理、能力面收敛。 | completed |
+| [spec-11-data-integrity.md](./spec-11-data-integrity.md) | 数据完整性：切项目清历史、编辑器串写、分块死循环、ingest/lint/dedup 误删覆盖、settings 静默保存。 | completed |
 | [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建；2026-07 review 已范围修正，依赖 SPEC-5-FIX。 | planned / rescoped |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | planned |
@@ -94,33 +94,32 @@
 
 ## Current Execution Order
 
-截至 2026-07-02，SPEC-4 implementation baseline 为 `285214c feat: wire agent runs to runtime profiles (#221)`。Phase 6 的 PR A-K 主线 port 已完成到 #148，follow-up sweep 已完成到 #164，安全/质量 backlog #120/#126 系列已完成到 #170。OKF + Knowledge Wiki business-layer stream 已完成，并已归档；SPEC-0 到 SPEC-9 已由 #192 定稿，SPEC-1 已由 #194-#199 完成，#200 恢复 `docs/plans/**` 默认可跟踪，SPEC-2 已由 #202-#208 完成，SPEC-3 已由 #210-#216 完成 PR1-PR6，SPEC-4 PR1 已由 #217 完成，SPEC-4 PR2 已由 #218 完成，SPEC-4 PR3 已由 #219 完成，SPEC-4 PR4 已由 #220 完成，SPEC-4 PR5 已由 #221 完成，SPEC-4-FIX PR1 已由 #228 完成，SPEC-4-FIX PR2 已由 #230 完成，SPEC-4-FIX PR3 已由 #232 完成。后续不再按旧 OKF/KW 队列或旧 Phase 7 队列执行。
+历史 baseline 证据以 git history 为准。SPEC-4 implementation baseline 是 `285214c feat: wire agent runs to runtime profiles (#221)`；更早的 Phase 6、OKF/KW、安全/质量 backlog 已归档，不再在本节逐条维护。
 
-已完成 OKF/KW 基线证据：
+| SPEC | 状态 | closeout PR |
+|------|------|-------------|
+| SPEC-0 | reviewed / ready for PR split | #192 |
+| SPEC-1 | completed | #194-#199 |
+| SPEC-2 | completed | #202-#208 |
+| SPEC-3 | completed via PR1-PR6 | #210-#216 |
+| SPEC-4 | reviewed / ready for PR split | #217-#221 |
+| SPEC-4-FIX | completed via #228, #230, #232 | #228/#230/#232 |
+| SPEC-5 | completed by #236/#238/#240/#242/#244/#246 | #236/#238/#240/#242/#244/#246 |
+| SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
+| SPEC-6 | reviewed / rescoped by 2026-07 review / ready for PR split | pending |
+| SPEC-7 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
+| SPEC-8 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
+| SPEC-9 | deferred / gated | deferred |
+| SPEC-10 | completed via #250/#252/#254/#261/#265/#266/#271 | #250/#252/#254/#261/#265/#266/#271 |
+| SPEC-11 | completed via #262/#263/#256/#270/#274/#268/#275/#272/#273 | #262/#263/#256/#270/#274/#268/#275/#272/#273 |
 
-1. `f9f63c5` KW-QA：QA manual save baseline。
-2. `e300cdd` OKF-A：validator/export。
-3. `67f54f6` OKF-B：import/mapping。
-4. `95e4bb9` KW-B1：Knowledge Agents 配置基座 + Settings 骨架。
-5. `8ea2326` KW-B2：Prompt Registry。
-6. `127fc9e` KW-C1：三层标签体系 schema + bootstrap/growth 基座。
-7. `3a01730` KW-D：Synthesis 多维主题发现 + preview/generate UI。
-8. `ad0b9d5` KW-C2：Tag Agent taxonomy-aware 自动打标/自动生长。
-9. `248bd27` OKF-C：统一 Agent tools + MCP/local API 暴露。
+2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
-Next execution sequence：SPEC-1、SPEC-2、SPEC-3、SPEC-4、SPEC-4-FIX 已完成，SPEC-4-FIX PR1 已由 #228 完成，SPEC-4-FIX PR2 已由 #230 完成，SPEC-4-FIX PR3 已由 #232 完成，SPEC-5 PR1 已由 #236 完成，SPEC-5 PR2 已由 #238 完成，SPEC-5 PR3 已由 #240 完成，SPEC-5 PR4 已由 #242 完成，SPEC-5 PR5 已由 #244 完成，SPEC-5 PR6 已由 #246 完成。
+当前优先级：
 
-2026-07-02 一次全仓深度 review（证据见 `spec-5-8-post-review-findings.md`）发现：SPEC-5 组件虽 PR1-PR6 全 merged，但并行流水线在生产中从未端到端接线（`runPrepareWorkerPool`/`commitPendingStagingArtifacts` 零生产调用，无 `PrepareModelCallExecutor` 实现，已 grep + GitNexus 确认），且散布 14 个 P0（含 1 个可被任意外部网页直接触发的 clip server 漏洞和 1 个经应用文件操作路径可达的沙箱逃逸）。据此新增 SPEC-5-FIX（流水线接线 + runtime ledger hardening）、SPEC-10（安全加固）、SPEC-11（数据完整性），并回灌修正 SPEC-6/7/8。
+1. SPEC-6：derived rebuild。SPEC-5-FIX 已 closeout，commit 真实产生 derived stale marker 的前提已满足，SPEC-6 解锁；先补 marker 消费基础设施（状态流转/去重/游标/补齐层），再做 embedding rebuild。
+2. SPEC-8 剩余：维护性精简穿插，`runtime_db` mod split PR10 按原计划推进。
+3. SPEC-7 / SPEC-9 门控：SPEC-7 PR1 SDK alignment 可并行准备，但不得替代 SPEC-4-FIX PR3 的 Agent-run profile 最小兼容基座；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。
+4. Swift/native：Swift/SwiftUI/iOS/native 实现继续 deferred；SPEC-9 只有在 SPEC-1 到 SPEC-8（含 SPEC-5-FIX/10/11）的 core boundary 和关键 runtime API 稳定后才进入实现。
 
-修正后的执行优先级：
-1. SPEC-10 PR1/PR2（S1 沙箱逃逸、S2 clip server 鉴权）作为最高优先级独立 hotfix 先行——S2 任意网页可直接触发，S1 经应用文件操作路径可达。
-2. SPEC-5-FIX 接通并行流水线并修 heartbeat/lease/commit-budget，是 SPEC-6 硬前提。
-3. SPEC-11 数据丢失批（D1-D3 优先）+ `persistSetting` helper；SPEC-10 余下 PR 并行。
-4. SPEC-6 先补 marker 消费基础设施（状态流转/去重/游标/补齐层）再做 embedding rebuild；SPEC-7 PR1 SDK alignment 可并行准备（当前落后约 48 patch，须先核对官方 rewind 状态 API）。
-5. SPEC-8 维护性精简穿插；`api_server.rs` 降级为机械 mod 拆分。
-
-每个后续 PR 开始时再落对应详细计划，并按合并标准要求无 unresolved P0/P1/P2、修复该 PR 已发现全部 scoped P3、CI green 后由 Commander 合并。SPEC-7 PR1（SDK alignment）可并行准备，但不得替代已由 SPEC-4-FIX PR3 收口的 Agent-run profile 最小兼容基座；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。SPEC-9 Swift shell re-entry deferred，只有 SPEC-1 到 SPEC-8（含 SPEC-5-FIX/10/11）的 core boundary 和关键 runtime API 稳定后才进入实现。
-
-当前主线不跳过 SPEC-2 直接进入 Phase 7 / Unified Agentic Chat 完整实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR，可按依赖规则并行准备。
-
-Swift/SwiftUI/iOS/native 实现继续 deferred；但 native-ready shell/core boundary 已进入 SPEC-1，后置 Swift 回填由 SPEC-9 承接。
+每个后续 PR 开始时再落对应详细计划，并按合并标准要求无 unresolved P0/P1/P2、修复该 PR 已发现全部 scoped P3、CI green 后由 Commander 合并。当前主线不跳过 SPEC-2 直接进入 Phase 7 / Unified Agentic Chat 完整实现，也不继续按旧 OKF/KW 队列执行；Claude Agent SDK alignment 现在归入 SPEC-7 的前置 PR，可按依赖规则并行准备。
