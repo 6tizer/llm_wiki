@@ -219,16 +219,29 @@ export function SourcesView() {
   async function handleDelete(node: FileNode) {
     if (!project) return
     const pp = normalizePath(project.path)
+    const projectId = project.id
     // Confirmation now lives in the SourceTree component as a
     // two-stage button (click once = "Confirm", click again =
     // delete). Reaching this handler means the user has already
     // confirmed via the inline UI, so we proceed unconditionally.
     try {
       const result = await deleteSourceFile(pp, node.path)
+      // The delete itself has already landed on disk for `pp`'s project.
+      // If the user switched projects while we were awaiting, the UI
+      // refresh below must not run — it would reload the OLD project's
+      // tree into what's now the NEW project's view (same project.id
+      // guard as rescanProjectFileSync in project-file-sync.ts).
+      if (useWikiStore.getState().project?.id !== projectId) return
       // Step 8: Refresh everything (UI side — must run with parent
       // context, hence kept here rather than inside the helper).
       await loadSources()
+      // `loadSources` is itself an await window (lists the raw/sources
+      // dir) — re-check before touching the global file tree/version so
+      // a project switch that lands mid-refresh doesn't push the OLD
+      // project's tree into the NEW project's view.
+      if (useWikiStore.getState().project?.id !== projectId) return
       const tree = await listDirectory(pp)
+      if (useWikiStore.getState().project?.id !== projectId) return
       setFileTree(tree)
       useWikiStore.getState().bumpDataVersion()
       if (
@@ -239,7 +252,7 @@ export function SourcesView() {
       }
     } catch (err) {
       console.error("Failed to delete source:", err)
-      window.alert(`Failed to delete: ${err}`)
+      window.alert(`Failed to delete "${node.path}" in project "${project.name}" (${pp}): ${err}`)
     }
   }
 
@@ -260,10 +273,18 @@ export function SourcesView() {
   async function handleDeleteFolder(folder: FileNode) {
     if (!project) return
     const pp = normalizePath(project.path)
+    const projectId = project.id
     try {
       const result = await deleteSourceFolder(pp, folder)
+      // See handleDelete above: skip the UI refresh if the project
+      // changed under us while the delete was in flight.
+      if (useWikiStore.getState().project?.id !== projectId) return
       await loadSources()
+      // See handleDelete above: `loadSources` is itself an await window,
+      // re-check before touching the global file tree/version.
+      if (useWikiStore.getState().project?.id !== projectId) return
       const tree = await listDirectory(pp)
+      if (useWikiStore.getState().project?.id !== projectId) return
       setFileTree(tree)
       useWikiStore.getState().bumpDataVersion()
       if (
@@ -274,7 +295,7 @@ export function SourcesView() {
       }
     } catch (err) {
       console.error("Failed to delete folder:", err)
-      window.alert(`Failed to delete folder: ${err}`)
+      window.alert(`Failed to delete folder "${folder.path}" in project "${project.name}" (${pp}): ${err}`)
     }
   }
 
