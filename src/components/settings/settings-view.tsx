@@ -11,8 +11,6 @@ import {
   Network,
   History,
   Wrench,
-  Clock,
-  FileText,
   FolderSync,
   Server,
   SlidersHorizontal,
@@ -47,9 +45,7 @@ import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { GeneralSection } from "./sections/general-section"
 import { NetworkSection } from "./sections/network-section"
-import { ScheduledImportSection } from "./sections/scheduled-import-section"
-import { SourceWatchSection } from "./sections/source-watch-section"
-import { MineruSection } from "./sections/mineru-section"
+import { ImportSection } from "./sections/import-section"
 import { ApiServerSection } from "./sections/api-server-section"
 import { AgentSection } from "./sections/agent-section"
 import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
@@ -73,10 +69,8 @@ export type CategoryId =
   | "embedding"
   | "multimodal"
   | "web-search"
+  | "import"
   | "network"
-  | "source-watch"
-  | "scheduled-import"
-  | "mineru"
   | "api-server"
   | "agent"
   | "knowledge-agents"
@@ -108,29 +102,60 @@ interface Category {
   icon: typeof Bot
 }
 
+interface SettingsGroup {
+  id: "aiModels" | "pipeline" | "app"
+  labelKey: string
+  categoryIds: CategoryId[]
+}
+
 const CATEGORIES: Category[] = [
   { id: "llm", labelKey: "settings.categories.llm", icon: Bot },
   { id: "model-profiles", labelKey: "settings.categories.modelProfiles", icon: Layers },
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
   { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
-  { id: "network", labelKey: "settings.categories.network", icon: Network },
-  { id: "source-watch", labelKey: "settings.categories.sourceWatch", icon: FolderSync },
-  { id: "scheduled-import", labelKey: "settings.categories.scheduledImport", icon: Clock },
-  { id: "mineru", labelKey: "settings.categories.mineru", icon: FileText },
-  { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
-  { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
+  { id: "import", labelKey: "settings.categories.import", icon: FolderSync },
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
   { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
   { id: "synthesis", labelKey: "settings.categories.synthesis", icon: GitMerge },
   { id: "index-overview", labelKey: "settings.categories.indexOverview", icon: ListTree },
   { id: "derived-status", labelKey: "settings.categories.derivedStatus", icon: Activity },
+  { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
+  { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
+  { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
+  { id: "network", labelKey: "settings.categories.network", icon: Network },
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
-  { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
   { id: "changelog", labelKey: "settings.categories.changelog", icon: History },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
+]
+
+/** Navigation grouping for Settings; category order is the group order flattened. */
+export const SETTINGS_GROUPS: SettingsGroup[] = [
+  {
+    id: "aiModels",
+    labelKey: "settings.groups.aiModels",
+    categoryIds: ["llm", "model-profiles", "embedding", "multimodal", "web-search"],
+  },
+  {
+    id: "pipeline",
+    labelKey: "settings.groups.pipeline",
+    categoryIds: [
+      "import",
+      "knowledge-agents",
+      "taxonomy",
+      "synthesis",
+      "index-overview",
+      "derived-status",
+      "maintenance",
+    ],
+  },
+  {
+    id: "app",
+    labelKey: "settings.groups.app",
+    categoryIds: ["agent", "api-server", "network", "general", "output", "interface", "changelog", "about"],
+  },
 ]
 
 // These sections own their persistence instead of writing through SettingsDraft.
@@ -162,12 +187,19 @@ export function getSettingsCategories(isMacLike = isMacLikeRuntime()): Category[
 }
 
 export function coerceSettingsCategory(
-  active: CategoryId,
+  active: CategoryId | string,
   categories: Category[],
 ): CategoryId {
-  return categories.some((category) => category.id === active)
-    ? active
-    : categories[0]?.id ?? "llm"
+  if (categories.some((category) => category.id === active)) {
+    return active as CategoryId
+  }
+  const migratedActive = ["source-watch", "scheduled-import", "mineru"].includes(active)
+    ? "import"
+    : active
+  if (categories.some((category) => category.id === migratedActive)) {
+    return migratedActive as CategoryId
+  }
+  return categories[0]?.id ?? "llm"
 }
 
 /** Returns whether the shared Settings draft Save bar should be shown. */
@@ -522,6 +554,18 @@ export function SettingsView() {
   }, [])
 
   const categories = useMemo(() => getSettingsCategories(), [])
+  const categoriesById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories])
+  const categoryGroups = useMemo(
+    () =>
+      SETTINGS_GROUPS.map((group) => ({
+        ...group,
+        categories: group.categoryIds.flatMap((id) => {
+          const category = categoriesById.get(id)
+          return category ? [category] : []
+        }),
+      })).filter((group) => group.categories.length > 0),
+    [categoriesById],
+  )
   const activeCategory = coerceSettingsCategory(active, categories)
 
   useEffect(() => {
@@ -894,12 +938,8 @@ export function SettingsView() {
         return <WebSearchSection />
       case "network":
         return <NetworkSection draft={draft} setDraft={setDraft} />
-      case "source-watch":
-        return <SourceWatchSection draft={draft} setDraft={setDraft} projectReady={!!project} />
-      case "scheduled-import":
-        return <ScheduledImportSection draft={draft} setDraft={setDraft} />
-      case "mineru":
-        return <MineruSection draft={draft} setDraft={setDraft} />
+      case "import":
+        return <ImportSection draft={draft} setDraft={setDraft} projectReady={!!project} />
       case "api-server":
         return <ApiServerSection draft={draft} setDraft={setDraft} />
       case "agent":
@@ -937,45 +977,67 @@ export function SettingsView() {
         <div className="px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:pb-2 md:pt-4">
           {t("settings.title")}
         </div>
-        <nav className="flex min-h-0 flex-1 gap-1 overflow-x-auto overflow-y-hidden px-2 pb-2 md:block md:overflow-x-hidden md:overflow-y-auto md:pb-3">
-          {categories.map((c) => {
-            const Icon = c.icon
-            const isActive = c.id === activeCategory
-            // Mirror the gear-icon dot inside the settings sidebar
-            // so the user can find which sub-section the update
-            // notification is pointing at. Update info lives in
-            // the About panel, so the dot follows the About row.
-            // Same store, same gating — once dismissed, both
-            // disappear together.
-            const showUpdateDot =
-              c.id === "about" && updateAvailable
+        <nav
+          aria-label={t("settings.navLabel")}
+          className="flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden px-2 pb-2 md:block md:space-y-3 md:overflow-x-hidden md:overflow-y-auto md:pb-3"
+        >
+          {categoryGroups.map((group) => {
+            const headingId = `settings-group-${group.id}`
             return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => setActive(c.id)}
-                aria-current={isActive ? "page" : undefined}
-                data-testid={`settings-category-${c.id}`}
-                className={`group mb-0 flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm transition-colors md:mb-0.5 md:w-full md:gap-2.5 ${
-                  isActive
-                    ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/70"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
-                }`}
+              <section
+                key={group.id}
+                aria-labelledby={headingId}
+                className="flex shrink-0 items-start gap-1 md:block"
               >
-                <Icon
-                  className={`h-4 w-4 shrink-0 transition-colors ${
-                    isActive ? "text-primary" : "text-muted-foreground/80 group-hover:text-accent-foreground"
-                  }`}
-                />
-                <span className="truncate">{t(c.labelKey)}</span>
-                {showUpdateDot && (
-                  <span
-                    className="ml-auto h-2 w-2 shrink-0 rounded-full bg-red-500"
-                    aria-label={t("nav.updateAvailable")}
-                    title={t("nav.updateAvailable")}
-                  />
-                )}
-              </button>
+                <h3
+                  id={headingId}
+                  className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:pb-1 md:pt-2"
+                >
+                  {t(group.labelKey)}
+                </h3>
+                <div className="flex gap-1 md:block">
+                  {group.categories.map((c) => {
+                    const Icon = c.icon
+                    const isActive = c.id === activeCategory
+                    // Mirror the gear-icon dot inside the settings sidebar
+                    // so the user can find which sub-section the update
+                    // notification is pointing at. Update info lives in
+                    // the About panel, so the dot follows the About row.
+                    // Same store, same gating — once dismissed, both
+                    // disappear together.
+                    const showUpdateDot =
+                      c.id === "about" && updateAvailable
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setActive(c.id)}
+                        aria-current={isActive ? "page" : undefined}
+                        data-testid={`settings-category-${c.id}`}
+                        className={`group mb-0 flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm transition-colors md:mb-0.5 md:w-full md:gap-2.5 ${
+                          isActive
+                            ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/70"
+                            : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+                        }`}
+                      >
+                        <Icon
+                          className={`h-4 w-4 shrink-0 transition-colors ${
+                            isActive ? "text-primary" : "text-muted-foreground/80 group-hover:text-accent-foreground"
+                          }`}
+                        />
+                        <span className="truncate">{t(c.labelKey)}</span>
+                        {showUpdateDot && (
+                          <span
+                            className="ml-auto h-2 w-2 shrink-0 rounded-full bg-red-500"
+                            aria-label={t("nav.updateAvailable")}
+                            title={t("nav.updateAvailable")}
+                          />
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
             )
           })}
         </nav>

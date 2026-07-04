@@ -475,19 +475,26 @@
     "saveFailedRustLockedNote": "可能要到下次启动才会生效",
     "language": "语言",
     "languageHint": "界面语言（Wiki 内容语言以原始资料为准）",
+    "navLabel": "设置分类",
+    "groups": {
+      "aiModels": "AI 与模型",
+      "pipeline": "知识流水线",
+      "app": "应用"
+    },
     "categories": {
       "llm": "LLM 模型",
       "modelProfiles": "模型 Profiles",
       "embedding": "向量嵌入",
       "multimodal": "图片描述",
       "webSearch": "外部信息源",
+      "import": "导入",
       "network": "网络",
       "sourceWatch": "资料文件夹监控",
       "scheduledImport": "定时导入",
       "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
-      "agent": "Agent",
-      "knowledgeAgents": "Knowledge Agents",
+      "agent": "Agent 运行限额",
+      "knowledgeAgents": "流水线代理",
       "taxonomy": "标签体系",
       "synthesis": "综合",
       "indexOverview": "索引 / 总览",
@@ -692,6 +699,12 @@
         "testSuccess": "连接成功",
         "testFailed": "测试失败"
       },
+      "import": {
+        "title": "导入",
+        "sourceWatch": "资料文件夹监控",
+        "scheduledImport": "定时导入",
+        "mineru": "MinerU PDF"
+      },
       "webSearch": {
         "title": "外部信息源",
         "description": "配置 LLM Wiki 可以使用的外部信息来源。",
@@ -853,7 +866,7 @@
         "mcpPathUnavailable": "未找到 MCP server 入口。请在 LLM Wiki 仓库中运行 `npm run mcp:build`，然后重新打开设置。"
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent 运行限额",
         "description": "当前项目的 Agent 运行资源限制。设置只作用于当前打开的项目。",
         "noProject": "请先打开一个项目再编辑 Agent 限制。",
         "maxTurns": "最大轮数",
@@ -864,7 +877,7 @@
         "maxWriteKiBHint": "单次写入操作允许的最大文件大小。"
       },
       "knowledgeAgents": {
-        "title": "Knowledge Agents",
+        "title": "流水线代理",
         "description": "LLM Wiki 本地项目工作流 Agent，用于编译、检查、修复、综合、打标和 QA 保存。",
         "noProject": "请先打开一个项目再编辑 Knowledge Agents。",
         "loading": "正在加载 Knowledge Agents...",

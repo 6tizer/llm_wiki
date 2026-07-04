@@ -475,19 +475,26 @@
     "saveFailedRustLockedNote": "may not take effect until the next launch",
     "language": "Language",
     "languageHint": "Interface language (wiki content follows source material language)",
+    "navLabel": "Settings categories",
+    "groups": {
+      "aiModels": "AI & Models",
+      "pipeline": "Knowledge Pipeline",
+      "app": "Application"
+    },
     "categories": {
       "llm": "LLM Models",
       "modelProfiles": "Model Profiles",
       "embedding": "Embeddings",
       "multimodal": "Image Captioning",
       "webSearch": "External Information Sources",
+      "import": "Import",
       "network": "Network",
       "sourceWatch": "Source Watch",
       "scheduledImport": "Scheduled Import",
       "mineru": "MinerU PDF",
       "apiServer": "API + MCP",
-      "agent": "Agent",
-      "knowledgeAgents": "Knowledge Agents",
+      "agent": "Agent Run Limits",
+      "knowledgeAgents": "Pipeline Agents",
       "taxonomy": "Tag Taxonomy",
       "synthesis": "Synthesis",
       "indexOverview": "Index / Overview",
@@ -692,6 +699,12 @@
         "testSuccess": "Connection successful",
         "testFailed": "Test failed"
       },
+      "import": {
+        "title": "Import",
+        "sourceWatch": "Source Watch",
+        "scheduledImport": "Scheduled Import",
+        "mineru": "MinerU PDF"
+      },
       "webSearch": {
         "title": "External Information Sources",
         "description": "Configure external information sources that LLM Wiki can use.",
@@ -853,7 +866,7 @@
         "mcpPathUnavailable": "MCP server entry was not found. Run `npm run mcp:build` from the LLM Wiki repository, then reopen Settings."
       },
       "agent": {
-        "title": "Agent",
+        "title": "Agent Run Limits",
         "description": "Per-project resource limits for Agent runs. These settings apply only to the currently open project.",
         "noProject": "Open a project first to edit Agent limits.",
         "maxTurns": "Max turns",
@@ -864,7 +877,7 @@
         "maxWriteKiBHint": "Maximum size of a single write operation."
       },
       "knowledgeAgents": {
-        "title": "Knowledge Agents",
+        "title": "Pipeline Agents",
         "description": "LLM Wiki local, project-level workflow agents for compilation, linting, repair, synthesis, tagging, and QA capture.",
         "noProject": "Open a project first to edit Knowledge Agents.",
         "loading": "Loading Knowledge Agents...",
