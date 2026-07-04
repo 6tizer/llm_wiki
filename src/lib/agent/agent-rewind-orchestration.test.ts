@@ -5,7 +5,11 @@ import type { AgentRewindFilesPayload, AgentTransportOptions } from "./agent-typ
 const transportMocks = vi.hoisted(() => ({
   rewindAgentFiles: vi.fn<(streamId: string, messageId?: string) => Promise<AgentRewindFilesPayload>>(),
   rewindAgentSession: vi.fn<
-    (options: AgentTransportOptions, rewindUserMessageId: string) => Promise<AgentRewindFilesPayload>
+    (
+      options: AgentTransportOptions,
+      rewindUserMessageId: string,
+      fallbackAssistantMessageId?: string,
+    ) => Promise<AgentRewindFilesPayload>
   >(),
 }))
 
@@ -86,7 +90,7 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe("success")
     expect(transportMocks.rewindAgentFiles).toHaveBeenCalledWith("stream-1", "user-uuid-1")
     expect(transportMocks.rewindAgentSession).not.toHaveBeenCalled()
     expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["m1"])
@@ -116,10 +120,11 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe("success")
     expect(transportMocks.rewindAgentSession).toHaveBeenCalledWith(
       expect.objectContaining({ resume: "session-1" }),
       "user-uuid-1",
+      "assistant-uuid-1",
     )
   })
 
@@ -140,7 +145,7 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe("success")
     expect(transportMocks.rewindAgentSession).toHaveBeenCalled()
   })
 
@@ -160,7 +165,7 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(false)
+    expect(result.status).toBe("rewind_failed")
     expect(transportMocks.rewindAgentSession).not.toHaveBeenCalled()
     // No truncation/pending state applied on failure (A5: no reverse half-state).
     expect(useChatStore.getState().messages).toHaveLength(1)
@@ -181,12 +186,12 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(false)
+    expect(result.status).toBe("rewind_failed")
     expect(persistMocks.saveChatHistory).not.toHaveBeenCalled()
     expect(useChatStore.getState().messages).toHaveLength(1)
   })
 
-  it("reports persistError but still ok:true when the forced flush fails (A4)", async () => {
+  it("reports persist_failed (files already reverted) when the forced flush fails (A4)", async () => {
     useChatStore.setState({
       conversations: [{ id: "conv-1", title: "Agent", createdAt: 1, updatedAt: 1, agentSessionId: "session-1" }],
       messages: [msg("m1", "conv-1", 1)],
@@ -200,10 +205,51 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe("persist_failed")
     expect(result.persistError).toBe("disk full")
     // Pending fields/truncation are still applied in memory even though the flush failed.
     expect(useChatStore.getState().conversations[0].agentForkSessionPending).toBe(true)
+  })
+
+  it("reports persist_failed when there is no project path to persist to, even though the in-memory rewind succeeded", async () => {
+    useChatStore.setState({
+      conversations: [{ id: "conv-1", title: "Agent", createdAt: 1, updatedAt: 1, agentSessionId: "session-1" }],
+      messages: [msg("m1", "conv-1", 1)],
+    })
+    transportMocks.rewindAgentFiles.mockResolvedValue(okPayload)
+
+    const result = await runAgentRewind({
+      target: target(),
+      projectPath: undefined,
+      buildOptions: () => ({ apiKey: "k" }),
+    })
+
+    expect(result.status).toBe("persist_failed")
+    expect(persistMocks.saveChatHistory).not.toHaveBeenCalled()
+    expect(useChatStore.getState().conversations[0].agentForkSessionPending).toBe(true)
+  })
+
+  it("reports state_mismatch — not success — when rewindFiles succeeds but the target message is gone (review-round P2)", async () => {
+    useChatStore.setState({
+      conversations: [{ id: "conv-1", title: "Agent", createdAt: 1, updatedAt: 1, agentSessionId: "session-1" }],
+      // Target message "m1" is NOT present — simulates the conversation
+      // having been reset/changed shape between opening the rewind dialog
+      // and the rewindFiles call actually completing.
+      messages: [],
+    })
+    transportMocks.rewindAgentFiles.mockResolvedValue(okPayload)
+
+    const result = await runAgentRewind({
+      target: target(),
+      projectPath: "/wiki",
+      buildOptions: () => ({ apiKey: "k" }),
+    })
+
+    expect(result.status).toBe("state_mismatch")
+    expect(result.payload).toEqual(okPayload)
+    // Must NOT silently persist or report success — nothing to truncate.
+    expect(persistMocks.saveChatHistory).not.toHaveBeenCalled()
+    expect(useChatStore.getState().conversations[0].agentForkSessionPending).toBeUndefined()
   })
 
   it("blocks via the gate and never calls rewindFiles when a wiki write landed after the target (A2)", async () => {
@@ -224,7 +270,7 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(false)
+    expect(result.status).toBe("gate_blocked")
     expect(result.gate).toEqual({ allowed: false, reason: "wiki_write_after_target" })
     expect(transportMocks.rewindAgentFiles).not.toHaveBeenCalled()
   })
@@ -242,7 +288,7 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(false)
+    expect(result.status).toBe("gate_blocked")
     expect(result.gate).toEqual({ allowed: false, reason: "locked" })
     expect(transportMocks.rewindAgentFiles).not.toHaveBeenCalled()
   })
@@ -259,7 +305,7 @@ describe("runAgentRewind", () => {
       buildOptions: () => ({ apiKey: "k" }),
     })
 
-    expect(result.ok).toBe(false)
+    expect(result.status).toBe("rewind_failed")
     expect(transportMocks.rewindAgentFiles).not.toHaveBeenCalled()
   })
 

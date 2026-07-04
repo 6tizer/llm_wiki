@@ -170,6 +170,14 @@ export interface RewindSessionRequest {
 	streamId: string;
 	agentSessionId: string;
 	rewindUserMessageId: string;
+	/**
+	 * The target turn's assistant uuid — reliably echoed on the live SDK
+	 * stream (unlike the "user" uuid, see rewindUserMessageId), used as the
+	 * starting point for the JSONL-transcript reverse lookup when
+	 * rewindUserMessageId isn't itself a verified checkpoint anchor. See
+	 * rewind-anchor.ts.
+	 */
+	fallbackAssistantMessageId?: string;
 	cwd?: string;
 	model?: string;
 	apiKey?: string;

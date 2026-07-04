@@ -1,5 +1,6 @@
 import type { QueryControl, QueryFn, QueryInput } from "./core.js";
 import { applyAgentProfileEnv } from "./core.js";
+import { resolveVerifiedRewindAnchor, type SessionTranscriptLoader } from "./rewind-anchor.js";
 import type { AgentMessage, RewindSessionRequest, RewindSessionUnavailableReason } from "./types.js";
 
 interface RewindSessionBridgeDeps {
@@ -12,6 +13,8 @@ interface RewindSessionBridgeDeps {
 	onSettled?: () => void;
 	/** Test-only override for INIT_WAIT_TIMEOUT_MS (A13's transport-not-ready path). */
 	initTimeoutMs?: number;
+	/** Test-only override for the JSONL transcript loader (rewind-anchor.ts). */
+	loadTranscript?: SessionTranscriptLoader;
 }
 
 // The resumed one-shot Query must announce its session before rewindFiles
@@ -75,6 +78,7 @@ export async function handleRewindSessionRequest({
 	error = console.error,
 	onSettled,
 	initTimeoutMs = INIT_WAIT_TIMEOUT_MS,
+	loadTranscript,
 }: RewindSessionBridgeDeps): Promise<void> {
 	const { streamId } = request;
 
@@ -167,7 +171,34 @@ export async function handleRewindSessionRequest({
 			return;
 		}
 
-		const result = await query.rewindFiles(request.rewindUserMessageId);
+		// SPEC-7 PR2 review-round fix: never trust the client-supplied
+		// rewindUserMessageId on its own — it was captured live off the SDK
+		// stream (chat-panel.tsx), which the E1 probe proved unreliable
+		// (plain-string-prompt human turns never echo live at all; tool-use
+		// turns echo a synthetic tool-result "user" frame first). Verify
+		// against the session's persisted JSONL transcript before ever
+		// calling rewindFiles.
+		const anchor = await resolveVerifiedRewindAnchor(
+			{
+				agentSessionId: request.agentSessionId,
+				candidateUserMessageId: request.rewindUserMessageId,
+				fallbackAssistantMessageId: request.fallbackAssistantMessageId,
+			},
+			loadTranscript,
+		);
+		if (!anchor.ok) {
+			sendRewindSessionResult(send, streamId, {
+				ok: false,
+				error:
+					anchor.reason === "session_transcript_missing"
+						? "Could not locate the session's persisted transcript to verify the rewind anchor"
+						: "Could not verify a safe rewind anchor for this session",
+				unavailableReason: "missing_message_id",
+			});
+			return;
+		}
+
+		const result = await query.rewindFiles(anchor.uuid);
 		sendRewindSessionResult(send, streamId, {
 			ok: result.canRewind,
 			result,

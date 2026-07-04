@@ -5,17 +5,21 @@ const WIKI_TOOL_PREFIX = "mcp__llm_wiki__";
 
 /**
  * Wiki tools whose read/write behavior depends on call-time arguments
- * (`dryRun`/`apply`) rather than the tool name alone. `agent-policy.ts`'s
- * READ_WIKI_TOOLS list carries them as read (its `allowedTools` bare-approve
- * list only cares about the SDK's default no-arg case), but the rewind
- * fail-closed gate (SPEC-7 PR2, matrix A17) cannot afford to parse args to
- * decide — a missed/misread arg would silently pass a real write. Both are
- * therefore classified as write unconditionally here, regardless of the
- * actual dryRun/apply value in a given call.
+ * (`dryRun`/`apply`) rather than the tool name alone, AND that
+ * `agent-policy.ts` carries in READ_WIKI_TOOLS (its `allowedTools`
+ * bare-approve list only cares about the SDK's default no-arg case). The
+ * rewind fail-closed gate (SPEC-7 PR2, matrix A17) cannot afford to parse
+ * args to decide — a missed/misread arg would silently pass a real write —
+ * so this overrides the READ classification to write unconditionally.
+ *
+ * `okf_import` is the same kind of conditional-write tool (`apply:true`
+ * writes) but does NOT need an entry here: agent-policy.ts already lists it
+ * in WRITE_WIKI_TOOLS, so KNOWN_WRITE_WIKI_TOOLS below already classifies it
+ * as a write unconditionally — adding it here too would be a redundant
+ * second source of truth for the same verdict (review-round P3).
  */
 const CONDITIONAL_WRITE_WIKI_TOOLS = new Set<string>([
 	"mcp__llm_wiki__merge_duplicate_group",
-	"mcp__llm_wiki__okf_import",
 ]);
 
 /**

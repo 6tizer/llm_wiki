@@ -195,6 +195,7 @@ pub struct AgentRewindSessionArgs {
     stream_id: String,
     agent_session_id: String,
     rewind_user_message_id: String,
+    fallback_assistant_message_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
@@ -211,6 +212,8 @@ struct AgentRewindSessionRequest {
     stream_id: String,
     agent_session_id: String,
     rewind_user_message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_assistant_message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,6 +232,7 @@ fn build_agent_rewind_session_request(args: AgentRewindSessionArgs) -> AgentRewi
         stream_id: args.stream_id,
         agent_session_id: args.agent_session_id,
         rewind_user_message_id: args.rewind_user_message_id,
+        fallback_assistant_message_id: args.fallback_assistant_message_id,
         cwd: args.cwd,
         model: args.model,
         api_key: args.api_key,
@@ -1599,6 +1603,7 @@ mod tests {
             stream_id: "rewind-stream-1".to_string(),
             agent_session_id: "session-abc".to_string(),
             rewind_user_message_id: "user-uuid-1".to_string(),
+            fallback_assistant_message_id: None,
             cwd: None,
             model: None,
             api_key: None,
@@ -1639,6 +1644,7 @@ mod tests {
             build_agent_rewind_session_request(rewind_session_args_with_optional_fields_none());
         let value: Value = serde_json::to_value(request).unwrap();
 
+        assert!(value.get("fallbackAssistantMessageId").is_none());
         assert!(value.get("cwd").is_none());
         assert!(value.get("model").is_none());
         assert!(value.get("apiKey").is_none());
@@ -1649,6 +1655,7 @@ mod tests {
     #[test]
     fn rewind_session_request_serializes_present_optional_fields() {
         let mut args = rewind_session_args_with_optional_fields_none();
+        args.fallback_assistant_message_id = Some("assistant-uuid-1".to_string());
         args.cwd = Some("/wiki".to_string());
         args.model = Some("claude-sonnet-4-5".to_string());
         args.api_key = Some("sk-test".to_string());
@@ -1658,6 +1665,10 @@ mod tests {
         let request = build_agent_rewind_session_request(args);
         let value: Value = serde_json::to_value(request).unwrap();
 
+        assert_eq!(
+            value.get("fallbackAssistantMessageId").and_then(Value::as_str),
+            Some("assistant-uuid-1")
+        );
         assert_eq!(value.get("cwd").and_then(Value::as_str), Some("/wiki"));
         assert_eq!(
             value.get("model").and_then(Value::as_str),

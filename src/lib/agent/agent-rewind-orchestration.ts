@@ -4,14 +4,43 @@ import { computeAgentRewindGateDecision, type AgentRewindGateDecision } from "./
 import { rewindAgentFiles, rewindAgentSession } from "./agent-transport"
 import type { AgentRewindFilesPayload, AgentTransportOptions } from "./agent-types"
 
+/**
+ * Precise outcome of one rewind run — replaces the earlier `ok:true` +
+ * `persistError?` shape (review-round P3-1), which conflated "fully
+ * succeeded" with "succeeded but something after the point of no return
+ * didn't stick" under one boolean, and could not express the stale-target
+ * half-state at all (see `runAgentRewind`'s state_mismatch handling below).
+ *
+ * - "success": rewindFiles + the in-memory delayed-fork/truncation + the
+ *   forced disk flush all completed.
+ * - "persist_failed": rewindFiles + in-memory state both succeeded, but the
+ *   disk flush failed (or there was no project to flush to at all) — files
+ *   are reverted and the app's live state reflects it, but a crash/reload
+ *   before a successful retry could lose the truncation/pending-fork
+ *   (matrix A4).
+ * - "state_mismatch": rewindFiles succeeded (files on disk ARE already
+ *   reverted) but the target message no longer exists in this conversation
+ *   (deleted/reset/switched away mid-rewind) — there is nothing to truncate
+ *   or fork from. Must never be reported as a plain success: the files
+ *   changed, but the visible conversation state doesn't reflect it at all.
+ * - "gate_blocked": the fail-closed pre-flight gate refused to attempt
+ *   rewindFiles at all (see `gate`).
+ * - "rewind_failed": rewindFiles itself failed on every path attempted, or
+ *   a precondition for attempting it at all was missing (no fork anchor, no
+ *   transport options). No state was touched.
+ */
+export type RunAgentRewindStatus =
+  | "success"
+  | "persist_failed"
+  | "state_mismatch"
+  | "gate_blocked"
+  | "rewind_failed"
+
 export interface RunAgentRewindResult {
-  ok: boolean
+  status: RunAgentRewindStatus
   gate?: AgentRewindGateDecision
   payload?: AgentRewindFilesPayload
-  /** Rewind + fork-pending succeeded, but the forced persistence flush
-   * (design r2 P0) failed — files are reverted and the pending state is in
-   * memory, but a crash/reload before the next successful flush could lose
-   * the truncation/pending-fork (matrix A4). The caller should offer retry. */
+  /** Set for "persist_failed": why the disk flush didn't happen/succeed. */
   persistError?: string
 }
 
@@ -46,7 +75,7 @@ export async function runAgentRewind(args: {
     rewindLocked: Boolean(store.agentRewindLocks[target.conversationId]),
   })
   if (!gate.allowed) {
-    return { ok: false, gate }
+    return { status: "gate_blocked", gate }
   }
 
   // A5-adjacent: the fork anchor (assistant uuid) is structurally required
@@ -56,7 +85,7 @@ export async function runAgentRewind(args: {
   // the timeline with no way to actually fork away from the junk turn.
   if (!target.assistantMessageId) {
     return {
-      ok: false,
+      status: "rewind_failed",
       payload: {
         ok: false,
         error: "Missing assistant checkpoint uuid for the delayed-fork anchor",
@@ -80,7 +109,7 @@ export async function runAgentRewind(args: {
       const options = buildOptions()
       if (!options || !target.agentSessionId) {
         return {
-          ok: false,
+          status: "rewind_failed",
           payload: {
             ok: false,
             error: "Missing Agent transport options or session id to resume for rewind",
@@ -91,19 +120,36 @@ export async function runAgentRewind(args: {
       payload = await rewindAgentSession(
         { ...options, resume: target.agentSessionId },
         target.userMessageId,
+        target.assistantMessageId,
       )
     }
 
     if (!payload.ok) {
-      return { ok: false, payload }
+      return { status: "rewind_failed", payload }
     }
 
+    // Files ARE reverted on disk from this point on — every branch below
+    // must fail closed rather than silently report a plain "success" it
+    // can't back up (matrix A4/A12-adjacent, review-round P2).
     const applied = store.applyAgentRewindSuccess(target.conversationId, {
       throughMessageId: target.chatMessageId,
       resumeSessionAt: target.assistantMessageId,
     })
-    if (!applied || !projectPath) {
-      return { ok: true, payload }
+    if (!applied) {
+      // Stale target: the message we were rewinding to no longer exists in
+      // this conversation (deleted/reset, or the conversation itself
+      // changed shape mid-rewind). There is nothing to truncate/fork from,
+      // so the visible conversation state cannot reflect the file revert
+      // at all — this must surface as an explicit half-state, not success.
+      return { status: "state_mismatch", payload }
+    }
+
+    if (!projectPath) {
+      return {
+        status: "persist_failed",
+        payload,
+        persistError: "No active project to persist the rewound conversation to",
+      }
     }
 
     try {
@@ -111,12 +157,12 @@ export async function runAgentRewind(args: {
       await saveChatHistory(projectPath, fresh.conversations, fresh.messages)
     } catch (err) {
       return {
-        ok: true,
+        status: "persist_failed",
         payload,
         persistError: err instanceof Error ? err.message : String(err),
       }
     }
-    return { ok: true, payload }
+    return { status: "success", payload }
   } finally {
     store.setAgentRewindLock(target.conversationId, false)
   }

@@ -42,10 +42,14 @@ const WRITE_WIKI_TOOLS = new Set<string>([
  * read (their default/no-arg SDK auto-approve case), but that can perform a
  * real write depending on call args (`dryRun`/`apply`). The rewind gate does
  * not parse args — it classifies these unconditionally as writes (A17).
+ *
+ * `okf_import` is the same kind of tool (`apply:true` writes) but is NOT
+ * listed here — it's already in WRITE_WIKI_TOOLS above, which already
+ * classifies it as an unconditional write; duplicating it here would be a
+ * redundant second source of truth for the same verdict (review-round P3).
  */
 const CONDITIONAL_WRITE_WIKI_TOOLS = new Set<string>([
 	"mcp__llm_wiki__merge_duplicate_group",
-	"mcp__llm_wiki__okf_import",
 ]);
 
 const VERIFIED_READ_ONLY_WIKI_TOOLS = new Set<string>([

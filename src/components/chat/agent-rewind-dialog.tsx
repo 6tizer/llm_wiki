@@ -89,26 +89,41 @@ export function AgentRewindDialogHost() {
       buildOptions: buildRewindTransportOptions,
     })
       .then((outcome) => {
-        if (!outcome.ok) {
+        if (outcome.status === "success") {
+          clearAgentRewindRequest()
+          return
+        }
+        if (outcome.status === "gate_blocked") {
           if (outcome.gate && !outcome.gate.allowed) {
             setError(t(gateBlockedI18nKey(outcome.gate.reason)))
-            return
           }
-          const message = outcome.payload?.error ?? "Unknown rewind error"
-          console.warn("[agent] rewind failed:", message)
-          if (outcome.payload?.unavailableReason) {
-            clearAgentMessageRewindable(request.chatMessageId, {
-              keepActiveRequest: true,
-            })
-          }
-          setError(message)
           return
         }
-        if (outcome.persistError) {
-          setPersistError(outcome.persistError)
+        if (outcome.status === "persist_failed") {
+          setPersistError(outcome.persistError ?? "Unknown save error")
           return
         }
-        clearAgentRewindRequest()
+        if (outcome.status === "state_mismatch") {
+          // Files WERE reverted on disk (payload.ok), but the target
+          // message no longer exists in this conversation, so there is
+          // nothing left to truncate/fork from — this must never be
+          // silently reported as a plain success (review-round P2).
+          console.warn("[agent] rewind state mismatch:", outcome.payload)
+          clearAgentMessageRewindable(request.chatMessageId, {
+            keepActiveRequest: true,
+          })
+          setError(t("agent.rewind.stateMismatch"))
+          return
+        }
+        // status === "rewind_failed"
+        const message = outcome.payload?.error ?? "Unknown rewind error"
+        console.warn("[agent] rewind failed:", message)
+        if (outcome.payload?.unavailableReason) {
+          clearAgentMessageRewindable(request.chatMessageId, {
+            keepActiveRequest: true,
+          })
+        }
+        setError(message)
       })
       .catch((err: unknown) => {
         console.warn("[agent] rewind failed:", err)

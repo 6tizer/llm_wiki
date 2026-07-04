@@ -277,10 +277,18 @@ export async function rewindAgentFiles(
  * `claimAgentProfileForRun`/`releaseUntransferredAgentProfileClaim` calls,
  * so the rewind path never bypasses the claim/release lifecycle a normal
  * run goes through.
+ *
+ * `fallbackAssistantMessageId` (the target turn's assistant uuid) is
+ * required for the sidecar's JSONL-verified anchor resolution: the SDK
+ * stream only reliably echoes the assistant uuid live (not the user uuid —
+ * see rewindUserMessageId's caveat above), so it's the only trustworthy
+ * starting point for the sidecar to reverse-lookup a verified checkpoint
+ * anchor when rewindUserMessageId itself isn't one.
  */
 export async function rewindAgentSession(
 	options: AgentTransportOptions,
 	rewindUserMessageId: string,
+	fallbackAssistantMessageId?: string,
 ): Promise<AgentRewindFilesPayload> {
 	const agentSessionId = options.resume;
 	if (!agentSessionId) {
@@ -379,6 +387,7 @@ export async function rewindAgentSession(
 			streamId,
 			agentSessionId,
 			rewindUserMessageId,
+			fallbackAssistantMessageId,
 			cwd: options.cwd,
 			model: options.model,
 			apiKey: options.apiKey,

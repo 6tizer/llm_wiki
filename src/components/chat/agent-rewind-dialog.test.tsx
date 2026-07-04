@@ -162,4 +162,71 @@ describe("AgentRewindDialogHost", () => {
     act(() => root.unmount())
     container.remove()
   })
+
+  it("discloses the stale-target half-state instead of silently closing (review-round P2)", async () => {
+    // Files were reverted (payload.ok) but the orchestration could not
+    // apply the in-memory truncation/fork — must be disclosed, not treated
+    // as success.
+    runAgentRewindMock.mockResolvedValue({
+      status: "state_mismatch",
+      payload: { ok: true, result: { canRewind: true } },
+    })
+    const { container, root } = renderDialog()
+
+    const confirmButton = findButtonByText(container, i18n.t("agent.rewind.confirm"))
+    await act(async () => {
+      confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+    await flushMicrotasks()
+
+    expect(container.textContent).toContain(i18n.t("agent.rewind.stateMismatch"))
+    expect(useChatStore.getState().agentRewindTargets.m1).toBeUndefined()
+    // Dialog stays open (keepActiveRequest) so the disclosure is visible.
+    expect(useChatStore.getState().activeAgentRewindRequest).not.toBeNull()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("discloses persist_failed with a retry entry point instead of silently closing", async () => {
+    runAgentRewindMock.mockResolvedValue({
+      status: "persist_failed",
+      payload: { ok: true, result: { canRewind: true } },
+      persistError: "disk full",
+    })
+    const { container, root } = renderDialog()
+
+    const confirmButton = findButtonByText(container, i18n.t("agent.rewind.confirm"))
+    await act(async () => {
+      confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+    await flushMicrotasks()
+
+    expect(container.textContent).toContain("disk full")
+    expect(container.textContent).toContain(i18n.t("agent.rewind.retryPersist"))
+    // Dialog should not have closed.
+    expect(useChatStore.getState().activeAgentRewindRequest).not.toBeNull()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("closes the dialog on a plain success", async () => {
+    runAgentRewindMock.mockResolvedValue({
+      status: "success",
+      payload: { ok: true, result: { canRewind: true } },
+    })
+    const { container, root } = renderDialog()
+
+    const confirmButton = findButtonByText(container, i18n.t("agent.rewind.confirm"))
+    await act(async () => {
+      confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+    await flushMicrotasks()
+
+    expect(useChatStore.getState().activeAgentRewindRequest).toBeNull()
+
+    act(() => root.unmount())
+    container.remove()
+  })
 })
