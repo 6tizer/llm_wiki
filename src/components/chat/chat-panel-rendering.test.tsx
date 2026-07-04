@@ -203,6 +203,9 @@ describe("ChatPanel agent mode rendering", () => {
       isStreaming: false,
       streamingContent: "",
       mode: "chat",
+      agentRewindTargets: {},
+      activeAgentRewindRequest: null,
+      agentRewindLocks: {},
     })
     useWikiStore.setState({ project: null })
   })
@@ -364,6 +367,20 @@ describe("ChatPanel agent mode rendering", () => {
         "mcp__llm_wiki__read_page",
       ]),
     )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("blocks sending while a rewind is in progress for the active conversation (SPEC-7 PR2 matrix A6)", async () => {
+    setupActiveProjectConversation({ storeMode: "agent" })
+    useChatStore.setState({ agentRewindLocks: { "conv-1": true } })
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
 
     act(() => root.unmount())
     container.remove()
