@@ -11,6 +11,7 @@ import {
   saveKnowledgeAgentsConfig,
 } from "@/lib/agent/knowledge-agents-config"
 import { GUIDANCE_MAX_LENGTH, isPromptCapableAgent } from "@/lib/agent/prompt-registry"
+import { useProjectPersistedResource } from "@/lib/use-project-persisted-resource"
 import type { WikiProject } from "@/types/wiki"
 
 interface Props {
@@ -18,10 +19,15 @@ interface Props {
   now?: () => number
 }
 
-type LoadState =
-  | { kind: "idle"; config: KnowledgeAgentsConfig; issues: KnowledgeAgentsConfigIssue[]; conflict: boolean }
-  | { kind: "loading"; config: KnowledgeAgentsConfig; issues: KnowledgeAgentsConfigIssue[]; conflict: boolean }
-  | { kind: "ready"; config: KnowledgeAgentsConfig; issues: KnowledgeAgentsConfigIssue[]; conflict: boolean }
+interface KnowledgeAgentsResource {
+  config: KnowledgeAgentsConfig
+  issues: KnowledgeAgentsConfigIssue[]
+  conflict: boolean
+}
+
+function fallbackKnowledgeAgentsResource(): KnowledgeAgentsResource {
+  return { config: defaultKnowledgeAgentsConfig(), issues: [], conflict: false }
+}
 
 function warningText(
   t: ReturnType<typeof useTranslation>["t"],
@@ -43,61 +49,32 @@ function hasIssueCode(
 /** Settings page section for project-level Knowledge Agents config. */
 export function KnowledgeAgentsSection({ project, now }: Props) {
   const { t } = useTranslation()
-  const [state, setState] = useState<LoadState>({
-    kind: "idle",
-    config: defaultKnowledgeAgentsConfig(),
-    issues: [],
-    conflict: false,
-  })
+  const { state: loaded, loading } = useProjectPersistedResource<KnowledgeAgentsResource>(
+    project?.path,
+    loadKnowledgeAgentsConfig,
+    fallbackKnowledgeAgentsResource(),
+  )
+  const [draft, setDraft] = useState<KnowledgeAgentsResource>(loaded)
   const [loadedUpdatedAt, setLoadedUpdatedAt] = useState<number>(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [conflictMessage, setConflictMessage] = useState("")
   const [saveErrorMessage, setSaveErrorMessage] = useState("")
 
+  // Re-sync the editable draft every time the hook lands a fresh load
+  // — project cleared, project switched, or the initial load for the
+  // current project resolving/rejecting — discarding any in-progress
+  // edit, exactly like the hand-rolled effect this hook replaced.
   useEffect(() => {
-    if (!project) {
-      setState({
-        kind: "idle",
-        config: defaultKnowledgeAgentsConfig(),
-        issues: [],
-        conflict: false,
-      })
-      setLoadedUpdatedAt(0)
-      setConflictMessage("")
-      setSaveErrorMessage("")
-      return
-    }
+    setDraft(loaded)
+    setLoadedUpdatedAt(loaded.config.updatedAt)
+    setConflictMessage("")
+    setSaveErrorMessage("")
+  }, [loaded])
 
-    let cancelled = false
-    setState((prev) => ({ ...prev, kind: "loading" }))
-    loadKnowledgeAgentsConfig(project.path)
-      .then((result) => {
-        if (cancelled) return
-        setState({ kind: "ready", ...result })
-        setLoadedUpdatedAt(result.config.updatedAt)
-        setConflictMessage("")
-        setSaveErrorMessage("")
-      })
-      .catch(() => {
-        if (cancelled) return
-        setState({
-          kind: "ready",
-          config: defaultKnowledgeAgentsConfig(),
-          issues: [],
-          conflict: false,
-        })
-        setLoadedUpdatedAt(0)
-        setSaveErrorMessage("")
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [project?.path])
-
-  const disabled = !project || state.kind === "loading" || state.conflict || saving
-  const configWarning = warningText(t, state.issues, state.conflict)
-  const alertMessage = conflictMessage || (state.conflict ? configWarning : saveErrorMessage || configWarning)
+  const disabled = !project || loading || draft.conflict || saving
+  const configWarning = warningText(t, draft.issues, draft.conflict)
+  const alertMessage = conflictMessage || (draft.conflict ? configWarning : saveErrorMessage || configWarning)
 
   function patchAgent(
     id: typeof KNOWLEDGE_AGENT_IDS[number],
@@ -106,7 +83,7 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
     setSaved(false)
     setConflictMessage("")
     setSaveErrorMessage("")
-    setState((prev) => ({
+    setDraft((prev) => ({
       ...prev,
       config: {
         ...prev.config,
@@ -130,15 +107,14 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
     setSaveErrorMessage("")
 
     try {
-      const result = await saveKnowledgeAgentsConfig(project.path, state.config, {
+      const result = await saveKnowledgeAgentsConfig(project.path, draft.config, {
         expectedUpdatedAt: loadedUpdatedAt,
         now,
       })
 
       if (!result.saved) {
         const stale = hasIssueCode(result.issues, "stale_updated_at")
-        setState({
-          kind: "ready",
+        setDraft({
           config: result.config,
           issues: result.issues,
           conflict: stale ? false : result.conflict,
@@ -152,7 +128,7 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
         return
       }
 
-      setState({ kind: "ready", config: result.config, issues: result.issues, conflict: result.conflict })
+      setDraft({ config: result.config, issues: result.issues, conflict: result.conflict })
       setLoadedUpdatedAt(result.config.updatedAt)
       setSaved(true)
     } catch {
@@ -180,7 +156,7 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
         </div>
       )}
 
-      {state.kind === "loading" && (
+      {loading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>{t("settings.sections.knowledgeAgents.loading")}</span>
@@ -196,7 +172,7 @@ export function KnowledgeAgentsSection({ project, now }: Props) {
 
       <div className="space-y-2">
         {KNOWLEDGE_AGENT_IDS.map((id) => {
-          const agent = state.config.agents[id]
+          const agent = draft.config.agents[id]
           return (
             <div
               key={id}

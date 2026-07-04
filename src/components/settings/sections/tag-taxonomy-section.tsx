@@ -14,6 +14,7 @@ import {
   type TagTaxonomyOperationReport,
   type TagTaxonomyRoot,
 } from "@/lib/agent/tag-taxonomy"
+import { useProjectPersistedResource } from "@/lib/use-project-persisted-resource"
 import type { WikiProject } from "@/types/wiki"
 
 interface Props {
@@ -21,10 +22,15 @@ interface Props {
   now?: () => number
 }
 
-type LoadState =
-  | { kind: "idle"; taxonomy: TagTaxonomyRoot; issues: TagTaxonomyIssue[]; conflict: boolean }
-  | { kind: "loading"; taxonomy: TagTaxonomyRoot; issues: TagTaxonomyIssue[]; conflict: boolean }
-  | { kind: "ready"; taxonomy: TagTaxonomyRoot; issues: TagTaxonomyIssue[]; conflict: boolean }
+interface TaxonomyResource {
+  taxonomy: TagTaxonomyRoot
+  issues: TagTaxonomyIssue[]
+  conflict: boolean
+}
+
+function fallbackTaxonomyResource(): TaxonomyResource {
+  return { taxonomy: defaultTagTaxonomy(), issues: [], conflict: false }
+}
 
 type ActionKind =
   | "previewBootstrap"
@@ -70,61 +76,40 @@ function reportStatusKey(report: TagTaxonomyOperationReport): string {
 /** Settings page section for project-level tag taxonomy governance. */
 export function TagTaxonomySection({ project, now }: Props) {
   const { t } = useTranslation()
-  const [state, setState] = useState<LoadState>({
-    kind: "idle",
-    taxonomy: defaultTagTaxonomy(),
-    issues: [],
-    conflict: false,
-  })
+  const projectPath = project?.path
+  const { state: loaded, loading, error: loadError } = useProjectPersistedResource<TaxonomyResource>(
+    projectPath,
+    loadTagTaxonomy,
+    fallbackTaxonomyResource(),
+  )
+  const [draft, setDraft] = useState<TaxonomyResource>(loaded)
   const [running, setRunning] = useState<ActionKind | null>(null)
   const [report, setReport] = useState<TagTaxonomyOperationReport | null>(null)
   const [errorMessage, setErrorMessage] = useState("")
 
+  // Re-sync the editable draft every time the hook lands a fresh
+  // load — project cleared, project switched, or the initial load for
+  // the current project resolving/rejecting. `report` only resets on
+  // "project cleared" and `errorMessage` only reflects a load failure
+  // while a project is active, matching the hand-rolled effect this
+  // hook replaced.
+  useEffect(() => {
+    setDraft(loaded)
+    if (!projectPath) {
+      setReport(null)
+    }
+    setErrorMessage(projectPath && loadError ? t("settings.sections.tagTaxonomy.loadFailed") : "")
+  }, [loaded, loadError, projectPath, t])
+
   async function refresh(projectPath: string): Promise<void> {
     const result = await loadTagTaxonomy(projectPath)
-    setState({ kind: "ready", ...result })
+    setDraft(result)
   }
 
-  useEffect(() => {
-    if (!project) {
-      setState({
-        kind: "idle",
-        taxonomy: defaultTagTaxonomy(),
-        issues: [],
-        conflict: false,
-      })
-      setReport(null)
-      setErrorMessage("")
-      return
-    }
-
-    let cancelled = false
-    setState((prev) => ({ ...prev, kind: "loading" }))
-    loadTagTaxonomy(project.path)
-      .then((result) => {
-        if (cancelled) return
-        setState({ kind: "ready", ...result })
-        setErrorMessage("")
-      })
-      .catch(() => {
-        if (cancelled) return
-        setState({
-          kind: "ready",
-          taxonomy: defaultTagTaxonomy(),
-          issues: [],
-          conflict: false,
-        })
-        setErrorMessage(t("settings.sections.tagTaxonomy.loadFailed"))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [project?.path, t])
-
-  const disabled = !project || state.kind === "loading" || state.conflict || running !== null
-  const alertMessage = errorMessage || warningText(t, state.issues, state.conflict)
-  const nodeCount = useMemo(() => countNodes(state.taxonomy.tree), [state.taxonomy.tree])
-  const batchCount = state.taxonomy.changeLog.filter((entry) =>
+  const disabled = !project || loading || draft.conflict || running !== null
+  const alertMessage = errorMessage || warningText(t, draft.issues, draft.conflict)
+  const nodeCount = useMemo(() => countNodes(draft.taxonomy.tree), [draft.taxonomy.tree])
+  const batchCount = draft.taxonomy.changeLog.filter((entry) =>
     entry.action === "bootstrap" || entry.action === "growth"
   ).length
 
@@ -172,7 +157,7 @@ export function TagTaxonomySection({ project, now }: Props) {
         </div>
       )}
 
-      {state.kind === "loading" && (
+      {loading && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>{t("settings.sections.tagTaxonomy.loading")}</span>
@@ -198,12 +183,12 @@ export function TagTaxonomySection({ project, now }: Props) {
         <div className="rounded-md border border-border/70 px-3 py-2">
           <div className="text-xs text-muted-foreground">{t("settings.sections.tagTaxonomy.updatedAt")}</div>
           <div className="truncate font-medium" data-testid="tag-taxonomy-updated-at">
-            {statusDate(state.taxonomy.updatedAt)}
+            {statusDate(draft.taxonomy.updatedAt)}
           </div>
         </div>
         <div className="rounded-md border border-border/70 px-3 py-2">
           <div className="text-xs text-muted-foreground">{t("settings.sections.tagTaxonomy.issues")}</div>
-          <div className="font-medium" data-testid="tag-taxonomy-issue-count">{state.issues.length}</div>
+          <div className="font-medium" data-testid="tag-taxonomy-issue-count">{draft.issues.length}</div>
         </div>
       </div>
 

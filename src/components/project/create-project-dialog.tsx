@@ -20,7 +20,7 @@ import { saveOutputLanguage } from "@/lib/project-store"
 interface CreateProjectDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: (project: WikiProject) => void
+  onCreated: (project: WikiProject) => void | Promise<void>
 }
 
 /** Translation keys returned by create-project form validation. */
@@ -77,8 +77,9 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
     }
     setCreating(true)
     setError("")
+    let project: WikiProject
     try {
-      const project = await createProject(name.trim(), path.trim())
+      project = await createProject(name.trim(), path.trim())
       const pp = normalizePath(project.path)
 
       const template = getTemplate(selectedTemplate)
@@ -95,22 +96,46 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
       const lang = language as OutputLanguage
       setOutputLanguage(lang)
       await saveOutputLanguage(lang, project.id)
+    } catch (err) {
+      setError(String(err))
+      setCreating(false)
+      return
+    }
 
-      onCreated(project)
+    try {
+      // Await so `creating` (and this button's disabled state) stays
+      // true for the full duration of the caller's project-open work,
+      // not just this dialog's own project-creation call — otherwise
+      // the button re-enables while handleProjectOpened is still
+      // running, opening a window for a second concurrent open.
+      await onCreated(project)
+    } catch (err) {
+      console.error("Failed to open created project:", err)
+    } finally {
       onOpenChange(false)
       setName("")
       setPath("")
       setSelectedTemplate("general")
       setLanguage("")
-    } catch (err) {
-      setError(String(err))
-    } finally {
       setCreating(false)
     }
   }
 
+  // Ignore dismiss attempts (Escape / click-outside / the Cancel button)
+  // while `creating` is in flight. Without this, dismissing mid-creation
+  // drops the dialog and reveals WelcomeScreen again WHILE createProject()
+  // is still running — `onCreated` (and the busy-guard it participates
+  // in) only fires once that promise resolves, so a user who dismisses
+  // and then immediately clicks a recent project on WelcomeScreen can get
+  // a real overlapping-open race that has nothing to do with double-
+  // clicking the same button.
+  function handleOpenChange(next: boolean): void {
+    if (creating && !next) return
+    onOpenChange(next)
+  }
+
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] grid-rows-[auto_1fr_auto] overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t("project.createTitle")}</DialogTitle>
@@ -169,7 +194,7 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("project.cancel")}</Button>
+          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={creating}>{t("project.cancel")}</Button>
           <Button onClick={handleCreate} disabled={creating}>{creating ? t("project.creating") : t("project.create")}</Button>
         </DialogFooter>
       </DialogContent>
