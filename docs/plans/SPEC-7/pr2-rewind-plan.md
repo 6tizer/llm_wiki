@@ -48,6 +48,8 @@ core.ts:154 现在自行 `getAllowedWikiTools(...)` 生成 allowedTools 且不�
 - 兜底/校验：持久化 session JSONL 的 `file-history-snapshot.snapshot.messageId`（user uuid 侧）。
 - 任一侧解析不到 → 现有 `missing_message_id` 分支（fail-closed）。
 
+**实现终态（review round 实证修正，2026-07-05）**：真实 transcript 显示 checkpoint messageId **不总是** human-turn uuid——轮内后续写入的 snapshot（`isSnapshotUpdate:true`）键到 assistant uuid。最终算法（sidecar `rewind-anchor.ts`）：解析 session JSONL 收集 checkpoint messageId 集合 + uuid→parentUuid 链；client uuid 若在集合中直用；否则从目标 turn 的 assistant uuid（live 流可靠回显，经 `fallbackAssistantMessageId` 字段透传）沿 parent 链回溯至最近的 checkpoint 锚点；回溯不到 → missing_message_id fail-closed。三分支 + cycle guard 均有测试（rewind-anchor.node.ts）。
+
 ### 4. wiki 写工具 fail-closed 门禁（修 P1-1/P1-2/P1-3）
 
 分类源与判定规则：
@@ -69,7 +71,7 @@ core.ts:154 现在自行 `getAllowedWikiTools(...)` 生成 allowedTools 且不�
 - 顺序硬约束自动满足：rewindFiles 永远先于 fork（fork 发生在之后的发送）。junk "OK" turn 落在旧 session、resumeSessionAt 指向其之前，fork 天然剔除。
 - **强制持久化闭环（r2 P0）**：聊天保存是 2s debounce（auto-save.ts:210）——若只依赖 debounce，rewindFiles 成功后立刻崩溃/reload = 文件已回滚但 pending/裁剪没落盘，续聊仍 resume 旧 session。处置：编排在置 pending + 裁剪后**绕过 debounce 立即 flush 落盘，落盘成功才向 UI 报 rewind 成功**；flush 失败 → 显式错误披露（「文件已回滚，会话截断可能在重启后丢失」）+ 保留重试 flush 入口。测试断言 flush 先于成功回报。
 - **半态窗口收窄**：rewindFiles 成功 → 本地置 pending + 裁剪 + 同步 flush，无第二次网络调用。pending 未消费前再次 rewind：允许，目标只能更早（门禁保证），latest-wins 更新 resumeSessionAt（矩阵 A19）。
-- **持久化卫生（r2 P2）**：persist.ts 过期 session 清理路径必须同时清 `agentResumeSessionAt`（与 `agentForkSessionPending` 一致），否则留孤儿锚点；builder 侧断言两字段要么同在要么同无。
+- **持久化卫生（r2 P2）**：persist.ts 过期 session 清理路径必须同时清 `agentResumeSessionAt`（与 `agentForkSessionPending` 一致），否则留孤儿锚点。builder 侧对「孤儿 resumeSessionAt（无 pending fork）」的处置为降级忽略 + console.warn（不外传孤儿字段）——注意 `agentForkSessionPending` 单独存在是合法态（既有「复制会话」功能），不能反向断言（实现裁定，2026-07-05 review round 对齐）。
 
 ### 6. 失败路径统一 + 已知 bug 修复
 
