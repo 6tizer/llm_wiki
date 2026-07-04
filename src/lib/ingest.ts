@@ -31,6 +31,7 @@ import {
   loadProjectWikiSchemaRouting,
   type WikiSchemaRouting,
 } from "@/lib/wiki-schema"
+import { isWikiListingPath } from "@/lib/wiki-cleanup"
 
 
 function appendSavedImageRefsForCaption(content: string, images: SavedImage[]): string {
@@ -1584,15 +1585,6 @@ function isLogPath(relativePath: string): boolean {
   return relativePath === "wiki/log.md" || relativePath.endsWith("/log.md")
 }
 
-function isListingPath(relativePath: string): boolean {
-  return (
-    relativePath === "wiki/index.md" ||
-    relativePath.endsWith("/index.md") ||
-    relativePath === "wiki/overview.md" ||
-    relativePath.endsWith("/overview.md")
-  )
-}
-
 export function isRootIngestAggregatePath(relativePath: string): boolean {
   return relativePath === "wiki/index.md" || relativePath === "wiki/overview.md"
 }
@@ -1874,7 +1866,7 @@ async function writeFileBlocks(
     // unparseable frontmatter and the read-time fallback had to
     // paper over it forever.
     let content = sanitizeIngestedFileContent(rawContent)
-    if (sourceFileName && !isLogPath(relativePath) && !isListingPath(relativePath)) {
+    if (sourceFileName && !isLogPath(relativePath) && !isWikiListingPath(relativePath)) {
       content = canonicalizeSourcesField(content, sourceFileName)
     }
 
@@ -1929,7 +1921,7 @@ async function writeFileBlocks(
           previousContent: existing,
         })
       } else if (
-        isListingPath(relativePath)
+        isWikiListingPath(relativePath)
       ) {
         // Nested listing pages keep the legacy wholesale-write behavior.
         // Root index/overview were skipped above because normal ingest no

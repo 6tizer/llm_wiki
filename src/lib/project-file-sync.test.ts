@@ -125,6 +125,7 @@ vi.mock("@/lib/embedding", () => ({
 
 vi.mock("@/lib/wiki-page-delete", () => ({
   cascadeDeleteWikiPagesWithRefs: mocks.cascadeDeleteWikiPagesWithRefs,
+  cascadeDeleteWikiPagesWithRefsUnlocked: mocks.cascadeDeleteWikiPagesWithRefs,
 }))
 
 describe("project file sync", () => {

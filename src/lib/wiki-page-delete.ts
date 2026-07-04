@@ -17,18 +17,19 @@
  * media ownership and related-frontmatter cleanup where those files
  * are keyed by page slug.
  *
- * Errors are propagated, NOT swallowed — callers wrap in try/catch
- * to apply their own fault-tolerance policy (e.g. continue with the
- * next file in a batch, or surface to the user via toast).
+ * Disk delete errors are propagated. Post-delete cleanup is
+ * best-effort: once the page is gone from disk, stale embeddings or
+ * media directories are leaks, not blockers for reference cleanup.
  */
 import { deleteFile, listDirectory, readFile, writeFile } from "@/commands/fs"
-import { getFileStem, normalizePath } from "@/lib/path-utils"
+import { getFileStem, getRelativePath, normalizePath } from "@/lib/path-utils"
 import { removePageEmbedding } from "@/lib/embedding"
 import { wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
 import {
   buildDeletedKeys,
   cleanIndexListing,
   extractFrontmatterTitle,
+  isWikiListingPath,
   normalizeWikiRefKey,
   stripDeletedWikilinks,
   type DeletedPageInfo,
@@ -38,6 +39,7 @@ import {
   writeFrontmatterArray,
 } from "@/lib/sources-merge"
 import type { FileNode } from "@/types/wiki"
+import { withProjectLock } from "@/lib/project-mutex"
 
 /**
  * Detect whether a wiki page lives under `wiki/sources/`. We treat
@@ -77,7 +79,11 @@ export async function cascadeDeleteWikiPage(
   await deleteFile(pagePath)
   const slug = getFileStem(pagePath)
   if (slug.length > 0) {
-    await removePageEmbedding(projectPath, wikiPathToVectorPageId(projectPath, pagePath))
+    try {
+      await removePageEmbedding(projectPath, wikiPathToVectorPageId(projectPath, pagePath))
+    } catch (err) {
+      console.warn(`[wiki-delete] failed to remove embedding for ${pagePath}:`, err)
+    }
   }
 
   // Media cascade: source-summary deletion → drop the source's
@@ -166,6 +172,18 @@ export async function cascadeDeleteWikiPagesWithRefs(
   projectPath: string,
   pagePaths: readonly string[],
 ): Promise<CascadeDeleteResult> {
+  return withProjectLock(normalizePath(projectPath), () =>
+    cascadeDeleteWikiPagesWithRefsUnlocked(projectPath, pagePaths),
+  )
+}
+
+/**
+ * Lock-free implementation for callers that already hold the project mutex.
+ */
+export async function cascadeDeleteWikiPagesWithRefsUnlocked(
+  projectPath: string,
+  pagePaths: readonly string[],
+): Promise<CascadeDeleteResult> {
   const pp = normalizePath(projectPath)
   const result: CascadeDeleteResult = {
     deletedPaths: [],
@@ -174,7 +192,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
 
   // 1. Read each target's title so the cleanup keyset includes both
   //    slug-form and title-form. Capture before delete.
-  const infos: DeletedPageInfo[] = []
+  const infosByPath = new Map<string, DeletedPageInfo>()
   for (const pagePath of pagePaths) {
     let title = ""
     try {
@@ -185,7 +203,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
       // slug-form key alone will still work.
     }
     const slug = getFileStem(pagePath)
-    if (slug.length > 0) infos.push({ slug, title })
+    if (slug.length > 0) infosByPath.set(pagePath, { slug, title })
   }
 
   // 2. Delete the target files themselves.
@@ -198,13 +216,16 @@ export async function cascadeDeleteWikiPagesWithRefs(
     }
   }
 
+  const infos = result.deletedPaths.flatMap((path) => {
+    const info = infosByPath.get(path)
+    return info ? [info] : []
+  })
   if (infos.length === 0) return result
 
   // 3. Sweep surviving wiki/*.md.
   const deletedKeys = buildDeletedKeys(infos)
   const wikiTree = await listDirectory(`${pp}/wiki`)
   const allMd = flattenMd(wikiTree)
-  const indexAbs = `${pp}/wiki/index.md`
 
   for (const file of allMd) {
     if (result.deletedPaths.includes(file.path)) continue // already gone
@@ -216,7 +237,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
     }
 
     let updated = content
-    if (file.path === indexAbs || file.name === "index.md") {
+    if (isWikiListingPath(getRelativePath(file.path, pp))) {
       updated = cleanIndexListing(updated, deletedKeys)
     }
     updated = stripDeletedWikilinks(updated, deletedKeys)
