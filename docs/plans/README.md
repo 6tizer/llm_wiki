@@ -67,12 +67,12 @@
 | [SPEC-6/pr5-index-overview-plan.md](./SPEC-6/pr5-index-overview-plan.md) | SPEC-6 PR5 执行计划：index_export/overview 手动重建 job 化——自产自销 marker 闭环共享 helper、index 扫描+格式化纯函数、overview LLM 单页生成、独立 settings section。 | merged |
 | [SPEC-6/pr6-derived-status-ui-plan.md](./SPEC-6/pr6-derived-status-ui-plan.md) | SPEC-6 PR6 执行计划（收口 PR）：per-layer 派生状态 UI（5 态 + stale 展示变体，graph/search 隐藏）、`usePolling` 抽取修 timer 重置 bug、`manual-rebuild-marker.ts` 共享去重 helper（三处调用点零复制）、embedding/taxonomy 手动 rebuild 按钮、搜索 fallback 提示条、端到端 fixture。 | merged（#288） |
 | [SPEC-6/closeout-hotfix-plan.md](./SPEC-6/closeout-hotfix-plan.md) | SPEC-6 收口后（PR6 合并后）多代理深度 review 的 P0/P1 分流修复：per-path marker 状态归约、搜索 fallback banner 拆分、cancel 孤儿 marker 释放、dedup-queue 忙退避补齐、runtime-disabled 默认态 UI。 | active / in review |
-| [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | in progress（PR1/PR2 merged #277/#291；PR3-PR7 范围经 2026-07-05 走查修订） |
+| [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | in progress（PR1/PR2 merged #277/#291；PR3-PR7 范围经 2026-07-04 走查修订） |
 | [SPEC-7/pr2-rewind-plan.md](./SPEC-7/pr2-rewind-plan.md) | SPEC-7 PR2 执行计划（design r3）：resume-only-for-rewind 桥、JSONL 锚点验证、wiki 写工具 fail-closed 门禁、延迟 fork 复用。 | merged（#291） |
 | [SPEC-7/pr2-rewind-investigation.md](./SPEC-7/pr2-rewind-investigation.md) | SPEC-7 PR2 前置调查 + E1/E2 实证（E1 跨进程 checkpoint PASS；E2 wiki 工具假成功 FAIL）。 | merged（#291） |
 | [SPEC-7/pr2-adversarial-matrix.md](./SPEC-7/pr2-adversarial-matrix.md) | SPEC-7 PR2 对抗矩阵（19 场景 + 裁定记录）。 | merged（#291） |
 | [spec-12-ui-ia-consolidation.md](./spec-12-ui-ia-consolidation.md) | UI 信息架构收敛：Work Runtime 生产转正、设置三组重组、模型配置合并页 + legacy 退役、Wiki 健康中心、主导航 8→5。 | planned / ready for PR split |
-| [SPEC-12/ui-audit-2026-07.md](./SPEC-12/ui-audit-2026-07.md) | 2026-07-05 生产 app 全页 UI 走查证据：三病根、问题清单 A/B/C、Notion AI 对照 N1-N8、用户裁定 D1-D5。SPEC-12 与 SPEC-7 修订的共同依据。 | evidence |
+| [SPEC-12/ui-audit-2026-07.md](./SPEC-12/ui-audit-2026-07.md) | 2026-07-04 生产 app 全页 UI 走查证据：三病根、问题清单 A/B/C、Notion AI 对照 N1-N8、用户裁定 D1-D5。SPEC-12 与 SPEC-7 修订的共同依据。 | evidence |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | in progress（PR10 先行） |
 | [SPEC-8/pr10-runtime-db-mod-split-plan.md](./SPEC-8/pr10-runtime-db-mod-split-plan.md) | SPEC-8 PR10 执行计划：runtime_db.rs 保行为拆分为 runtime_db/ 15 模块（行号测绘、可见性纪律、characterization 验证）。 | merged |
 | [spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md) | Swift/SwiftUI native shell 回填锚点；等 core boundary 稳定后进入。 | deferred / gated |
@@ -121,7 +121,7 @@
 | SPEC-5 | completed by #236/#238/#240/#242/#244/#246 | #236/#238/#240/#242/#244/#246 |
 | SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
 | SPEC-6 | completed（closeout hotfix merged #290） | #280/#283/#284/#285/#288/#290 |
-| SPEC-7 | PR1/PR2 completed（#277/#291）；PR3-PR7 范围经 2026-07-05 UI 走查修订 | in progress |
+| SPEC-7 | PR1/PR2 completed（#277/#291）；PR3-PR7 范围经 2026-07-04 UI 走查修订 | in progress |
 | SPEC-8 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
 | SPEC-9 | deferred / gated | deferred |
 | SPEC-10 | completed via #250/#252/#254/#261/#265/#266/#271 | #250/#252/#254/#261/#265/#266/#271 |
@@ -130,7 +130,7 @@
 
 2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
-当前优先级（2026-07-05 更新，轨间并行布局）：
+当前优先级（2026-07-04 更新，轨间并行布局）：
 
 0. **双轨并行主线**：pipeline 轨跑 SPEC-12（PR1 runtime 转正最先——它是 SPEC-12 PR3 与 SPEC-7 PR4/PR6 的共同前置；PR2 设置分组前置于 SPEC-7 PR6）；agent 轨跑 SPEC-7 PR3（会话状态隔离 + 错误产品化，无前置依赖，即刻可开）→ PR4/PR5/PR6 按修订后范围推进。文件边界：chat-store/chat 组件归 agent 轨，设置组件归 pipeline 轨。maint 轨填缝（#292 PR2b、#286/#287/#289、SPEC-8 剩余）。走查依据与裁定见 `SPEC-12/ui-audit-2026-07.md`。
 

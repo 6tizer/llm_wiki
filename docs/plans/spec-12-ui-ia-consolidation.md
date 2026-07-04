@@ -1,6 +1,6 @@
 # SPEC-12: UI 信息架构收敛（设置重组 · Wiki 健康中心 · Runtime 转正）
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 依据：2026-07-05 生产 app 全页 UI 走查（`SPEC-12/ui-audit-2026-07.md`）+ 用户裁定 D1-D5 | 依赖：SPEC-4/4-FIX（profile 体系）、SPEC-5-FIX/6（runtime 与派生层）、与 SPEC-7 PR3-PR6 交错（见「与 SPEC-7 的接口」）
+> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 依据：2026-07-04 生产 app 全页 UI 走查（`SPEC-12/ui-audit-2026-07.md`）+ 用户裁定 D1-D5 | 依赖：SPEC-4/4-FIX（profile 体系）、SPEC-5-FIX/6（runtime 与派生层）、与 SPEC-7 PR3-PR6 交错（见「与 SPEC-7 的接口」）
 
 ## 背景与三个病根
 
@@ -47,7 +47,7 @@
 | chat-store/chat 组件归 SPEC-7 轨独占；设置组件归 SPEC-12 轨独占 | 避免跨轨文件冲突 |
 | **权限默认值归属裁定**：SPEC-7 PR6 交付契约/事件 + 会话级权限 UI + footer；**设置页 UI 由本 SPEC PR3 承接** | 与文件边界一致，消除双认领 |
 
-对话侧的修订（四档路由删除 D4、提取双入口 D1、composer「自动 ▾ + ＋ + 来源」范式、空态建议卡、错误产品化）已作为 2026-07-05 修订节写入 `spec-7-unified-agentic-chat.md`，不在本 SPEC 范围。
+对话侧的修订（四档路由删除 D4、提取双入口 D1、composer「自动 ▾ + ＋ + 来源」范式、空态建议卡、错误产品化）已作为 2026-07-04 修订节写入 `spec-7-unified-agentic-chat.md`，不在本 SPEC 范围。
 
 ## 验证策略
 

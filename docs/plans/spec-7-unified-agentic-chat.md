@@ -2,7 +2,7 @@
 
 > 类型：阶段 SPEC | 状态：PR1/PR2 completed（#277/#291），PR3-PR7 ready | 覆盖：#190、#60、#66、#67、#68、#84、#86 | 依赖：SPEC-1 shell/core boundary、SPEC-2 job creation API、SPEC-4 Agent-run Profile preflight、**SPEC-10（权限绕过/密钥泄露修复）**、**SPEC-12（精确前置关系：SPEC-12 PR1 前置于本 SPEC PR4/PR6；SPEC-12 PR2 仅前置于 PR6）**
 
-## 2026-07-05 UI 走查修订（必读，约束 PR3-PR6 范围）
+## 2026-07-04 UI 走查修订（必读，约束 PR3-PR6 范围）
 
 依据：`SPEC-12/ui-audit-2026-07.md`（生产 app 全页走查 + Notion AI 实机对照 + 用户裁定 D1-D5）。
 
@@ -17,7 +17,7 @@
 
 ## 2026-07 Review 补充（历史记录——PR1/PR2 相关项已随 #277/#291 完成）
 
-> 2026-07-05 注：本节写于 PR1/PR2 实施前。SDK 落差项已由 PR1（#277，升级至 0.3.201）解决；rewind 相关项已由 PR2（#291）解决——官方无 typed rewind 状态，最终采用 resume-only-for-rewind + JSONL 锚点验证 + wiki 工具 fail-closed 门禁（实证与设计见 `SPEC-7/pr2-rewind-investigation.md`、`SPEC-7/pr2-rewind-plan.md`）。**PR3/PR6 两条仍有效。**
+> 2026-07-04 注：本节写于 PR1/PR2 实施前。SDK 落差项已由 PR1（#277，升级至 0.3.201）解决；rewind 相关项已由 PR2（#291）解决——官方无 typed rewind 状态，最终采用 resume-only-for-rewind + JSONL 锚点验证 + wiki 工具 fail-closed 门禁（实证与设计见 `SPEC-7/pr2-rewind-investigation.md`、`SPEC-7/pr2-rewind-plan.md`）。**PR3/PR6 两条仍有效。**
 
 深度 review（见 `spec-5-8-post-review-findings.md`）对本 SPEC 的三处 PR 有实质影响：
 
