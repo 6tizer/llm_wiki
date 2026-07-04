@@ -63,7 +63,8 @@
 | [SPEC-6/pr1-marker-consumption-infrastructure-plan.md](./SPEC-6/pr1-marker-consumption-infrastructure-plan.md) | SPEC-6 PR1 执行计划：marker 状态流转/claim 折叠/游标/毒 marker 收敛（含 P0 修订与 PR2+ 消费者契约）。 | merged |
 | [SPEC-6/pr1-adversarial-matrix.md](./SPEC-6/pr1-adversarial-matrix.md) | SPEC-6 PR1 并发场景矩阵（design-first gate 凭据），Reviewer 逐格验证记录的依据。 | evidence |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
-| [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | planned |
+| [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | in progress（PR10 先行） |
+| [SPEC-8/pr10-runtime-db-mod-split-plan.md](./SPEC-8/pr10-runtime-db-mod-split-plan.md) | SPEC-8 PR10 执行计划：runtime_db.rs 保行为拆分为 runtime_db/ 15 模块（行号测绘、可见性纪律、characterization 验证）。 | merged |
 | [spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md) | Swift/SwiftUI native shell 回填锚点；等 core boundary 稳定后进入。 | deferred / gated |
 | [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 复核入口；不再承载完成证据，只用于后续 PR 开工前重新核对 upstream 并分流。 | active / recheck gate |
 | [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Claude Agent SDK alignment 背景资料；实际执行归入 SPEC-7 PR1。 | planned via SPEC-7 |
