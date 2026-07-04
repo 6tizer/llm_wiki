@@ -447,6 +447,7 @@
       "knowledgeAgents": "Knowledge Agents",
       "taxonomy": "Tag Taxonomy",
       "synthesis": "Synthesis",
+      "indexOverview": "Index / Overview",
       "general": "General",
       "output": "Output",
       "interface": "Interface",
@@ -910,6 +911,21 @@
           "not_enough_tagged_pages": "Not enough pages have this many tags.",
           "no_cluster_meets_minimum": "No cluster meets the minimum page count."
         }
+      },
+      "indexOverview": {
+        "title": "Index / Overview",
+        "description": "Manually rebuild the wiki's root index and overview pages.",
+        "noProject": "Open a project first to rebuild the index or overview.",
+        "rebuild": "Rebuild",
+        "indexTitle": "Wiki Index",
+        "indexDescription": "Scans wiki/ and rewrites wiki/index.md, grouped by page type. Deterministic, no LLM call.",
+        "indexFailed": "Index rebuild failed. Please try again.",
+        "indexRebuilt": "Rebuilt wiki/index.md ({{count}} pages)",
+        "overviewTitle": "Project Overview",
+        "overviewDescription": "Calls the configured LLM to regenerate wiki/overview.md from the current page index.",
+        "noLlm": "Configure an LLM provider first to regenerate the overview.",
+        "overviewFailed": "Overview rebuild failed. Please try again.",
+        "overviewRebuilt": "Rebuilt {{path}}"
       },
       "output": {
         "title": "Output Preferences",
