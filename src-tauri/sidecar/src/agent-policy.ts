@@ -59,15 +59,24 @@ const WIKI_TOOL_NAMES = new Set<string>([
 
 const WRITE_TOOL_NAMES = new Set<string>(WRITE_WIKI_TOOLS);
 
+/**
+ * Returns the tool names safe to pass in the SDK's `allowedTools` option
+ * (bare, unconditional auto-approval, no `canUseTool` involvement).
+ *
+ * Write tools are always excluded, regardless of write-tool enablement:
+ * confirmed against the SDK 0.3.201 runtime (`sdk.mjs`, function that
+ * emits the `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` warning), a bare entry in
+ * `allowedTools` "auto-approve[s] the whole tool before the callback is
+ * consulted" — i.e. it would skip `canUseTool` entirely and make the
+ * "default" policy's write-tool approval prompt unreachable. Write-tool
+ * gating is handled exclusively by `resolveWikiToolDecision`, invoked from
+ * both `canUseTool` (core.ts) and the PreToolUse hook (agent-hooks.ts).
+ */
 export function getAllowedWikiTools(args: {
 	wikiToolsEnabled: boolean;
-	enableWriteTools: boolean;
 }): string[] {
 	if (!args.wikiToolsEnabled) return [];
-	return [
-		...READ_WIKI_TOOLS,
-		...(args.enableWriteTools ? WRITE_WIKI_TOOLS : []),
-	];
+	return [...READ_WIKI_TOOLS];
 }
 
 export function buildPermissionOptions(policy: AgentPermissionPolicy = "default") {

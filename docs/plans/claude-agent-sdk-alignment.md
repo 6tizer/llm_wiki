@@ -5,12 +5,12 @@
 
 ## 结论
 
-Phase 7 前需要一个前置 PR 对齐 Claude Agent SDK latest stable。当前事实截至 2026-06-25：
+Phase 7 前需要一个前置 PR 对齐 Claude Agent SDK latest stable。当前事实截至 2026-07-04（SPEC-7 PR1 落地时重新核验）：
 
-- sidecar declared package range：`^0.3.148`
-- locked version：`0.3.150`
-- npm `latest`：`0.3.190`
-- npm `next`：`0.3.190`
+- sidecar declared package range：`^0.3.201`
+- locked version：`0.3.201`
+- npm `latest`：`0.3.201`
+- npm `next`：`0.3.201`
 
 版本核验命令：
 

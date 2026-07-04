@@ -126,6 +126,48 @@ test("PreToolUse hook defers Wiki writes to the permission bridge under the defa
 	);
 });
 
+test("PreToolUse hook defers Wiki writes to the permission bridge under SDK-native ask-style policies", async () => {
+	// Only "bypassPermissions" makes the SDK skip canUseTool entirely; every
+	// other permissionMode (acceptEdits/plan/dontAsk/auto included) still
+	// runs both canUseTool and this hook, so the "ask" fallthrough here must
+	// hold for all of them too, not just "default".
+	for (const permissionPolicy of [
+		"acceptEdits",
+		"plan",
+		"dontAsk",
+		"auto",
+	] as const) {
+		const sent: AgentMessage[] = [];
+		const hooks = createLlmWikiHooks({
+			streamId: "stream-1",
+			enableWriteTools: true,
+			permissionPolicy,
+			changedPaths: new Set<string>(),
+			send: (msg) => sent.push(msg),
+		});
+
+		const result = await hooks.PreToolUse?.[0]?.hooks[0]?.(
+			{
+				hook_event_name: "PreToolUse",
+				tool_name: "mcp__llm_wiki__update_page",
+				tool_input: { path: "wiki/entities/example.md", contents: "hello" },
+				tool_use_id: "tool-1",
+			} as any,
+			"tool-1",
+			{ signal: new AbortController().signal },
+		);
+
+		assert.equal(
+			(result as any)?.hookSpecificOutput?.permissionDecision,
+			"ask",
+		);
+		assert.equal(
+			(result as any)?.hookSpecificOutput?.permissionDecisionReason,
+			undefined,
+		);
+	}
+});
+
 test("PreToolUse hook denies Wiki writes under the restricted policy even when writes are enabled", async () => {
 	const sent: AgentMessage[] = [];
 	const hooks = createLlmWikiHooks({
