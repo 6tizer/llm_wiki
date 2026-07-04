@@ -5,6 +5,10 @@ import { wikiRelativePathToVectorPageId } from "./wiki-page-identity"
 // Mock autoIngest so tests control success/failure timing.
 vi.mock("./ingest", () => ({
   autoIngest: vi.fn(),
+  recordWrittenPageFirstSnapshot: vi.fn((meta, record) => {
+    const existing = meta.get(record.path)
+    meta.set(record.path, existing ? { ...record, wasCreated: existing.wasCreated, previousContent: existing.previousContent } : record)
+  }),
 }))
 
 // Mock fs so we don't hit the real filesystem.
@@ -91,6 +95,7 @@ import {
   restoreQueue,
 } from "./ingest-queue"
 import { autoIngest } from "./ingest"
+import type { WrittenPageRecord } from "./ingest"
 import { readFile, writeFile } from "@/commands/fs"
 import { sweepResolvedReviews } from "./sweep-reviews"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -99,6 +104,15 @@ const mockAutoIngest = vi.mocked(autoIngest)
 const mockReadFile = vi.mocked(readFile)
 const mockWriteFile = vi.mocked(writeFile)
 const mockSweep = vi.mocked(sweepResolvedReviews)
+
+function recordCreatedPages(
+  onPageWritten: ((record: WrittenPageRecord) => void) | undefined,
+  paths: string[],
+): void {
+  for (const path of paths) {
+    onPageWritten?.({ path, wasCreated: true, previousContent: null })
+  }
+}
 
 /** Simulate the app having opened `TEST_ID` at `TEST_PATH` so the queue
  *  module's `currentProjectId` / `currentProjectPath` are set. Most
@@ -599,7 +613,13 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
     // AFTER pauseQueue completes to simulate the delayed return.
     let resolveAutoIngest: (files: string[]) => void = () => {}
     mockAutoIngest.mockImplementation(
-      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+      (_pp, _src, _llm, _signal, _folderContext, onPageWritten) =>
+        new Promise<string[]>((resolve) => {
+          resolveAutoIngest = (files) => {
+            recordCreatedPages(onPageWritten, files)
+            resolve(files)
+          }
+        }),
     )
 
     await enqueueIngest(TEST_ID, "long-running.md")
@@ -655,7 +675,13 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
 
     let resolveAutoIngest: (files: string[]) => void = () => {}
     mockAutoIngest.mockImplementation(
-      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+      (_pp, _src, _llm, _signal, _folderContext, onPageWritten) =>
+        new Promise<string[]>((resolve) => {
+          resolveAutoIngest = (files) => {
+            recordCreatedPages(onPageWritten, files)
+            resolve(files)
+          }
+        }),
     )
 
     const taskId = await enqueueIngest(TEST_ID, "aborted-mid.md")
@@ -704,7 +730,13 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
 
     let resolveAutoIngest: (files: string[]) => void = () => {}
     mockAutoIngest.mockImplementation(
-      () => new Promise<string[]>((resolve) => { resolveAutoIngest = resolve }),
+      (_pp, _src, _llm, _signal, _folderContext, onPageWritten) =>
+        new Promise<string[]>((resolve) => {
+          resolveAutoIngest = (files) => {
+            recordCreatedPages(onPageWritten, files)
+            resolve(files)
+          }
+        }),
     )
 
     const taskId = await enqueueIngest(TEST_ID, "switch-during.md")
@@ -746,7 +778,13 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
 
     let resolveA: (files: string[]) => void = () => {}
     mockAutoIngest.mockImplementationOnce(
-      () => new Promise<string[]>((resolve) => { resolveA = resolve }),
+      (_pp, _src, _llm, _signal, _folderContext, onPageWritten) =>
+        new Promise<string[]>((resolve) => {
+          resolveA = (files) => {
+            recordCreatedPages(onPageWritten, files)
+            resolve(files)
+          }
+        }),
     )
     // Second call (for task B) succeeds immediately.
     mockAutoIngest.mockResolvedValueOnce(["wiki/sources/b-done.md"])
@@ -795,13 +833,24 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
 
     // A: controllable promise that captures the abort signal.
     mockAutoIngest.mockImplementationOnce(
-      () => new Promise<string[]>((resolve) => { resolveA = resolve }),
+      (_pp, _src, _llm, _signal, _folderContext, onPageWritten) =>
+        new Promise<string[]>((resolve) => {
+          resolveA = (files) => {
+            recordCreatedPages(onPageWritten, files)
+            resolve(files)
+          }
+        }),
     )
     // B: controllable promise that captures the abort signal.
     mockAutoIngest.mockImplementationOnce(
-      (_pp: string, _src: string, _llm: unknown, signal?: AbortSignal) => {
+      (_pp, _src, _llm, signal, _folderContext, onPageWritten) => {
         bSignal = signal
-        return new Promise<string[]>((resolve) => { resolveB = resolve })
+        return new Promise<string[]>((resolve) => {
+          resolveB = (files) => {
+            recordCreatedPages(onPageWritten, files)
+            resolve(files)
+          }
+        })
       },
     )
 
@@ -855,7 +904,10 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     await cleanupWrittenFiles("/proj", [
       "wiki/concepts/rope.md",
       "wiki/entities/transformer.md",
-    ])
+    ], new Map([
+      ["wiki/concepts/rope.md", { path: "wiki/concepts/rope.md", wasCreated: true, previousContent: null }],
+      ["wiki/entities/transformer.md", { path: "wiki/entities/transformer.md", wasCreated: true, previousContent: null }],
+    ]))
 
     // File deletes use joined absolute paths.
     expect(mockDeleteFile).toHaveBeenCalledTimes(2)
@@ -882,7 +934,13 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     mockDeleteFile.mockReset()
     mockDeleteFile.mockResolvedValue(undefined)
 
-    await cleanupWrittenFiles("/proj", ["/abs/elsewhere/wiki/concepts/foo.md"])
+    await cleanupWrittenFiles("/proj", ["/abs/elsewhere/wiki/concepts/foo.md"], new Map([
+      ["/abs/elsewhere/wiki/concepts/foo.md", {
+        path: "/abs/elsewhere/wiki/concepts/foo.md",
+        wasCreated: true,
+        previousContent: null,
+      }],
+    ]))
 
     expect(mockDeleteFile).toHaveBeenCalledWith("/abs/elsewhere/wiki/concepts/foo.md")
     expect(removePageEmbeddingMock).not.toHaveBeenCalled()
@@ -900,7 +958,10 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     await cleanupWrittenFiles("/proj", [
       "wiki/concepts/missing.md",
       "wiki/concepts/present.md",
-    ])
+    ], new Map([
+      ["wiki/concepts/missing.md", { path: "wiki/concepts/missing.md", wasCreated: true, previousContent: null }],
+      ["wiki/concepts/present.md", { path: "wiki/concepts/present.md", wasCreated: true, previousContent: null }],
+    ]))
 
     // Both deleteFile attempts happened — the helper kept going.
     expect(mockDeleteFile).toHaveBeenCalledTimes(2)
@@ -927,7 +988,10 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     await cleanupWrittenFiles("/proj", [
       "wiki/concepts/a.md",
       "wiki/concepts/b.md",
-    ])
+    ], new Map([
+      ["wiki/concepts/a.md", { path: "wiki/concepts/a.md", wasCreated: true, previousContent: null }],
+      ["wiki/concepts/b.md", { path: "wiki/concepts/b.md", wasCreated: true, previousContent: null }],
+    ]))
 
     // Both file deletes still happened.
     expect(mockDeleteFile).toHaveBeenCalledTimes(2)
@@ -944,7 +1008,9 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     // A path that's been rewritten with backslashes (Windows ingest
     // pipeline output before normalize). The cascade must still
     // derive the same path-aware vector id.
-    await cleanupWrittenFiles("C:/proj", ["wiki\\concepts\\rope.md"])
+    await cleanupWrittenFiles("C:/proj", ["wiki\\concepts\\rope.md"], new Map([
+      ["wiki\\concepts\\rope.md", { path: "wiki\\concepts\\rope.md", wasCreated: true, previousContent: null }],
+    ]))
 
     expect(removePageEmbeddingMock).toHaveBeenCalledWith(
       "C:/proj",

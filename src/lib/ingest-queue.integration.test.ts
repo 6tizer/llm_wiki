@@ -15,6 +15,10 @@ vi.mock("@/commands/fs", () => realFs)
 // where we can inspect the persisted file before success removes them.
 vi.mock("./ingest", () => ({
   autoIngest: vi.fn(),
+  recordWrittenPageFirstSnapshot: vi.fn((meta, record) => {
+    const existing = meta.get(record.path)
+    meta.set(record.path, existing ? { ...record, wasCreated: existing.wasCreated, previousContent: existing.previousContent } : record)
+  }),
 }))
 
 // Sweep is tested separately; stub so drains don't explode

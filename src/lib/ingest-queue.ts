@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "@/commands/fs"
-import { autoIngest } from "./ingest"
+import { autoIngest, recordWrittenPageFirstSnapshot, type WrittenPageRecord } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
@@ -36,6 +36,10 @@ let currentProjectId = ""
 let currentProjectPath = ""
 let currentAbortController: AbortController | null = null
 let lastWrittenFiles: string[] = []  // track files written by current ingest for cleanup
+/** Per-page write metadata for the current run, parallel to
+ *  `lastWrittenFiles`. Lets cleanup restore a merged page's pre-ingest
+ *  content instead of deleting it outright when this task is cancelled. */
+let lastWrittenFileMeta = new Map<string, WrittenPageRecord>()
 let completedSinceIdle = 0
 // Track whether any task has been processed since the last drain.
 // Prevents the sweep from running on every idle/no-op call.
@@ -58,6 +62,16 @@ let currentRunToken = 0
 
 function resetQueueAccounting(): void {
   completedSinceIdle = 0
+}
+
+/** Reset the module-level "most recent run" write tracking. Always
+ *  reset together — `lastWrittenFileMeta` without `lastWrittenFiles`
+ *  (or vice versa) would let a stale meta entry apply to an unrelated
+ *  file list, or an empty meta silently downgrade a merge-restore into
+ *  a delete. */
+function resetLastWritten(): void {
+  lastWrittenFiles = []
+  lastWrittenFileMeta = new Map()
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────
@@ -200,17 +214,68 @@ function upsertQueuedIngestTask(
 export async function cleanupWrittenFiles(
   projectPath: string,
   filePaths: string[],
+  meta?: ReadonlyMap<string, WrittenPageRecord>,
 ): Promise<void> {
   const { cascadeDeleteWikiPage } = await import("@/lib/wiki-page-delete")
+  const failedToUndo: string[] = []
   for (const filePath of filePaths) {
     const fullPath = isAbsolutePath(filePath)
       ? normalizePath(filePath)
       : `${projectPath}/${filePath}`
     try {
-      await cascadeDeleteWikiPage(projectPath, fullPath)
-    } catch {
+      const record = meta?.get(filePath)
+      if (!record) {
+        failedToUndo.push(filePath)
+        console.warn(
+          `[Ingest Queue] Skipping cleanup for "${filePath}" because write metadata is missing; preserving the current page to avoid deleting pre-existing user content.`,
+        )
+        continue
+      }
+      if (record && !record.wasCreated) {
+        // This ingest merged into a page that already existed — undo
+        // only its contribution by restoring the pre-merge content,
+        // rather than deleting a page other ingests also wrote to.
+        const restoredContent = record.previousContent ?? ""
+        await writeFile(fullPath, restoredContent)
+        await reembedRestoredWikiPage(projectPath, fullPath, restoredContent)
+      } else {
+        await cascadeDeleteWikiPage(projectPath, fullPath)
+      }
+    } catch (err) {
+      failedToUndo.push(filePath)
+      console.warn(
+        `[Ingest Queue] Failed to undo "${filePath}": ${err instanceof Error ? err.message : String(err)}`,
+      )
       // file may not exist / lancedb unavailable — non-critical
     }
+  }
+  if (failedToUndo.length > 0) {
+    console.warn(`[Ingest Queue] ${failedToUndo.length} written file(s) were left in place after cleanup failed.`)
+  }
+}
+
+async function reembedRestoredWikiPage(
+  projectPath: string,
+  path: string,
+  content: string,
+): Promise<void> {
+  const embCfg = useWikiStore.getState().embeddingConfig
+  if (!embCfg.enabled || !embCfg.model) return
+  try {
+    const { embedPage } = await import("@/lib/embedding")
+    const {
+      isRootStructuralWikiPagePath,
+      normalizeProjectWikiMarkdownPath,
+      wikiPathToVectorPageId,
+    } = await import("@/lib/wiki-page-identity")
+    const wikiPath = normalizeProjectWikiMarkdownPath(projectPath, path)
+    if (isRootStructuralWikiPagePath(projectPath, wikiPath)) return
+    const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
+    const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
+    const title = titleMatch ? titleMatch[1].trim() : titleFallback
+    await embedPage(projectPath, wikiPathToVectorPageId(projectPath, path), title, content, embCfg)
+  } catch {
+    // embedding refresh is best-effort during cancel cleanup
   }
 }
 
@@ -321,9 +386,9 @@ export async function cancelTask(taskId: string): Promise<void> {
 
     // Clean up any files written by the interrupted ingest
     if (lastWrittenFiles.length > 0) {
-      await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles)
+      await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles, lastWrittenFileMeta)
       console.log(`[Ingest Queue] Cleaned up ${lastWrittenFiles.length} files from cancelled task`)
-      lastWrittenFiles = []
+      resetLastWritten()
     }
 
     processing = false
@@ -365,8 +430,8 @@ export async function cancelAllTasks(): Promise<number> {
   currentRunToken++
 
   if (lastWrittenFiles.length > 0) {
-    await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles)
-    lastWrittenFiles = []
+    await cleanupWrittenFiles(currentProjectPath, lastWrittenFiles, lastWrittenFileMeta)
+    resetLastWritten()
   }
 
   const before = queue.length
@@ -418,7 +483,7 @@ export function clearQueueState(): void {
   currentProjectPath = ""
   currentAbortController = null
   sweepAbortController = null
-  lastWrittenFiles = []
+  resetLastWritten()
   processedSinceDrain = false
   resetQueueAccounting()
   currentRunToken = 0
@@ -454,7 +519,7 @@ export async function pauseQueue(): Promise<void> {
   // not undo the ones already made). The task is reverted to pending
   // below so it re-runs from scratch on the next restore.
   if (lastWrittenFiles.length > 0) {
-    await cleanupWrittenFiles(pausedProjectPath, lastWrittenFiles)
+    await cleanupWrittenFiles(pausedProjectPath, lastWrittenFiles, lastWrittenFileMeta)
   }
   if (sweepAbortController) {
     sweepAbortController.abort()
@@ -477,7 +542,7 @@ export async function pauseQueue(): Promise<void> {
   queue = []
   currentProjectId = ""
   currentProjectPath = ""
-  lastWrittenFiles = []
+  resetLastWritten()
   processedSinceDrain = false
   resetQueueAccounting()
 }
@@ -500,7 +565,7 @@ export async function restoreQueue(
   queue = []
   processing = false
   currentAbortController = null
-  lastWrittenFiles = []
+  resetLastWritten()
   resetQueueAccounting()
   currentProjectId = projectId
   currentProjectPath = pp
@@ -633,10 +698,29 @@ async function processNext(projectId: string): Promise<void> {
   // `undefined` (falsy) and the partial result would slip into the
   // success branch. The captured reference survives the null-out.
   const runSignal = currentAbortController.signal
-  lastWrittenFiles = []
+  // Run-local write-metadata map — deliberately NOT the module-level
+  // `lastWrittenFileMeta`. cancelTask / cancelAllTasks / pauseQueue read
+  // that module map at arbitrary times relative to this run's lifecycle,
+  // and a cancelled run's `autoIngest` promise can resolve LATE (after a
+  // second processNext for a different task has already started and
+  // reset/repopulated the shared map). If this run's `onPageWritten`
+  // callback wrote into that same shared map, the orphaned run's
+  // abort-guard cleanup below would restore/delete pages using the OTHER
+  // run's records — a cross-run data leak. Routing writes through a
+  // closure-captured local makes this run's own cleanup race-free no
+  // matter what any other run does to module state.
+  const runMeta = new Map<string, WrittenPageRecord>()
+  resetLastWritten()
 
   try {
-    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, runSignal, next.folderContext)
+    const writtenFiles = await autoIngest(
+      pp,
+      fullSourcePath,
+      llmConfig,
+      runSignal,
+      next.folderContext,
+      (record) => recordWrittenPageFirstSnapshot(runMeta, record),
+    )
 
     // Abort guard (FIRST, before the stale-context bail): if the run
     // signal aborted mid-write but the promise still resolved late
@@ -645,13 +729,31 @@ async function processNext(projectId: string): Promise<void> {
     // because the partial pages were written to THIS run's project
     // path (`pp`) — pauseQueue's lastWrittenFiles cleanup won't see
     // them (lastWrittenFiles is only set AFTER this point at line
-    // below). Clean up against the captured `pp`, then bail/throw
-    // without touching the active queue.
+    // below). Clean up against the captured `pp` and this run's own
+    // `runMeta`, then bail/throw without touching the active queue.
+    //
+    // In the common case `writtenFiles` is already empty here:
+    // `autoIngestImpl` self-undoes its own writes (still holding the
+    // per-project lock) before returning when its signal is aborted,
+    // and empties its `writtenPaths` in the same step — see the
+    // TOCTOU note at that call site for why a redundant second
+    // restore/delete pass here isn't just wasted work but reopens a
+    // transient-empty-read window. This `writtenFiles.length > 0`
+    // branch below is therefore the fallback for `autoIngest` callers
+    // whose signal aborts only after this function has returned.
     if (runSignal.aborted) {
       if (writtenFiles.length > 0) {
-        await cleanupWrittenFiles(pp, writtenFiles)
+        await cleanupWrittenFiles(pp, writtenFiles, runMeta)
       }
-      lastWrittenFiles = []
+      // Only reset the module-level tracking if this run is still the
+      // current one. An orphaned run's delayed resolve (this branch, if
+      // a newer run already started while this one was in flight) must
+      // not clobber that newer run's in-flight `lastWrittenFiles` /
+      // `lastWrittenFileMeta` — same run-token hazard the other guards
+      // in this function protect against.
+      if (runToken === currentRunToken) {
+        resetLastWritten()
+      }
       // If the project switched, bail silently (pauseQueue already
       // persisted the correct state); otherwise throw so the catch
       // branch keeps the task for retry.
@@ -671,6 +773,7 @@ async function processNext(projectId: string): Promise<void> {
       return
     }
     lastWrittenFiles = writtenFiles
+    lastWrittenFileMeta = runMeta
 
     // Safety net: autoIngest resolving with zero files means nothing
     // was really ingested (e.g. abort during webview refresh where the
@@ -682,7 +785,7 @@ async function processNext(projectId: string): Promise<void> {
 
     // Success: remove from queue
     currentAbortController = null
-    lastWrittenFiles = []
+    resetLastWritten()
     queue = queue.filter((t) => t.id !== next.id)
     completedSinceIdle++
     processedSinceDrain = true
