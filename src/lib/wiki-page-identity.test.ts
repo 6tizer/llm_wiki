@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  extractPageTitle,
   isRootStructuralWikiPagePath,
   normalizeProjectWikiMarkdownPath,
   normalizeWikiMarkdownPath,
@@ -60,5 +61,23 @@ describe("wiki page identity helpers", () => {
 
   it("keeps legacy stem identity path-only", () => {
     expect(wikiPathToLegacyStemId("/tmp/wiki/proj/wiki/something/wiki/foo.bar.md")).toBe("foo.bar")
+  })
+
+  describe("extractPageTitle", () => {
+    it("extracts a quoted title from frontmatter", () => {
+      expect(extractPageTitle('---\ntitle: "RoPE"\ncreated: 2026-01-01\n---\n\nbody', "fallback")).toBe("RoPE")
+    })
+
+    it("extracts an unquoted title from frontmatter", () => {
+      expect(extractPageTitle("---\ntitle: RoPE\n---\n\nbody", "fallback")).toBe("RoPE")
+    })
+
+    it("falls back when there is no frontmatter title", () => {
+      expect(extractPageTitle("# Just a heading\n\nbody", "fallback")).toBe("fallback")
+    })
+
+    it("falls back on empty content", () => {
+      expect(extractPageTitle("", "fallback")).toBe("fallback")
+    })
   })
 })

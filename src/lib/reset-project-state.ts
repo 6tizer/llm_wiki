@@ -79,13 +79,14 @@ export async function resetProjectState(): Promise<void> {
 
   // Module-level caches — load in parallel and clear each, surfacing any
   // failure instead of swallowing it.
-  const [queueMod, dedupQueueMod, graphMod, fileSyncMod, scheduledImportMod, agentLintQueueMod] = await Promise.allSettled([
+  const [queueMod, dedupQueueMod, graphMod, fileSyncMod, scheduledImportMod, agentLintQueueMod, embeddingConsumerMod] = await Promise.allSettled([
     import("@/lib/ingest-queue"),
     import("@/lib/dedup-queue"),
     import("@/lib/graph-relevance"),
     import("@/lib/project-file-sync"),
     import("@/lib/scheduled-import"),
     import("@/lib/agent/agent-lint-queue"),
+    import("@/lib/derived-rebuild/embedding-consumer"),
   ])
 
   if (scheduledImportMod.status === "fulfilled") {
@@ -96,6 +97,21 @@ export async function resetProjectState(): Promise<void> {
     }
   } else {
     console.warn("[Reset Project State] Failed to load scheduled-import:", scheduledImportMod.reason)
+  }
+
+  // SPEC-6 PR2: stop the embedding-consumer derived-rebuild job poller
+  // BEFORE the new project's own start call (App.tsx) can run — same
+  // start/stop + generation-counter lifecycle contract as scheduled import
+  // (SPEC-11 PR8b/S8 teaches this must be in the centralized cleanup list,
+  // not left to whichever caller remembers).
+  if (embeddingConsumerMod.status === "fulfilled") {
+    try {
+      embeddingConsumerMod.value.stopEmbeddingConsumer()
+    } catch (err) {
+      console.warn("[Reset Project State] stopEmbeddingConsumer failed:", err)
+    }
+  } else {
+    console.warn("[Reset Project State] Failed to load embedding-consumer:", embeddingConsumerMod.reason)
   }
 
   if (queueMod.status === "fulfilled") {

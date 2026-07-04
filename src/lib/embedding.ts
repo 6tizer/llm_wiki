@@ -462,11 +462,25 @@ function enrichChunkForEmbedding(
 // ── Public API: embedPage / embedAllPages / searchByEmbedding ────────────
 
 /**
+ * Outcome of an `embedPage` call: how many chunks were successfully
+ * embedded and upserted vs. how many failed. Callers that run embedding as
+ * a `derived-rebuild` job (SPEC-6 PR2 decision 4) use `failed > 0` to
+ * decide the job must be retried (`runtimeJobFail`) instead of completed —
+ * a page indexed with missing chunks is a silent search-quality regression,
+ * not a success.
+ */
+export interface EmbedPageResult {
+  indexed: number
+  failed: number
+}
+
+/**
  * Embed a wiki page: chunk → per-chunk embed → replace the page's
  * vectors in LanceDB in one batch. Every transient failure leaves the
  * existing v2 rows intact (empty upsert is a no-op Rust-side).
  *
- * Called by ingest.ts after writing a page to disk.
+ * Called by the `embedding-consumer` derived-rebuild job consumer after a
+ * page is written to disk (SPEC-6 PR2 — ingest.ts no longer embeds inline).
  */
 export async function embedPage(
   projectPath: string,
@@ -474,15 +488,15 @@ export async function embedPage(
   title: string,
   content: string,
   cfg: EmbeddingConfig,
-): Promise<void> {
-  if (!cfg.enabled || !cfg.model) return
+): Promise<EmbedPageResult> {
+  if (!cfg.enabled || !cfg.model) return { indexed: 0, failed: 0 }
 
   const t0 = performance.now()
   const chunks = chunkMarkdown(content, {
     targetChars: cfg.maxChunkChars ?? 1000,
     overlapChars: cfg.overlapChunkChars ?? 200,
   })
-  if (chunks.length === 0) return
+  if (chunks.length === 0) return { indexed: 0, failed: 0 }
 
   const rows: ChunkUpsertInput[] = []
   let failedChunks = 0
@@ -505,7 +519,7 @@ export async function embedPage(
     console.log(
       `[Embedding] Indexed nothing for "${pageId}" — all ${chunks.length} chunks failed. See getLastEmbeddingError().`,
     )
-    return
+    return { indexed: 0, failed: failedChunks }
   }
 
   await vectorUpsertChunks(projectPath, pageId, rows)
@@ -513,6 +527,7 @@ export async function embedPage(
   console.log(
     `[Embedding] Indexed "${pageId}": ${rows.length}/${chunks.length} chunks (${failedChunks} skipped) in ${elapsed}ms`,
   )
+  return { indexed: rows.length, failed: failedChunks }
 }
 
 /**

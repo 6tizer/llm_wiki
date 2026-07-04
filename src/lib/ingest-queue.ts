@@ -254,6 +254,15 @@ export async function cleanupWrittenFiles(
   }
 }
 
+/**
+ * SPEC-6 PR2 gate review (internal audit P2): this used to call `embedPage`
+ * directly and independently of ingest.ts's own (same-named, separately
+ * maintained — see the comment on `undoWrittenPage` in ingest.ts for why
+ * two copies exist) restore path. Migrated to the same
+ * recordEmbeddingStaleMarker + runtime-disabled legacy-embed-fallback
+ * shape ingest.ts uses, so both restore paths converge through the same
+ * marker system instead of one silently staying on the pre-PR2 behavior.
+ */
 async function reembedRestoredWikiPage(
   projectPath: string,
   path: string,
@@ -262,18 +271,22 @@ async function reembedRestoredWikiPage(
   const embCfg = useWikiStore.getState().embeddingConfig
   if (!embCfg.enabled || !embCfg.model) return
   try {
-    const { embedPage } = await import("@/lib/embedding")
+    const { recordEmbeddingStaleMarker } = await import("./ingest-write")
     const {
       isRootStructuralWikiPagePath,
       normalizeProjectWikiMarkdownPath,
       wikiPathToVectorPageId,
+      extractPageTitle,
     } = await import("@/lib/wiki-page-identity")
     const wikiPath = normalizeProjectWikiMarkdownPath(projectPath, path)
     if (isRootStructuralWikiPagePath(projectPath, wikiPath)) return
-    const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
-    const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
-    const title = titleMatch ? titleMatch[1].trim() : titleFallback
-    await embedPage(projectPath, wikiPathToVectorPageId(projectPath, path), title, content, embCfg)
+    const status = await recordEmbeddingStaleMarker(wikiPath, content)
+    if (status === "runtime-disabled") {
+      const { embedPage } = await import("@/lib/embedding")
+      const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
+      const title = extractPageTitle(content, titleFallback)
+      await embedPage(projectPath, wikiPathToVectorPageId(projectPath, path), title, content, embCfg)
+    }
   } catch {
     // embedding refresh is best-effort during cancel cleanup
   }

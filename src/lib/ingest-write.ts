@@ -193,18 +193,110 @@ export async function injectImagesIntoSourceSummary(
 }
 
 /**
- * Re-embed the source-summary page after we've rewritten its
- * `## Embedded Images` safety-net section with captions. The full
- * autoIngest pipeline calls `embedPage` at step 6 unconditionally;
- * this is the cache-hit equivalent (where step 6 is skipped) and
- * exists specifically to keep the search index in sync after a
- * caption refresh.
+ * Runtime job `kind` for the ingest pipeline's own throwaway anchor jobs
+ * (SPEC-6 PR2, see `recordEmbeddingStaleMarker`). Distinct from
+ * `DERIVED_REBUILD_JOB_KIND` — these jobs never carry rebuild work, they
+ * exist only long enough to give a `runtime_event_append` call a valid
+ * `job_id` FK, and are completed inline in the same async tick they're
+ * created in.
+ */
+const INGEST_MARKER_EVENT_JOB_KIND = "auto-ingest-marker-event"
+const INGEST_MARKER_EVENT_HOLDER = "auto-ingest"
+const RUNTIME_DISABLED_ERROR_PREFIX = "runtime-disabled:"
+
+function isRuntimeDisabledError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return message.startsWith(RUNTIME_DISABLED_ERROR_PREFIX)
+}
+
+/** Outcome of {@link recordEmbeddingStaleMarker} — see its doc comment for what each means to the caller. */
+export type RecordEmbeddingStaleMarkerResult = "recorded" | "runtime-disabled" | "error"
+
+/**
+ * Records the `"embedding"` layer derived-stale marker for one written wiki
+ * page (SPEC-6 PR2 decision 1). The traditional auto-ingest path has no
+ * pre-existing runtime job/event to hang the marker's required
+ * `sourceEventId` FK on — unlike the bulk-commit pipeline, which already
+ * has one per staged artifact — so this mints a tiny throwaway
+ * create → claim → event-append → complete anchor job purely to mint a
+ * valid event id, then discards it.
  *
- * Why not just call `embedPage` inline at the call site: the
- * embedding store + config lookup, the readFile-then-parse-title
- * dance, and the no-op behavior when embedding is disabled all
- * already exist in the step-6 logic. Wrapping them once here
- * avoids drift between the two paths if either side changes.
+ * Non-throwing: the actual embedding rebuild normally happens later,
+ * entirely off the ingest path, in the `embedding-consumer` job consumer
+ * (`src/lib/derived-rebuild/embedding-consumer.ts`). But the work-runtime
+ * feature flag (`LLM_WIKI_CORE_WORK_RUNTIME_ENABLED`) defaults OFF — unlike
+ * the pre-PR2 inline `embedPage` call this replaced, which was never gated
+ * by that flag — so a caller MUST treat `"runtime-disabled"` as "nothing
+ * was recorded, no consumer will ever pick this page up" and fall back to
+ * embedding inline itself (see `ingest.ts`'s `legacyInlineEmbedPage` and
+ * `reembedSourceSummary` below), or every default-configuration user
+ * silently gets zero embeddings. Any other failure is logged and treated
+ * as best-effort (matches the old inline call's own try/catch) — it does
+ * not trigger the legacy fallback, since it's not the systemic
+ * default-path gap the runtime-disabled case is.
+ */
+export async function recordEmbeddingStaleMarker(
+  affectedPath: string,
+  content: string,
+): Promise<RecordEmbeddingStaleMarkerResult> {
+  try {
+    const {
+      runtimeJobCreate,
+      runtimeJobClaimByKind,
+      runtimeJobComplete,
+      runtimeEventAppend,
+      runtimeDerivedStaleMarkerRecord,
+    } = await import("@/commands/runtime-db")
+    const { hashMarkdownContent } = await import("@/core-runtime/markdown-commit")
+
+    const inputHash = await hashMarkdownContent(content)
+
+    await runtimeJobCreate({
+      kind: INGEST_MARKER_EVENT_JOB_KIND,
+      payload: JSON.stringify({ affectedPath }),
+      maxAttempts: 1,
+    })
+    const claim = await runtimeJobClaimByKind({
+      kind: INGEST_MARKER_EVENT_JOB_KIND,
+      holder: INGEST_MARKER_EVENT_HOLDER,
+    })
+    const event = await runtimeEventAppend({
+      jobId: claim.job.jobId,
+      payload: JSON.stringify({ kind: "auto-ingest", affectedPath }),
+    })
+    await runtimeJobComplete({ jobId: claim.job.jobId, leaseId: claim.lease.leaseId })
+
+    await runtimeDerivedStaleMarkerRecord({
+      layer: "embedding",
+      affectedPath,
+      inputHash,
+      baseVersion: inputHash,
+      reason: "commit",
+      sourceEventId: event.eventId,
+    })
+    return "recorded"
+  } catch (err) {
+    if (isRuntimeDisabledError(err)) return "runtime-disabled"
+    console.warn(
+      `[ingest] Failed to record embedding stale marker for "${affectedPath}":`,
+      err instanceof Error ? err.message : err,
+    )
+    return "error"
+  }
+}
+
+/**
+ * Marks the source-summary page's embedding stale after we've rewritten its
+ * `## Embedded Images` safety-net section with captions. The full
+ * autoIngest pipeline marks step-6-written pages stale unconditionally;
+ * this is the cache-hit equivalent (where that step is skipped) and exists
+ * specifically to keep the search index eventually in sync after a caption
+ * refresh — the actual re-embedding normally happens later in the
+ * embedding-consumer job (SPEC-6 PR2).
+ *
+ * Falls back to the pre-PR2 inline `embedPage` call when the work-runtime
+ * feature flag is off (the default) — see `recordEmbeddingStaleMarker`'s
+ * doc comment for why that fallback is mandatory, not optional.
  */
 export async function reembedSourceSummary(
   pp: string,
@@ -213,23 +305,20 @@ export async function reembedSourceSummary(
 ): Promise<void> {
   const embCfg = useWikiStore.getState().embeddingConfig
   if (!embCfg.enabled || !embCfg.model) return
-  const sourceSummaryFullPath = `${pp}/wiki/sources/${sourceSummarySlug}.md`
+  const affectedPath = `wiki/sources/${sourceSummarySlug}.md`
+  const sourceSummaryFullPath = `${pp}/${affectedPath}`
   try {
     const content = await readFile(sourceSummaryFullPath)
-    const titleMatch = content.match(
-      /^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m,
-    )
-    const title = titleMatch ? titleMatch[1].trim() : sourceIdentity
-    const { embedPage } = await import("@/lib/embedding")
-    const { wikiPathToVectorPageId } = await import("@/lib/wiki-page-identity")
-    await embedPage(
-      pp,
-      wikiPathToVectorPageId(pp, `wiki/sources/${sourceSummarySlug}.md`),
-      title,
-      content,
-      embCfg,
-    )
-    console.log(`[ingest:caption] re-embedded ${sourceSummarySlug} with captioned alt text`)
+    const status = await recordEmbeddingStaleMarker(affectedPath, content)
+    if (status === "runtime-disabled") {
+      const { embedPage } = await import("@/lib/embedding")
+      const { wikiPathToVectorPageId, extractPageTitle } = await import("@/lib/wiki-page-identity")
+      const title = extractPageTitle(content, sourceIdentity)
+      await embedPage(pp, wikiPathToVectorPageId(pp, affectedPath), title, content, embCfg)
+      console.log(`[ingest:caption] re-embedded ${sourceSummarySlug} with captioned alt text (runtime disabled, legacy inline fallback)`)
+    } else {
+      console.log(`[ingest:caption] marked ${sourceSummarySlug} embedding stale after caption refresh`)
+    }
   } catch (err) {
     console.warn(
       `[ingest:caption] re-embed failed for ${sourceSummarySlug}:`,

@@ -21,15 +21,27 @@ vi.mock("./graph-relevance", () => ({
   clearGraphCache: vi.fn(),
 }))
 
+// SPEC-6 PR2: resetProjectState must stop the embedding-consumer
+// derived-rebuild job poller, same as it stops scheduled import — this is
+// the centralized-cleanup wiring test the plan calls a "sabotage" guard
+// for (see PR2 self-verification: removing the stopEmbeddingConsumer call
+// from reset-project-state.ts's cleanup list turns this test red).
+vi.mock("./derived-rebuild/embedding-consumer", () => ({
+  stopEmbeddingConsumer: vi.fn(),
+}))
+
 import { clearGraphCache } from "./graph-relevance"
+import { stopEmbeddingConsumer } from "./derived-rebuild/embedding-consumer"
 
 const mockPauseQueue = vi.mocked(pauseQueue)
 const mockClearGraphCache = vi.mocked(clearGraphCache)
+const mockStopEmbeddingConsumer = vi.mocked(stopEmbeddingConsumer)
 
 beforeEach(() => {
   mockPauseQueue.mockReset()
   mockPauseQueue.mockImplementation(async () => {})
   mockClearGraphCache.mockReset()
+  mockStopEmbeddingConsumer.mockReset()
 })
 
 describe("resetProjectState — Zustand stores", () => {
@@ -146,12 +158,30 @@ describe("resetProjectState — module-level caches are awaited", () => {
     expect(mockClearGraphCache).toHaveBeenCalledOnce()
   })
 
-  it("ordering: when resolve() fires, BOTH module caches are already cleared", async () => {
+  it("calls stopEmbeddingConsumer before the returned promise resolves (SPEC-6 PR2)", async () => {
+    await resetProjectState()
+    expect(mockStopEmbeddingConsumer).toHaveBeenCalledOnce()
+  })
+
+  it("ordering: when resolve() fires, ALL module-level pollers/caches are already cleared", async () => {
     // This is the regression guard against fire-and-forget resets.
-    // By the time the outer await returns, BOTH clears must be done.
+    // By the time the outer await returns, every one of these must be done.
     await resetProjectState()
     expect(mockPauseQueue).toHaveBeenCalledOnce()
     expect(mockClearGraphCache).toHaveBeenCalledOnce()
+    expect(mockStopEmbeddingConsumer).toHaveBeenCalledOnce()
+  })
+
+  it("does not throw when stopEmbeddingConsumer itself throws — logs and continues", async () => {
+    mockStopEmbeddingConsumer.mockImplementationOnce(() => {
+      throw new Error("boom")
+    })
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await expect(resetProjectState()).resolves.toBeUndefined()
+    expect(warnSpy).toHaveBeenCalled()
+    expect(mockClearGraphCache).toHaveBeenCalledOnce() // still runs despite sibling failure
+    warnSpy.mockRestore()
   })
 
   it("does not throw when pauseQueue itself throws — logs and continues", async () => {

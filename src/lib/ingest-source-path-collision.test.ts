@@ -7,12 +7,19 @@ import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { sourceSummarySlugFromIdentity } from "./source-identity"
-import { wikiPathToVectorPageId } from "./wiki-page-identity"
 
 vi.mock("@/commands/fs", () => realFs)
 vi.mock("@/lib/embedding", () => ({
-  embedPage: vi.fn(async () => {}),
+  embedPage: vi.fn(async () => ({ indexed: 0, failed: 0 })),
 }))
+// SPEC-6 PR2: ingest records an "embedding" derived-stale marker instead of
+// embedding inline — stub only that one export, everything else in
+// ingest-write.ts (buildPageMerger, injectImagesIntoSourceSummary, etc.)
+// keeps running for real.
+vi.mock("./ingest-write", async () => {
+  const actual = await vi.importActual<typeof import("./ingest-write")>("./ingest-write")
+  return { ...actual, recordEmbeddingStaleMarker: vi.fn(async () => {}) }
+})
 
 let sourceMarkers: string[] = []
 let failLongChunksOnce = new Set<number>()
@@ -114,10 +121,12 @@ vi.mock("./llm-client", () => ({
 
 import { autoIngest, executeIngestWrites } from "./ingest"
 import { embedPage } from "@/lib/embedding"
+import { recordEmbeddingStaleMarker } from "./ingest-write"
 import { streamChat } from "./llm-client"
 
 const mockStreamChat = vi.mocked(streamChat)
 const mockEmbedPage = vi.mocked(embedPage)
+const mockRecordEmbeddingStaleMarker = vi.mocked(recordEmbeddingStaleMarker)
 
 describe("autoIngest source summary paths", () => {
   let tmp: { path: string; cleanup: () => Promise<void> } | undefined
@@ -130,6 +139,7 @@ describe("autoIngest source summary paths", () => {
     abortDuringReview = null
     mockStreamChat.mockClear()
     mockEmbedPage.mockClear()
+    mockRecordEmbeddingStaleMarker.mockClear()
     tmp = await createTempProject("same-basename-sources")
 
     await writeFileRaw(`${tmp.path}/purpose.md`, "# Purpose\n\nTrack project config files.\n")
@@ -314,14 +324,17 @@ describe("autoIngest source summary paths", () => {
       "project-a",
     )
 
-    const pageIds = mockEmbedPage.mock.calls.map(([, pageId]) => pageId)
-    expect(pageIds).toContain(wikiPathToVectorPageId(projectPath, "wiki/projects/log.md"))
-    expect(pageIds).toContain(wikiPathToVectorPageId(projectPath, "wiki/projects/index.md"))
-    expect(pageIds).not.toContain(wikiPathToVectorPageId(projectPath, "wiki/log.md"))
-    const indexCall = mockEmbedPage.mock.calls.find(([, pageId]) =>
-      pageId === wikiPathToVectorPageId(projectPath, "wiki/projects/index.md")
-    )
-    expect(indexCall?.[2]).toBe("projects/index")
+    // SPEC-6 PR2: ingest no longer embeds inline — it records an
+    // "embedding" derived-stale marker per written path instead (the
+    // embedding-consumer job does the actual embedding later). The
+    // structural-vs-nested skip logic under test here is unchanged: only
+    // the mechanism moved from embedPage(pageId, ...) to
+    // recordEmbeddingStaleMarker(affectedPath, ...).
+    const markedPaths = mockRecordEmbeddingStaleMarker.mock.calls.map(([affectedPath]) => affectedPath)
+    expect(markedPaths).toContain("wiki/projects/log.md")
+    expect(markedPaths).toContain("wiki/projects/index.md")
+    expect(markedPaths).not.toContain("wiki/log.md")
+    expect(mockEmbedPage).not.toHaveBeenCalled()
   })
 
   it("migrates a safe legacy basename source summary to the canonical nested source path", async () => {
