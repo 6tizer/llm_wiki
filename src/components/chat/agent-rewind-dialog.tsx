@@ -112,6 +112,12 @@ export function AgentRewindDialogHost() {
       })
       .catch((err: unknown) => {
         console.warn("[agent] rewind failed:", err)
+        // A7 (pre-existing bug, now fixed): an unexpected throw (e.g. the
+        // sidecar is already dead) must clear the target too, or the
+        // button stays clickable and keeps failing forever.
+        clearAgentMessageRewindable(request.chatMessageId, {
+          keepActiveRequest: true,
+        })
         setError(err instanceof Error ? err.message : String(err))
       })
       .finally(() => {
