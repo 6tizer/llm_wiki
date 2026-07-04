@@ -29,17 +29,40 @@ describe("parallel knowledge commit integration", () => {
 
     expect(result.committed).toBe(1)
     expect(result.cleanedArtifacts).toBe(1)
-    expect(result.markersRecorded).toBe(4)
+    // SPEC-6 PR3+4 decision 2: only the three job-backed consumer layers
+    // ("embedding", "taxonomy", "synthesis") are marked on every commit —
+    // "graph" was removed (no materialized artifact, no consumer; see
+    // COMMIT_DERIVED_STALE_MARKER_LAYERS's comment in commit-integration.ts).
+    expect(result.markersRecorded).toBe(3)
     expect(files.files.get("Wiki/Page.md")).toBe(markdown)
     expect(runtime.calls.committedArtifacts).toEqual(["artifact-1"])
     expect(runtime.calls.repairs).toEqual([])
-    expect(runtime.calls.markers).toHaveLength(4)
+    expect(runtime.calls.markers).toHaveLength(3)
     expect(runtime.calls.markers[0]).toMatchObject({
       affectedPath: "Wiki/Page.md",
       inputHash: await hashMarkdownContent(markdown),
       baseVersion: "genesis",
       reason: "commit",
     })
+  })
+
+  it("negative lock (SPEC-6 PR3+4 decision 2): a committed artifact never records a 'graph' derived marker", async () => {
+    const markdown = "# Page\n"
+    const artifact = await stagingArtifact({
+      artifactHash: await hashMarkdownContent(markdown),
+      operationIntent: "create",
+      baseHash: null,
+    })
+    const runtime = fakeRuntime([artifact], { [artifact.artifactId]: markdown })
+
+    const result = await commitPendingStagingArtifacts({ runtime, files: fakeFiles() })
+
+    expect(result.committed).toBe(1)
+    const recordedLayers = runtime.calls.markers.map(
+      (marker) => (marker as { layer: string }).layer,
+    )
+    expect(recordedLayers).not.toContain("graph")
+    expect(recordedLayers.sort()).toEqual(["embedding", "synthesis", "taxonomy"])
   })
 
   it("routes base-hash conflicts to repair without cleaning staging", async () => {
@@ -268,7 +291,11 @@ describe("parallel knowledge commit integration", () => {
     })
     const runtime = fakeRuntime([artifact], { [artifact.artifactId]: markdown })
     runtime.recordDerivedStaleMarker = async (request) => {
-      if (request.layer === "graph") throw new Error("marker failed")
+      // "graph" is no longer a commit-time marker layer (SPEC-6 PR3+4
+      // decision 2) — use "taxonomy" (still a commit-time layer) to keep
+      // this test exercising the same "one layer's record call fails"
+      // shape.
+      if (request.layer === "taxonomy") throw new Error("marker failed")
       return {
         ...request,
         markedAtMs: 1,

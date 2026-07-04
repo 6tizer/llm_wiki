@@ -125,6 +125,12 @@ describe("embedding-consumer — dual signal polling", () => {
     await vi.waitFor(() => expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalled())
 
     expect(mocks.runtimeDerivedMarkerClaimBatch).toHaveBeenCalledWith({ layer: "embedding", affectedPath: "wiki/foo.md" })
+    // SPEC-6 PR3+4 P0-2b regression lock: the claim MUST be scoped to this
+    // consumer's own layer server-side, not just kind — otherwise a
+    // higher-priority sibling-layer (e.g. "taxonomy") job could win it.
+    expect(mocks.runtimeJobClaimByKind).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: DERIVED_REBUILD_JOB_KIND, payloadLayer: "embedding" }),
+    )
     expect(mocks.embedPage).toHaveBeenCalledWith(
       "/proj",
       expect.any(String),
@@ -205,6 +211,12 @@ describe("embedding-consumer — dual signal polling", () => {
     await vi.waitFor(() => expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalled())
 
     expect(mocks.runtimeJobRetry).toHaveBeenCalledWith("job-retry")
+    // Recovery re-claims through the SAME payloadLayer-scoped call as
+    // fresh-marker folding (SPEC-6 PR3+4 P0-2b) — both signals converge on
+    // one claim site.
+    expect(mocks.runtimeJobClaimByKind).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: DERIVED_REBUILD_JOB_KIND, payloadLayer: "embedding" }),
+    )
     expect(mocks.embedPage).toHaveBeenCalledWith(
       "/proj",
       expect.any(String),

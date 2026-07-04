@@ -171,7 +171,18 @@ async function runTick(generation: number): Promise<void> {
     assertCurrentRun(generation)
     let claim: RuntimeJobClaim
     try {
-      claim = await runtimeJobClaimByKind({ kind: DERIVED_REBUILD_JOB_KIND, holder: HOLDER })
+      claim = await runtimeJobClaimByKind({
+        kind: DERIVED_REBUILD_JOB_KIND,
+        holder: HOLDER,
+        // SPEC-6 PR3+4 P0-2b: server-side filter so this consumer only ever
+        // claims "embedding"-layer jobs, even though "derived-rebuild" is a
+        // job kind shared by every layer (PR1 decision 2). Without this, a
+        // higher-priority sibling-layer job could win the claim here every
+        // tick — and each such misclaim increments that job's `attempt`,
+        // silently burning it to `failed` before its own poller ever sees
+        // it (root-caused during 内审 review).
+        payloadLayer: "embedding",
+      })
     } catch (err) {
       if (isNoQueuedJobError(err) || isRuntimeDisabledError(err)) return
       throw err
@@ -246,11 +257,13 @@ async function processClaimedJob(
     }
 
     if (payload.layer !== "embedding") {
-      // `derived-rebuild` is a job kind shared by every layer (PR1 decision
-      // 2) — this is a future non-embedding consumer's job, claimed here
-      // only because runtimeJobClaimByKind has no per-layer filter. Leave
-      // it untouched; the lease-timeout reclaim scheduler recovers it back
-      // to retry-wait once this lease expires.
+      // Defense-in-depth backstop only — theoretically unreachable now that
+      // the claim above passes `payloadLayer: "embedding"` (SPEC-6 PR3+4
+      // P0-2b), which filters this server-side. Kept in case that filter is
+      // ever bypassed (e.g. a future direct `claim_by_kind` caller omits
+      // it) or a job predates the filter. Leave it untouched; the
+      // lease-timeout reclaim scheduler recovers it back to retry-wait once
+      // this lease expires.
       console.warn(
         `[embedding-consumer] claimed a non-embedding derived-rebuild job (layer="${payload.layer}"); leaving it for lease-timeout recovery.`,
       )

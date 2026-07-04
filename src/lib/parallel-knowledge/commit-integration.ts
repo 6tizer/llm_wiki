@@ -47,16 +47,27 @@ const DEFAULT_COMMIT_LIMIT = 100
 const DEFAULT_COMMIT_CONCURRENCY = 1
 const DEFAULT_COMMIT_BUDGET_TTL_MS = 120_000
 // Deliberately a strict subset of DERIVED_STALE_MARKER_LAYERS (SPEC-6 PR1
-// decision 7): "search"/"index_export"/"overview" are NOT marked here on
-// every commit, to avoid producing markers with no consumer (Wiring Gate
-// philosophy). "search" gets its own commit-time marker once its PR3
-// consumer lands; "index_export"/"overview" are refreshed by PR5's explicit
-// on-demand jobs (reason: "manual_rebuild") instead of on every commit. All
-// four layers use the same runtime_derived_marker_claim_batch/complete/
-// release infrastructure (SPEC-6 PR1) once a consumer exists.
+// decision 7, narrowed by PR3+4 decision 2): only layers with an actual
+// job-backed consumer produce a marker on every commit, to avoid producing
+// markers that would just pile up as pending rows forever (Wiring Gate
+// philosophy). "graph" was removed here in PR3+4: the investigation that
+// merged the original PR3 (graph/search job-ification) into this PR proved
+// graph has no materialized artifact at all — wiki-graph.ts always recomputes
+// live from the committed wiki tree (graph-relevance.ts's cache is an
+// in-memory read-through, not a rebuild target) — so a "graph" marker would
+// never have a consumer to fold it. "search" is likewise never marked here
+// (real-time scan + vector search is covered by the "embedding" layer);
+// "index_export"/"overview" are refreshed by PR5's explicit on-demand jobs
+// (reason: "manual_rebuild") instead of on every commit. The remaining three
+// layers ("embedding", "taxonomy", "synthesis") all have a
+// runtime_derived_marker_claim_batch/complete/release-backed consumer
+// (embedding-consumer.ts SPEC-6 PR2; taxonomy-consumer.ts + the
+// synthesis-section.tsx manual-rebuild closeout, SPEC-6 PR3+4). Any already
+// stale "graph" marker rows recorded before this change are left as-is
+// (harmless pending rows, follow-up: PR6 diagnostics should filter
+// no-artifact layers out of any pending-marker UI).
 const COMMIT_DERIVED_STALE_MARKER_LAYERS = [
   "embedding",
-  "graph",
   "taxonomy",
   "synthesis",
 ] as const satisfies readonly DerivedStaleMarkerLayer[]

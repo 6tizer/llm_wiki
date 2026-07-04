@@ -2,6 +2,7 @@ import { useState } from "react"
 import { AlertTriangle, Eye, FilePlus2, GitMerge, Loader2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
+import { markSynthesisRebuilt } from "@/lib/derived-rebuild/synthesis-staleness"
 import {
   DEFAULT_SYNTHESIS_LIMITS,
   discoverSynthesisCandidates,
@@ -89,6 +90,19 @@ export function SynthesisSection({ project }: Props) {
       setResult(next)
       if (!next.ok) {
         setErrorMessage(next.error ?? t("settings.sections.synthesis.generateFailed"))
+      } else {
+        // SPEC-6 PR3+4 decision 4: close the pending "synthesis" derived
+        // marker loop for this cluster's source pages now that the manual
+        // regenerate succeeded (the consumer for this layer IS this manual
+        // action — no background poller). Best-effort: a bookkeeping
+        // failure here must never surface as a synthesis-generate failure,
+        // since the wiki page was already written successfully. The stale
+        // badge UI itself is deferred to PR6.
+        try {
+          await markSynthesisRebuilt(candidate)
+        } catch (err) {
+          console.warn("[SynthesisSection] markSynthesisRebuilt failed:", err)
+        }
       }
     } catch {
       setErrorMessage(t("settings.sections.synthesis.generateFailed"))

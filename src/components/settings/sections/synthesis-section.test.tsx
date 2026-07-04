@@ -22,6 +22,15 @@ vi.mock("@/lib/wiki-synthesis", async () => {
   }
 })
 
+// SPEC-6 PR3+4: the section's post-generate marker closeout call — mocked so
+// these tests exercise the section's own wiring in isolation from the real
+// runtime-db/Tauri invoke plumbing (covered separately by
+// synthesis-staleness.test.ts).
+const markSynthesisRebuiltMock = vi.hoisted(() => vi.fn())
+vi.mock("@/lib/derived-rebuild/synthesis-staleness", () => ({
+  markSynthesisRebuilt: markSynthesisRebuiltMock,
+}))
+
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
 
@@ -102,6 +111,7 @@ function unmount(root: Root): void {
 describe("SynthesisSection", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    markSynthesisRebuiltMock.mockResolvedValue({ affectedPaths: [], completedGroups: 0, skippedGroups: 0 })
     synthesisMocks.discoverSynthesisCandidates.mockResolvedValue(report())
     synthesisMocks.runWikiSynthesis.mockResolvedValue({
       ok: true,
@@ -224,6 +234,56 @@ describe("SynthesisSection", () => {
       },
     )
     expect(container.querySelector("[data-testid='synthesis-generate-result']")?.textContent).toContain("wiki/synthesis/ai-systems-synthesis.md")
+    // SPEC-6 PR3+4 decision 4 wiring: a successful regenerate closes the
+    // pending "synthesis" marker loop for the exact candidate just used.
+    expect(markSynthesisRebuiltMock).toHaveBeenCalledWith(candidate)
+
+    unmount(root)
+  })
+
+  it("does not call markSynthesisRebuilt when the synthesis result reports failure", async () => {
+    synthesisMocks.runWikiSynthesis.mockResolvedValueOnce({
+      ok: false,
+      error: "Selected synthesis candidate not found with ≥3 pages",
+    })
+    const { container, root } = renderSection({ project })
+    await flush()
+
+    const preview = container.querySelector<HTMLButtonElement>("[data-testid='synthesis-preview']")
+    if (!preview) throw new Error("preview button not found")
+    await click(preview)
+    await flush()
+
+    const generate = container.querySelector<HTMLButtonElement>("[data-testid='synthesis-generate-0']")
+    if (!generate) throw new Error("generate button not found")
+    await click(generate)
+    await flush()
+
+    expect(markSynthesisRebuiltMock).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("a markSynthesisRebuilt failure is swallowed (logged) and does not turn a successful generate into a UI failure", async () => {
+    markSynthesisRebuiltMock.mockRejectedValueOnce(new Error("boom"))
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { container, root } = renderSection({ project })
+    await flush()
+
+    const preview = container.querySelector<HTMLButtonElement>("[data-testid='synthesis-preview']")
+    if (!preview) throw new Error("preview button not found")
+    await click(preview)
+    await flush()
+
+    const generate = container.querySelector<HTMLButtonElement>("[data-testid='synthesis-generate-0']")
+    if (!generate) throw new Error("generate button not found")
+    await click(generate)
+    await flush()
+
+    expect(container.querySelector("[data-testid='synthesis-generate-result']")?.textContent).toContain("wiki/synthesis/ai-systems-synthesis.md")
+    expect(container.textContent).not.toContain("Generate failed")
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
 
     unmount(root)
   })

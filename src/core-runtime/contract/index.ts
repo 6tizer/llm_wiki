@@ -190,7 +190,36 @@ export const MARKDOWN_COMMIT_BASE_HASH_CASES = [
   },
 ] as const
 
-/** Logical derived marker layers dirtied by committed Markdown changes. */
+/**
+ * Logical derived marker layers dirtied by committed Markdown changes
+ * (SPEC-3 contract; value set frozen — SPEC-6 PR3+4 investigation only
+ * clarified which members are wired to a real consumer, it did not change
+ * this list). Two groups:
+ *
+ * - **Materialized, job-backed**: `"embedding"`, `"taxonomy"`, `"synthesis"`,
+ *   `"index_export"`, `"overview"`. Each has (or, for `"synthesis"`, is
+ *   deliberately given a manual-action-as-consumer instead of an automatic
+ *   job — see synthesis-staleness.ts) a real derived artifact and a
+ *   `runtime_derived_marker_claim_batch`/`complete`/`release`-backed
+ *   consumer that converges it: `embedding-consumer.ts` (SPEC-6 PR2),
+ *   `taxonomy-consumer.ts` (SPEC-6 PR3+4); `index_export`/`overview` will
+ *   get PR5's on-demand manual-rebuild jobs (not yet implemented — until
+ *   PR5 lands, these two layers accumulate markers with no consumer yet,
+ *   which is the accepted interim state, not a bug).
+ * - **Declared, no materialized artifact**: `"graph"`, `"search"`. `"graph"`
+ *   (wiki-graph.ts) always recomputes live from the committed wiki tree —
+ *   graph-relevance.ts's cache is an in-memory read-through, not a rebuild
+ *   target — so there is nothing for a consumer to converge; SPEC-6 PR3+4
+ *   removed it from `COMMIT_DERIVED_STALE_MARKER_LAYERS`
+ *   (commit-integration.ts) so it stops accumulating pending marker rows
+ *   with no consumer (Wiring Gate philosophy). `"search"` is real-time
+ *   scan + vector search, and vector search is already covered by the
+ *   `"embedding"` layer, so it is likewise never marked on commit. Both
+ *   remain valid, storable layer values (a caller CAN still record a
+ *   marker for them) in case a future materialized artifact reintroduces
+ *   the need — see this file's `follow-ups` in
+ *   docs/plans/SPEC-6/pr3-4-taxonomy-synthesis-plan.md.
+ */
 export const DERIVED_STALE_MARKER_LAYERS = [
   "embedding",
   "graph",

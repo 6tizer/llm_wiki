@@ -120,6 +120,20 @@ pub(crate) fn claim_request(holder: &str, lease_id: &str) -> RuntimeJobClaimRequ
     RuntimeJobClaimRequest {
         holder: holder.to_string(),
         lease_id: Some(lease_id.to_string()),
+        job_id: None,
+    }
+}
+
+/// SPEC-6 PR3+4 P0-2a: claim a specific queued job by id instead of "next
+/// queued job of any kind".
+pub(crate) fn claim_request_with_job_id(
+    holder: &str,
+    lease_id: &str,
+    job_id: &str,
+) -> RuntimeJobClaimRequest {
+    RuntimeJobClaimRequest {
+        job_id: Some(job_id.to_string()),
+        ..claim_request(holder, lease_id)
     }
 }
 
@@ -132,6 +146,21 @@ pub(crate) fn claim_by_kind_request(
         holder: holder.to_string(),
         lease_id: Some(lease_id.to_string()),
         kind: kind.to_string(),
+        payload_layer: None,
+    }
+}
+
+/// SPEC-6 PR3+4 P0-2b: claim the next queued job of `kind` whose JSON
+/// `payload.layer` field also matches `payload_layer`.
+pub(crate) fn claim_by_kind_request_with_layer(
+    holder: &str,
+    lease_id: &str,
+    kind: &str,
+    payload_layer: &str,
+) -> RuntimeJobClaimByKindRequest {
+    RuntimeJobClaimByKindRequest {
+        payload_layer: Some(payload_layer.to_string()),
+        ..claim_by_kind_request(holder, lease_id, kind)
     }
 }
 

@@ -20,7 +20,7 @@
 - SPEC-7 轨触碰面是 `src-tauri/sidecar/` + `agent_cli`，与 SPEC-6 天然隔离，无需协调。
 - 任一轨 merge 后：本轨 worktree 内 `GITNEXUS_MAX_FILE_SIZE=1024 npx gitnexus analyze --name <gitnexusRepo>` + `.agent/scripts/track-sync.sh --exclude <本轨>`。
 
-## 轨内串行顺序：PR1 → PR2 → PR3 → PR4 → PR5 → PR6
+## 轨内串行顺序：PR1 → PR2 → PR3+4（合并）→ PR5 → PR6
 
 范围基线是 `docs/plans/spec-6-derived-knowledge-rebuild.md`（含 2026-07 review 范围修正，必读）。PR1 是全 SPEC 硬闸门。
 
@@ -42,15 +42,15 @@
 - **跨轨**：本 PR 执行期 = maint 轨 PR10（runtime_db split）的安全窗口。
 - **验收**：ingest 不等 embedding 即结束；embedding 失败可见、可 retry；characterization（SPEC-11 已有的 ingest 测试）不回归。
 
-### PR3 — Graph/search/materialized metadata rebuild job 化
+### PR3+4（合并）— Taxonomy/synthesis rebuild job 化 + 派生层契约收口 + S5 自愈
 
-- **范围**：已独立的扫描任务接入 marker 消费 + job 调度；后台优先级低于前台 prepare/commit（不抢占用户触发的 ingest/repair/Agent run）。
+> 详细计划：[SPEC-6/pr3-4-taxonomy-synthesis-plan.md](./pr3-4-taxonomy-synthesis-plan.md)。原计划的 PR3（graph/search job 化）与 PR4（taxonomy/synthesis）在实现前的调查阶段合并：graph（wiki-graph.ts 现读现算零持久化）与 search（实时扫描 + vector=embedding 层）均**无物化产物**，无 rebuild 目标可消费——继续把它们当独立 PR 只会产生「job 化了一个不存在的东西」。taxonomy（`.llm-wiki/tag-taxonomy.json`）是唯一真实 rebuild 对象，synthesis（直写 wiki 页面）第二，两者合并为一个 PR 一次性收口。
+
+- **范围**：`COMMIT_DERIVED_STALE_MARKER_LAYERS` 摘除 `"graph"`（无消费者的 marker 只会永久堆积 pending 行）；新增 `taxonomy-consumer.ts`（照 PR2 embedding-consumer 模式，聚合多 `affectedPath` 组为一次 `applyTagTaxonomyGrowth` 调用）；新增 `synthesis-staleness.ts`（纯查询 + 手动重跑闭环，synthesis 本身不建自动 job）；**顺带消化 SPEC-11 遗留 S5**（跨文件 reference sweep 非事务崩溃留死链 → 核实 `lint.ts` 既有 `broken-link` 检查已覆盖自愈路径，补 characterization，不新增检查代码）。synthesis 整页覆盖保护 SPEC-11 已修，本 PR 不重复。
 - **lane**：full。
+- **结果**：merged。PR6 承接的 deferred wiring：synthesis stale 徽标 UI、诊断面过滤 no-artifact 层（历史 pending `"graph"` marker）。
 
-### PR4 — Taxonomy/synthesis rebuild job 化
-
-- **范围**：同 PR3 模式；**顺带消化 SPEC-11 遗留 S5**（跨文件 reference sweep 非事务崩溃留死链 → derived-rebuild 自愈路径）。synthesis 整页覆盖保护 SPEC-11 已修，本 PR 不重复。
-- **lane**：full。
+**SPEC-6 收口清单追加项**（Simplicity review P2，2026-07；裁定不在本 PR 做）：提取 `createDerivedRebuildConsumer(config)` 共享骨架——`embedding-consumer.ts` 与 `taxonomy-consumer.ts` 247 行逐字重复（世代计数、per-generation tick guard、忙退避、双信号轮询、心跳、safeComplete/safeFail marker 收敛全套），并发关键代码的双副本维护风险。独立 PR，以两套既有测试（`embedding-consumer.test.ts` + `taxonomy-consumer.test.ts`）作为 characterization 基线。裁定理由：本 PR 内重构已上线的 embedding-consumer 会扩大爆炸半径，独立小 PR 更安全。
 
 ### PR5 — Optional index export / overview synthesis 显式 job
 

@@ -147,6 +147,15 @@ const embeddingConsumerMocks = vi.hoisted(() => ({
   stopEmbeddingConsumer: vi.fn(),
 }))
 vi.mock("@/lib/derived-rebuild/embedding-consumer", () => embeddingConsumerMocks)
+// SPEC-6 PR3+4: mirrors embeddingConsumerMocks above — without this mock,
+// handleProjectOpened's dynamic `import("@/lib/derived-rebuild/
+// taxonomy-consumer")` would load the REAL module and start a genuine
+// setInterval poll loop that outlives individual tests in this file.
+const taxonomyConsumerMocks = vi.hoisted(() => ({
+  startTaxonomyConsumer: vi.fn(),
+  stopTaxonomyConsumer: vi.fn(),
+}))
+vi.mock("@/lib/derived-rebuild/taxonomy-consumer", () => taxonomyConsumerMocks)
 const projectFileSyncMocks = vi.hoisted(() => ({
   startProjectFileSync: vi.fn(async () => undefined),
   stopProjectFileSync: vi.fn(async () => undefined),
@@ -764,6 +773,65 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
 
     expect(embeddingConsumerMocks.startEmbeddingConsumer).not.toHaveBeenCalledWith(projA)
     expect(embeddingConsumerMocks.startEmbeddingConsumer).toHaveBeenCalledWith(projB)
+    expect(useWikiStore.getState().project?.id).toBe("b")
+
+    unmount(root)
+  })
+
+  it("P1d (SPEC-6 PR3+4): starts the taxonomy consumer for a normal single-project open, after the embedding consumer", async () => {
+    const { root } = renderApp()
+    await flush()
+
+    const onSelectProject = welcomeScreenProps.current!.onSelectProject
+    const proj = project("a", "/tmp/a")
+    fsMocks.openProject.mockResolvedValue(proj)
+
+    await act(async () => {
+      await onSelectProject(proj)
+    })
+    await flush()
+
+    expect(taxonomyConsumerMocks.startTaxonomyConsumer).toHaveBeenCalledWith(proj)
+
+    unmount(root)
+  })
+
+  it("P1e (SPEC-6 PR3+4): stale taxonomy-consumer startup work cannot land after a newer project is queued — same checkpoint shape as the embedding-consumer P1c guard", async () => {
+    const { root } = renderApp()
+    await flush()
+
+    const onSelectProject = welcomeScreenProps.current!.onSelectProject
+    const projA = project("a", "/tmp/a")
+    const projB = project("b", "/tmp/b")
+    fsMocks.openProject.mockImplementation(async (path: string) =>
+      path === projA.path ? projA : projB,
+    )
+
+    const delayedARestore = deferred<undefined>()
+    ingestQueueMocks.restoreQueue.mockImplementation(async (_id: string, path: string) =>
+      path === projA.path ? delayedARestore.promise : undefined,
+    )
+
+    let pA!: Promise<void>
+    act(() => {
+      pA = onSelectProject(projA)
+    })
+    await flush()
+
+    let pB!: Promise<void>
+    act(() => {
+      pB = onSelectProject(projB)
+    })
+    await flush()
+
+    await act(async () => {
+      delayedARestore.resolve(undefined)
+    })
+    await flush(30)
+    await Promise.allSettled([pA, pB])
+
+    expect(taxonomyConsumerMocks.startTaxonomyConsumer).not.toHaveBeenCalledWith(projA)
+    expect(taxonomyConsumerMocks.startTaxonomyConsumer).toHaveBeenCalledWith(projB)
     expect(useWikiStore.getState().project?.id).toBe("b")
 
     unmount(root)

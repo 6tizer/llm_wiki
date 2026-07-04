@@ -209,7 +209,7 @@ pub(crate) fn runtime_job_claim_for_project(
     request: RuntimeJobClaimRequest,
     now: i64,
 ) -> Result<RuntimeJobClaim, String> {
-    runtime_job_claim_matching_kind_for_project(project_root, enabled, request, None, now)
+    runtime_job_claim_matching_kind_for_project(project_root, enabled, request, None, None, now)
 }
 
 pub(crate) fn runtime_job_claim_by_kind_for_project(
@@ -219,14 +219,21 @@ pub(crate) fn runtime_job_claim_by_kind_for_project(
     now: i64,
 ) -> Result<RuntimeJobClaim, String> {
     let kind = require_non_empty("invalid-kind", "kind", &request.kind)?.to_string();
+    let payload_layer = normalize_optional_id(
+        "invalid-payload-layer",
+        "payloadLayer",
+        request.payload_layer,
+    )?;
     runtime_job_claim_matching_kind_for_project(
         project_root,
         enabled,
         RuntimeJobClaimRequest {
             holder: request.holder,
             lease_id: request.lease_id,
+            job_id: None,
         },
         Some(kind),
+        payload_layer,
         now,
     )
 }
@@ -236,10 +243,12 @@ fn runtime_job_claim_matching_kind_for_project(
     enabled: bool,
     request: RuntimeJobClaimRequest,
     kind_filter: Option<String>,
+    payload_layer_filter: Option<String>,
     now: i64,
 ) -> Result<RuntimeJobClaim, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
     let holder = require_non_empty("invalid-holder", "holder", &request.holder)?.to_string();
+    let job_id_filter = normalize_optional_id("invalid-job-id", "jobId", request.job_id)?;
     with_runtime_writer(|| {
         let mut connection = open_job_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
@@ -253,10 +262,20 @@ fn runtime_job_claim_matching_kind_for_project(
         // locking). If the UPDATE claims zero rows, the job was already taken;
         // exclude it and select the next candidate instead of inserting a
         // second active lease for a job some other transaction just claimed.
+        // When `job_id_filter` is set, excluding the one-and-only matching
+        // candidate on a lost race simply makes the NEXT iteration's SELECT
+        // return nothing — surfacing as the same "no-queued-job" error a
+        // caller would get for a job that was never queued in the first
+        // place, which is the correct outcome (SPEC-6 PR3+4 P0-2a).
         let mut excluded_job_ids: Vec<String> = Vec::new();
         let job_id = loop {
-            let candidate =
-                select_queued_job_id_tx(&tx, kind_filter.as_deref(), &excluded_job_ids)?;
+            let candidate = select_queued_job_id_tx(
+                &tx,
+                kind_filter.as_deref(),
+                payload_layer_filter.as_deref(),
+                job_id_filter.as_deref(),
+                &excluded_job_ids,
+            )?;
             ensure_no_active_lease(&tx, &candidate)?;
             let claimed_rows = tx
                 .execute(
@@ -303,6 +322,8 @@ fn runtime_job_claim_matching_kind_for_project(
 fn select_queued_job_id_tx(
     tx: &Transaction<'_>,
     kind_filter: Option<&str>,
+    payload_layer_filter: Option<&str>,
+    job_id_filter: Option<&str>,
     excluded_job_ids: &[String],
 ) -> Result<String, String> {
     let mut sql = String::from(
@@ -311,10 +332,25 @@ fn select_queued_job_id_tx(
          WHERE state = 'queued'",
     );
     let kind_value = kind_filter.map(str::to_string);
+    let payload_layer_value = payload_layer_filter.map(str::to_string);
+    let job_id_value = job_id_filter.map(str::to_string);
     let mut sql_params: Vec<&dyn ToSql> = Vec::new();
     if let Some(kind) = kind_value.as_ref() {
         sql.push_str(" AND kind = ?");
         sql_params.push(kind);
+    }
+    if let Some(layer) = payload_layer_value.as_ref() {
+        // SQLite's json_extract returns NULL (never matches `= ?`) for a
+        // payload that isn't a JSON object or has no "layer" key, rather
+        // than erroring — so a job whose payload doesn't carry a layer
+        // simply never matches this filter instead of failing the whole
+        // claim (SPEC-6 PR3+4 P0-2b).
+        sql.push_str(" AND json_extract(payload, '$.layer') = ?");
+        sql_params.push(layer);
+    }
+    if let Some(job_id) = job_id_value.as_ref() {
+        sql.push_str(" AND job_id = ?");
+        sql_params.push(job_id);
     }
     for excluded_job_id in excluded_job_ids {
         sql.push_str(" AND job_id != ?");
@@ -1320,6 +1356,206 @@ mod tests {
         let _ = fs::remove_dir_all(project);
     }
 
+    fn create_derived_rebuild_request(job_id: &str, layer: &str, priority: i64) -> RuntimeJobCreateRequest {
+        RuntimeJobCreateRequest {
+            job_id: Some(job_id.to_string()),
+            kind: "derived-rebuild".to_string(),
+            payload: serde_json::json!({
+                "layer": layer,
+                "affectedPath": format!("wiki/{layer}.md"),
+                "markerIds": [],
+                "baseVersion": "h",
+                "inputHash": "h",
+                "reason": "commit",
+            })
+            .to_string(),
+            max_attempts: None,
+            priority: Some(priority),
+        }
+    }
+
+    // ---- SPEC-6 PR3+4 P0-2b: payloadLayer filter on claim_by_kind ----
+
+    #[test]
+    fn scoped_claim_by_kind_with_payload_layer_filters_to_matching_layer_only() {
+        // The exact cross-consumer collision the internal audit flagged:
+        // embedding-consumer and taxonomy-consumer share the SAME job kind
+        // ("derived-rebuild"). Without a payload-level filter, a
+        // higher-priority sibling-layer job would win the plain kind-scoped
+        // claim every time, and each accidental claim increments `attempt`
+        // — three such misclaims silently exhausts the OTHER consumer's job
+        // to a terminal `failed` state before its own poller ever sees it.
+        let project = temp_project("job-claim-payload-layer-hit");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_derived_rebuild_request("job-embedding-high", "embedding", 100),
+            100,
+        )
+        .expect("create high-priority embedding job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_derived_rebuild_request("job-taxonomy-low", "taxonomy", 10),
+            110,
+        )
+        .expect("create lower-priority taxonomy job");
+
+        let claimed = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request_with_layer("taxonomy-consumer", "lease-tax", "derived-rebuild", "taxonomy"),
+            200,
+        )
+        .expect("claim taxonomy-layer job despite lower priority");
+        assert_eq!(claimed.job.job_id, "job-taxonomy-low");
+        assert_eq!(claimed.job.attempt, 1);
+
+        // The embedding job was never touched — still queued, attempt still 0.
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        let embedding_job = list
+            .jobs
+            .iter()
+            .find(|job| job.job_id == "job-embedding-high")
+            .expect("embedding job present");
+        assert_eq!(embedding_job.state, "queued");
+        assert_eq!(embedding_job.attempt, 0);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_by_kind_with_payload_layer_no_match_returns_no_queued_job_and_does_not_touch_other_layers() {
+        let project = temp_project("job-claim-payload-layer-miss");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_derived_rebuild_request("job-embedding-only", "embedding", 100),
+            100,
+        )
+        .expect("create embedding job");
+
+        let error = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request_with_layer("taxonomy-consumer", "lease-tax", "derived-rebuild", "taxonomy"),
+            200,
+        )
+        .expect_err("no taxonomy-layer job is queued");
+        assert!(error.starts_with("no-queued-job"));
+
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(list.jobs[0].state, "queued");
+        assert_eq!(list.jobs[0].attempt, 0);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_by_kind_without_payload_layer_is_unchanged_backward_compat() {
+        // `payloadLayer: None` must behave EXACTLY like before this field
+        // existed — claims across layers by priority, same as
+        // `scoped_claim_only_claims_requested_job_kind` already proves for
+        // the plain kind filter.
+        let project = temp_project("job-claim-payload-layer-none");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_derived_rebuild_request("job-embedding-high", "embedding", 100),
+            100,
+        )
+        .expect("create high-priority embedding job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_derived_rebuild_request("job-taxonomy-low", "taxonomy", 10),
+            110,
+        )
+        .expect("create lower-priority taxonomy job");
+
+        let claimed = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            claim_by_kind_request("any-consumer", "lease-any", "derived-rebuild"),
+            200,
+        )
+        .expect("claim next queued derived-rebuild job by priority alone");
+        assert_eq!(claimed.job.job_id, "job-embedding-high");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    // ---- SPEC-6 PR3+4 P0-2a: job_id filter on runtime_job_claim ----
+
+    #[test]
+    fn claim_with_job_id_filter_claims_only_that_specific_queued_job() {
+        let project = temp_project("job-claim-by-id-hit");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-high-priority", "compile-page", 100),
+            100,
+        )
+        .expect("create high-priority job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-target-low-priority", "compile-page", 10),
+            110,
+        )
+        .expect("create low-priority target job");
+
+        // Without a job_id filter, priority ordering would pick
+        // "job-high-priority" — the filter must override that entirely.
+        let claimed = runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request_with_job_id("synthesis-manual-rebuild", "lease-1", "job-target-low-priority"),
+            200,
+        )
+        .expect("claim the exact requested job");
+        assert_eq!(claimed.job.job_id, "job-target-low-priority");
+
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        let untouched = list
+            .jobs
+            .iter()
+            .find(|job| job.job_id == "job-high-priority")
+            .expect("high-priority job present");
+        assert_eq!(untouched.state, "queued");
+        assert_eq!(untouched.attempt, 0);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn claim_with_job_id_filter_returns_no_queued_job_without_falling_back_to_a_different_job() {
+        let project = temp_project("job-claim-by-id-miss");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-other", "compile-page", 100),
+            100,
+        )
+        .expect("create an unrelated queued job");
+
+        let error = runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request_with_job_id("worker", "lease-1", "job-does-not-exist"),
+            200,
+        )
+        .expect_err("the specific job id was never queued");
+        assert!(error.starts_with("no-queued-job"));
+
+        // Must NOT have silently fallen back to claiming "job-other".
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(list.jobs[0].state, "queued");
+        assert_eq!(list.jobs[0].attempt, 0);
+        let _ = fs::remove_dir_all(project);
+    }
+
     #[test]
     fn heartbeat_near_expiry_bypasses_min_interval_noop() {
         let project = temp_project("job-heartbeat-near-expiry");
@@ -1621,6 +1857,7 @@ mod tests {
             RuntimeJobClaimRequest {
                 holder: "  ".to_string(),
                 lease_id: Some("lease-empty-holder".to_string()),
+                job_id: None,
             },
             200,
         )
@@ -2090,13 +2327,14 @@ mod tests {
 
         let mut connection = open_job_runtime_locked(&project).expect("open runtime db");
         let tx = connection.transaction().expect("begin tx");
-        let first =
-            select_queued_job_id_tx(&tx, Some("compile-page"), &[]).expect("select first job");
+        let first = select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[])
+            .expect("select first job");
         assert_eq!(first, "job-1");
-        let second = select_queued_job_id_tx(&tx, Some("compile-page"), &[first.clone()])
+        let second = select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[first.clone()])
             .expect("select next candidate excluding first");
         assert_eq!(second, "job-2");
-        let none_left = select_queued_job_id_tx(&tx, Some("compile-page"), &[first, second]);
+        let none_left =
+            select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[first, second]);
         assert!(none_left.unwrap_err().starts_with("no-queued-job"));
         let _ = fs::remove_dir_all(project);
     }
