@@ -89,6 +89,19 @@ describe("DerivedStatusSection", () => {
     unmount(root)
   })
 
+  it("keeps the no-project state visible even if runtimeDisabled is stale in the store", async () => {
+    useDerivedLayerStore.setState({ runtimeDisabled: true })
+
+    const { container, root } = renderSection()
+    await flush()
+
+    expect(container.querySelector("[data-testid='derived-status-section']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-card-embedding']")).toBeNull()
+    expect(mocks.runtimeDerivedStaleMarkerList).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
   it("renders one card per visible layer, in order, all ready with no markers", async () => {
     const { container, root } = renderSection({ project })
     await flush()
@@ -149,11 +162,13 @@ describe("DerivedStatusSection", () => {
           layer: "embedding",
           affectedPath: "wiki/a.md",
           baseVersion: "b",
+          inputHash: "h",
           markedAtMs: 0,
           reason: "commit",
           sourceEventId: "e1",
           status: "pending",
           updatedAtMs: 0,
+          lastError: null,
         },
       ],
       nextCursor: null,
@@ -178,11 +193,13 @@ describe("DerivedStatusSection", () => {
           layer: "synthesis",
           affectedPath: "wiki/synthesis/x.md",
           baseVersion: "b",
+          inputHash: "h",
           markedAtMs: 0,
           reason: "commit",
           sourceEventId: "e1",
           status: "pending",
           updatedAtMs: 0,
+          lastError: null,
         },
       ],
       nextCursor: null,
@@ -209,7 +226,7 @@ describe("DerivedStatusSection", () => {
     unmount(root)
   })
 
-  it("renders a neutral runtime-disabled notice — no error banner, no ready-badged layer cards — when the work runtime feature flag is off, resolved (not rejected) with enabled:false (closeout hotfix P1 gate-fix: the real backend response for this case resolves Ok({enabled:false}), it never rejects)", async () => {
+  it("hides the section when the work runtime kill-switch is off, resolved (not rejected) with enabled:false", async () => {
     mocks.runtimeDerivedStaleMarkerList.mockResolvedValue({
       enabled: false,
       status: "disabled",
@@ -220,7 +237,7 @@ describe("DerivedStatusSection", () => {
     const { container, root } = renderSection({ project })
     await flush()
 
-    expect(container.querySelector("[data-testid='derived-status-runtime-disabled']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-section']")).toBeNull()
     expect(container.querySelector("[data-testid='derived-status-error']")).toBeNull()
     expect(container.querySelector("[data-testid='derived-status-card-embedding']")).toBeNull()
     expect(container.querySelector("[data-testid='derived-status-badge-ready']")).toBeNull()
@@ -283,11 +300,13 @@ describe("DerivedStatusSection", () => {
           layer: "embedding",
           affectedPath: "wiki/a.md",
           baseVersion: "b",
+          inputHash: "h",
           markedAtMs: 0,
           reason: "manual_rebuild",
           sourceEventId: "e1",
           status: "pending",
           updatedAtMs: 0,
+          lastError: null,
         },
       ],
       nextCursor: null,
@@ -311,11 +330,13 @@ describe("DerivedStatusSection", () => {
           layer: "embedding",
           affectedPath: "wiki/a.md",
           baseVersion: "b",
+          inputHash: "h",
           markedAtMs: 0,
           reason: "manual_rebuild",
           sourceEventId: "e1",
           status: "claimed",
           updatedAtMs: 0,
+          lastError: null,
         },
       ],
       nextCursor: null,
@@ -358,11 +379,13 @@ describe("DerivedStatusSection", () => {
           layer: "taxonomy",
           affectedPath: "wiki/a.md",
           baseVersion: "b",
+          inputHash: "h",
           markedAtMs: 0,
           reason: "commit",
           sourceEventId: "e1",
           status: "pending",
           updatedAtMs: 0,
+          lastError: null,
         },
       ],
       nextCursor: null,
@@ -387,7 +410,7 @@ describe("DerivedStatusSection", () => {
     unmount(root)
   })
 
-  it("shows the runtime-disabled message and reverts when the work runtime is off", async () => {
+  it("shows a rebuild failure message and reverts when a rebuild races the work runtime kill-switch", async () => {
     mocks.mintManualRebuildForLayer.mockResolvedValue({ mintedCount: 0, failedCount: 0, runtimeDisabled: true })
 
     const { container, root } = renderSection({ project })
@@ -399,7 +422,7 @@ describe("DerivedStatusSection", () => {
 
     const embeddingCard = container.querySelector("[data-testid='derived-status-card-embedding']")!
     expect(embeddingCard.querySelector("[data-testid='derived-status-badge-building']")).toBeNull()
-    expect(embeddingCard.textContent).toContain("Background rebuild is disabled")
+    expect(embeddingCard.textContent).toContain("Rebuild failed")
 
     unmount(root)
   })

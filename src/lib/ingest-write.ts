@@ -223,17 +223,15 @@ export type RecordEmbeddingStaleMarkerResult = "recorded" | "runtime-disabled" |
  *
  * Non-throwing: the actual embedding rebuild normally happens later,
  * entirely off the ingest path, in the `embedding-consumer` job consumer
- * (`src/lib/derived-rebuild/embedding-consumer.ts`). But the work-runtime
- * feature flag (`LLM_WIKI_CORE_WORK_RUNTIME_ENABLED`) defaults OFF — unlike
- * the pre-PR2 inline `embedPage` call this replaced, which was never gated
- * by that flag — so a caller MUST treat `"runtime-disabled"` as "nothing
- * was recorded, no consumer will ever pick this page up" and fall back to
- * embedding inline itself (see `ingest.ts`'s `legacyInlineEmbedPage` and
- * `reembedSourceSummary` below), or every default-configuration user
- * silently gets zero embeddings. Any other failure is logged and treated
- * as best-effort (matches the old inline call's own try/catch) — it does
- * not trigger the legacy fallback, since it's not the systemic
- * default-path gap the runtime-disabled case is.
+ * (`src/lib/derived-rebuild/embedding-consumer.ts`). But an explicit
+ * disabled Work Runtime still means no marker was recorded and no consumer
+ * will ever pick this page up, so a caller MUST treat `"runtime-disabled"`
+ * as a signal to fall back to embedding inline itself (see `ingest.ts`'s
+ * `legacyInlineEmbedPage` and `reembedSourceSummary` below). Any other
+ * failure is logged and treated as best-effort
+ * (matches the old inline call's own try/catch) — it does not trigger the
+ * legacy fallback, since it's not the same intentional disabled-runtime
+ * path.
  */
 export async function recordEmbeddingStaleMarker(
   affectedPath: string,
@@ -284,9 +282,9 @@ export async function recordEmbeddingStaleMarker(
  * refresh — the actual re-embedding normally happens later in the
  * embedding-consumer job (SPEC-6 PR2).
  *
- * Falls back to the pre-PR2 inline `embedPage` call when the work-runtime
- * feature flag is off (the default) — see `recordEmbeddingStaleMarker`'s
- * doc comment for why that fallback is mandatory, not optional.
+ * Falls back to the pre-PR2 inline `embedPage` call when Work Runtime is
+ * explicitly disabled — see `recordEmbeddingStaleMarker`'s doc comment for
+ * why that fallback is mandatory, not optional.
  */
 export async function reembedSourceSummary(
   pp: string,

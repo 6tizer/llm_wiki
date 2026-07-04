@@ -1504,18 +1504,17 @@ async function autoIngestImpl(
   }
 
   // ── Step 6: Mark embedding stale for each written page (SPEC-6 PR2) ──
-  // Embedding is no longer generated inline here when the work-runtime
-  // feature flag is on — ingest completion doesn't wait on it. Instead,
+  // Embedding is no longer generated inline here when the Work Runtime
+  // is enabled (the default) — ingest completion doesn't wait on it. Instead,
   // each non-structural written page gets an "embedding" layer
   // derived-stale marker; the embedding-consumer job consumer
   // (src/lib/derived-rebuild/embedding-consumer.ts) polls for those
   // markers and does the actual rebuild off the ingest path.
   //
-  // That flag defaults OFF, unlike the old unconditional inline embed this
-  // replaced — so `recordEmbeddingStaleMarker` returning "runtime-disabled"
-  // falls back to embedding inline right here (legacyInlineEmbedPage),
-  // otherwise every default-configuration user would silently stop getting
-  // embeddings at all (P0 regression, caught in PR2 review).
+  // If the explicit Work Runtime kill-switch is off,
+  // `recordEmbeddingStaleMarker` returns "runtime-disabled" and falls back
+  // to embedding inline right here (legacyInlineEmbedPage), so kill-switch
+  // users still get embeddings.
   const embCfg = useWikiStore.getState().embeddingConfig
   if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
     try {
@@ -1832,10 +1831,10 @@ async function reembedRestoredWikiPage(
 
 /**
  * Pre-PR2 inline embed path, kept as an explicit fallback for when the
- * work-runtime feature flag is off (the default) and
- * `recordEmbeddingStaleMarker` therefore can't hand the page to any
- * consumer — see that function's doc comment (ingest-write.ts) for why
- * this fallback is mandatory rather than a nice-to-have. Identical
+ * Work Runtime kill-switch is off and `recordEmbeddingStaleMarker`
+ * therefore can't hand the page to any consumer — see that function's doc
+ * comment (ingest-write.ts) for why this fallback is mandatory rather than
+ * a nice-to-have. Identical
  * title-extraction logic to what step 6 used to do inline.
  */
 async function legacyInlineEmbedPage(

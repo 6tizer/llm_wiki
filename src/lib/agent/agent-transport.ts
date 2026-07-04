@@ -13,6 +13,8 @@ import {
 	runtimeProfilePoolClaim,
 	runtimeProfilePoolList,
 	runtimeProfilePoolRelease,
+	runtimeProfileList,
+	type RuntimeProfileRecord,
 	type RuntimeProfilePoolClaim,
 } from "@/commands/runtime-db";
 import { AgentRunError } from "./agent-run-state";
@@ -111,6 +113,8 @@ type InvokePayload = Record<string, unknown> & {
 const AGENT_PROFILE_CLAIM_TTL_MS = 1_200_000;
 // Keep this aligned with PROFILE_CLAIM_INACTIVE_PREFIX in runtime_db.rs.
 const PROFILE_CLAIM_INACTIVE_PREFIX = "claim-inactive:";
+// Keep this aligned with PROFILE_PROBE_CAPABILITY_VERSION in runtime_db.rs.
+const PROFILE_PROBE_CAPABILITY_VERSION = "profile-probe.v1";
 // TS uses this only before Rust accepts profile claim ownership.
 const AGENT_PROFILE_SPAWN_FAILED_REASON = "agent-spawn-failed";
 
@@ -127,6 +131,24 @@ function isRuntimeDisabledError(err: unknown): boolean {
 
 function profileUnavailable(message: string): AgentRunError {
 	return new AgentRunError("profile_unavailable", `profile-unavailable: ${message}`);
+}
+
+function agentRunCapabilitySupported(profile: RuntimeProfileRecord): boolean {
+	try {
+		const parsed = JSON.parse(profile.capabilityJson) as Record<string, unknown>;
+		return parsed.agentRunSupported === true;
+	} catch {
+		return false;
+	}
+}
+
+function hasAgentRunProfileCandidate(profile: RuntimeProfileRecord): boolean {
+	return profile.enabled
+		&& profile.kind === "agent-run"
+		&& profile.taskFamilies.includes("agent")
+		&& profile.capabilityVersion === PROFILE_PROBE_CAPABILITY_VERSION
+		&& (profile.capabilityStatus === "supported" || profile.capabilityStatus === "limited")
+		&& agentRunCapabilitySupported(profile);
 }
 
 async function claimAgentProfileForRun(
@@ -147,6 +169,26 @@ async function claimAgentProfileForRun(
 	if (!pool.enabled) return null;
 	if (pool.status !== "healthy") {
 		throw profileUnavailable(`profile pool is ${pool.status}`);
+	}
+	let profiles;
+	try {
+		profiles = await runtimeProfileList();
+	} catch (err) {
+		if (isRuntimeDisabledError(err)) return null;
+		throw profileUnavailable(errorMessage(err));
+	}
+	if (!profiles.enabled) return null;
+	if (profiles.status !== "healthy") {
+		throw profileUnavailable(`profile list is ${profiles.status}`);
+	}
+	// "Candidate" here is the static-config gate (enabled, agent-run kind,
+	// probed capability) — deliberately a strict subset of the Rust claim
+	// side's real-time eligibility (backoff, circuit breaker, capacity).
+	// Zero candidates means the user never configured an agent-run profile,
+	// so fall back to the legacy caller-supplied model path; candidates that
+	// fail the real-time claim below surface as profile_unavailable instead.
+	if (!profiles.profiles.some(hasAgentRunProfileCandidate)) {
+		return null;
 	}
 	try {
 		return await runtimeProfilePoolClaim({

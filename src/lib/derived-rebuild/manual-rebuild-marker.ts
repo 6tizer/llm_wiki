@@ -191,7 +191,7 @@ export interface MintManualRebuildForLayerResult {
  * one marker at `TAXONOMY_MANUAL_REBUILD_AFFECTED_PATH` since its consumer's
  * rescan is whole-tree regardless of how many/which paths are pending.
  *
- * The work-runtime feature flag is a single global toggle, so if the FIRST
+ * The explicit Work Runtime kill-switch is process-wide, so if the FIRST
  * mint call reports `"runtime-disabled"` every subsequent one would too —
  * this returns immediately on that result instead of looping over
  * potentially hundreds of pages for the same foregone conclusion.

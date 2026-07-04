@@ -161,8 +161,8 @@ export interface FetchAllDerivedStaleMarkersOptions {
  * `enabled`/`status` are carried through from the FIRST page's response
  * (closeout hotfix P1): `runtime_derived_stale_marker_list_for_project`
  * (`runtime_db/markers.rs`) resolves `Ok({ enabled: false, status:
- * "disabled", markers: [], nextCursor: null })` when the work runtime
- * feature flag is off — it never rejects for that case, same convention
+ * "disabled", markers: [], nextCursor: null })` when the Work Runtime
+ * kill-switch is off — it never rejects for that case, same convention
  * every other `_list` command in this codebase uses (e.g.
  * `runtime_job_list_for_project`). A disabled/no-project response always
  * has an empty `markers` array and no `nextCursor`, so page 0 IS the whole

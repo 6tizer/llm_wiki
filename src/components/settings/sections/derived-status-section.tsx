@@ -65,6 +65,10 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
     getDelayMs: () => POLL_INTERVAL_MS,
   })
 
+  if (project && runtimeDisabled) {
+    return null
+  }
+
   return (
     <div className="space-y-6" data-testid="derived-status-section">
       <div>
@@ -79,17 +83,7 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
         </div>
       )}
 
-      {project && runtimeDisabled && (
-        <div
-          className="flex items-start gap-2 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
-          data-testid="derived-status-runtime-disabled"
-        >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{t("settings.sections.derivedStatus.runtimeDisabled")}</span>
-        </div>
-      )}
-
-      {project && !runtimeDisabled && error && (
+      {project && error && (
         <div
           className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200"
           data-testid="derived-status-error"
@@ -100,7 +94,6 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
       )}
 
       {project &&
-        !runtimeDisabled &&
         VISIBLE_DERIVED_LAYERS.map((layer) => (
           <LayerCard
             key={layer}
@@ -162,7 +155,7 @@ function LayerCard({
       async () => {
         const result = await mintManualRebuildForLayer(layer, projectPath, `${layer}-manual-rebuild`)
         if (result.runtimeDisabled) {
-          throw new Error(t("settings.sections.derivedStatus.runtimeDisabled"))
+          throw new Error(t("settings.sections.derivedStatus.rebuildFailed"))
         }
         if (result.mintedCount === 0 && result.failedCount > 0) {
           throw new Error(t("settings.sections.derivedStatus.rebuildFailed"))

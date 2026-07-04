@@ -16,11 +16,14 @@ pub(crate) fn staging_dir_path(project_root: &Path) -> PathBuf {
     project_root.join(RUNTIME_DIR).join(STAGING_DIR)
 }
 
+/// Deny-list gate parser: unknown or malformed values intentionally enable
+/// Work Runtime, so changing this back to an allow-list would silently
+/// reintroduce production-default disablement.
 fn parse_work_runtime_enabled(value: Option<&str>) -> bool {
-    value
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+    !matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("0" | "false" | "no" | "off")
+    )
 }
 
 pub(crate) fn read_work_runtime_flag_value() -> Option<String> {
@@ -1093,21 +1096,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_work_runtime_enabled_accepts_only_truthy_values() {
-        for value in ["1", "true", "TRUE", " yes ", "on"] {
-            assert!(parse_work_runtime_enabled(Some(value)));
+    fn parse_work_runtime_enabled_defaults_enabled_with_explicit_falsy_kill_switch() {
+        assert!(parse_work_runtime_enabled(None));
+
+        for value in ["0", "false", "no", "off", "FALSE", " off ", "No", "Off"] {
+            assert!(!parse_work_runtime_enabled(Some(value)));
         }
 
-        for value in [None, Some(""), Some("0"), Some("false"), Some("enabled")] {
-            assert!(!parse_work_runtime_enabled(value));
+        for value in ["1", "true", "yes", "on", "ON", "garbage", ""] {
+            assert!(parse_work_runtime_enabled(Some(value)));
         }
     }
 
     #[test]
-    fn resolve_work_runtime_enabled_defaults_disabled_without_adapter_value() {
-        assert!(!resolve_work_runtime_enabled(None));
+    fn resolve_work_runtime_enabled_defaults_enabled_without_adapter_value() {
+        assert!(resolve_work_runtime_enabled(None));
         assert!(!resolve_work_runtime_enabled(Some("false".to_string())));
         assert!(resolve_work_runtime_enabled(Some("true".to_string())));
+        assert!(resolve_work_runtime_enabled(Some("garbage".to_string())));
     }
 
     #[test]

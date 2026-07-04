@@ -554,7 +554,6 @@
           "saveFailed": "保存失败：{{message}}",
           "deleted": "Profile 已删除。",
           "deleteFailed": "删除失败：{{message}}",
-          "runtimeUnavailableDisabled": "保存或探测 profile 前需要启用 Work Runtime。当前 runtime 状态：{{status}}。Dev 测试请用 LLM_WIKI_CORE_WORK_RUNTIME_ENABLED=true 重启。",
           "runtimeUnavailableNoProject": "保存或探测 profile 前需要先打开项目。",
           "agentKindWarning": "Agent Chat 只会使用 Profile 类型为 agent-run 的 profile。当前 profile 是 {{kind}}，不会被 Agent-run 选择。",
           "agentRunApiModeWarning": "Agent-run 当前需要 Anthropic Messages 兼容 endpoint。其他 endpoint 模式可以保存给其支持的任务使用，但 Agent Chat 不会选择它。",
@@ -947,7 +946,6 @@
         "lastRebuilt": "上次重建于 {{time}}",
         "rebuildQueued": "已为 {{count}} 个页面加入重建队列——后台任务稍后会自动处理。",
         "rebuildFailed": "重建失败，请重试。",
-        "runtimeDisabled": "后台重建功能未启用——请先启用工作运行时再使用此按钮。",
         "layers": {
           "embedding": "向量嵌入",
           "taxonomy": "标签体系",
