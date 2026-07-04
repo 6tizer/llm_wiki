@@ -554,7 +554,6 @@
           "saveFailed": "Save failed: {{message}}",
           "deleted": "Profile deleted.",
           "deleteFailed": "Delete failed: {{message}}",
-          "runtimeUnavailableDisabled": "Profiles require Work Runtime before saving or probing. Current runtime status: {{status}}. Restart dev with LLM_WIKI_CORE_WORK_RUNTIME_ENABLED=true.",
           "runtimeUnavailableNoProject": "Profiles require an open project before saving or probing.",
           "agentKindWarning": "Agent Chat only uses profiles whose kind is agent-run. This profile is {{kind}}, so it will not satisfy Agent-run selection.",
           "agentRunApiModeWarning": "Agent-run currently requires an Anthropic Messages-compatible endpoint. Other endpoint modes can be saved for their supported tasks, but Agent Chat will not select them.",
@@ -947,7 +946,6 @@
         "lastRebuilt": "Last rebuilt {{time}}",
         "rebuildQueued": "Queued {{count}} page(s) for rebuild — picked up by the background worker shortly.",
         "rebuildFailed": "Rebuild failed. Please try again.",
-        "runtimeDisabled": "Background rebuild is disabled — enable the work runtime to use this button.",
         "layers": {
           "embedding": "Embeddings",
           "taxonomy": "Tag Taxonomy",

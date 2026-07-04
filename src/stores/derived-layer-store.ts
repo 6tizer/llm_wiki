@@ -22,9 +22,9 @@ import type { DerivedStaleMarkerLayer } from "@/core-runtime/contract"
  * `current`, rather than this store growing its own bespoke
  * optimistic-write/rollback method.
  *
- * `runtimeDisabled` (closeout hotfix P1 #5, corrected P1 gate-fix): the
- * DEFAULT configuration has the work runtime feature flag off, which is
- * the expected, persistent steady state for most users, not an error.
+ * `runtimeDisabled` (closeout hotfix P1 #5, corrected P1 gate-fix): an
+ * explicit Work Runtime kill-switch is an expected steady state, not an
+ * error.
  * `runtimeDerivedStaleMarkerList`/`fetchAllDerivedStaleMarkers` never
  * REJECTS for this case — `runtime_derived_stale_marker_list_for_project`
  * (`runtime_db/markers.rs`) resolves `Ok({ enabled: false, ... })`, same as

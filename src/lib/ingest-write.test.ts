@@ -129,7 +129,7 @@ describe("recordEmbeddingStaleMarker", () => {
     await expect(recordEmbeddingStaleMarker("wiki/foo.md", "body")).resolves.toBe("recorded")
   })
 
-  it("resolves 'runtime-disabled' (and swallows it silently, no console.warn) when the work-runtime flag is off", async () => {
+  it("resolves 'runtime-disabled' (and swallows it silently, no console.warn) when the Work Runtime kill-switch is off", async () => {
     mocks.runtimeJobCreate.mockRejectedValueOnce(new Error(RUNTIME_DISABLED_ERROR))
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
 
@@ -227,7 +227,7 @@ describe("reembedSourceSummary", () => {
     warnSpy.mockRestore()
   })
 
-  it("P0 regression guard: falls back to the legacy inline embedPage call when the work-runtime flag is off (default)", async () => {
+  it("P0 regression guard: falls back to the legacy inline embedPage call when the Work Runtime kill-switch is off", async () => {
     mocks.readFile.mockResolvedValue("---\ntitle: My Source\n---\n\nbody")
     mocks.runtimeJobCreate.mockRejectedValueOnce(new Error(RUNTIME_DISABLED_ERROR))
 

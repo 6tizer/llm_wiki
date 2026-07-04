@@ -252,12 +252,12 @@ fn runtime_job_lease_reclaim_scan_for_project(
 fn runtime_job_lease_reclaim_tick(
     project_root: Option<&Path>,
 ) -> Result<Vec<RuntimeJobRecord>, String> {
-    if !work_runtime_enabled_from_env() {
-        return Ok(Vec::new());
-    }
     let Some(project_root) = project_root else {
         return Ok(Vec::new());
     };
+    if !work_runtime_enabled_from_env() {
+        return Ok(Vec::new());
+    }
     let now = now_ms()?;
     runtime_job_lease_reclaim_scan_for_project(Some(project_root), true, now)
 }
@@ -404,6 +404,15 @@ mod tests {
         assert_eq!(list.jobs[0].state, "retry-wait");
         assert_eq!(list.leases[0].status, EXPIRED_LEASE_STATUS);
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn lease_reclaim_tick_without_project_is_quiet_noop() {
+        // Keep this env-independent without serializing process env: no-project
+        // short-circuits before the runtime kill-switch is read.
+        let reclaimed = runtime_job_lease_reclaim_tick(None).expect("tick without project");
+
+        assert!(reclaimed.is_empty());
     }
 
     #[test]

@@ -33,6 +33,8 @@ vi.mock("@/commands/profile-secrets", () => secretMocks)
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
 
+const workRuntimeEnvName = ["LLM", "WIKI", "CORE", "WORK", "RUNTIME", "ENABLED"].join("_")
+
 function runtimeProfile(
   patch: Partial<RuntimeProfileRecord> = {},
 ): RuntimeProfileRecord {
@@ -527,23 +529,38 @@ describe("ModelProfilesSection UI", () => {
     unmount(root)
   })
 
-  it("disables save and probe when work runtime is disabled", async () => {
+  it("hides the profiles section when work runtime is disabled", async () => {
     const { container, root } = await renderProfilesWithList({
       enabled: false,
       status: "disabled",
       profiles: [],
     })
 
-    expect(container.querySelector("[data-testid='profile-runtime-unavailable']")?.textContent).toContain(
-      "Work Runtime",
-    )
-    expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")?.disabled).toBe(true)
-    expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")?.disabled).toBe(true)
+    expect(container.querySelector("[data-testid='model-profiles-section']")).toBeNull()
+    expect(container.querySelector("[data-testid='profile-runtime-unavailable']")).toBeNull()
+    expect(container.textContent).not.toContain(workRuntimeEnvName)
 
     unmount(root)
   })
 
-  it("asks for a project instead of a runtime restart when no project is open", async () => {
+  it("never renders the work runtime env var in healthy, disabled, or no-project states", async () => {
+    const healthy = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    expect(healthy.container.querySelector("[data-testid='model-profiles-section']")).not.toBeNull()
+    expect(healthy.container.textContent).not.toContain(workRuntimeEnvName)
+    unmount(healthy.root)
+
+    const disabled = await renderProfilesWithList({
+      enabled: false,
+      status: "disabled",
+      profiles: [],
+    })
+    expect(disabled.container.textContent).not.toContain(workRuntimeEnvName)
+    unmount(disabled.root)
+
     const { container, root } = await renderProfilesWithList({
       enabled: true,
       status: "no-project",
@@ -552,7 +569,7 @@ describe("ModelProfilesSection UI", () => {
 
     const message = container.querySelector("[data-testid='profile-runtime-unavailable']")?.textContent ?? ""
     expect(message).toContain("project")
-    expect(message).not.toContain("LLM_WIKI_CORE_WORK_RUNTIME_ENABLED")
+    expect(container.textContent).not.toContain(workRuntimeEnvName)
     expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")?.disabled).toBe(true)
     expect(container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")?.disabled).toBe(true)
 

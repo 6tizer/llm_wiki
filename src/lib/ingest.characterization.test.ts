@@ -125,11 +125,10 @@ vi.mock("@/lib/embedding", () => ({
 }))
 
 // SPEC-6 PR2: ingest records an "embedding" derived-stale marker instead of
-// embedding inline WHEN the work-runtime feature flag is on — consumed
-// later by embedding-consumer.ts. Default-mocked to "recorded" (flag on);
-// individual tests override to "runtime-disabled" to exercise the P0
-// regression-lock fallback (flag off, the actual default — see
-// legacyInlineEmbedPage in ingest.ts). Stub only `recordEmbeddingStaleMarker`
+// embedding inline when Work Runtime is enabled — consumed later by
+// embedding-consumer.ts. Default-mocked to "recorded" (default enabled);
+// individual tests override to "runtime-disabled" to exercise the explicit
+// kill-switch fallback. Stub only `recordEmbeddingStaleMarker`
 // — every other ingest-write.ts export (buildPageMerger,
 // injectImagesIntoSourceSummary, tryReadFile, reembedSourceSummary) keeps
 // running for real, unchanged from before this mock existed.
@@ -274,8 +273,8 @@ beforeEach(() => {
   mockEmbedPage.mockClear()
   // mockReset (not mockClear): A2c overrides this to "runtime-disabled" via
   // mockResolvedValue (a persistent override, unlike mockResolvedValueOnce)
-  // to simulate the flag being off for every written page in that test —
-  // reset the implementation back to the "flag on" default here so that
+  // to simulate the kill-switch being off for every written page in that
+  // test — reset the implementation back to the default-enabled path so that
   // doesn't leak into later tests.
   mockRecordEmbeddingStaleMarker.mockReset()
   mockRecordEmbeddingStaleMarker.mockResolvedValue("recorded")
@@ -409,15 +408,15 @@ describe("A. autoIngestImpl", () => {
     expect(markedPaths).not.toContain("wiki/overview.md")
   })
 
-  it("A2c (P0 regression lock): with the work-runtime flag off (the actual default), ingest still embeds every written page inline", async () => {
+  it("A2c (P0 regression lock): with the work-runtime kill-switch off, ingest still embeds every written page inline", async () => {
     const tmp = track(await seedProject("a2c"))
     useWikiStore.setState({
       embeddingConfig: { enabled: true, endpoint: "http://x", apiKey: "", model: "test-embed" },
     })
     // recordEmbeddingStaleMarker signals "runtime-disabled" exactly like it
-    // does for real when LLM_WIKI_CORE_WORK_RUNTIME_ENABLED isn't set — the
-    // actual out-of-the-box state for every user. Before this regression
-    // lock, that silently meant zero embeddings ever happened.
+    // does for real when the kill-switch explicitly disables Work Runtime.
+    // Before this regression lock, that silently meant zero embeddings ever
+    // happened.
     mockRecordEmbeddingStaleMarker.mockResolvedValue("runtime-disabled")
     await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
     generationResponse = [
@@ -435,12 +434,41 @@ describe("A. autoIngestImpl", () => {
     // The marker attempt still happens (and still reports disabled)...
     expect(mockRecordEmbeddingStaleMarker).toHaveBeenCalledTimes(written.length)
     // ...but every one of those pages falls back to the legacy inline
-    // embedPage call so the default-configuration user still gets
-    // embeddings, exactly as before SPEC-6 PR2.
+    // embedPage call so kill-switch users still get embeddings.
     expect(mockEmbedPage).toHaveBeenCalledTimes(written.length)
     const embeddedPaths = mockEmbedPage.mock.calls.map(([, pageId]) => pageId)
     for (const p of written) {
       expect(embeddedPaths).toContain(wikiPathToVectorPageId(tmp.path, p))
+    }
+  })
+
+  it("A2d: by default, ingest records stale markers and does not embed pages inline", async () => {
+    const tmp = track(await seedProject("a2d"))
+    useWikiStore.setState({
+      embeddingConfig: { enabled: true, endpoint: "http://x", apiKey: "", model: "test-embed" },
+    })
+    mockRecordEmbeddingStaleMarker.mockResolvedValue("recorded")
+    await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
+    generationResponse = [
+      sourceSummaryBlock("doc.md"),
+      fileBlock(
+        "wiki/concepts/topic-a2d.md",
+        ["type: concept", 'title: "Topic A2d"', "created: 2026-05-01", "updated: 2026-05-01", 'sources: ["doc.md"]', "tags: []", "related: []"],
+        ["# Topic A2d", "", "Body content generated for the default-enabled marker scenario."],
+      ),
+    ].join("\n\n")
+
+    const written = await autoIngest(tmp.path, `${tmp.path}/raw/sources/doc.md`, useWikiStore.getState().llmConfig)
+    expect(written.length).toBeGreaterThan(0)
+
+    expect(mockRecordEmbeddingStaleMarker).toHaveBeenCalledTimes(written.length)
+    await expect(Promise.all(mockRecordEmbeddingStaleMarker.mock.results.map((result) => result.value))).resolves.toEqual(
+      Array.from({ length: written.length }, () => "recorded"),
+    )
+    expect(mockEmbedPage).not.toHaveBeenCalled()
+    const markedPaths = mockRecordEmbeddingStaleMarker.mock.calls.map(([affectedPath]) => affectedPath)
+    for (const p of written) {
+      expect(markedPaths).toContain(p)
     }
   })
 

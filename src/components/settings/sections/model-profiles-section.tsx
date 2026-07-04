@@ -463,13 +463,8 @@ export function ModelProfilesSection() {
   const capabilityStatus = selectedCapabilityIsFresh
     ? selectedProfile?.capabilityStatus
     : "unknown"
-  const runtimeProfilesReady = loadState.kind === "ready"
-    && loadState.enabled
-    && loadState.status === "healthy"
-  const runtimeUnavailableMessage = loadState.kind === "ready" && !runtimeProfilesReady
-    ? loadState.status === "no-project"
-      ? t("settings.sections.llm.profiles.runtimeUnavailableNoProject")
-      : t("settings.sections.llm.profiles.runtimeUnavailableDisabled", { status: loadState.status })
+  const runtimeUnavailableMessage = loadState.kind === "ready" && loadState.status === "no-project"
+    ? t("settings.sections.llm.profiles.runtimeUnavailableNoProject")
     : null
   const agentKindWarning = draft.kind !== "agent-run" && draft.taskFamilies.includes("agent")
     ? t("settings.sections.llm.profiles.agentKindWarning", { kind: draft.kind })
@@ -481,6 +476,10 @@ export function ModelProfilesSection() {
         ? t("settings.sections.llm.profiles.agentRunCapabilityWarning")
         : null
     : null
+
+  if (loadState.kind === "ready" && loadState.status === "disabled") {
+    return null
+  }
 
   return (
     <div className="space-y-3" data-testid="model-profiles-section">

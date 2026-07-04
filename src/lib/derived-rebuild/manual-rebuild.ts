@@ -46,10 +46,10 @@
  * `recordEmbeddingStaleMarker`'s two non-throwing branches: the manual
  * rebuild button is a user-requested action whose entire point is
  * `execute()`, and a marker-bookkeeping hiccup must never block it. Only
- * the `runtime-disabled:` case is silent (expected: the work-runtime flag
- * defaults off); any other bookkeeping error is logged so it doesn't vanish
- * unnoticed. Once bookkeeping IS established, `execute()` itself throwing
- * both fails the job and rethrows to the caller.
+ * the `runtime-disabled:` case is silent (expected when the explicit Work
+ * Runtime kill-switch is off); any other bookkeeping error is logged so it
+ * doesn't vanish unnoticed. Once bookkeeping IS established, `execute()`
+ * itself throwing both fails the job and rethrows to the caller.
  *
  * Lease heartbeat (Codex gate P1): `execute()` can run long — `overview`'s
  * single LLM call in particular can easily exceed the job runtime's
