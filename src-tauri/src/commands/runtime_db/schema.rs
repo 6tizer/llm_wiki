@@ -1,13 +1,12 @@
-use std::path::{Path, PathBuf};
-use rusqlite::{params, Connection, OptionalExtension};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{params, Connection, OptionalExtension};
+use std::path::{Path, PathBuf};
+use tauri::State;
 
 use super::*;
-use std::time::{SystemTime, UNIX_EPOCH};
 use crate::commands::profile_secrets::{PROFILE_SECRET_REF_BYTES, PROFILE_SECRET_REF_SQL_GLOB};
-
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn runtime_db_path(project_root: &Path) -> PathBuf {
     project_root.join(RUNTIME_DIR).join(RUNTIME_DB_FILE)
@@ -165,7 +164,9 @@ fn open_initialized_runtime_db_locked(
     Ok((connection, runtime_dir, db_path, journal_mode))
 }
 
-pub(crate) fn with_runtime_writer<T>(body: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+pub(crate) fn with_runtime_writer<T>(
+    body: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     let lock = RUNTIME_DB_WRITE_LOCK.get_or_init(|| Mutex::new(()));
     let _guard = lock.lock().map_err(|_| {
         "runtime-db-writer-poisoned: runtime DB writer lock is poisoned".to_string()
@@ -296,25 +297,33 @@ fn initialize_job_schema(connection: &Connection) -> Result<(), String> {
     record_migration_family(connection, LEASES_FAMILY, LEASES_VERSION)
 }
 
-pub(crate) fn open_resource_budget_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+pub(crate) fn open_resource_budget_runtime_locked(
+    project_root: &Path,
+) -> Result<Connection, String> {
     let connection = open_job_runtime_locked(project_root)?;
     initialize_resource_budget_schema(&connection)?;
     Ok(connection)
 }
 
-pub(crate) fn open_events_progress_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+pub(crate) fn open_events_progress_runtime_locked(
+    project_root: &Path,
+) -> Result<Connection, String> {
     let connection = open_job_runtime_locked(project_root)?;
     initialize_events_progress_schema(&connection)?;
     Ok(connection)
 }
 
-pub(crate) fn open_staging_artifacts_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+pub(crate) fn open_staging_artifacts_runtime_locked(
+    project_root: &Path,
+) -> Result<Connection, String> {
     let connection = open_job_runtime_locked(project_root)?;
     initialize_staging_artifacts_schema(&connection)?;
     Ok(connection)
 }
 
-pub(crate) fn open_derived_stale_markers_runtime_locked(project_root: &Path) -> Result<Connection, String> {
+pub(crate) fn open_derived_stale_markers_runtime_locked(
+    project_root: &Path,
+) -> Result<Connection, String> {
     let connection = open_events_progress_runtime_locked(project_root)?;
     initialize_derived_stale_markers_schema(&connection)?;
     Ok(connection)
@@ -980,7 +989,11 @@ pub(crate) fn table_exists(connection: &Connection, table: &str) -> Result<bool,
         .map_err(|err| format!("table-exists-check-failed: {err}"))
 }
 
-pub(crate) fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool, String> {
+pub(crate) fn column_exists(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, String> {
     connection
         .query_row(
             &format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1 LIMIT 1"),
@@ -995,7 +1008,12 @@ pub(crate) fn column_exists(connection: &Connection, table: &str, column: &str) 
 pub(crate) fn staging_artifact_commit_metadata_columns_exist(
     connection: &Connection,
 ) -> Result<bool, String> {
-    for column in ["target_path", "operation_intent", "base_hash", "source_kind"] {
+    for column in [
+        "target_path",
+        "operation_intent",
+        "base_hash",
+        "source_kind",
+    ] {
         if !column_exists(connection, "runtime_staging_artifacts", column)? {
             return Ok(false);
         }
@@ -1060,20 +1078,11 @@ fn path_to_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    use std::path::{Path, PathBuf};
-    use rusqlite::{params, Connection};
-    
-    use std::fs;
-    
-    
-    
-    
-    
-    
-    
-    
 
+    use rusqlite::{params, Connection};
+    use std::path::{Path, PathBuf};
+
+    use std::fs;
 
     #[test]
     fn runtime_db_path_is_project_scoped() {

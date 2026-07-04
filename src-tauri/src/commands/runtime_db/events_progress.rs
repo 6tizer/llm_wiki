@@ -1,12 +1,11 @@
-use std::path::Path;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
 use uuid::Uuid;
-
 
 /// Append a durable runtime event for the currently-open project.
 #[tauri::command]
@@ -305,7 +304,10 @@ pub(crate) fn upsert_runtime_progress_tx(
     Ok(())
 }
 
-pub(crate) fn read_event_tx(tx: &Transaction<'_>, event_id: &str) -> Result<RuntimeEventRecord, String> {
+pub(crate) fn read_event_tx(
+    tx: &Transaction<'_>,
+    event_id: &str,
+) -> Result<RuntimeEventRecord, String> {
     tx.query_row(
         &event_select_sql("WHERE event_id = ?1"),
         [event_id],
@@ -436,20 +438,10 @@ fn map_progress_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeProgress
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
-    use rusqlite::{params, Connection};
-    
-    use std::fs;
-    
-    
-    
-    
-    
-    
-    
-    
 
+    use rusqlite::{params, Connection};
+
+    use std::fs;
 
     fn progress_request(
         job_id: Option<&str>,

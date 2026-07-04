@@ -1,13 +1,12 @@
-use std::path::Path;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
-use uuid::Uuid;
 use crate::commands::profile_secrets::validate_profile_secret_ref;
-
+use uuid::Uuid;
 
 /// Create a stored model profile for the currently-open project.
 #[tauri::command]
@@ -724,7 +723,9 @@ fn read_visible_profiles(connection: &Connection) -> Result<Vec<RuntimeProfileRe
         .map_err(|err| format!("profiles-read-failed: {err}"))
 }
 
-pub(crate) fn read_visible_profiles_tx(tx: &Transaction<'_>) -> Result<Vec<RuntimeProfileRecord>, String> {
+pub(crate) fn read_visible_profiles_tx(
+    tx: &Transaction<'_>,
+) -> Result<Vec<RuntimeProfileRecord>, String> {
     // Writer transactions run after schema initialization, so deleted_at_ms is guaranteed.
     let mut statement = tx
         .prepare(&profile_select_sql(
@@ -835,20 +836,10 @@ fn parse_profile_task_families(value: String) -> rusqlite::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
-    use rusqlite::{params, Connection};
-    
-    use std::fs;
-    
-    
-    
-    
-    
-    
-    
-    
 
+    use rusqlite::{params, Connection};
+
+    use std::fs;
 
     #[test]
     fn profile_request_shapes_reject_unknown_fields() {

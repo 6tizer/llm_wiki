@@ -2,7 +2,6 @@ use rusqlite::{params, OptionalExtension, Transaction};
 
 use super::*;
 
-
 /// Shared by `expire_profile_claims_tx` and `expire_commit_budget_claims_tx`:
 /// flips any active claim row in `table` whose TTL has lapsed to `expired`.
 /// `table` is always one of our own hardcoded table names, never user input.

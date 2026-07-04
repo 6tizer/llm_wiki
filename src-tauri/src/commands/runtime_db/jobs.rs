@@ -1,12 +1,13 @@
-use std::path::Path;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
+};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
 use uuid::Uuid;
-
 
 /// Create a queued runtime job for the currently-open project.
 #[tauri::command]
@@ -254,7 +255,8 @@ pub(crate) fn runtime_job_claim_matching_kind_for_project(
         // second active lease for a job some other transaction just claimed.
         let mut excluded_job_ids: Vec<String> = Vec::new();
         let job_id = loop {
-            let candidate = select_queued_job_id_tx(&tx, kind_filter.as_deref(), &excluded_job_ids)?;
+            let candidate =
+                select_queued_job_id_tx(&tx, kind_filter.as_deref(), &excluded_job_ids)?;
             ensure_no_active_lease(&tx, &candidate)?;
             let claimed_rows = tx
                 .execute(
@@ -735,7 +737,10 @@ pub(crate) fn read_job_tx(tx: &Transaction<'_>, job_id: &str) -> Result<RuntimeJ
         .map_err(|err| format!("job-read-failed: {err}"))
 }
 
-pub(crate) fn read_lease_tx(tx: &Transaction<'_>, lease_id: &str) -> Result<RuntimeJobLeaseRecord, String> {
+pub(crate) fn read_lease_tx(
+    tx: &Transaction<'_>,
+    lease_id: &str,
+) -> Result<RuntimeJobLeaseRecord, String> {
     tx.query_row(
         &lease_select_sql("WHERE lease_id = ?1"),
         [lease_id],
@@ -841,20 +846,11 @@ pub(crate) fn map_lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Runtime
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
+
     use rusqlite::Connection;
-    
+
     use std::fs;
     use std::sync::{Arc, Barrier};
-    
-    
-    
-    
-    
-    
-    
-
 
     fn create_request_with_kind(
         job_id: &str,
@@ -2186,7 +2182,10 @@ mod tests {
             .query_map([], |row| row.get::<_, String>(0))
             .expect("query duplicate leases")
             .count();
-        assert_eq!(duplicate_leases, 0, "no job should ever carry two active leases");
+        assert_eq!(
+            duplicate_leases, 0,
+            "no job should ever carry two active leases"
+        );
         let _ = fs::remove_dir_all(project);
     }
 }

@@ -1,13 +1,12 @@
-use std::path::Path;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
-use uuid::Uuid;
 use sha2::{Digest, Sha256};
-
+use uuid::Uuid;
 
 /// Record or advance staging artifact metadata for the currently-open project.
 #[tauri::command]
@@ -633,7 +632,9 @@ fn normalize_markdown_operation_intent(raw: &str) -> Result<String, String> {
     let value = require_non_empty("invalid-operation-intent", "operationIntent", raw)?;
     match value {
         "create" | "update" | "append" | "delete" => Ok(value.to_string()),
-        _ => Err(format!("invalid-operation-intent: unsupported operationIntent '{value}'")),
+        _ => Err(format!(
+            "invalid-operation-intent: unsupported operationIntent '{value}'"
+        )),
     }
 }
 
@@ -806,8 +807,10 @@ fn ensure_staging_parent_inside_root(staging_root: &Path, parent: &Path) -> Resu
     if canonical_parent.starts_with(&canonical_root) {
         Ok(())
     } else {
-        Err("invalid-artifact-path: staging artifact escapes the runtime staging directory"
-            .to_string())
+        Err(
+            "invalid-artifact-path: staging artifact escapes the runtime staging directory"
+                .to_string(),
+        )
     }
 }
 
@@ -981,7 +984,7 @@ fn read_staging_artifact_tx(
         [artifact_id],
         map_staging_artifact_row,
     )
-        .map_err(|err| format!("staging-artifact-read-failed: {err}"))
+    .map_err(|err| format!("staging-artifact-read-failed: {err}"))
 }
 
 fn read_staging_artifact_tx_unchecked(
@@ -1007,7 +1010,7 @@ fn read_staging_artifact_optional_tx(
         map_staging_artifact_row,
     )
     .optional()
-        .map_err(|err| format!("staging-artifact-read-failed: {err}"))
+    .map_err(|err| format!("staging-artifact-read-failed: {err}"))
 }
 
 fn read_pending_staging_artifacts_for_job_tx(
@@ -1115,7 +1118,10 @@ fn staging_artifact_select_sql(suffix: &str) -> String {
     staging_artifact_select_sql_with_metadata(suffix, true)
 }
 
-fn staging_artifact_select_sql_with_metadata(suffix: &str, include_commit_metadata: bool) -> String {
+fn staging_artifact_select_sql_with_metadata(
+    suffix: &str,
+    include_commit_metadata: bool,
+) -> String {
     let target_path = if include_commit_metadata {
         "target_path"
     } else {
@@ -1179,20 +1185,11 @@ fn map_staging_artifact_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    use std::path::{Path, PathBuf};
-    use rusqlite::{params, Connection};
-    
-    use std::fs;
-    
-    
-    
-    
-    
-    
-    
-    
 
+    use rusqlite::{params, Connection};
+    use std::path::{Path, PathBuf};
+
+    use std::fs;
 
     fn staging_record_request(
         artifact_id: Option<&str>,
@@ -1894,13 +1891,9 @@ mod tests {
 
         create_with_base.base_hash = None;
         create_with_base.markdown = "x".repeat(MAX_STAGING_ARTIFACT_BODY_BYTES + 1);
-        let body_error = runtime_staging_artifact_store_for_project(
-            Some(&project),
-            true,
-            create_with_base,
-            200,
-        )
-        .expect_err("oversized body is rejected");
+        let body_error =
+            runtime_staging_artifact_store_for_project(Some(&project), true, create_with_base, 200)
+                .expect_err("oversized body is rejected");
         assert!(body_error.starts_with("invalid-markdown"));
         let _ = fs::remove_dir_all(project);
     }
@@ -2092,7 +2085,9 @@ mod tests {
         .expect("clear pending artifacts");
 
         assert_eq!(cleared.cleared.len(), 2);
-        assert!(!staging_dir_path(&project).join("job-1/artifact-1.md").exists());
+        assert!(!staging_dir_path(&project)
+            .join("job-1/artifact-1.md")
+            .exists());
         let list = runtime_staging_artifact_list_for_project(
             Some(&project),
             true,
@@ -2201,10 +2196,14 @@ mod tests {
 
         assert_eq!(stored.target_path.as_deref(), Some("Wiki/Page.md"));
         let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
-        assert!(column_exists(&connection, "runtime_staging_artifacts", "target_path")
-            .expect("check target column"));
-        assert!(column_exists(&connection, "runtime_staging_artifacts", "operation_intent")
-            .expect("check intent column"));
+        assert!(
+            column_exists(&connection, "runtime_staging_artifacts", "target_path")
+                .expect("check target column")
+        );
+        assert!(
+            column_exists(&connection, "runtime_staging_artifacts", "operation_intent")
+                .expect("check intent column")
+        );
         let _ = fs::remove_dir_all(project);
     }
 

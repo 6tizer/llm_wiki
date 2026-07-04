@@ -1,15 +1,14 @@
-use std::path::Path;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
+};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
+use crate::commands::profile_secrets::{read_profile_secret, SecretStore};
 use uuid::Uuid;
-use crate::commands::profile_secrets::{
-    read_profile_secret, SecretStore,
-};
-
 
 /// Claim one eligible profile-pool slot for the currently-open project.
 #[tauri::command]
@@ -1169,20 +1168,11 @@ fn map_profile_circuit_breaker_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
+
     use rusqlite::{params, Connection};
-    
+
     use std::fs;
     use std::sync::{Arc, Barrier};
-    
-    
-    
-    
-    
-    
-    
-
 
     fn profile_pool_release_request(
         claim_id: &str,
@@ -2074,8 +2064,7 @@ mod tests {
 
     #[test]
     fn redact_profile_pool_text_redacts_tp_gateway_key() {
-        let redacted =
-            redact_profile_pool_text("gateway key=tp-test000aaaabbbbccccdddd in use");
+        let redacted = redact_profile_pool_text("gateway key=tp-test000aaaabbbbccccdddd in use");
         assert!(!redacted.contains("tp-test000aaaabbbbccccdddd"));
         assert!(redacted.contains("[REDACTED]"));
     }

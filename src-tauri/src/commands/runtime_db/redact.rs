@@ -1,6 +1,3 @@
-
-
-
 const SECRET_REDACTION_MARKER: &str = "[REDACTED]";
 
 // Bare scheme/keyword tokens that, when themselves consumed as a carried-over
@@ -465,7 +462,13 @@ fn redact_json_value_inner(
                     Some(parent) => format!("{parent}{}:{key}", key.len()),
                     None => format!("{}:{key}", key.len()),
                 };
-                redact_json_value_inner(&mut entry, changed, force_redact, Some(&child_path), carry);
+                redact_json_value_inner(
+                    &mut entry,
+                    changed,
+                    force_redact,
+                    Some(&child_path),
+                    carry,
+                );
                 let key = if key_is_secret {
                     *changed = true;
                     SECRET_REDACTION_MARKER.to_string()
@@ -484,19 +487,10 @@ fn redact_json_value_inner(
 mod tests {
     use super::*;
     use crate::commands::runtime_db::*;
-    
-    use rusqlite::Connection;
-    
-    use std::fs;
-    
-    
-    
-    
-    
-    
-    
-    
 
+    use rusqlite::Connection;
+
+    use std::fs;
 
     #[test]
     fn profile_create_update_list_and_status_round_trip_without_secret_values() {
@@ -908,7 +902,8 @@ mod tests {
 
     #[test]
     fn redact_secrets_in_json_line_two_secret_keys_do_not_panic_and_leak_nothing() {
-        let line = "{\"sk-test000aaaabbbbccccdddd\":\"v1\",\"sk-other111aaaabbbbccccdddd\":\"v2\"}\n";
+        let line =
+            "{\"sk-test000aaaabbbbccccdddd\":\"v1\",\"sk-other111aaaabbbbccccdddd\":\"v2\"}\n";
         let redacted = SecretRedactor::new().redact_json_line(line);
         assert!(!redacted.contains("sk-test000aaaabbbbccccdddd"));
         assert!(!redacted.contains("sk-other111aaaabbbbccccdddd"));
@@ -1036,8 +1031,7 @@ mod tests {
         // caught, same as the flat `text` -> `text` case above.
         let mut redactor = SecretRedactor::new();
         redactor.redact_json_line("{\"delta\":{\"text\":\"Authorization:\"}}\n");
-        let second =
-            redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueNESTED\"}}\n");
+        let second = redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueNESTED\"}}\n");
         assert!(!second.contains("opaqueNESTED"));
     }
 
@@ -1102,8 +1096,7 @@ mod tests {
 
         // An early path armed before the cap was reached is unaffected by
         // the later skipped insert — still armed, still redacts.
-        let early_continuation =
-            redactor.redact_json_line("{\"k000\":\"Basic opaqueEARLY\"}\n");
+        let early_continuation = redactor.redact_json_line("{\"k000\":\"Basic opaqueEARLY\"}\n");
         assert!(!early_continuation.contains("opaqueEARLY"));
     }
 
@@ -1150,34 +1143,29 @@ mod tests {
         // evt2: the NESTED path is a different slot, so it is not armed —
         // "Basic opaqueREV1" is not preceded by an armed "Authorization:"
         // under its own path, so it is left untouched.
-        let evt2_out =
-            redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueREV1\"}}\n");
+        let evt2_out = redactor.redact_json_line("{\"delta\":{\"text\":\"Basic opaqueREV1\"}}\n");
         assert!(evt2_out.contains("opaqueREV1"));
 
         // evt3: the literal-key continuation is still the armed path from
         // evt1 and must redact.
-        let evt3_out =
-            redactor.redact_json_line("{\"delta.text\":\"Basic opaqueREV2\"}\n");
+        let evt3_out = redactor.redact_json_line("{\"delta.text\":\"Basic opaqueREV2\"}\n");
         assert!(!evt3_out.contains("opaqueREV2"));
     }
 
     #[test]
     fn redact_secrets_preserving_format_redacts_bracket_wrapped_sk_and_aiza() {
-        let redacted_sk =
-            redact_secrets_preserving_format("key=[sk-test000aaaabbbbccccdddd] end");
+        let redacted_sk = redact_secrets_preserving_format("key=[sk-test000aaaabbbbccccdddd] end");
         assert!(!redacted_sk.contains("sk-test000aaaabbbbccccdddd"));
         assert!(redacted_sk.contains("[REDACTED]"));
 
-        let redacted_google =
-            redact_secrets_preserving_format("[AIzaTest000aaaabbbbccccdddd] end");
+        let redacted_google = redact_secrets_preserving_format("[AIzaTest000aaaabbbbccccdddd] end");
         assert!(!redacted_google.contains("AIzaTest000aaaabbbbccccdddd"));
         assert!(redacted_google.contains("[REDACTED]"));
     }
 
     #[test]
     fn redact_secrets_preserving_format_redacts_authorization_basic_scheme_credential() {
-        let redacted =
-            redact_secrets_preserving_format("Authorization: Basic dGVzdDAwMA== next");
+        let redacted = redact_secrets_preserving_format("Authorization: Basic dGVzdDAwMA== next");
         assert!(!redacted.contains("dGVzdDAwMA=="));
         assert!(redacted.contains("[REDACTED]"));
         assert!(redacted.ends_with(" next"));

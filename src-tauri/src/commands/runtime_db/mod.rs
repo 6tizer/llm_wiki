@@ -1,38 +1,37 @@
-use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 
-mod schema;
-mod validate;
-mod txhelpers;
-mod jobs;
-mod scheduler;
 mod commit_budget;
 mod events_progress;
-mod staging;
+mod jobs;
 mod markers;
-mod profiles;
-mod profile_pool;
 mod probe;
+mod profile_pool;
+mod profiles;
 mod redact;
+mod scheduler;
+mod schema;
+mod staging;
 #[cfg(test)]
 mod test_support;
+mod txhelpers;
+mod validate;
 
-pub use schema::*;
-pub(crate) use validate::*;
-pub(crate) use txhelpers::*;
-pub use jobs::*;
-pub use scheduler::*;
 pub use commit_budget::*;
 pub use events_progress::*;
-pub use staging::*;
+pub use jobs::*;
 pub use markers::*;
-pub use profiles::*;
-pub use profile_pool::*;
 pub use probe::*;
+pub use profile_pool::*;
+pub use profiles::*;
 pub(crate) use redact::*;
+pub use scheduler::*;
+pub use schema::*;
+pub use staging::*;
 #[cfg(test)]
 pub(crate) use test_support::*;
-
+pub(crate) use txhelpers::*;
+pub(crate) use validate::*;
 
 pub(crate) const RUNTIME_DIR: &str = ".llm-wiki/runtime";
 pub(crate) const RUNTIME_DB_FILE: &str = "runtime.db";
@@ -145,7 +144,8 @@ pub(crate) const PROGRESS_APPENDED_NAME: &str = "job-runtime:progress-appended";
 pub(crate) const PROFILE_POOL_CLAIMED_NAME: &str = "profile-pool:claimed";
 pub(crate) const PROFILE_POOL_RELEASED_NAME: &str = "profile-pool:released";
 pub(crate) const PROFILE_CLAIM_INACTIVE_PREFIX: &str = "claim-inactive:";
-pub(crate) const PROFILE_CLAIM_INACTIVE_ERROR: &str = "claim-inactive: profile pool claim is not active";
+pub(crate) const PROFILE_CLAIM_INACTIVE_ERROR: &str =
+    "claim-inactive: profile pool claim is not active";
 // Rust uses this after agent_spawn has accepted claim ownership.
 pub(crate) const AGENT_PROFILE_RELEASE_REASON: &str = "agent-run-cleanup";
 pub(crate) const AGENT_PROFILE_SDK_MODEL_REJECTED_REASON: &str = "agent-sdk-model-rejected";

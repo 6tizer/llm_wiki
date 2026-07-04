@@ -3,7 +3,6 @@ use unicode_normalization::UnicodeNormalization;
 
 use super::*;
 
-
 pub(crate) fn normalize_profile_json(
     code: &str,
     field: &str,
@@ -16,7 +15,11 @@ pub(crate) fn normalize_profile_json(
     Ok(value.to_string())
 }
 
-pub(crate) fn normalize_non_negative_ms(code: &str, field: &str, value: i64) -> Result<i64, String> {
+pub(crate) fn normalize_non_negative_ms(
+    code: &str,
+    field: &str,
+    value: i64,
+) -> Result<i64, String> {
     if value >= 0 {
         Ok(value)
     } else {
@@ -32,19 +35,29 @@ pub(crate) fn bool_to_i64(value: bool) -> i64 {
     }
 }
 
-pub(crate) fn require_enabled_project(project_root: Option<&Path>, enabled: bool) -> Result<&Path, String> {
+pub(crate) fn require_enabled_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+) -> Result<&Path, String> {
     if !enabled {
         return Err("runtime-disabled: work runtime is disabled".to_string());
     }
     project_root.ok_or_else(|| "no-project: no project root is open".to_string())
 }
 
-pub(crate) fn now_for_enabled_project(project_root: Option<&Path>, enabled: bool) -> Result<i64, String> {
+pub(crate) fn now_for_enabled_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+) -> Result<i64, String> {
     require_enabled_project(project_root, enabled)?;
     now_ms()
 }
 
-pub(crate) fn require_non_empty<'a>(code: &str, field: &str, value: &'a str) -> Result<&'a str, String> {
+pub(crate) fn require_non_empty<'a>(
+    code: &str,
+    field: &str,
+    value: &'a str,
+) -> Result<&'a str, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         Err(format!("{code}: {field} must not be empty"))
@@ -185,20 +198,6 @@ pub(crate) fn normalize_affected_path(raw: &str) -> Result<NormalizedAffectedPat
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
 
     #[test]
     fn now_for_enabled_project_returns_disabled_before_no_project() {

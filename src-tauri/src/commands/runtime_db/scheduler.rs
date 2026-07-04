@@ -1,12 +1,11 @@
-use std::path::Path;
-use rusqlite::{params, Connection, OpenFlags};
 use crate::commands::file_sync::ProjectRootState;
+use rusqlite::{params, Connection, OpenFlags};
+use std::path::Path;
 
 use super::*;
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
-
 
 /// Expire an active running lease for a specific job/lease pair, moving the
 /// job to `retry-wait` (attempts remain) or `failed` (attempts exhausted) and
@@ -250,7 +249,9 @@ fn runtime_job_lease_reclaim_scan_for_project(
 /// error) when the work runtime is disabled or no project is open, since
 /// those are ordinary idle states for the background scheduler rather than
 /// failures.
-fn runtime_job_lease_reclaim_tick(project_root: Option<&Path>) -> Result<Vec<RuntimeJobRecord>, String> {
+fn runtime_job_lease_reclaim_tick(
+    project_root: Option<&Path>,
+) -> Result<Vec<RuntimeJobRecord>, String> {
     if !work_runtime_enabled_from_env() {
         return Ok(Vec::new());
     }
@@ -292,20 +293,10 @@ pub fn start_lease_reclaim_scheduler(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
-    use rusqlite::Connection;
-    
-    use std::fs;
-    
-    
-    
-    
-    
-    
-    
-    
 
+    use rusqlite::Connection;
+
+    use std::fs;
 
     #[test]
     fn lease_timeout_moves_running_job_to_retry_wait_or_failed() {
@@ -442,12 +433,9 @@ mod tests {
         .expect("heartbeat renews lease");
 
         let original_expiry = 200 + DEFAULT_LEASE_TTL_MS;
-        let reclaimed = runtime_job_lease_reclaim_scan_for_project(
-            Some(&project),
-            true,
-            original_expiry,
-        )
-        .expect("scan at the pre-renewal expiry");
+        let reclaimed =
+            runtime_job_lease_reclaim_scan_for_project(Some(&project), true, original_expiry)
+                .expect("scan at the pre-renewal expiry");
         assert!(
             reclaimed.is_empty(),
             "a job whose lease was renewed by a live heartbeat must not be reclaimed"
@@ -508,12 +496,9 @@ mod tests {
             ]
         );
 
-        let second_tick = runtime_job_lease_reclaim_scan_for_project(
-            Some(&project),
-            true,
-            expired_at + 60_000,
-        )
-        .expect("second tick is idempotent");
+        let second_tick =
+            runtime_job_lease_reclaim_scan_for_project(Some(&project), true, expired_at + 60_000)
+                .expect("second tick is idempotent");
         assert!(
             second_tick.is_empty(),
             "a later tick must not re-reclaim jobs already moved out of running/active"

@@ -1,12 +1,11 @@
-use std::path::Path;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, ToSql, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, ToSql, Transaction};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
 use uuid::Uuid;
-
 
 /// Record one pending derived stale marker for the currently-open project.
 #[tauri::command]
@@ -347,7 +346,10 @@ fn runtime_derived_marker_claim_batch_for_project(
         let base_version = latest.base_version.clone();
         let input_hash = latest.input_hash.clone();
         let reason = latest.reason.clone();
-        let marker_ids: Vec<String> = snapshot.iter().map(|marker| marker.marker_id.clone()).collect();
+        let marker_ids: Vec<String> = snapshot
+            .iter()
+            .map(|marker| marker.marker_id.clone())
+            .collect();
 
         let payload = serde_json::json!({
             "layer": layer,
@@ -755,7 +757,9 @@ fn normalize_marker_id_batch(marker_ids: &[String]) -> Result<Vec<String>, Strin
     for marker_id in marker_ids {
         let trimmed = require_non_empty("invalid-marker-ids", "markerIds", marker_id)?.to_string();
         if !seen.insert(trimmed.clone()) {
-            return Err(format!("invalid-marker-ids: duplicate markerId '{trimmed}'"));
+            return Err(format!(
+                "invalid-marker-ids: duplicate markerId '{trimmed}'"
+            ));
         }
         normalized.push(trimmed);
     }
@@ -773,7 +777,8 @@ fn ensure_marker_id_sets_match(
 ) -> Result<(), String> {
     let requested_set: std::collections::HashSet<&str> =
         requested.iter().map(String::as_str).collect();
-    let expected_set: std::collections::HashSet<&str> = expected.iter().map(String::as_str).collect();
+    let expected_set: std::collections::HashSet<&str> =
+        expected.iter().map(String::as_str).collect();
     if requested_set == expected_set {
         Ok(())
     } else {
@@ -789,19 +794,24 @@ fn ensure_marker_id_sets_match(
 /// automatic lease-timeout self-heal path (which must never fail its
 /// transaction on a corrupt payload) catches this error itself instead of
 /// propagating it.
-pub(crate) fn parse_derived_rebuild_marker_ids(job: &RuntimeJobRecord) -> Result<Vec<String>, String> {
+pub(crate) fn parse_derived_rebuild_marker_ids(
+    job: &RuntimeJobRecord,
+) -> Result<Vec<String>, String> {
     let value: serde_json::Value = serde_json::from_str(&job.payload).map_err(|err| {
         format!(
             "derived-marker-payload-parse-failed: job '{}' payload is not valid JSON: {err}",
             job.job_id
         )
     })?;
-    let ids = value.get("markerIds").and_then(serde_json::Value::as_array).ok_or_else(|| {
-        format!(
-            "derived-marker-payload-parse-failed: job '{}' payload has no markerIds array",
-            job.job_id
-        )
-    })?;
+    let ids = value
+        .get("markerIds")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            format!(
+                "derived-marker-payload-parse-failed: job '{}' payload has no markerIds array",
+                job.job_id
+            )
+        })?;
     ids.iter()
         .map(|entry| {
             entry.as_str().map(str::to_string).ok_or_else(|| {
@@ -852,20 +862,12 @@ fn map_derived_marker_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    use std::path::{Path, PathBuf};
+
     use rusqlite::{params, Connection};
-    
+    use std::path::{Path, PathBuf};
+
     use std::fs;
     use std::sync::{Arc, Barrier};
-    
-    
-    
-    
-    
-    
-    
-
 
     fn marker_record_request(
         marker_id: &str,
@@ -914,7 +916,10 @@ mod tests {
         }
     }
 
-    fn claim_batch_request(layer: &str, affected_path: &str) -> RuntimeDerivedMarkerClaimBatchRequest {
+    fn claim_batch_request(
+        layer: &str,
+        affected_path: &str,
+    ) -> RuntimeDerivedMarkerClaimBatchRequest {
         RuntimeDerivedMarkerClaimBatchRequest {
             layer: layer.to_string(),
             affected_path: affected_path.to_string(),
@@ -1134,16 +1139,37 @@ mod tests {
         // D1 (fold whole group), T4/D3 (latest real row wins, not synthesized).
         let project = setup_marker_project("marker-claim-fold");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         seed_pending_marker(
-            &project, "marker-2", "embedding", "wiki/a.md", "event-2",
-            Some("sha256:hash2"), "hash2", "commit", 200,
+            &project,
+            "marker-2",
+            "embedding",
+            "wiki/a.md",
+            "event-2",
+            Some("sha256:hash2"),
+            "hash2",
+            "commit",
+            200,
         );
         seed_pending_marker(
-            &project, "marker-3", "embedding", "wiki/a.md", "event-3",
-            Some("sha256:hash3"), "hash3", "commit", 300,
+            &project,
+            "marker-3",
+            "embedding",
+            "wiki/a.md",
+            "event-3",
+            Some("sha256:hash3"),
+            "hash3",
+            "commit",
+            300,
         );
 
         let claimed = runtime_derived_marker_claim_batch_for_project(
@@ -1239,8 +1265,15 @@ mod tests {
     fn derived_marker_claim_batch_concurrent_calls_on_same_group_only_one_succeeds() {
         let project = setup_marker_project("marker-claim-concurrent");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
 
         let shared_project = Arc::new(project.clone());
@@ -1313,8 +1346,15 @@ mod tests {
     fn derived_marker_claim_batch_does_not_sweep_late_arriving_marker() {
         let project = setup_marker_project("marker-claim-late-arrival");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
 
         let job_a = runtime_derived_marker_claim_batch_for_project(
@@ -1328,8 +1368,15 @@ mod tests {
 
         // Arrives strictly after job A's snapshot was read/committed.
         seed_pending_marker(
-            &project, "marker-2", "embedding", "wiki/a.md", "event-2",
-            Some("sha256:hash2"), "hash2", "commit", 300,
+            &project,
+            "marker-2",
+            "embedding",
+            "wiki/a.md",
+            "event-2",
+            Some("sha256:hash2"),
+            "hash2",
+            "commit",
+            300,
         );
 
         let payload_a: serde_json::Value =
@@ -1385,12 +1432,26 @@ mod tests {
         // D4: folding one layer must never touch a sibling layer on the same path.
         let project = setup_marker_project("marker-claim-layer-scope");
         seed_pending_marker(
-            &project, "marker-embedding", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-embedding",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         seed_pending_marker(
-            &project, "marker-graph", "graph", "wiki/a.md", "event-2",
-            Some("sha256:hash2"), "hash2", "commit", 100,
+            &project,
+            "marker-graph",
+            "graph",
+            "wiki/a.md",
+            "event-2",
+            Some("sha256:hash2"),
+            "hash2",
+            "commit",
+            100,
         );
 
         runtime_derived_marker_claim_batch_for_project(
@@ -1424,8 +1485,15 @@ mod tests {
         // reason "delete") rather than being normalized into a commit shape.
         let project = setup_marker_project("marker-claim-delete-intent");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/b.md", "event-1",
-            None, "hash1", "delete", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/b.md",
+            "event-1",
+            None,
+            "hash1",
+            "delete",
+            100,
         );
 
         let claimed = runtime_derived_marker_claim_batch_for_project(
@@ -1450,12 +1518,26 @@ mod tests {
         // reviving it once the batch is processed.
         let project = setup_marker_project("marker-claim-d2-mixed-sequence");
         seed_pending_marker(
-            &project, "marker-commit", "embedding", "wiki/c.md", "event-1",
-            Some("sha256:commit-hash"), "commit-hash", "commit", 100,
+            &project,
+            "marker-commit",
+            "embedding",
+            "wiki/c.md",
+            "event-1",
+            Some("sha256:commit-hash"),
+            "commit-hash",
+            "commit",
+            100,
         );
         seed_pending_marker(
-            &project, "marker-delete", "embedding", "wiki/c.md", "event-2",
-            None, "delete-base", "delete", 200,
+            &project,
+            "marker-delete",
+            "embedding",
+            "wiki/c.md",
+            "event-2",
+            None,
+            "delete-base",
+            "delete",
+            200,
         );
 
         let claimed = runtime_derived_marker_claim_batch_for_project(
@@ -1508,8 +1590,15 @@ mod tests {
     fn derived_marker_complete_batch_happy_path_marks_done_and_completes_job() {
         let project = setup_marker_project("marker-complete-happy");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -1554,8 +1643,15 @@ mod tests {
         // outright rather than silently completing a subset.
         let project = setup_marker_project("marker-complete-own-set");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let job_a = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -1573,8 +1669,15 @@ mod tests {
         .expect("claim job A");
 
         seed_pending_marker(
-            &project, "marker-2", "embedding", "wiki/a.md", "event-2",
-            Some("sha256:hash2"), "hash2", "commit", 300,
+            &project,
+            "marker-2",
+            "embedding",
+            "wiki/a.md",
+            "event-2",
+            Some("sha256:hash2"),
+            "hash2",
+            "commit",
+            300,
         );
         let job_b = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -1589,7 +1692,11 @@ mod tests {
         let mismatch = runtime_derived_marker_complete_batch_for_project(
             Some(&project),
             true,
-            complete_batch_request(&claim_a.job.job_id, &claim_a.lease.lease_id, &["marker-1", "marker-2"]),
+            complete_batch_request(
+                &claim_a.job.job_id,
+                &claim_a.lease.lease_id,
+                &["marker-1", "marker-2"],
+            ),
             500,
         )
         .expect_err("completing another job's marker must fail");
@@ -1629,16 +1736,37 @@ mod tests {
         // superset/foreign id (already covered by the mismatch case above).
         let project = setup_marker_project("marker-complete-subset-reject");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         seed_pending_marker(
-            &project, "marker-2", "embedding", "wiki/a.md", "event-2",
-            Some("sha256:hash2"), "hash2", "commit", 200,
+            &project,
+            "marker-2",
+            "embedding",
+            "wiki/a.md",
+            "event-2",
+            Some("sha256:hash2"),
+            "hash2",
+            "commit",
+            200,
         );
         seed_pending_marker(
-            &project, "marker-3", "embedding", "wiki/a.md", "event-3",
-            Some("sha256:hash3"), "hash3", "commit", 300,
+            &project,
+            "marker-3",
+            "embedding",
+            "wiki/a.md",
+            "event-3",
+            Some("sha256:hash3"),
+            "hash3",
+            "commit",
+            300,
         );
 
         let claimed = runtime_derived_marker_claim_batch_for_project(
@@ -1686,8 +1814,15 @@ mod tests {
         // the actual complete_batch command path.
         let project = setup_marker_project("marker-complete-batch-id-validation");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -1735,8 +1870,15 @@ mod tests {
         // the actual release_batch command path.
         let project = setup_marker_project("marker-release-batch-id-validation");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -1793,7 +1935,8 @@ mod tests {
                 .expect_err("duplicate ids must be rejected");
         assert!(duplicate.starts_with("invalid-marker-ids"));
 
-        let blank = normalize_marker_id_batch(&["  ".to_string()]).expect_err("blank id must be rejected");
+        let blank =
+            normalize_marker_id_batch(&["  ".to_string()]).expect_err("blank id must be rejected");
         assert!(blank.starts_with("invalid-marker-ids"));
 
         assert_eq!(
@@ -1828,8 +1971,15 @@ mod tests {
     fn derived_marker_lease_timeout_self_heals_within_same_job() {
         let project = setup_marker_project("marker-lease-timeout-l1");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -1932,8 +2082,15 @@ mod tests {
     fn derived_marker_complete_batch_rejects_zombie_lease_on_recovered_running_job() {
         let project = setup_marker_project("marker-lease-timeout-l5-variant");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -2034,8 +2191,15 @@ mod tests {
     fn derived_marker_lease_timeout_converges_poison_marker_to_failed_after_max_attempts() {
         let project = setup_marker_project("marker-lease-timeout-p1");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -2055,12 +2219,22 @@ mod tests {
             let claim = runtime_job_claim_by_kind_for_project(
                 Some(&project),
                 true,
-                claim_by_kind_request(&format!("worker-{round}"), &format!("lease-{round}"), DERIVED_REBUILD_JOB_KIND),
+                claim_by_kind_request(
+                    &format!("worker-{round}"),
+                    &format!("lease-{round}"),
+                    DERIVED_REBUILD_JOB_KIND,
+                ),
                 now,
             )
             .unwrap_or_else(|err| panic!("round {round}: claim job: {err}"));
-            assert_eq!(claim.job.job_id, job_id, "round {round}: same job_id every round");
-            assert_eq!(claim.job.attempt, round, "round {round}: attempt count continues on the same job");
+            assert_eq!(
+                claim.job.job_id, job_id,
+                "round {round}: same job_id every round"
+            );
+            assert_eq!(
+                claim.job.attempt, round,
+                "round {round}: attempt count continues on the same job"
+            );
 
             now += DEFAULT_LEASE_TTL_MS;
             let reclaimed = runtime_job_lease_timeout_for_project(
@@ -2071,7 +2245,10 @@ mod tests {
                 now,
             )
             .unwrap_or_else(|err| panic!("round {round}: reclaim: {err}"));
-            assert_eq!(reclaimed.state, "retry-wait", "round {round}: attempts remain");
+            assert_eq!(
+                reclaimed.state, "retry-wait",
+                "round {round}: attempts remain"
+            );
 
             // Intermediate-round regression lock: the marker must stay
             // claimed under this SAME job, not be re-foldable elsewhere.
@@ -2085,7 +2262,10 @@ mod tests {
             .into_iter()
             .find(|marker| marker.marker_id == "marker-1")
             .expect("marker-1 present");
-            assert_eq!(marker.status, CLAIMED_MARKER_STATUS, "round {round}: marker stays claimed");
+            assert_eq!(
+                marker.status, CLAIMED_MARKER_STATUS,
+                "round {round}: marker stays claimed"
+            );
             let cannot_refold = runtime_derived_marker_claim_batch_for_project(
                 Some(&project),
                 true,
@@ -2144,7 +2324,10 @@ mod tests {
         .find(|marker| marker.marker_id == "marker-1")
         .expect("marker-1 present");
         assert_eq!(marker.status, FAILED_MARKER_STATUS);
-        assert!(marker.last_error.as_deref().is_some_and(|error| error.contains("lease-timeout")));
+        assert!(marker
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("lease-timeout")));
         let _ = fs::remove_dir_all(project);
     }
 
@@ -2155,8 +2338,15 @@ mod tests {
     fn derived_marker_lease_timeout_clock_rollback_does_not_deadlock() {
         let project = setup_marker_project("marker-lease-timeout-l4");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -2219,8 +2409,15 @@ mod tests {
         // land on `cancelled`, not silently flip back to `done`.
         let project = setup_marker_project("marker-release-cancel-p3");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -2241,7 +2438,9 @@ mod tests {
         runtime_job_cancel_for_project(
             Some(&project),
             true,
-            RuntimeJobCancelRequest { job_id: claim.job.job_id.clone() },
+            RuntimeJobCancelRequest {
+                job_id: claim.job.job_id.clone(),
+            },
             400,
         )
         .expect("cancel job");
@@ -2271,8 +2470,15 @@ mod tests {
     fn derived_marker_release_batch_rejects_wrong_job_state_and_marker_id_mismatch() {
         let project = setup_marker_project("marker-release-guards");
         seed_pending_marker(
-            &project, "marker-1", "embedding", "wiki/a.md", "event-1",
-            Some("sha256:hash1"), "hash1", "commit", 100,
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
         );
         let claimed = runtime_derived_marker_claim_batch_for_project(
             Some(&project),
@@ -2295,7 +2501,9 @@ mod tests {
         runtime_job_cancel_for_project(
             Some(&project),
             true,
-            RuntimeJobCancelRequest { job_id: claimed.job.job_id.clone() },
+            RuntimeJobCancelRequest {
+                job_id: claimed.job.job_id.clone(),
+            },
             400,
         )
         .expect("cancel job");
@@ -2336,25 +2544,42 @@ mod tests {
         )
         .expect("page 1");
         assert_eq!(page1.markers.len(), 2);
-        let cursor1 = page1.next_cursor.clone().expect("page 1 is full, must carry a cursor");
+        let cursor1 = page1
+            .next_cursor
+            .clone()
+            .expect("page 1 is full, must carry a cursor");
 
         let page2 = runtime_derived_stale_marker_list_for_project(
             Some(&project),
             true,
-            marker_list_request_with_cursor(2, Some(cursor1.marked_at_ms), Some(&cursor1.marker_id)),
+            marker_list_request_with_cursor(
+                2,
+                Some(cursor1.marked_at_ms),
+                Some(&cursor1.marker_id),
+            ),
         )
         .expect("page 2");
         assert_eq!(page2.markers.len(), 2);
-        let cursor2 = page2.next_cursor.clone().expect("page 2 is full, must carry a cursor");
+        let cursor2 = page2
+            .next_cursor
+            .clone()
+            .expect("page 2 is full, must carry a cursor");
 
         let page3 = runtime_derived_stale_marker_list_for_project(
             Some(&project),
             true,
-            marker_list_request_with_cursor(2, Some(cursor2.marked_at_ms), Some(&cursor2.marker_id)),
+            marker_list_request_with_cursor(
+                2,
+                Some(cursor2.marked_at_ms),
+                Some(&cursor2.marker_id),
+            ),
         )
         .expect("page 3");
         assert_eq!(page3.markers.len(), 1);
-        assert!(page3.next_cursor.is_none(), "a short page must not claim there is more");
+        assert!(
+            page3.next_cursor.is_none(),
+            "a short page must not claim there is more"
+        );
 
         let mut all_ids: Vec<String> = page1
             .markers
@@ -2399,33 +2624,59 @@ mod tests {
         )
         .expect("page 1");
         assert_eq!(
-            page1.markers.iter().map(|m| m.marker_id.as_str()).collect::<Vec<_>>(),
+            page1
+                .markers
+                .iter()
+                .map(|m| m.marker_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["marker-0", "marker-1"]
         );
-        let cursor1 = page1.next_cursor.clone().expect("full page carries a cursor");
+        let cursor1 = page1
+            .next_cursor
+            .clone()
+            .expect("full page carries a cursor");
         assert_eq!(cursor1.marked_at_ms, 100);
         assert_eq!(cursor1.marker_id, "marker-1");
 
         let page2 = runtime_derived_stale_marker_list_for_project(
             Some(&project),
             true,
-            marker_list_request_with_cursor(2, Some(cursor1.marked_at_ms), Some(&cursor1.marker_id)),
+            marker_list_request_with_cursor(
+                2,
+                Some(cursor1.marked_at_ms),
+                Some(&cursor1.marker_id),
+            ),
         )
         .expect("page 2");
         assert_eq!(
-            page2.markers.iter().map(|m| m.marker_id.as_str()).collect::<Vec<_>>(),
+            page2
+                .markers
+                .iter()
+                .map(|m| m.marker_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["marker-2", "marker-3"]
         );
-        let cursor2 = page2.next_cursor.clone().expect("full page carries a cursor");
+        let cursor2 = page2
+            .next_cursor
+            .clone()
+            .expect("full page carries a cursor");
 
         let page3 = runtime_derived_stale_marker_list_for_project(
             Some(&project),
             true,
-            marker_list_request_with_cursor(2, Some(cursor2.marked_at_ms), Some(&cursor2.marker_id)),
+            marker_list_request_with_cursor(
+                2,
+                Some(cursor2.marked_at_ms),
+                Some(&cursor2.marker_id),
+            ),
         )
         .expect("page 3");
         assert_eq!(
-            page3.markers.iter().map(|m| m.marker_id.as_str()).collect::<Vec<_>>(),
+            page3
+                .markers
+                .iter()
+                .map(|m| m.marker_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["marker-4"]
         );
         assert!(page3.next_cursor.is_none());
@@ -2465,7 +2716,11 @@ mod tests {
         let page2 = runtime_derived_stale_marker_list_for_project(
             Some(&project),
             true,
-            marker_list_request_with_cursor(2, Some(cursor1.marked_at_ms), Some(&cursor1.marker_id)),
+            marker_list_request_with_cursor(
+                2,
+                Some(cursor1.marked_at_ms),
+                Some(&cursor1.marker_id),
+            ),
         )
         .expect("page 2");
         assert_eq!(page2.markers.len(), 2);
@@ -2477,7 +2732,11 @@ mod tests {
         let page3 = runtime_derived_stale_marker_list_for_project(
             Some(&project),
             true,
-            marker_list_request_with_cursor(2, Some(cursor2.marked_at_ms), Some(&cursor2.marker_id)),
+            marker_list_request_with_cursor(
+                2,
+                Some(cursor2.marked_at_ms),
+                Some(&cursor2.marker_id),
+            ),
         )
         .expect("page 3 (past end)");
         assert!(page3.markers.is_empty());

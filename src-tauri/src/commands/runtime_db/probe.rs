@@ -1,18 +1,15 @@
-use std::path::Path;
-use rusqlite::params;
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::params;
+use std::path::Path;
+use tauri::State;
 
 use super::*;
+use crate::commands::profile_secrets::{read_profile_secret, OsSecretStore, SecretStore};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
-use crate::commands::profile_secrets::{
-    read_profile_secret, OsSecretStore, SecretStore,
-};
-
 
 /// Probe stored or draft model profile capabilities without returning secrets.
 #[tauri::command]
@@ -72,13 +69,12 @@ pub async fn runtime_model_call_forward(
     request: RuntimeModelCallForwardRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
-    let (project_root, runtime_enabled, now) =
-        run_guarded("runtime_model_call_forward", || {
-            let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-            let project_root = root_state.get();
-            let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-            Ok((project_root, runtime_enabled, now))
-        })?;
+    let (project_root, runtime_enabled, now) = run_guarded("runtime_model_call_forward", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        Ok((project_root, runtime_enabled, now))
+    })?;
 
     let client = model_call_forward_client()?;
     runtime_model_call_forward_for_project_with_store(
@@ -894,8 +890,7 @@ async fn runtime_model_call_forward_for_project_with_store(
             .ok_or_else(|| PROFILE_CLAIM_INACTIVE_ERROR.to_string())?;
         if claim.kind != "model-call" || claim.task_family != PREPARE_PROFILE_TASK_FAMILY {
             return Err(
-                "model-call-claim-unsupported: claim is not an ingest model-call claim"
-                    .to_string(),
+                "model-call-claim-unsupported: claim is not an ingest model-call claim".to_string(),
             );
         }
         let profile = read_visible_profile_tx(&tx, &claim.profile_id)?;
@@ -917,8 +912,7 @@ async fn runtime_model_call_forward_for_project_with_store(
 
     if profile.profile_id != claim.profile_id {
         return Err(
-            "model-call-claim-mismatch: claim profile does not match resolved profile"
-                .to_string(),
+            "model-call-claim-mismatch: claim profile does not match resolved profile".to_string(),
         );
     }
     require_plan_field_match(&profile.provider_id, &request.provider, "provider")?;
@@ -970,7 +964,9 @@ async fn runtime_model_call_forward_for_project_with_store(
     }
     if !status.is_success() {
         // Anti-leak constraint #3: non-2xx bodies are never surfaced.
-        return Err(format!("model-call-http-failed: provider returned {status}"));
+        return Err(format!(
+            "model-call-http-failed: provider returned {status}"
+        ));
     }
 
     response
@@ -1033,20 +1029,13 @@ fn model_call_retry_after_ms(headers: &HeaderMap) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use std::path::{Path, PathBuf};
-    
-    
+
     use std::fs;
-    
-    
-    
-    
-    
-    
+
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
 
     fn stored_probe_request(profile_id: &str, force: bool) -> RuntimeProfileProbeRequest {
         RuntimeProfileProbeRequest {
@@ -1549,10 +1538,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
             .and(header("x-api-key", "sk-test000-stored-secret"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n",
+            ))
             .expect(1)
             .mount(&server)
             .await;
@@ -1574,7 +1562,13 @@ mod tests {
         let result = runtime_model_call_forward_for_project_with_store(
             Some(&project),
             true,
-            model_call_forward_request(&claim_id, "anthropic", "anthropic-messages", "claude-test", body),
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                body,
+            ),
             250,
             &store,
             &client,
@@ -1747,7 +1741,10 @@ mod tests {
         .await
         .expect_err("non-2xx provider response must surface as an error");
 
-        assert_eq!(error, "model-call-http-failed: provider returned 500 Internal Server Error");
+        assert_eq!(
+            error,
+            "model-call-http-failed: provider returned 500 Internal Server Error"
+        );
         assert!(!error.contains("sk-test000-stored-secret"));
         assert!(!error.contains("Authorization"));
         assert!(!error.contains("leaked-upstream-diagnostic-details"));

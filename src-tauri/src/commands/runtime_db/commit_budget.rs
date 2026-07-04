@@ -1,12 +1,11 @@
-use std::path::Path;
-use rusqlite::{params, Connection, OpenFlags, Transaction};
-use tauri::State;
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
+use rusqlite::{params, Connection, OpenFlags, Transaction};
+use std::path::Path;
+use tauri::State;
 
 use super::*;
 use uuid::Uuid;
-
 
 /// Claim commit-path budget capacity for the currently-open project.
 #[tauri::command]
@@ -250,7 +249,10 @@ fn normalize_commit_budget_ttl(ttl_ms: Option<i64>) -> Result<i64, String> {
     }
 }
 
-pub(crate) fn ensure_claim_id_available(tx: &Transaction<'_>, claim_id: &str) -> Result<(), String> {
+pub(crate) fn ensure_claim_id_available(
+    tx: &Transaction<'_>,
+    claim_id: &str,
+) -> Result<(), String> {
     let existing = tx
         .query_row(
             "SELECT COUNT(*)
@@ -531,20 +533,11 @@ fn map_resource_claim_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
+
     use rusqlite::{params, Connection};
-    
+
     use std::fs;
     use std::sync::{Arc, Barrier};
-    
-    
-    
-    
-    
-    
-    
-
 
     fn commit_release_request(claim_id: &str) -> RuntimeCommitBudgetReleaseRequest {
         RuntimeCommitBudgetReleaseRequest {
@@ -979,7 +972,10 @@ mod tests {
         )
         .expect("orphaned claim self-heals once its ttl elapses, with no manual expire call");
         assert_eq!(healed.resource_key, "wiki/a.md");
-        assert!(healed.claims.iter().all(|claim| claim.claim_id == "claim-2"));
+        assert!(healed
+            .claims
+            .iter()
+            .all(|claim| claim.claim_id == "claim-2"));
 
         // The stale claim-1 rows must be flipped to 'expired' in place (not
         // merely filtered at read time), otherwise the commit-path unique
@@ -1095,7 +1091,10 @@ mod tests {
         )
         .expect("single-row orphan self-heals once its ttl elapses");
         assert_eq!(healed.claims.len(), 2);
-        assert!(healed.claims.iter().all(|claim| claim.claim_id == "claim-2"));
+        assert!(healed
+            .claims
+            .iter()
+            .all(|claim| claim.claim_id == "claim-2"));
         let _ = fs::remove_dir_all(project);
     }
 
@@ -1156,8 +1155,9 @@ mod tests {
         assert_eq!(
             list.claims
                 .iter()
-                .filter(|claim| claim.scope == COMMIT_PATH_SCOPE
-                    && claim.resource_key == "wiki/a.md")
+                .filter(
+                    |claim| claim.scope == COMMIT_PATH_SCOPE && claim.resource_key == "wiki/a.md"
+                )
                 .count(),
             1,
             "exactly one active path claim must remain, never zero or two"
