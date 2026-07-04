@@ -417,7 +417,7 @@ describe("chat store agent data model", () => {
     })
   })
 
-  it("clears fork pending when an agent stream returns a new session", () => {
+  it("clears fork pending and resumeSessionAt when an agent stream returns a new session (SPEC-7 PR2 A14)", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({
       isStreaming: true,
@@ -430,6 +430,7 @@ describe("chat store agent data model", () => {
           updatedAt: 1,
           agentSessionId: "old-session",
           agentForkSessionPending: true,
+          agentResumeSessionAt: "assistant-uuid-1",
         },
       ],
       activeConversationId: convId,
@@ -444,6 +445,7 @@ describe("chat store agent data model", () => {
       agentSessionId: "new-session",
     })
     expect(useChatStore.getState().conversations[0].agentForkSessionPending).toBeUndefined()
+    expect(useChatStore.getState().conversations[0].agentResumeSessionAt).toBeUndefined()
   })
 
   it("finishAgentStreamMessage updates the message's conversation, not the live active one (P1-6)", () => {
