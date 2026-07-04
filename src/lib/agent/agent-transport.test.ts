@@ -1067,7 +1067,7 @@ describe("streamAgent", () => {
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
 
-	it("filters SDK compact summaries out of normal assistant output", async () => {
+	it("filters SDK compact boundary system messages out of normal output", async () => {
 		const callbacks = {
 			onMessage: vi.fn(),
 			onToken: vi.fn(),
@@ -1086,17 +1086,11 @@ describe("streamAgent", () => {
 			args: { streamId: string };
 		};
 		const compactMessage = {
-			type: "assistant",
-			message: {
-				role: "assistant",
-				content: [
-					{
-						type: "text",
-						text: "The context has run out, so here is a compact summary of the prior session.",
-					},
-				],
+			type: "system",
+			subtype: "compact_boundary",
+			compact_metadata: {
+				post_tokens: 1200,
 			},
-			uuid: "assistant-compact-1",
 		};
 
 		tauriMocks.emitString(
@@ -1120,10 +1114,73 @@ describe("streamAgent", () => {
 
 		expect(callbacks.onSessionCompact).toHaveBeenCalledWith({
 			kind: "compact",
-			message: compactMessage,
 		});
 		expect(callbacks.onMessage).not.toHaveBeenCalled();
 		expect(callbacks.onToken).not.toHaveBeenCalled();
+		expect(callbacks.onDone).toHaveBeenCalledWith(null);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["boundary-then-text", ["compact", "assistant"]],
+		["text-then-boundary", ["assistant", "compact"]],
+	])("handles compact boundary and assistant text out of order: %s", async (_name, order) => {
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+			onSessionCompact: vi.fn(),
+		};
+
+		const stream = streamAgent("resume agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledTimes(1);
+		});
+
+		const payload = tauriMocks.invoke.mock.calls[0]?.[1] as {
+			args: { streamId: string };
+		};
+		const compactMessage = {
+			type: "system",
+			subtype: "compact_boundary",
+		};
+		const assistantMessage = {
+			type: "assistant",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "continued output" }],
+			},
+			uuid: "assistant-1",
+		};
+
+		for (const item of order) {
+			tauriMocks.emitString(
+				`agent:${payload.args.streamId}`,
+				JSON.stringify({
+					streamId: payload.args.streamId,
+					type: "message",
+					data: item === "compact" ? compactMessage : assistantMessage,
+				}),
+			);
+		}
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "done",
+				data: null,
+			}),
+		);
+
+		await stream;
+
+		expect(callbacks.onSessionCompact).toHaveBeenCalledWith({
+			kind: "compact",
+		});
+		expect(callbacks.onMessage).toHaveBeenCalledWith(assistantMessage);
+		expect(callbacks.onToken).toHaveBeenCalledWith("continued output");
 		expect(callbacks.onDone).toHaveBeenCalledWith(null);
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});

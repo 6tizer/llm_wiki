@@ -8,14 +8,18 @@ function resetChatStore(): void {
     activeConversationId: null,
     messages: [],
     isStreaming: false,
+    streamingConversationId: null,
+    streamingAgentMessageId: null,
     streamingContent: "",
     mode: "chat",
     ingestSource: null,
     maxHistoryMessages: 10,
     activeAgentPermissionRequest: null,
     queuedAgentPermissionRequests: [],
+    agentPermissionRequestsByConversation: {},
     agentRewindTargets: {},
     activeAgentRewindRequest: null,
+    agentRewindRequestsByConversation: {},
     agentRewindLocks: {},
   })
 }
@@ -29,6 +33,10 @@ function makeAssistantMessage(id: string, conversationId: string): DisplayMessag
     conversationId,
     mode: "agent",
   }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve()
 }
 
 describe("chat store agent data model", () => {
@@ -369,7 +377,7 @@ describe("chat store agent data model", () => {
 
     expect(useChatStore.getState().messages[0]).toMatchObject({
       id: "m1",
-      content: "Agent timed out",
+      content: "",
       mode: "agent",
       agentErrorKind: "timeout",
     })
@@ -405,7 +413,7 @@ describe("chat store agent data model", () => {
 
     expect(useChatStore.getState().messages[0]).toMatchObject({
       id: "m1",
-      content: "Agent reached the max turn limit.",
+      content: "",
       agentErrorKind: "max_turns_exceeded",
       agentResourceLimit: {
         kind: "resource_limit",
@@ -483,6 +491,40 @@ describe("chat store agent data model", () => {
       agentSessionId: "session-A",
       conversationId: convA,
     })
+  })
+
+  it("ignores a stale agent finish when a newer run is already streaming in the same conversation", () => {
+    const convId = useChatStore.getState().createConversation()
+    const oldMessageId = useChatStore.getState().startAgentStreamMessage()
+    const newMessageId = useChatStore.getState().startAgentStreamMessage()
+    if (!oldMessageId || !newMessageId) throw new Error("expected agent messages")
+
+    expect(useChatStore.getState().streamingAgentMessageId).toBe(newMessageId)
+
+    useChatStore.getState().finishAgentStreamMessage(oldMessageId, "old done")
+
+    expect(useChatStore.getState().isStreaming).toBe(true)
+    expect(useChatStore.getState().streamingConversationId).toBe(convId)
+    expect(useChatStore.getState().streamingAgentMessageId).toBe(newMessageId)
+    expect(
+      useChatStore.getState().messages.find((message) => message.id === oldMessageId)?.content
+    ).toBe("old done")
+  })
+
+  it("setStreaming keeps streaming conversation and agent message ids in sync", () => {
+    const convId = useChatStore.getState().createConversation()
+    const messageId = useChatStore.getState().startAgentStreamMessage()
+    if (!messageId) throw new Error("expected agent message")
+
+    expect(useChatStore.getState().isStreaming).toBe(true)
+    expect(useChatStore.getState().streamingConversationId).toBe(convId)
+    expect(useChatStore.getState().streamingAgentMessageId).toBe(messageId)
+
+    useChatStore.getState().setStreaming(false)
+
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(useChatStore.getState().streamingConversationId).toBeNull()
+    expect(useChatStore.getState().streamingAgentMessageId).toBeNull()
   })
 
   it("updateAgentProgress upserts by toolUseId and overwrites status fields", () => {
@@ -871,12 +913,48 @@ describe("chat store agent data model", () => {
     ])
   })
 
+  it("allows a compact boundary patch to land after the agent message has finished", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      isStreaming: true,
+      streamingContent: "",
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+    useChatStore.getState().finishAgentStreamMessage("m1", "done")
+    useChatStore.getState().updateAgentStreamMessage("m1", {
+      sessionCompact: true,
+    })
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      id: "m1",
+      content: "done",
+      sessionCompact: true,
+    })
+  })
+
+  it("keeps sessionCompact idempotent when the same run receives multiple compact boundaries", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().updateAgentStreamMessage("m1", { sessionCompact: true })
+    useChatStore.getState().updateAgentStreamMessage("m1", { sessionCompact: true })
+
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      id: "m1",
+      sessionCompact: true,
+    })
+  })
+
   it("starts with no pending agent permission request", () => {
     expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
     expect(useChatStore.getState().queuedAgentPermissionRequests).toEqual([])
   })
 
   it("resolves the active agent permission request", async () => {
+    useChatStore.getState().createConversation()
     const promise = useChatStore.getState().requestAgentPermission({
       requestId: "permission-1",
       toolName: "Bash",
@@ -901,22 +979,30 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
   })
 
-  it("queues concurrent agent permission requests serially", async () => {
+  it("queues concurrent agent permission requests per conversation and shows the active conversation first", async () => {
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    useChatStore.getState().setActiveConversation(convB)
     const first = useChatStore.getState().requestAgentPermission({
       requestId: "permission-1",
+      conversationId: convA,
       toolName: "Bash",
       inputPreview: {},
       toolUseID: "tool-1",
     })
     const second = useChatStore.getState().requestAgentPermission({
       requestId: "permission-2",
+      conversationId: convB,
       toolName: "Edit",
       inputPreview: {},
       toolUseID: "tool-2",
     })
 
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-2")
+    expect(useChatStore.getState().queuedAgentPermissionRequests).toHaveLength(0)
+
+    useChatStore.getState().setActiveConversation(convA)
     expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-1")
-    expect(useChatStore.getState().queuedAgentPermissionRequests).toHaveLength(1)
 
     useChatStore.getState().resolveAgentPermission("permission-1", {
       behavior: "deny",
@@ -924,12 +1010,111 @@ describe("chat store agent data model", () => {
     })
 
     await expect(first).resolves.toMatchObject({ behavior: "deny" })
+    expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
+
+    useChatStore.getState().setActiveConversation(convB)
     expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-2")
 
     useChatStore.getState().resolveAgentPermission("permission-2", {
       behavior: "allow",
     })
     await expect(second).resolves.toMatchObject({ behavior: "allow" })
+  })
+
+  it("approving one conversation's request does not affect another conversation's display queue", async () => {
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    const first = useChatStore.getState().requestAgentPermission({
+      requestId: "a-1",
+      conversationId: convA,
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-a",
+    })
+    const second = useChatStore.getState().requestAgentPermission({
+      requestId: "b-1",
+      conversationId: convB,
+      toolName: "Edit",
+      inputPreview: {},
+      toolUseID: "tool-b",
+    })
+
+    useChatStore.getState().setActiveConversation(convA)
+    useChatStore.getState().resolveAgentPermission("a-1", { behavior: "allow" })
+    useChatStore.getState().setActiveConversation(convB)
+
+    await expect(first).resolves.toMatchObject({ behavior: "allow" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("b-1")
+    expect(useChatStore.getState().queuedAgentPermissionRequests).toEqual([])
+    useChatStore.getState().resolveAgentPermission("b-1", { behavior: "deny" })
+    await expect(second).resolves.toMatchObject({ behavior: "deny" })
+  })
+
+  it("keeps a switched-away active permission request pending until resolved or timed out", async () => {
+    vi.useFakeTimers()
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    useChatStore.getState().setActiveConversation(convA)
+
+    const first = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      conversationId: convA,
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 1_000)
+
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-1")
+    useChatStore.getState().setActiveConversation(convB)
+    expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
+    let resolved = false
+    first.then(() => {
+      resolved = true
+    })
+    await flushMicrotasks()
+    expect(resolved).toBe(false)
+    expect(useChatStore.getState().agentPermissionRequestsByConversation[convA]).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await expect(first).resolves.toMatchObject({ behavior: "deny" })
+    expect(useChatStore.getState().agentPermissionRequestsByConversation[convA]).toBeUndefined()
+  })
+
+  it("starts the timeout for a same-conversation queued permission only after promotion", async () => {
+    vi.useFakeTimers()
+    const convId = useChatStore.getState().createConversation()
+    const first = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      conversationId: convId,
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 60_000)
+    const second = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-2",
+      conversationId: convId,
+      toolName: "Edit",
+      inputPreview: {},
+      toolUseID: "tool-2",
+    }, 60_000)
+
+    await vi.advanceTimersByTimeAsync(50_000)
+    useChatStore.getState().resolveAgentPermission("permission-1", {
+      behavior: "allow",
+    })
+    await expect(first).resolves.toMatchObject({ behavior: "allow" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-2")
+
+    await vi.advanceTimersByTimeAsync(59_999)
+    let secondResolved = false
+    second.then(() => {
+      secondResolved = true
+    })
+    await flushMicrotasks()
+    expect(secondResolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(second).resolves.toMatchObject({ behavior: "deny" })
   })
 
   it("auto-denies an active agent permission request after the timeout", async () => {
@@ -948,6 +1133,29 @@ describe("chat store agent data model", () => {
       decisionClassification: "user_reject",
     })
     expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
+  })
+
+  it("auto-denies a background conversation permission request after the timeout", async () => {
+    vi.useFakeTimers()
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    useChatStore.getState().setActiveConversation(convB)
+    const promise = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      conversationId: convA,
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 1_000)
+
+    expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    await expect(promise).resolves.toMatchObject({
+      behavior: "deny",
+      decisionClassification: "user_reject",
+    })
+    expect(useChatStore.getState().agentPermissionRequestsByConversation[convA]).toBeUndefined()
   })
 
   it("clears active and queued permission requests without touching chat data", async () => {
@@ -976,10 +1184,173 @@ describe("chat store agent data model", () => {
     await expect(second).resolves.toMatchObject({ behavior: "deny", interrupt: true })
     expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
     expect(useChatStore.getState().queuedAgentPermissionRequests).toEqual([])
+    expect(useChatStore.getState().agentPermissionRequestsByConversation).toEqual({})
     expect(useChatStore.getState().conversations[0].id).toBe(convId)
     expect(useChatStore.getState().messages[0]).toMatchObject({
       role: "user",
       content: "hello",
     })
+  })
+
+  it("clears only one conversation's permission requests and promotes that conversation's next request", async () => {
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    useChatStore.getState().setActiveConversation(convA)
+    const a1 = useChatStore.getState().requestAgentPermission({
+      requestId: "a-1",
+      conversationId: convA,
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-a-1",
+    })
+    const a2 = useChatStore.getState().requestAgentPermission({
+      requestId: "a-2",
+      conversationId: convA,
+      toolName: "Edit",
+      inputPreview: {},
+      toolUseID: "tool-a-2",
+    })
+    const b1 = useChatStore.getState().requestAgentPermission({
+      requestId: "b-1",
+      conversationId: convB,
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-b-1",
+    })
+
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("a-1")
+    useChatStore.getState().resolveAgentPermission("a-1", { behavior: "deny" })
+    await expect(a1).resolves.toMatchObject({ behavior: "deny" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("a-2")
+
+    useChatStore.getState().clearAgentPermissionRequestsForConversation(convA, {
+      behavior: "deny",
+      interrupt: true,
+      message: "stopped",
+    })
+    await expect(a2).resolves.toMatchObject({ behavior: "deny", interrupt: true })
+    expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
+
+    useChatStore.getState().setActiveConversation(convB)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("b-1")
+    useChatStore.getState().resolveAgentPermission("b-1", { behavior: "allow" })
+    await expect(b1).resolves.toMatchObject({ behavior: "allow" })
+  })
+
+  it("deleteConversation denies and clears only that conversation's pending permissions", async () => {
+    vi.useFakeTimers()
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    const a = useChatStore.getState().requestAgentPermission({
+      requestId: "a-1",
+      conversationId: convA,
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-a-1",
+    })
+    const b = useChatStore.getState().requestAgentPermission({
+      requestId: "b-1",
+      conversationId: convB,
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-b-1",
+    })
+
+    useChatStore.getState().deleteConversation(convA)
+    let aResolved = false
+    a.then(() => {
+      aResolved = true
+    })
+    await flushMicrotasks()
+
+    expect(aResolved).toBe(true)
+    await expect(a).resolves.toMatchObject({ behavior: "deny" })
+    expect(useChatStore.getState().agentPermissionRequestsByConversation[convA]).toBeUndefined()
+    useChatStore.getState().setActiveConversation(convB)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("b-1")
+    useChatStore.getState().resolveAgentPermission("b-1", { behavior: "allow" })
+    await expect(b).resolves.toMatchObject({ behavior: "allow" })
+  })
+
+  it("applyAgentRewindSuccess denies stale pending permissions for that conversation only", async () => {
+    const convA = useChatStore.getState().createConversation()
+    const convB = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        makeAssistantMessage("m1", convA),
+        makeAssistantMessage("m2", convA),
+        makeAssistantMessage("other-1", convB),
+      ],
+    })
+    const stale = useChatStore.getState().requestAgentPermission({
+      requestId: "stale-1",
+      conversationId: convA,
+      streamId: "old-stream",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-stale",
+    })
+    const other = useChatStore.getState().requestAgentPermission({
+      requestId: "other-1",
+      conversationId: convB,
+      streamId: "other-stream",
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-other",
+    })
+
+    expect(useChatStore.getState().applyAgentRewindSuccess(convA, {
+      throughMessageId: "m1",
+      resumeSessionAt: "assistant-sdk-1",
+    })).toBe(true)
+
+    await expect(stale).resolves.toMatchObject({ behavior: "deny", interrupt: true })
+    const stateAfterCleanup = useChatStore.getState()
+    useChatStore.getState().resolveAgentPermission("stale-1", { behavior: "allow" })
+    expect(useChatStore.getState()).toMatchObject({
+      agentPermissionRequestsByConversation: stateAfterCleanup.agentPermissionRequestsByConversation,
+      activeAgentPermissionRequest: stateAfterCleanup.activeAgentPermissionRequest,
+      queuedAgentPermissionRequests: stateAfterCleanup.queuedAgentPermissionRequests,
+    })
+    useChatStore.getState().setActiveConversation(convB)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("other-1")
+    useChatStore.getState().resolveAgentPermission("other-1", { behavior: "allow" })
+    await expect(other).resolves.toMatchObject({ behavior: "allow" })
+  })
+
+  it("clears old pending permissions at fork time before later cross-fork targets can be approved", async () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      conversations: [
+        {
+          id: convId,
+          title: "A",
+          createdAt: 0,
+          updatedAt: 1,
+          agentSessionId: "session-old",
+        },
+      ],
+      activeConversationId: convId,
+      messages: [
+        makeAssistantMessage("m1", convId),
+        makeAssistantMessage("m2", convId),
+      ],
+    })
+    const pending = useChatStore.getState().requestAgentPermission({
+      requestId: "old-permission",
+      conversationId: convId,
+      streamId: "old-stream",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-old",
+    })
+
+    expect(useChatStore.getState().applyAgentRewindSuccess(convId, {
+      throughMessageId: "m1",
+      resumeSessionAt: "assistant-sdk-1",
+    })).toBe(true)
+
+    await expect(pending).resolves.toMatchObject({ behavior: "deny", interrupt: true })
+    expect(useChatStore.getState().agentPermissionRequestsByConversation[convId]).toBeUndefined()
   })
 })

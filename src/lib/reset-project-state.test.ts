@@ -63,9 +63,12 @@ describe("resetProjectState — Zustand stores", () => {
       ],
       activeConversationId: "c1",
       isStreaming: true,
+      streamingConversationId: "c1",
+      streamingAgentMessageId: "m2",
       streamingContent: "partial",
       mode: "ingest",
       ingestSource: "/some/file",
+      agentRewindLocks: { c1: true },
     })
 
     await resetProjectState()
@@ -75,27 +78,38 @@ describe("resetProjectState — Zustand stores", () => {
     expect(chat.messages).toEqual([])
     expect(chat.activeConversationId).toBeNull()
     expect(chat.isStreaming).toBe(false)
+    expect(chat.streamingConversationId).toBeNull()
+    expect(chat.streamingAgentMessageId).toBeNull()
     expect(chat.streamingContent).toBe("")
     expect(chat.mode).toBe("chat")
     expect(chat.ingestSource).toBeNull()
+    expect(chat.agentRewindLocks).toEqual({})
   })
 
-  it("clears pending agent permission requests", async () => {
+  it("clears pending agent permission requests immediately on project reset", async () => {
+    let resolved = false
     const decision = useChatStore.getState().requestAgentPermission({
       requestId: "permission-1",
+      conversationId: "conv-1",
       toolName: "Bash",
       inputPreview: {},
       toolUseID: "tool-1",
     })
+    decision.then(() => {
+      resolved = true
+    })
 
     await resetProjectState()
+    await Promise.resolve()
 
+    expect(resolved).toBe(true)
     await expect(decision).resolves.toMatchObject({
       behavior: "deny",
       interrupt: true,
     })
     expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
     expect(useChatStore.getState().queuedAgentPermissionRequests).toEqual([])
+    expect(useChatStore.getState().agentPermissionRequestsByConversation).toEqual({})
   })
 
   it("clears review store items", async () => {

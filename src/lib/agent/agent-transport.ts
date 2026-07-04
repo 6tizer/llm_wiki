@@ -663,7 +663,6 @@ export async function streamAgent(
 				if (isSdkCompactSummaryMessage(sdkMessage)) {
 					callbacks.onSessionCompact?.({
 						kind: "compact",
-						message: sdkMessage,
 					});
 					return;
 				}

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   AgentRunError,
-  agentErrorI18nKey,
   agentErrorKindFromError,
   agentRunPhaseI18nKey,
   agentProviderNeedsApiKey,
@@ -59,6 +58,18 @@ describe("agent run state helpers", () => {
     expect(classifyAgentError("Request timeout")).toBe("timeout")
     expect(classifyAgentError("Permission request timed out: wiki_write")).toBe("failed")
     expect(classifyAgentError("Reached maximum number of turns (10)")).toBe("max_turns_exceeded")
+    expect(classifyAgentError("model not found: deepseek-chat")).toBe("model_not_found")
+    expect(classifyAgentError("Unknown model 'deepseek-reasoner'")).toBe("model_not_found")
+    expect(
+      classifyAgentError(
+        "There's an issue with the selected model (deepseek-v4-flash). It may not exist or you may not have access to it. Run --model to pick a different model.",
+      ),
+    ).toBe("model_not_found")
+    expect(classifyAgentError("session does not exist")).toBe("failed")
+    expect(classifyAgentError("file does not exist")).toBe("failed")
+    expect(classifyAgentError("TypeError: fetch failed")).toBe("network")
+    expect(classifyAgentError("connect ECONNREFUSED 127.0.0.1:11434")).toBe("network")
+    expect(classifyAgentError("failed to open /tmp/dns-cache.json")).toBe("failed")
     expect(classifyAgentError("ANTHROPIC_API_KEY is missing")).toBe("missing_api_key")
     expect(classifyAgentError("profile-secret-not-found: test secret missing")).toBe("missing_api_key")
     expect(classifyAgentError("no-eligible-profile: no profile pool capacity is available")).toBe("profile_unavailable")
@@ -70,7 +81,6 @@ describe("agent run state helpers", () => {
 
     expect(agentErrorKindFromError(err)).toBe("profile_unavailable")
     expect(agentErrorKindFromError(new Error("Request timeout"))).toBe("timeout")
-    expect(agentErrorI18nKey("profile_unavailable")).toBe("agent.error.profileUnavailable")
   })
 
   it("maps run phases to loading i18n keys", () => {

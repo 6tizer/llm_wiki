@@ -54,6 +54,7 @@ export function AgentRewindDialogHost() {
   const conversations = useChatStore((s) => s.conversations)
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore((s) => s.isStreaming)
+  const streamingConversationId = useChatStore((s) => s.streamingConversationId)
   const agentRewindLocks = useChatStore((s) => s.agentRewindLocks)
   const project = useWikiStore((s) => s.project)
   const [error, setError] = useState<string | null>(null)
@@ -74,6 +75,7 @@ export function AgentRewindDialogHost() {
         conversation: conversations.find((c) => c.id === request.conversationId),
         messages,
         isStreaming,
+        streamingConversationId,
         rewindLocked: Boolean(agentRewindLocks[request.conversationId]),
       })
     : null

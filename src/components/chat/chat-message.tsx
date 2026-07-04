@@ -15,6 +15,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { listDirectory, readFile } from "@/commands/fs"
 import { lastQueryPages } from "@/components/chat/chat-panel"
 import type { AgentWikiChangeRecord, DisplayMessage, MessageReference } from "@/stores/chat-store"
+import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
 import type { FileNode } from "@/types/wiki"
 
 import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
@@ -134,7 +135,12 @@ function ChatMessageImpl({
             ))}
           </div>
         )}
-        {(!isUser || content) && (
+        {isAgentError && message.agentErrorKind ? (
+          <AgentErrorNotice
+            kind={message.agentErrorKind}
+            detail={message.agentErrorDetail}
+          />
+        ) : (!isUser || content) && (
           <div
             className={`rounded-lg px-3 py-2 text-sm ${isUser ? "self-end" : "self-start"} ${
               isUser
@@ -202,8 +208,10 @@ function ChatMessageImpl({
         )}
         {isAssistant && hovered && !isSessionCompactOnly && (
           <div className="flex items-center gap-1">
-            <CopyButton content={actionContent} />
-            <SaveToWikiButton content={actionContent} visible={true} />
+            {/* Error messages carry empty content (the notice owns rendering),
+                so copy/save would silently act on an empty string. */}
+            {!isAgentError && <CopyButton content={actionContent} />}
+            {!isAgentError && <SaveToWikiButton content={actionContent} visible={true} />}
             {isLastAssistant && onRegenerate && !isAgentError && (
               <button
                 type="button"
@@ -288,6 +296,45 @@ function AgentResourceLimitNotice({
             </div>
           )}
           <div className="text-amber-900/80 dark:text-amber-100/80">{recovery}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AgentErrorNotice({
+  kind,
+  detail,
+}: {
+  kind: AgentErrorKind
+  detail?: string
+}) {
+  const { t } = useTranslation()
+  const title = t(`agent.errorNotice.${kind}.title`)
+  const description = t(`agent.errorNotice.${kind}.description`)
+  const action = t(`agent.errorNotice.${kind}.action`)
+
+  return (
+    <div
+      role="alert"
+      className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <div className="min-w-0 space-y-1">
+          <div className="font-medium">{title}</div>
+          <div>{description}</div>
+          <div className="text-destructive/80">{action}</div>
+          {detail ? (
+            <details className="pt-1 text-destructive/80">
+              <summary className="cursor-pointer font-medium">
+                {t("agent.errorNotice.details")}
+              </summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 p-2 text-[11px]">
+                {detail}
+              </pre>
+            </details>
+          ) : null}
         </div>
       </div>
     </div>

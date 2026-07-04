@@ -185,15 +185,31 @@ describe("computeAgentRewindGateDecision", () => {
     ).toEqual({ allowed: false, reason: "locked" })
   })
 
-  it("blocks while a normal send is streaming (A6)", () => {
-    expect(
-      computeAgentRewindGateDecision({
+  it("locks only for rewind lock or a stream in the target conversation", () => {
+    const cases = [
+      { isStreaming: false, streamingConversationId: null, rewindLocked: false, allowed: true },
+      { isStreaming: false, streamingConversationId: "c1", rewindLocked: false, allowed: true },
+      { isStreaming: false, streamingConversationId: "c2", rewindLocked: false, allowed: true },
+      { isStreaming: true, streamingConversationId: null, rewindLocked: false, allowed: true },
+      { isStreaming: true, streamingConversationId: "c2", rewindLocked: false, allowed: true },
+      { isStreaming: true, streamingConversationId: "c1", rewindLocked: false, allowed: false },
+      { isStreaming: false, streamingConversationId: null, rewindLocked: true, allowed: false },
+      { isStreaming: true, streamingConversationId: "c2", rewindLocked: true, allowed: false },
+    ]
+
+    for (const testCase of cases) {
+      const decision = computeAgentRewindGateDecision({
         target: target(),
         conversation,
         messages: [msg("m1", 1)],
-        isStreaming: true,
-        rewindLocked: false,
+        isStreaming: testCase.isStreaming,
+        streamingConversationId: testCase.streamingConversationId,
+        rewindLocked: testCase.rewindLocked,
       })
-    ).toEqual({ allowed: false, reason: "locked" })
+
+      expect(decision, JSON.stringify(testCase)).toEqual(
+        testCase.allowed ? { allowed: true } : { allowed: false, reason: "locked" }
+      )
+    }
   })
 })

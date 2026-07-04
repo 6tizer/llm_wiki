@@ -57,6 +57,11 @@ export interface RunAgentRewindResult {
  * module intentionally does not import — keeps it framework-agnostic and
  * unit-testable without mounting those stores) and is only invoked if the
  * fast path is unavailable.
+ *
+ * Rewind fast/slow paths do not register agent_permission_request listeners:
+ * `rewindAgentFiles` is a direct bridge call, and `rewindAgentSession` only
+ * listens for rewind result/error/done events, so permission dialogs are
+ * unreachable during rewind.
  */
 export async function runAgentRewind(args: {
   target: AgentRewindRequestRecord
@@ -72,6 +77,7 @@ export async function runAgentRewind(args: {
     conversation,
     messages: store.messages,
     isStreaming: store.isStreaming,
+    streamingConversationId: store.streamingConversationId,
     rewindLocked: Boolean(store.agentRewindLocks[target.conversationId]),
   })
   if (!gate.allowed) {

@@ -102,4 +102,34 @@ describe("buildAgentResumeIntentOverride", () => {
 			}),
 		).toBeUndefined();
 	});
+
+	it("uses the latest assistant question from the requested conversation only", () => {
+		const messages: DisplayMessage[] = [
+			{
+				id: "m1",
+				conversationId: "conv-1",
+				role: "assistant",
+				content: "是否要继续写入这些文件？",
+				timestamp: 1,
+				mode: "agent",
+			},
+			{
+				id: "m2",
+				conversationId: "other-conv",
+				role: "assistant",
+				content: "是否要继续执行另一个任务？",
+				timestamp: 2,
+				mode: "agent",
+			},
+		];
+
+		expect(
+			buildAgentResumeIntentOverrideForConversation({
+				messages,
+				conversationId: "conv-1",
+				resumeSessionId: "session-1",
+				latestUserText: "不对，先别继续",
+			}),
+		).toBe(AGENT_RESUME_INTENT_OVERRIDE);
+	});
 });

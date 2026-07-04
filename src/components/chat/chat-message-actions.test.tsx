@@ -1,0 +1,64 @@
+// @vitest-environment jsdom
+
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { describe, expect, it, vi } from "vitest"
+import "@/i18n"
+import { ChatMessage } from "./chat-message"
+import type { DisplayMessage } from "@/stores/chat-store"
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(),
+}))
+
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true
+
+function assistantMessage(overrides: Partial<DisplayMessage> = {}): DisplayMessage {
+  return {
+    id: "msg-1",
+    conversationId: "conv-1",
+    role: "assistant",
+    content: "hello there",
+    timestamp: 1,
+    mode: "agent",
+    ...overrides,
+  } as DisplayMessage
+}
+
+function renderHovered(message: DisplayMessage): { container: HTMLDivElement; root: Root } {
+  const container = document.createElement("div")
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  act(() => {
+    root.render(<ChatMessage message={message} />)
+  })
+  const bubble = container.querySelector("[data-message-id]") ?? container.firstElementChild
+  act(() => {
+    bubble?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }))
+    // React attaches enter/leave via mouseover/mouseout delegation.
+    bubble?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }))
+  })
+  return { container, root }
+}
+
+describe("ChatMessage hover actions", () => {
+  it("hides copy and save-to-wiki for agent error messages (content is empty by design)", () => {
+    const { container, root } = renderHovered(
+      assistantMessage({
+        content: "",
+        agentErrorKind: "model_not_found",
+        agentErrorDetail: "raw CLI detail",
+      }),
+    )
+    expect(container.textContent).not.toContain("Copy")
+    expect(container.textContent).not.toContain("Save to Wiki")
+    act(() => root.unmount())
+  })
+
+  it("keeps copy visible for normal agent messages on hover", () => {
+    const { container, root } = renderHovered(assistantMessage())
+    expect(container.textContent).toContain("Copy")
+    act(() => root.unmount())
+  })
+})
