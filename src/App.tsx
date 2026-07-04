@@ -447,6 +447,17 @@ function App() {
       } catch (err) {
         console.error("Failed to start embedding consumer:", err)
       }
+      // Start the taxonomy-consumer derived-rebuild job poller (SPEC-6
+      // PR3+4) — same always-on shape as the embedding consumer above; it
+      // only does work when there are pending "taxonomy" markers, and never
+      // bootstraps a taxonomy from scratch (growth only).
+      try {
+        const { startTaxonomyConsumer } = await import("@/lib/derived-rebuild/taxonomy-consumer")
+        if (isStale()) return
+        startTaxonomyConsumer(proj)
+      } catch (err) {
+        console.error("Failed to start taxonomy consumer:", err)
+      }
       // Load per-project scheduled import config
       try {
         const savedScheduledImport = await loadScheduledImportConfig(proj.path)

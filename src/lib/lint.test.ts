@@ -13,7 +13,7 @@ vi.mock("@/commands/fs", () => ({
   listDirectory: vi.fn(),
 }))
 
-import { runSemanticLint } from "./lint"
+import { runSemanticLint, runStructuralLint } from "./lint"
 import { streamChat } from "./llm-client"
 import { readFile, listDirectory } from "@/commands/fs"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -150,5 +150,93 @@ describe("runSemanticLint — activity & early returns", () => {
     await runSemanticLint("/project", fakeLlmConfig())
     const items = useActivityStore.getState().items
     expect(items[0].status).toBe("error")
+  })
+})
+
+// SPEC-11 S5 self-heal (consumed by SPEC-6 PR3+4): the cross-file wikilink
+// "reference sweep" (cleanupDeletedWikiPages, source-lifecycle.ts) is NOT
+// transactional across the pages it edits — a crash partway through can
+// leave a page with a dangling `[[wikilink]]` to a page that is already
+// gone. Rather than adding transactional machinery to the sweep itself
+// (out of scope), S5's self-heal is: the NEXT lint pass independently
+// re-derives "does this link's target exist right now?" straight from the
+// current wiki tree on disk, with zero dependency on the sweep having
+// completed cleanly. `runStructuralLint`'s "broken-link" check already does
+// exactly this (verified here: it had ZERO test coverage before this PR) —
+// so S5 needed no new lint code, just this characterization proving the
+// self-heal path is real, not aspirational.
+describe("runStructuralLint — broken-link detection (baseline coverage)", () => {
+  it("flags a wikilink whose target page does not exist anywhere in the wiki tree", async () => {
+    const pages = [
+      makeFileNode("a.md", "See [[missing-page]] for details."),
+    ]
+    mockListDirectory.mockResolvedValue(pages.map((p) => p.node))
+    mockReadFile.mockImplementation(async (path) => {
+      const match = pages.find((p) => p.node.path === path)
+      return match?.content ?? ""
+    })
+
+    const results = await runStructuralLint("/project")
+
+    const broken = results.filter((r) => r.type === "broken-link")
+    expect(broken).toHaveLength(1)
+    expect(broken[0].detail).toContain("[[missing-page]]")
+  })
+
+  it("does NOT flag a wikilink whose target page exists (slug or basename match)", async () => {
+    const pages = [
+      makeFileNode("a.md", "See [[b]] for details."),
+      makeFileNode("b.md", "# B\n\nBack to [[a]]."),
+    ]
+    mockListDirectory.mockResolvedValue(pages.map((p) => p.node))
+    mockReadFile.mockImplementation(async (path) => {
+      const match = pages.find((p) => p.node.path === path)
+      return match?.content ?? ""
+    })
+
+    const results = await runStructuralLint("/project")
+    expect(results.filter((r) => r.type === "broken-link")).toHaveLength(0)
+  })
+})
+
+describe("runStructuralLint — S5 self-heal characterization (SPEC-11 reference-sweep crash → dead link)", () => {
+  it("flags the dangling wikilink left behind when the cross-file reference sweep crashes after deleting the target page but before it could scrub a surviving page's link to it", async () => {
+    // Simulates the exact SPEC-11 chain-B scenario (see
+    // source-lifecycle-cleanup-chains.characterization.test.ts's
+    // `cleanupDeletedWikiPages` fixtures): "kv-cache.md" has already been
+    // deleted from disk (the sweep's OWN target-removal step, or an
+    // external deletion, already landed), but the sweep crashed before it
+    // could reach "other-page.md" to strip its now-dangling `[[kv-cache]]`
+    // reference. Note kv-cache.md is deliberately ABSENT from this
+    // listDirectory snapshot — the sweep's job was to clean it up, and it
+    // didn't finish.
+    const pages = [
+      makeFileNode(
+        "other-page.md",
+        [
+          "---",
+          "type: concept",
+          'title: "Other Page"',
+          "---",
+          "",
+          "# Other Page",
+          "",
+          "See [[kv-cache]] for the slug-form reference.",
+        ].join("\n"),
+      ),
+    ]
+    mockListDirectory.mockResolvedValue(pages.map((p) => p.node))
+    mockReadFile.mockImplementation(async (path) => {
+      const match = pages.find((p) => p.node.path === path)
+      return match?.content ?? ""
+    })
+
+    const results = await runStructuralLint("/project")
+
+    const broken = results.filter((r) => r.type === "broken-link")
+    expect(broken).toHaveLength(1)
+    expect(broken[0].page).toBe("other-page.md")
+    expect(broken[0].detail).toContain("[[kv-cache]]")
+    expect(broken[0].severity).toBe("warning")
   })
 })

@@ -42,10 +42,28 @@ export interface RuntimeJobCreateRequest {
 export interface RuntimeJobClaimRequest {
   holder: string
   leaseId?: string | null
+  /**
+   * Exact-match filter (SPEC-6 PR3+4 P0-2a): when present, claims ONLY this
+   * specific job id instead of the default "next queued job of any kind".
+   * Errors with the same `no-queued-job:` prefix as the no-filter case when
+   * the job isn't currently `queued` (already claimed, doesn't exist, or in
+   * a terminal state) — it never silently falls back to claiming a
+   * different job.
+   */
+  jobId?: string | null
 }
 
 export interface RuntimeJobClaimByKindRequest extends RuntimeJobClaimRequest {
   kind: string
+  /**
+   * Additional filter (SPEC-6 PR3+4 P0-2b): when present, only a queued job
+   * of `kind` whose JSON `payload.layer` field also equals this value is
+   * eligible. This is what lets two same-`kind` (`"derived-rebuild"`)
+   * consumers each only ever claim their OWN layer's jobs — omitting it
+   * preserves the exact prior "claim across all layers by priority"
+   * behavior.
+   */
+  payloadLayer?: string | null
 }
 
 export interface RuntimeJobLeaseRecord {
@@ -559,6 +577,10 @@ export function runtimeJobCreate(
   request: RuntimeJobCreateRequest,
 ): Promise<RuntimeJobRecord> {
   return invoke<RuntimeJobRecord>("runtime_job_create", { request })
+}
+
+export function runtimeJobClaim(request: RuntimeJobClaimRequest): Promise<RuntimeJobClaim> {
+  return invoke<RuntimeJobClaim>("runtime_job_claim", { request })
 }
 
 export function runtimeJobClaimByKind(

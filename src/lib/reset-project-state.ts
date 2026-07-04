@@ -79,7 +79,7 @@ export async function resetProjectState(): Promise<void> {
 
   // Module-level caches — load in parallel and clear each, surfacing any
   // failure instead of swallowing it.
-  const [queueMod, dedupQueueMod, graphMod, fileSyncMod, scheduledImportMod, agentLintQueueMod, embeddingConsumerMod] = await Promise.allSettled([
+  const [queueMod, dedupQueueMod, graphMod, fileSyncMod, scheduledImportMod, agentLintQueueMod, embeddingConsumerMod, taxonomyConsumerMod] = await Promise.allSettled([
     import("@/lib/ingest-queue"),
     import("@/lib/dedup-queue"),
     import("@/lib/graph-relevance"),
@@ -87,6 +87,7 @@ export async function resetProjectState(): Promise<void> {
     import("@/lib/scheduled-import"),
     import("@/lib/agent/agent-lint-queue"),
     import("@/lib/derived-rebuild/embedding-consumer"),
+    import("@/lib/derived-rebuild/taxonomy-consumer"),
   ])
 
   if (scheduledImportMod.status === "fulfilled") {
@@ -112,6 +113,18 @@ export async function resetProjectState(): Promise<void> {
     }
   } else {
     console.warn("[Reset Project State] Failed to load embedding-consumer:", embeddingConsumerMod.reason)
+  }
+
+  // SPEC-6 PR3+4: stop the taxonomy-consumer derived-rebuild job poller —
+  // same lifecycle contract as the embedding consumer above.
+  if (taxonomyConsumerMod.status === "fulfilled") {
+    try {
+      taxonomyConsumerMod.value.stopTaxonomyConsumer()
+    } catch (err) {
+      console.warn("[Reset Project State] stopTaxonomyConsumer failed:", err)
+    }
+  } else {
+    console.warn("[Reset Project State] Failed to load taxonomy-consumer:", taxonomyConsumerMod.reason)
   }
 
   if (queueMod.status === "fulfilled") {

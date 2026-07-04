@@ -204,21 +204,34 @@ pub struct RuntimeJobCreateRequest {
     priority: Option<i64>,
 }
 
-/// Request payload for claiming the next queued runtime job.
+/// Request payload for claiming the next queued runtime job. `job_id` is an
+/// optional exact-match filter (SPEC-6 PR3+4 P0-2a): when present, claims
+/// ONLY that specific job (still subject to the normal `state = 'queued'`
+/// race-safe conditional UPDATE), instead of the default "next queued job of
+/// any kind" behavior used by callers with no filter.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeJobClaimRequest {
     holder: String,
     lease_id: Option<String>,
+    job_id: Option<String>,
 }
 
 /// Request payload for claiming the next queued runtime job of one kind.
+/// `payload_layer` is an optional additional filter (SPEC-6 PR3+4 P0-2b):
+/// when present, only a job whose JSON `payload.layer` field equals this
+/// value is eligible — this is what lets two same-kind (`"derived-rebuild"`)
+/// consumers each only ever claim their OWN layer's jobs, instead of racing
+/// to claim (and burn an attempt off) a sibling consumer's job. `None`
+/// preserves the exact prior behavior (no payload filtering) for backward
+/// compatibility with any other `"kind"` that doesn't carry a `layer` field.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeJobClaimByKindRequest {
     holder: String,
     lease_id: Option<String>,
     kind: String,
+    payload_layer: Option<String>,
 }
 
 /// Request payload for active-lease job operations.

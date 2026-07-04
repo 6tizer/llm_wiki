@@ -30,18 +30,28 @@ vi.mock("./derived-rebuild/embedding-consumer", () => ({
   stopEmbeddingConsumer: vi.fn(),
 }))
 
+// SPEC-6 PR3+4: resetProjectState must ALSO stop the taxonomy-consumer
+// derived-rebuild job poller, same centralized-cleanup contract as the
+// embedding consumer above.
+vi.mock("./derived-rebuild/taxonomy-consumer", () => ({
+  stopTaxonomyConsumer: vi.fn(),
+}))
+
 import { clearGraphCache } from "./graph-relevance"
 import { stopEmbeddingConsumer } from "./derived-rebuild/embedding-consumer"
+import { stopTaxonomyConsumer } from "./derived-rebuild/taxonomy-consumer"
 
 const mockPauseQueue = vi.mocked(pauseQueue)
 const mockClearGraphCache = vi.mocked(clearGraphCache)
 const mockStopEmbeddingConsumer = vi.mocked(stopEmbeddingConsumer)
+const mockStopTaxonomyConsumer = vi.mocked(stopTaxonomyConsumer)
 
 beforeEach(() => {
   mockPauseQueue.mockReset()
   mockPauseQueue.mockImplementation(async () => {})
   mockClearGraphCache.mockReset()
   mockStopEmbeddingConsumer.mockReset()
+  mockStopTaxonomyConsumer.mockReset()
 })
 
 describe("resetProjectState — Zustand stores", () => {
@@ -163,6 +173,11 @@ describe("resetProjectState — module-level caches are awaited", () => {
     expect(mockStopEmbeddingConsumer).toHaveBeenCalledOnce()
   })
 
+  it("calls stopTaxonomyConsumer before the returned promise resolves (SPEC-6 PR3+4)", async () => {
+    await resetProjectState()
+    expect(mockStopTaxonomyConsumer).toHaveBeenCalledOnce()
+  })
+
   it("ordering: when resolve() fires, ALL module-level pollers/caches are already cleared", async () => {
     // This is the regression guard against fire-and-forget resets.
     // By the time the outer await returns, every one of these must be done.
@@ -170,6 +185,7 @@ describe("resetProjectState — module-level caches are awaited", () => {
     expect(mockPauseQueue).toHaveBeenCalledOnce()
     expect(mockClearGraphCache).toHaveBeenCalledOnce()
     expect(mockStopEmbeddingConsumer).toHaveBeenCalledOnce()
+    expect(mockStopTaxonomyConsumer).toHaveBeenCalledOnce()
   })
 
   it("does not throw when stopEmbeddingConsumer itself throws — logs and continues", async () => {
@@ -181,6 +197,19 @@ describe("resetProjectState — module-level caches are awaited", () => {
     await expect(resetProjectState()).resolves.toBeUndefined()
     expect(warnSpy).toHaveBeenCalled()
     expect(mockClearGraphCache).toHaveBeenCalledOnce() // still runs despite sibling failure
+    warnSpy.mockRestore()
+  })
+
+  it("does not throw when stopTaxonomyConsumer itself throws — logs and continues", async () => {
+    mockStopTaxonomyConsumer.mockImplementationOnce(() => {
+      throw new Error("boom")
+    })
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await expect(resetProjectState()).resolves.toBeUndefined()
+    expect(warnSpy).toHaveBeenCalled()
+    expect(mockClearGraphCache).toHaveBeenCalledOnce() // still runs despite sibling failure
+    expect(mockStopEmbeddingConsumer).toHaveBeenCalledOnce() // still runs despite sibling failure
     warnSpy.mockRestore()
   })
 
