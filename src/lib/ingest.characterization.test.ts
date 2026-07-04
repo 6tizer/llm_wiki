@@ -232,7 +232,6 @@ async function seedProject(label: string): Promise<Tmp> {
     conversations: [],
     messages: [],
     activeConversationId: null,
-    mode: "chat",
     ingestSource: null,
     isStreaming: false,
     streamingContent: "",
@@ -249,7 +248,6 @@ async function setupChatIngest(tmp: Tmp, sourceRelPath = "raw/sources/doc.md"): 
       { id: "u1", role: "user", content: "Please save the wiki files.", timestamp: Date.now(), conversationId: "c1" },
     ],
     ingestSource: `${tmp.path}/${sourceRelPath}`,
-    mode: "ingest",
     isStreaming: false,
     streamingContent: "",
   })

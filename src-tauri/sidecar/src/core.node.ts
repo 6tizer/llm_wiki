@@ -120,6 +120,30 @@ test("query request preserves provided maxTurns", async () => {
 	assert.equal(capturedInput?.options?.maxTurns, 44);
 });
 
+test("query request forwards disallowedTools to SDK options", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			disallowedTools: ["WebSearch", "WebFetch"],
+		},
+	});
+
+	assert.deepEqual(capturedInput?.options?.disallowedTools, ["WebSearch", "WebFetch"]);
+});
+
 async function captureAgentProfileEnv(
 	options: Partial<AgentRequest["options"]>,
 	baseEnv: Record<string, string | undefined> = {},

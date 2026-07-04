@@ -2049,7 +2049,6 @@ export async function startIngest(
   const sourceIdentity = sourceIdentityForPath(pp, sp)
   const sourceSummarySlug = sourceSummarySlugFromIdentity(sourceIdentity)
   const store = getStore()
-  store.setMode("ingest")
   store.setIngestSource(sp)
   store.clearMessages()
   store.setStreaming(false)

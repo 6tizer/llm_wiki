@@ -59,7 +59,6 @@ function renderChatInput(
       onSend={onSend}
       onStop={() => undefined}
       isStreaming={false}
-      showSearchToggles={false}
       {...props}
     />
   )
@@ -150,6 +149,14 @@ function buttonByTitle(container: HTMLElement, title: string): HTMLButtonElement
   return button
 }
 
+function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
+  const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (candidate) => candidate.textContent?.includes(text),
+  )
+  if (!button) throw new Error(`button not found: ${text}`)
+  return button
+}
+
 function useDeferredFileReader(): void {
   deferredFileReaders.length = 0
   globalThis.FileReader = DeferredFileReader as unknown as typeof FileReader
@@ -161,35 +168,6 @@ async function resolveDeferredFileReader(index = 0): Promise<void> {
   await act(async () => {
     reader.onload?.()
     await Promise.resolve()
-    await Promise.resolve()
-  })
-}
-
-function modeScroller(container: HTMLElement): HTMLElement {
-  const scroller = container.querySelector<HTMLElement>('[data-testid="chat-mode-scroll"]')
-  if (!scroller) throw new Error("mode scroller not found")
-  return scroller
-}
-
-async function setModeScrollMetrics(
-  scroller: HTMLElement,
-  metrics: { clientWidth: number; scrollWidth: number; scrollLeft: number },
-): Promise<void> {
-  Object.defineProperty(scroller, "clientWidth", {
-    value: metrics.clientWidth,
-    configurable: true,
-  })
-  Object.defineProperty(scroller, "scrollWidth", {
-    value: metrics.scrollWidth,
-    configurable: true,
-  })
-  Object.defineProperty(scroller, "scrollLeft", {
-    value: metrics.scrollLeft,
-    configurable: true,
-  })
-  await act(async () => {
-    scroller.dispatchEvent(new Event("scroll", { bubbles: true }))
-    window.dispatchEvent(new Event("resize"))
     await Promise.resolve()
   })
 }
@@ -225,7 +203,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "describe this",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
     expect(container.querySelector("img")).toBeNull()
 
@@ -268,7 +246,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "describe this",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
 
     act(() => root.unmount())
@@ -303,7 +281,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "text only",
       [],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
 
     act(() => root.unmount())
@@ -329,7 +307,7 @@ describe("ChatInput image attachments", () => {
         { mediaType: "image/png", dataBase64: PNG_BASE64 },
         { mediaType: "image/webp", dataBase64: PNG_BASE64 },
       ],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
 
     act(() => root.unmount())
@@ -345,7 +323,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "caption: pasted text",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
 
     act(() => root.unmount())
@@ -365,7 +343,7 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "from paste",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
 
     act(() => root.unmount())
@@ -468,43 +446,69 @@ describe("ChatInput image attachments", () => {
     expect(onSend).toHaveBeenCalledWith(
       "",
       [{ mediaType: "image/png", dataBase64: PNG_BASE64 }],
-      { useWebSearch: false, useAnyTxtSearch: false, agentMode: "standard" },
+      { useWebSearch: false, useAnyTxtSearch: false },
     )
     expect(container.querySelector("img")).toBeNull()
 
     act(() => root.unmount())
   })
 
-  it("shows mode selector fades only on overflowing scroll edges", async () => {
-    const { container, root } = renderChatInput({ showSearchToggles: true })
-    const scroller = modeScroller(container)
+  it("groups source toggles in the sources menu and sends their state", async () => {
+    const { container, root, onSend } = renderChatInput()
 
-    await setModeScrollMetrics(scroller, {
-      clientWidth: 120,
-      scrollWidth: 240,
-      scrollLeft: 0,
+    await clickButton(findButtonByText(container, "Sources"))
+    expect(container.textContent).toContain("Off means no network access.")
+
+    await clickButton(findButtonByText(container, "Web search"))
+    expect(container.textContent).not.toContain("Off means no network access.")
+    await clickButton(findButtonByText(container, "Sources"))
+    await clickButton(findButtonByText(container, "AnyTXT search"))
+    await typeText(container, "search with sources")
+    await clickButton(buttonByTitle(container, "Send message"))
+
+    expect(onSend).toHaveBeenCalledWith(
+      "search with sources",
+      [],
+      { useWebSearch: true, useAnyTxtSearch: true },
+    )
+
+    act(() => root.unmount())
+  })
+
+  it("closes the sources menu on outside pointerdown", async () => {
+    const { container, root } = renderChatInput()
+
+    await clickButton(findButtonByText(container, "Sources"))
+    expect(container.textContent).toContain("Off means no network access.")
+
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))
+      await Promise.resolve()
     })
 
-    expect(container.querySelector('[data-testid="chat-mode-fade-left"]')).toBeNull()
-    expect(container.querySelector('[data-testid="chat-mode-fade-right"]')).not.toBeNull()
+    expect(container.textContent).not.toContain("Off means no network access.")
 
-    await setModeScrollMetrics(scroller, {
-      clientWidth: 120,
-      scrollWidth: 240,
-      scrollLeft: 120,
+    act(() => root.unmount())
+  })
+
+  it("closes the sources menu when streaming starts", async () => {
+    const { container, root } = renderChatInput()
+
+    await clickButton(findButtonByText(container, "Sources"))
+    expect(container.textContent).toContain("Off means no network access.")
+
+    await act(async () => {
+      root.render(
+        <ChatInput
+          onSend={vi.fn()}
+          onStop={() => undefined}
+          isStreaming={true}
+        />,
+      )
+      await Promise.resolve()
     })
 
-    expect(container.querySelector('[data-testid="chat-mode-fade-left"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="chat-mode-fade-right"]')).toBeNull()
-
-    await setModeScrollMetrics(scroller, {
-      clientWidth: 240,
-      scrollWidth: 240,
-      scrollLeft: 0,
-    })
-
-    expect(container.querySelector('[data-testid="chat-mode-fade-left"]')).toBeNull()
-    expect(container.querySelector('[data-testid="chat-mode-fade-right"]')).toBeNull()
+    expect(container.textContent).not.toContain("Off means no network access.")
 
     act(() => root.unmount())
   })

@@ -175,12 +175,14 @@
     "typeAMessage": "Type a message...",
     "useWebSearch": "Web search",
     "useAnyTxtSearch": "AnyTXT search",
-    "agentMode": "Chat mode",
-    "agentModes": {
-      "fast": "Fast",
-      "standard": "Standard",
-      "deep": "Deep",
-      "localFirst": "Local first"
+    "webSearchOffHint": "Off means no network access.",
+    "modelAuto": "Auto",
+    "modelIndicator": "Model routing",
+    "emptySuggestions": {
+      "brokenLinks": "Check the wiki for broken links",
+      "recentSources": "Summarize recently imported materials",
+      "topicOverview": "Draft an overview page for X",
+      "findGaps": "Find gaps in this wiki"
     },
     "agentStages": {
       "understanding": "Understanding",

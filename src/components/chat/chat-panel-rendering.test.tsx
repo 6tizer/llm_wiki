@@ -9,6 +9,7 @@ import { ChatPanel, shouldPromptForQaBeforeConversationDelete } from "./chat-pan
 import { ChatMessage, StreamingMessage } from "./chat-message"
 import { type DisplayMessage, useChatStore } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
+import { getChatAgentTools } from "@/lib/chat-agent"
 
 const saveQaForConversationMock = vi.hoisted(() => vi.fn())
 const cleanupLegacyPendingQaStorageMock = vi.hoisted(() => vi.fn())
@@ -16,6 +17,20 @@ const buildChatAgentMessagesMock = vi.hoisted(() => vi.fn())
 const streamChatMock = vi.hoisted(() => vi.fn())
 const streamAgentMock = vi.hoisted(() => vi.fn())
 const deleteFileMock = vi.hoisted(() => vi.fn())
+const runtimeProfileListMock = vi.hoisted(() => vi.fn())
+
+const PNG_BASE64 = "iVBORw0KGgo="
+
+class MockFileReader {
+  result: string | ArrayBuffer | null = null
+  onerror: (() => void) | null = null
+  onload: (() => void) | null = null
+
+  readAsDataURL(file: Blob): void {
+    this.result = `data:${file.type || "image/png"};base64,${PNG_BASE64}`
+    this.onload?.()
+  }
+}
 
 vi.mock("@/lib/agent/agent-qa-hook", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/agent/agent-qa-hook")>()
@@ -47,6 +62,14 @@ vi.mock("@/lib/agent/agent-transport", async (importOriginal) => {
   return {
     ...actual,
     streamAgent: streamAgentMock,
+  }
+})
+
+vi.mock("@/commands/runtime-db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/commands/runtime-db")>()
+  return {
+    ...actual,
+    runtimeProfileList: runtimeProfileListMock,
   }
 })
 
@@ -103,9 +126,69 @@ async function pressEnter(container: HTMLElement): Promise<void> {
   })
 }
 
+async function chooseImage(container: HTMLElement): Promise<void> {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')
+  if (!input) throw new Error("file input not found")
+  Object.defineProperty(input, "files", {
+    value: [
+      new File([new Uint8Array([137, 80, 78, 71])], "tiny.png", {
+        type: "image/png",
+      }),
+    ],
+    configurable: true,
+  })
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
+function mockModelCallSuccess(content = "model answer"): void {
+  buildChatAgentMessagesMock.mockResolvedValue({
+    messages: [{ role: "user", content: "prompt" }],
+    references: [],
+    queryPages: [],
+    steps: [],
+  })
+  streamChatMock.mockImplementation(async (
+    _config: unknown,
+    _messages: unknown,
+    callbacks: { onToken: (token: string) => void; onDone: () => void },
+  ) => {
+    callbacks.onToken(content)
+    callbacks.onDone()
+  })
+}
+
+function agentRunProfileRecord(): Record<string, unknown> {
+  return {
+    id: "agent-profile",
+    label: "Agent",
+    enabled: true,
+    kind: "agent-run",
+    taskFamilies: ["agent"],
+    capabilityVersion: "profile-probe.v1",
+    capabilityStatus: "supported",
+    capabilityJson: JSON.stringify({ agentRunSupported: true }),
+  }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (error: unknown) => void
+} {
+  let resolve: (value: T) => void = () => undefined
+  let reject: (error: unknown) => void = () => undefined
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function setupActiveProjectConversation(
   options: {
-    storeMode?: "chat" | "agent" | "ingest"
     assistantMode?: DisplayMessage["mode"]
     agentSessionId?: string
   } = {},
@@ -142,7 +225,6 @@ function setupActiveProjectConversation(
         ...(options.agentSessionId ? { agentSessionId: options.agentSessionId } : {}),
       },
     ],
-    mode: options.storeMode ?? "chat",
   })
 }
 
@@ -193,9 +275,15 @@ async function openDeleteQaDialog(container: HTMLElement): Promise<void> {
 describe("ChatPanel agent mode rendering", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    globalThis.FileReader = MockFileReader as unknown as typeof FileReader
     saveQaForConversationMock.mockResolvedValue({ ok: true, saved: true })
     streamAgentMock.mockResolvedValue(undefined)
     deleteFileMock.mockResolvedValue(undefined)
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
     useChatStore.setState({
       conversations: [],
       activeConversationId: null,
@@ -204,7 +292,8 @@ describe("ChatPanel agent mode rendering", () => {
       streamingConversationId: null,
       streamingAgentMessageId: null,
       streamingContent: "",
-      mode: "chat",
+      ingestSource: null,
+      activeRunModelByConversation: {},
       activeAgentPermissionRequest: null,
       queuedAgentPermissionRequests: [],
       agentPermissionRequestsByConversation: {},
@@ -213,17 +302,57 @@ describe("ChatPanel agent mode rendering", () => {
       agentRewindRequestsByConversation: {},
       agentRewindLocks: {},
     })
-    useWikiStore.setState({ project: null })
+    useWikiStore.setState((state) => ({
+      project: null,
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "custom",
+        apiKey: "",
+        model: "test-model",
+        customEndpoint: "http://127.0.0.1:9999/v1/chat/completions",
+      },
+    }))
   })
 
-  it("renders the mode switch in the default chat panel", () => {
+  it("renders the unified composer without mode switch buttons", () => {
     const html = renderToStaticMarkup(<ChatPanel />)
 
-    expect(html).toContain("Chat")
-    expect(html).toContain("Agent")
-    expect(html).toContain("Ingest")
+    expect(html).not.toContain("Ingest")
     expect(html).toContain("Type a message")
-    expect(html).toContain("max-w-full flex-wrap")
+    expect(html).toContain("Sources")
+    expect(html).toContain("Model routing")
+  })
+
+  it("shows the legacy model when no Agent-run profile candidate exists", async () => {
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain("test-model")
+    expect(container.textContent).not.toContain("Auto")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("shows Auto when an Agent-run profile candidate exists", async () => {
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord()],
+    })
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain("Auto")
+
+    act(() => root.unmount())
+    container.remove()
   })
 
   it("renders explicit Save QA when a project conversation is active", () => {
@@ -232,6 +361,63 @@ describe("ChatPanel agent mode rendering", () => {
     const { container, root } = renderChatPanel()
 
     expect(container.textContent).toContain("Save QA")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("renders task suggestions for an empty active conversation and sends through normal routing", async () => {
+    useWikiStore.setState({
+      project: { id: "project-1", name: "Project", path: "/project" },
+    })
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-1", title: "Empty", createdAt: 1, updatedAt: 1 },
+      ],
+      activeConversationId: "conv-1",
+      messages: [],
+    })
+    const { container, root } = renderChatPanel()
+
+    expect(container.textContent).toContain("Check the wiki for broken links")
+
+    await act(async () => {
+      findButtonByText(container, "Check the wiki for broken links").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(streamAgentMock).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().messages.find((m) => m.role === "user")?.content).toBe(
+      "Check the wiki for broken links",
+    )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("falls back to model-call when an empty-state suggestion is clicked without Agent preflight", async () => {
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-1", title: "Empty", createdAt: 1, updatedAt: 1 },
+      ],
+      activeConversationId: "conv-1",
+      messages: [],
+    })
+    mockModelCallSuccess("fallback suggestion")
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      findButtonByText(container, "Check the wiki for broken links").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(buildChatAgentMessagesMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
 
     act(() => root.unmount())
     container.remove()
@@ -265,6 +451,133 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("routes image messages to the model-call stream path even when Agent is available", async () => {
+    setupActiveProjectConversation()
+    mockModelCallSuccess("vision answer")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "describe this")
+    await chooseImage(container)
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(buildChatAgentMessagesMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().messages.find((m) => m.content === "describe this")?.images).toHaveLength(1)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("routes ingest discussion text to model-call and keeps Write to Wiki available", async () => {
+    setupActiveProjectConversation()
+    useChatStore.setState({ ingestSource: "/project/raw/sources/doc.md" })
+    mockModelCallSuccess("ingest answer")
+    const { container, root } = renderChatPanel()
+
+    expect(container.textContent).toContain("Write to Wiki")
+
+    await typeText(container, "discuss this source")
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(buildChatAgentMessagesMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain("Write to Wiki")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("routes ingest discussion images to model-call", async () => {
+    setupActiveProjectConversation()
+    useChatStore.setState({ ingestSource: "/project/raw/sources/doc.md" })
+    mockModelCallSuccess("ingest image answer")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "look at this")
+    await chooseImage(container)
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(buildChatAgentMessagesMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("routes text messages to Agent when project preflight passes", async () => {
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    expect(streamAgentMock).toHaveBeenCalledTimes(1)
+    expect(streamAgentMock.mock.calls[0]?.[1]).toMatchObject({
+      disallowedTools: ["WebSearch", "WebFetch"],
+    })
+    expect(buildChatAgentMessagesMock).not.toHaveBeenCalled()
+    expect(streamChatMock).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("falls back to model-call chat when Agent preflight fails", async () => {
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-1", title: "No project", createdAt: 1, updatedAt: 1 },
+      ],
+      activeConversationId: "conv-1",
+      messages: [],
+    })
+    mockModelCallSuccess("fallback answer")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "plain question")
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(buildChatAgentMessagesMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("keeps web_search out of normal Chat Router tools when the web source is off", async () => {
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-1", title: "No project", createdAt: 1, updatedAt: 1 },
+      ],
+      activeConversationId: "conv-1",
+      messages: [],
+    })
+    mockModelCallSuccess("fallback answer")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "plain question")
+    await pressEnter(container)
+
+    const input = buildChatAgentMessagesMock.mock.calls[0]?.[0] as {
+      project: unknown
+      options: { useWebSearch: boolean; useAnyTxtSearch: boolean }
+    }
+    expect(input.options.useWebSearch).toBe(false)
+    expect(
+      getChatAgentTools({
+        hasProject: Boolean(input.project),
+        webSearchEnabled: input.options.useWebSearch,
+        anyTxtSearchEnabled: input.options.useAnyTxtSearch,
+      }).map((tool) => tool.name),
+    ).not.toContain("web_search")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("stops the streaming conversation's pending permissions after switching conversations", async () => {
     useWikiStore.setState({
       project: { id: "project-1", name: "Project", path: "/project" },
@@ -283,7 +596,6 @@ describe("ChatPanel agent mode rendering", () => {
       streamingConversationId: "conv-a",
       streamingAgentMessageId: "a-assistant",
       streamingContent: "",
-      mode: "agent",
     })
     const permissionA = useChatStore.getState().requestAgentPermission({
       requestId: "permission-a",
@@ -320,9 +632,8 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
-  it("handles /save-qa locally in Agent mode without starting the agent stream", async () => {
+  it("handles /save-qa locally for legacy Agent conversations without starting the agent stream", async () => {
     setupActiveProjectConversation({
-      storeMode: "agent",
       assistantMode: "agent",
       agentSessionId: "agent-session-1",
     })
@@ -354,7 +665,12 @@ describe("ChatPanel agent mode rendering", () => {
   })
 
   it("starts the Agent stream with an empty legacy API key so runtime profiles can claim", async () => {
-    setupActiveProjectConversation({ storeMode: "agent" })
+    setupActiveProjectConversation()
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord()],
+    })
     useWikiStore.setState((state) => ({
       llmConfig: {
         ...state.llmConfig,
@@ -363,6 +679,9 @@ describe("ChatPanel agent mode rendering", () => {
       },
     }))
     const { container, root } = renderChatPanel()
+    await act(async () => {
+      await Promise.resolve()
+    })
 
     await typeText(container, "run the agent")
     await pressEnter(container)
@@ -382,8 +701,160 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("uses on-demand runtime profile lookup for an immediate send before the mount effect resolves", async () => {
+    setupActiveProjectConversation()
+    const effectLookup = deferred<unknown>()
+    runtimeProfileListMock
+      .mockReturnValueOnce(effectLookup.promise)
+      .mockResolvedValueOnce({
+        enabled: true,
+        status: "healthy",
+        profiles: [agentRunProfileRecord()],
+      })
+    useWikiStore.setState((state) => ({
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "anthropic",
+        apiKey: "",
+      },
+    }))
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run immediately")
+    await pressEnter(container)
+
+    expect(streamAgentMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).not.toHaveBeenCalled()
+
+    effectLookup.resolve({ enabled: true, status: "healthy", profiles: [] })
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("falls back to model-call when on-demand runtime profile lookup rejects", async () => {
+    setupActiveProjectConversation()
+    runtimeProfileListMock.mockRejectedValue(new Error("runtime disabled"))
+    useWikiStore.setState((state) => ({
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "anthropic",
+        apiKey: "",
+      },
+    }))
+    mockModelCallSuccess("fallback")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "plain fallback")
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("falls back to model-call when runtime profiles are disabled or unhealthy", async () => {
+    setupActiveProjectConversation()
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: false,
+      status: "disabled",
+      profiles: [agentRunProfileRecord()],
+    })
+    useWikiStore.setState((state) => ({
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "anthropic",
+        apiKey: "",
+      },
+    }))
+    mockModelCallSuccess("fallback")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "disabled fallback")
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(streamChatMock).toHaveBeenCalledTimes(1)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("caches a negative on-demand runtime profile result", async () => {
+    setupActiveProjectConversation()
+    const effectLookup = deferred<unknown>()
+    runtimeProfileListMock
+      .mockReturnValueOnce(effectLookup.promise)
+      .mockResolvedValueOnce({
+        enabled: false,
+        status: "disabled",
+        profiles: [agentRunProfileRecord()],
+      })
+    useWikiStore.setState((state) => ({
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "anthropic",
+        apiKey: "",
+      },
+    }))
+    mockModelCallSuccess("fallback")
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "first fallback")
+    await pressEnter(container)
+    await typeText(container, "second fallback")
+    await pressEnter(container)
+
+    expect(streamAgentMock).not.toHaveBeenCalled()
+    expect(streamChatMock).toHaveBeenCalledTimes(2)
+    expect(runtimeProfileListMock).toHaveBeenCalledTimes(2)
+
+    effectLookup.resolve({ enabled: false, status: "disabled", profiles: [] })
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("records the active run model from SDK assistant messages only", async () => {
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    const callbacks = streamAgentMock.mock.calls[0]?.[2] as {
+      onMessage: (message: Record<string, unknown>) => void
+    }
+
+    act(() => {
+      callbacks.onMessage({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "partial" }],
+        },
+      })
+    })
+    expect(useChatStore.getState().activeRunModelByConversation["conv-1"]).toBeNull()
+
+    act(() => {
+      callbacks.onMessage({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "partial" }],
+          model: "claude-runtime",
+        },
+      })
+    })
+    expect(useChatStore.getState().activeRunModelByConversation["conv-1"]).toBe("claude-runtime")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("merges a batch tool event into existing toolCalls instead of overwriting them (SPEC-7 PR2 matrix A16)", async () => {
-    setupActiveProjectConversation({ storeMode: "agent" })
+    setupActiveProjectConversation()
     const { container, root } = renderChatPanel()
 
     await typeText(container, "run the agent")
@@ -394,7 +865,7 @@ describe("ChatPanel agent mode rendering", () => {
     }
     const assistantMessageId = useChatStore
       .getState()
-      .messages.find((m) => m.mode === "agent" && m.role === "assistant")?.id
+      .streamingAgentMessageId
     expect(assistantMessageId).toBeTruthy()
 
     act(() => {
@@ -434,7 +905,7 @@ describe("ChatPanel agent mode rendering", () => {
   })
 
   it("blocks sending while a rewind is in progress for the active conversation (SPEC-7 PR2 matrix A6)", async () => {
-    setupActiveProjectConversation({ storeMode: "agent" })
+    setupActiveProjectConversation()
     useChatStore.setState({ agentRewindLocks: { "conv-1": true } })
     const { container, root } = renderChatPanel()
 

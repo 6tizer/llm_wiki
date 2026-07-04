@@ -264,6 +264,7 @@ export function createRequestHandler({
 				sandbox: req.options.sandbox,
 				...buildPermissionOptions(permissionPolicy),
 				allowedTools,
+				disallowedTools: req.options.disallowedTools,
 				canUseTool,
 				mcpServers,
 				hooks,

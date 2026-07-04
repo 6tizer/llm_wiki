@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
-import { FileSearch, Globe2, ImagePlus, Loader2, Send, Square, X } from "lucide-react"
+import { ChevronDown, FileSearch, Globe2, Loader2, Plus, Send, Square, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -14,15 +14,12 @@ import {
 } from "@/lib/chat-image-utils"
 import { isImeComposing } from "@/lib/keyboard-utils"
 import type { MessageImage } from "@/stores/chat-store"
-import type { ChatAgentMode } from "@/lib/chat-agent"
 
 const ACCEPTED_IMAGE_ACCEPT = ACCEPTED_CHAT_IMAGE_TYPES.join(",")
-const AGENT_MODE_OPTIONS: ChatAgentMode[] = ["fast", "standard", "deep", "local_first"]
 
 export interface ChatSendOptions {
   useWebSearch: boolean
   useAnyTxtSearch: boolean
-  agentMode: ChatAgentMode
 }
 
 interface ChatInputProps {
@@ -32,7 +29,6 @@ interface ChatInputProps {
   anyTxtAvailable?: boolean
   imageInputAvailable?: boolean
   placeholder?: string
-  showSearchToggles?: boolean
 }
 
 interface ImageAttachment {
@@ -48,7 +44,6 @@ export function ChatInput({
   anyTxtAvailable = true,
   imageInputAvailable = true,
   placeholder,
-  showSearchToggles = true,
 }: ChatInputProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState("")
@@ -56,11 +51,10 @@ export function ChatInput({
   const [imageError, setImageError] = useState<string | null>(null)
   const [useWebSearch, setUseWebSearch] = useState(false)
   const [useAnyTxtSearch, setUseAnyTxtSearch] = useState(false)
-  const [agentMode, setAgentMode] = useState<ChatAgentMode>("standard")
-  const [modeScrollState, setModeScrollState] = useState({ left: false, right: false })
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const modeScrollerRef = useRef<HTMLDivElement>(null)
+  const sourceMenuRef = useRef<HTMLDivElement>(null)
   const pendingImageIdsRef = useRef(new Set<string>())
   const imageIdRef = useRef(0)
   const images = useMemo(
@@ -90,42 +84,20 @@ export function ChatInput({
     setImageError(null)
   }, [clearImageAttachments, imageAttachments.length, imageInputAvailable])
 
-  const updateModeScrollState = useCallback(() => {
-    const el = modeScrollerRef.current
-    if (!el) return
-    const maxScrollLeft = el.scrollWidth - el.clientWidth
-    const hasOverflow = maxScrollLeft > 1
-    setModeScrollState({
-      left: hasOverflow && el.scrollLeft > 1,
-      right: hasOverflow && el.scrollLeft < maxScrollLeft - 1,
-    })
-  }, [])
-
   useEffect(() => {
-    if (!showSearchToggles) return
-    updateModeScrollState()
-    const el = modeScrollerRef.current
-    if (!el) return
-
-    const handleScroll = () => updateModeScrollState()
-    el.addEventListener("scroll", handleScroll, { passive: true })
-    window.addEventListener("resize", handleScroll)
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(handleScroll)
-    resizeObserver?.observe(el)
-    const raf = requestAnimationFrame(handleScroll)
-
-    return () => {
-      el.removeEventListener("scroll", handleScroll)
-      window.removeEventListener("resize", handleScroll)
-      resizeObserver?.disconnect()
-      cancelAnimationFrame(raf)
+    if (!sourceMenuOpen) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Node && sourceMenuRef.current?.contains(target)) return
+      setSourceMenuOpen(false)
     }
-  }, [showSearchToggles, updateModeScrollState])
+    document.addEventListener("pointerdown", handlePointerDown)
+    return () => document.removeEventListener("pointerdown", handlePointerDown)
+  }, [sourceMenuOpen])
 
   useEffect(() => {
-    updateModeScrollState()
-  }, [agentMode, t, updateModeScrollState])
+    if (isStreaming) setSourceMenuOpen(false)
+  }, [isStreaming])
 
   const addFiles = useCallback(
     (files: File[]) => {
@@ -248,7 +220,7 @@ export function ChatInput({
       setImageError(t("chat.imageInputUnavailable", "Images are available in Chat mode only."))
       return
     }
-    onSend(trimmed, images, { useWebSearch, useAnyTxtSearch, agentMode })
+    onSend(trimmed, images, { useWebSearch, useAnyTxtSearch })
     setValue("")
     clearImageAttachments()
     setImageError(null)
@@ -256,7 +228,6 @@ export function ChatInput({
       textareaRef.current.style.height = "auto"
     }
   }, [
-    agentMode,
     imageInputAvailable,
     images,
     isStreaming,
@@ -291,19 +262,10 @@ export function ChatInput({
         : "border-transparent bg-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground"
     } disabled:pointer-events-none disabled:opacity-50`
 
-  const agentModeLabel = (mode: ChatAgentMode) => {
-    switch (mode) {
-      case "fast":
-        return t("chat.agentModes.fast", "Fast")
-      case "deep":
-        return t("chat.agentModes.deep", "Deep")
-      case "local_first":
-        return t("chat.agentModes.localFirst", "Local first")
-      case "standard":
-      default:
-        return t("chat.agentModes.standard", "Standard")
-    }
-  }
+  const sourceToggleClass = (active: boolean) =>
+    `flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+      active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+    } disabled:pointer-events-none disabled:opacity-50`
 
   return (
     <div className="border-t bg-background/95 p-3">
@@ -398,101 +360,73 @@ export function ChatInput({
               }
               aria-label={t("chat.attachImage", "Attach image")}
             >
-              <ImagePlus className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{t("chat.attachImage", "Attach image")}</span>
+              <Plus className="h-3.5 w-3.5" />
             </button>
-            {showSearchToggles && (
-              <>
-                <button
-                  type="button"
-                  aria-pressed={useWebSearch}
-                  onClick={() => setUseWebSearch((v) => !v)}
-                  disabled={isStreaming}
-                  className={searchToggleClass(useWebSearch)}
-                >
-                  <Globe2 className="h-3.5 w-3.5" />
-                  {t("chat.useWebSearch")}
-                  <span
-                    className={`ml-0.5 h-1.5 w-1.5 rounded-full ${
-                      useWebSearch ? "bg-emerald-500" : "bg-muted-foreground/30"
-                    }`}
-                  />
-                </button>
-                <TooltipProvider delay={0}>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span className="inline-flex" />
-                      }
-                    >
-                      <button
-                        type="button"
-                        aria-pressed={useAnyTxtSearch}
-                        onClick={() => setUseAnyTxtSearch((v) => !v)}
-                        disabled={isStreaming || !anyTxtAvailable}
-                        className={searchToggleClass(useAnyTxtSearch)}
-                      >
-                        <FileSearch className="h-3.5 w-3.5" />
-                        {t("chat.useAnyTxtSearch")}
-                        <span
-                          className={`ml-0.5 h-1.5 w-1.5 rounded-full ${
-                            useAnyTxtSearch ? "bg-emerald-500" : "bg-muted-foreground/30"
-                          }`}
-                        />
-                      </button>
-                    </TooltipTrigger>
-                    {!anyTxtAvailable && (
-                      <TooltipContent side="top" className="max-w-64 whitespace-normal leading-relaxed">
-                        {t("chat.enableAnyTxtInSettings")}
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                <div className="relative inline-flex h-7 min-w-0 max-w-full shrink overflow-hidden rounded-md border border-border/70 bg-muted/30">
-                  <div
-                    ref={modeScrollerRef}
-                    data-testid="chat-mode-scroll"
-                    className="flex min-w-0 items-center overflow-x-auto p-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-                    role="radiogroup"
-                    aria-label={t("chat.agentMode", "Chat mode")}
-                    title={t("chat.agentMode", "Chat mode")}
+            <div ref={sourceMenuRef} className="relative">
+              <button
+                type="button"
+                aria-expanded={sourceMenuOpen}
+                onClick={() => setSourceMenuOpen((open) => !open)}
+                disabled={isStreaming}
+                className={searchToggleClass(useWebSearch || useAnyTxtSearch)}
+              >
+                <Globe2 className="h-3.5 w-3.5" />
+                {t("chat.sources")}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {sourceMenuOpen && (
+                <div className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-md border bg-popover p-2 shadow-md">
+                  <button
+                    type="button"
+                    aria-pressed={useWebSearch}
+                    onClick={() => {
+                      setUseWebSearch((v) => !v)
+                      setSourceMenuOpen(false)
+                    }}
+                    disabled={isStreaming}
+                    className={sourceToggleClass(useWebSearch)}
                   >
-                    {AGENT_MODE_OPTIONS.map((mode) => {
-                      const active = agentMode === mode
-                      return (
+                    <span className="flex min-w-0 items-start gap-2">
+                      <Globe2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span className="flex min-w-0 flex-col">
+                        <span>{t("chat.useWebSearch")}</span>
+                        <span className="text-[11px] leading-4 text-muted-foreground">
+                          {t("chat.webSearchOffHint")}
+                        </span>
+                      </span>
+                    </span>
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${useWebSearch ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                  </button>
+                  <TooltipProvider delay={0}>
+                    <Tooltip>
+                      <TooltipTrigger render={<span className="mt-1 block" />}>
                         <button
-                          key={mode}
                           type="button"
-                          role="radio"
-                          aria-checked={active}
-                          disabled={isStreaming}
-                          onClick={() => setAgentMode(mode)}
-                          className={`h-6 shrink-0 rounded px-2 text-xs font-medium transition-colors ${
-                            active
-                              ? "bg-background text-foreground shadow-sm"
-                              : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
-                          } disabled:pointer-events-none disabled:opacity-50`}
+                          aria-pressed={useAnyTxtSearch}
+                          onClick={() => {
+                            setUseAnyTxtSearch((v) => !v)
+                            setSourceMenuOpen(false)
+                          }}
+                          disabled={isStreaming || !anyTxtAvailable}
+                          className={sourceToggleClass(useAnyTxtSearch)}
                         >
-                          {agentModeLabel(mode)}
+                          <span className="flex min-w-0 items-center gap-2">
+                            <FileSearch className="h-3.5 w-3.5 shrink-0" />
+                            <span>{t("chat.useAnyTxtSearch")}</span>
+                          </span>
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${useAnyTxtSearch ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
                         </button>
-                      )
-                    })}
-                  </div>
-                  {modeScrollState.left && (
-                    <div
-                      data-testid="chat-mode-fade-left"
-                      className="pointer-events-none absolute inset-y-0 left-0 w-4 bg-gradient-to-r from-muted via-muted/80 to-transparent"
-                    />
-                  )}
-                  {modeScrollState.right && (
-                    <div
-                      data-testid="chat-mode-fade-right"
-                      className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-muted via-muted/80 to-transparent"
-                    />
-                  )}
+                      </TooltipTrigger>
+                      {!anyTxtAvailable && (
+                        <TooltipContent side="top" className="max-w-64 whitespace-normal leading-relaxed">
+                          {t("chat.enableAnyTxtInSettings")}
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
           {isStreaming ? (
             <Button

@@ -279,6 +279,7 @@ export interface AgentTransportOptions {
 	agentProfileId?: string;
 	agentProfileClaimId?: string;
 	permissionPolicy?: AgentPermissionPolicy;
+	disallowedTools?: string[];
 	projectId?: string;
 	projectPath?: string;
 	apiServerBaseUrl?: string;
