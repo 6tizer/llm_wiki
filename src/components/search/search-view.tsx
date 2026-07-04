@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react"
+import { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import { Search, FileText, ImageIcon, X, ArrowUpRight } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
@@ -42,22 +42,34 @@ export function SearchView() {
   // closes naturally when the user navigates away from search.
   const [lightbox, setLightbox] = useState<ImageHit | null>(null)
 
+  // Tauri's `invoke` has no native cancellation, so a stale search can't
+  // actually be aborted on the backend — this sequence number just makes
+  // sure a slow OLDER query's result never overwrites a faster NEWER
+  // one once both land (e.g. the user retypes and hits Enter again
+  // before the first search returns).
+  const requestSeqRef = useRef(0)
+
   const doSearch = useCallback(
     async (q: string) => {
       if (!project || !q.trim()) {
+        ++requestSeqRef.current
+        setSearching(false)
         setResults([])
         return
       }
+      const seq = ++requestSeqRef.current
       setSearching(true)
       setHasSearched(true)
       try {
         const found = await searchWiki(normalizePath(project.path), q)
+        if (seq !== requestSeqRef.current) return
         setResults(found)
       } catch (err) {
+        if (seq !== requestSeqRef.current) return
         console.error("Search failed:", err)
         setResults([])
       } finally {
-        setSearching(false)
+        if (seq === requestSeqRef.current) setSearching(false)
       }
     },
     [project],

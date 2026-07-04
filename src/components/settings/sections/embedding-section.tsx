@@ -82,23 +82,36 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
   const [headersText, setHeadersText] = useState<string>(() => headersToText(draft.embeddingExtraHeaders ?? {}))
   const [legacyDropped, setLegacyDropped] = useState(false)
 
-  const refreshStats = useCallback(async () => {
+  // `isStale` lets the mount/project-change effect below discard a
+  // resolve that lands after the project has already switched again —
+  // otherwise a slow stats fetch for the OLD project can land after a
+  // fast one for the NEW project and stomp the view with stale numbers.
+  // Manual callers (e.g. handleReindex, right after a reindex it
+  // triggered) don't pass one — there's no analogous race for those.
+  const refreshStats = useCallback(async (isStale: () => boolean = () => false) => {
     if (!project) return
     try {
       const [chunks, legacy] = await Promise.all([
         getEmbeddingCount(project.path),
         legacyVectorRowCount(project.path),
       ])
+      if (isStale()) return
       setChunkCount(chunks)
       setLegacyCount(legacy)
     } catch {
+      if (isStale()) return
       setChunkCount(null)
     }
+    if (isStale()) return
     setLastError(getLastEmbeddingError())
   }, [project])
 
   useEffect(() => {
-    void refreshStats()
+    let cancelled = false
+    void refreshStats(() => cancelled)
+    return () => {
+      cancelled = true
+    }
   }, [refreshStats])
 
   const handleReindex = useCallback(async () => {

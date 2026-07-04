@@ -9,12 +9,17 @@ interface WelcomeScreenProps {
   onCreateProject: () => void
   onOpenProject: () => void
   onSelectProject: (project: WikiProject) => void
+  /** True while a project-open is already in flight (any entry point) —
+   *  disables these buttons so the same click can't re-fire the async
+   *  handler a second time before it resolves. */
+  disabled?: boolean
 }
 
 export function WelcomeScreen({
   onCreateProject,
   onOpenProject,
   onSelectProject,
+  disabled = false,
 }: WelcomeScreenProps) {
   const { t } = useTranslation()
   const [recentProjects, setRecentProjects] = useState<WikiProject[]>([])
@@ -41,11 +46,11 @@ export function WelcomeScreen({
         </div>
 
         <div className="flex gap-3">
-          <Button onClick={onCreateProject}>
+          <Button onClick={onCreateProject} disabled={disabled}>
             <Plus className="mr-2 h-4 w-4" />
             {t("welcome.newProject")}
           </Button>
-          <Button variant="outline" onClick={onOpenProject}>
+          <Button variant="outline" onClick={onOpenProject} disabled={disabled}>
             <FolderOpen className="mr-2 h-4 w-4" />
             {t("welcome.openProject")}
           </Button>
@@ -62,7 +67,8 @@ export function WelcomeScreen({
                 <button
                   key={proj.path}
                   onClick={() => onSelectProject(proj)}
-                  className="group flex w-full items-center justify-between border-b px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-accent"
+                  disabled={disabled}
+                  className="group flex w-full items-center justify-between border-b px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{proj.name}</div>
