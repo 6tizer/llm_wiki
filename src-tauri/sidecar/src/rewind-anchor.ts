@@ -19,6 +19,18 @@ export interface ParsedSessionTranscript {
 	 * assistant uuid to the nearest ancestor that IS a valid snapshot
 	 * anchor. */
 	parentByUuid: Map<string, string | undefined>;
+	/**
+	 * uuids of genuine human-turn boundary nodes: `type: "user"` entries
+	 * with NO `toolUseResult` field (as opposed to a synthetic tool-result
+	 * "user" frame, which DOES carry one). Each real turn has exactly one.
+	 * The ancestor walk in `nearestSnapshotAncestor` must treat this as a
+	 * hard stop (checked, then no further) — without it, walking past a
+	 * turn with no checkpoint of its own would silently land on an EARLIER
+	 * turn's checkpoint and over-rewind past the user's intended target
+	 * (Codex review-round P1: Turn2 has no checkpoint, but Turn1 does —
+	 * rewinding "to Turn2" must never reach back into Turn1's anchor).
+	 */
+	humanTurnBoundaryUuids: Set<string>;
 }
 
 /**
@@ -30,6 +42,7 @@ export interface ParsedSessionTranscript {
 export function parseSessionTranscript(content: string): ParsedSessionTranscript {
 	const snapshotMessageIds = new Set<string>();
 	const parentByUuid = new Map<string, string | undefined>();
+	const humanTurnBoundaryUuids = new Set<string>();
 
 	for (const raw of content.split("\n")) {
 		const line = raw.trim();
@@ -56,10 +69,13 @@ export function parseSessionTranscript(content: string): ParsedSessionTranscript
 		if (typeof uuid === "string" && uuid) {
 			const parentUuid = obj.parentUuid;
 			parentByUuid.set(uuid, typeof parentUuid === "string" ? parentUuid : undefined);
+			if (obj.type === "user" && !("toolUseResult" in obj)) {
+				humanTurnBoundaryUuids.add(uuid);
+			}
 		}
 	}
 
-	return { snapshotMessageIds, parentByUuid };
+	return { snapshotMessageIds, parentByUuid, humanTurnBoundaryUuids };
 }
 
 // Every entry in a real transcript carries a parentUuid forming a single
@@ -69,8 +85,15 @@ const MAX_ANCESTOR_HOPS = 500;
 
 /**
  * Walk `startUuid`'s own parentUuid chain (including itself, at hop 0) and
- * return the first uuid that is a recorded checkpoint anchor. Guards
- * against cycles/corrupted chains with both a hop cap and a visited set.
+ * return the first uuid that is a recorded checkpoint anchor — bounded by
+ * the target turn's own human-turn boundary node (Codex review-round P1):
+ * once the walk reaches a genuine human-turn node, it is checked (a
+ * checkpoint CAN be keyed to the human turn itself) but the walk stops
+ * there regardless of whether it matched — continuing past it would cross
+ * into an EARLIER turn and could land on that turn's own checkpoint,
+ * silently rewinding further back than the target turn ever asked for.
+ * Guards against cycles/corrupted chains with both a hop cap and a visited
+ * set.
  */
 function nearestSnapshotAncestor(
 	transcript: ParsedSessionTranscript,
@@ -81,6 +104,12 @@ function nearestSnapshotAncestor(
 	let hops = 0;
 	while (current !== undefined && hops < MAX_ANCESTOR_HOPS && !visited.has(current)) {
 		if (transcript.snapshotMessageIds.has(current)) return current;
+		if (transcript.humanTurnBoundaryUuids.has(current)) {
+			// Reached the target turn's own human-turn node without finding
+			// a checkpoint anywhere from startUuid down to here — do not
+			// continue into the previous turn.
+			return undefined;
+		}
 		visited.add(current);
 		current = transcript.parentByUuid.get(current);
 		hops += 1;
@@ -110,7 +139,11 @@ export type RewindAnchorResolution =
  *      (reliably echoed live per the E1 probe) up to the nearest ancestor
  *      that IS a recorded anchor — covers both the "assistant-keyed update
  *      snapshot" and "genuine human-turn snapshot several hops up" shapes
- *      observed in a real transcript.
+ *      observed in a real transcript. This walk is HARD-BOUNDED by the
+ *      target turn's own human-turn node (Codex review-round P1): if that
+ *      turn has no checkpoint of its own, the walk must fail rather than
+ *      cross into an earlier turn and rewind further back than the user
+ *      ever asked for — see `nearestSnapshotAncestor`.
  *   3. If neither resolves, fail closed — never guess.
  */
 export function resolveRewindAnchorFromTranscript(

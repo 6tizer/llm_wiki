@@ -139,3 +139,71 @@ test("cyclic parentUuid data does not hang the resolver", () => {
 	});
 	assert.deepEqual(result, { ok: false, reason: "anchor_unresolved" });
 });
+
+// Two-turn transcript for the Codex review-round P1 fix: the ancestor walk
+// must be hard-bounded by the TARGET turn's own human-turn node — it must
+// never cross into an earlier turn just because that earlier turn happens
+// to have a checkpoint and the target turn doesn't.
+const TURN1_HUMAN_UUID = "turn1-human";
+const TURN1_ASSISTANT_UUID = "turn1-assistant";
+const TURN2_HUMAN_UUID = "turn2-human";
+const TURN2_ASSISTANT_1_UUID = "turn2-assistant-1";
+const TURN2_ASSISTANT_2_UUID = "turn2-assistant-2";
+const TURN2_ASSISTANT_3_UUID = "turn2-assistant-3";
+
+function twoTurnTranscriptContent(args: { turn2HasCheckpoint: boolean }): string {
+	const lines = [
+		line({ type: "user", uuid: TURN1_HUMAN_UUID, parentUuid: undefined }),
+		line({
+			type: "file-history-snapshot",
+			messageId: TURN1_HUMAN_UUID,
+			isSnapshotUpdate: false,
+			snapshot: { messageId: TURN1_HUMAN_UUID },
+		}),
+		line({ type: "assistant", uuid: TURN1_ASSISTANT_UUID, parentUuid: TURN1_HUMAN_UUID }),
+		// Turn 2 starts here — its human node's parent chains back into turn 1.
+		line({ type: "user", uuid: TURN2_HUMAN_UUID, parentUuid: TURN1_ASSISTANT_UUID }),
+		line({ type: "assistant", uuid: TURN2_ASSISTANT_1_UUID, parentUuid: TURN2_HUMAN_UUID }),
+		line({ type: "assistant", uuid: TURN2_ASSISTANT_2_UUID, parentUuid: TURN2_ASSISTANT_1_UUID }),
+	];
+	if (args.turn2HasCheckpoint) {
+		lines.push(
+			line({
+				type: "file-history-snapshot",
+				messageId: TURN2_ASSISTANT_2_UUID,
+				isSnapshotUpdate: true,
+				snapshot: { messageId: TURN2_ASSISTANT_2_UUID },
+			}),
+		);
+	}
+	lines.push(line({ type: "assistant", uuid: TURN2_ASSISTANT_3_UUID, parentUuid: TURN2_ASSISTANT_2_UUID }));
+	return lines.join("\n");
+}
+
+test("Codex review-round P1: Turn2 has no checkpoint, Turn1 does — fails closed rather than reaching back into Turn1's anchor", () => {
+	const transcript = parseSessionTranscript(
+		twoTurnTranscriptContent({ turn2HasCheckpoint: false }),
+	);
+	const result = resolveRewindAnchorFromTranscript(transcript, {
+		candidateUserMessageId: "synthetic-uuid-not-a-checkpoint",
+		fallbackAssistantMessageId: TURN2_ASSISTANT_3_UUID,
+	});
+	// Must fail closed. Specifically must NOT resolve to TURN1_HUMAN_UUID —
+	// that would be a silent out-of-turn (over-)rewind.
+	assert.deepEqual(result, { ok: false, reason: "anchor_unresolved" });
+});
+
+test("multi-assistant-step turn: an in-turn checkpoint keyed to a middle assistant uuid still resolves (boundary doesn't false-positive-block correct in-turn resolution)", () => {
+	const transcript = parseSessionTranscript(
+		twoTurnTranscriptContent({ turn2HasCheckpoint: true }),
+	);
+	const result = resolveRewindAnchorFromTranscript(transcript, {
+		candidateUserMessageId: "synthetic-uuid-not-a-checkpoint",
+		fallbackAssistantMessageId: TURN2_ASSISTANT_3_UUID,
+	});
+	assert.deepEqual(result, {
+		ok: true,
+		uuid: TURN2_ASSISTANT_2_UUID,
+		source: "reverse_lookup_verified",
+	});
+});
