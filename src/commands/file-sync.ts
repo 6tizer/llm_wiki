@@ -13,6 +13,7 @@ export interface FileChangeTask {
   status: FileChangeStatus
   hashBefore?: string | null
   hashAfter?: string | null
+  titleBefore?: string | null
   size?: number | null
   mtimeMs?: number | null
   createdAt: number

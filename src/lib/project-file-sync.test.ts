@@ -732,4 +732,74 @@ describe("project file sync", () => {
     })
     expect(mocks.listDirectory.mock.calls.filter(([path]) => path === "/tmp/a/wiki")).toHaveLength(1)
   })
+
+  it("cleans a title-form wikilink from a sibling page when an externally deleted wiki task carries titleBefore", async () => {
+    vi.useFakeTimers()
+    const { startProjectFileSync } = await import("@/lib/project-file-sync")
+    const { useWikiStore } = await import("@/stores/wiki-store")
+
+    const project = { id: "A", name: "A", path: "/tmp/a" }
+    useWikiStore.getState().setProject(project)
+    mocks.listDirectory.mockImplementation(async (path?: string) => {
+      if (path === "/tmp/a/wiki") {
+        return [
+          {
+            name: "concepts",
+            path: "/tmp/a/wiki/concepts",
+            is_dir: true,
+            children: [
+              { name: "other-page.md", path: "/tmp/a/wiki/concepts/other-page.md", is_dir: false },
+            ],
+          },
+        ]
+      }
+      return []
+    })
+    mocks.readFile.mockImplementation(async (path?: string) => {
+      if (path === "/tmp/a/wiki/concepts/other-page.md") {
+        return [
+          "---",
+          'title: "Other Page"',
+          "---",
+          "",
+          "# Other Page",
+          "",
+          "See [[Key-Value Cache]] for details.",
+        ].join("\n")
+      }
+      return ""
+    })
+
+    void startProjectFileSync(project)
+    await vi.waitFor(() => {
+      expect(mocks.listen).toHaveBeenCalledTimes(2)
+    })
+
+    mocks.emit("file-sync://changed", {
+      projectId: "A",
+      tasks: [
+        {
+          id: "t1",
+          projectId: "A",
+          path: "wiki/concepts/kv-cache.md",
+          kind: "deleted",
+          status: "done",
+          titleBefore: "Key-Value Cache",
+          createdAt: 1,
+          updatedAt: 1,
+          retryCount: 0,
+          needsRerun: false,
+        },
+      ],
+    })
+
+    await vi.advanceTimersByTimeAsync(250)
+
+    await vi.waitFor(() => {
+      expect(mocks.writeFile).toHaveBeenCalledWith(
+        "/tmp/a/wiki/concepts/other-page.md",
+        expect.not.stringContaining("[[Key-Value Cache]]"),
+      )
+    })
+  })
 })

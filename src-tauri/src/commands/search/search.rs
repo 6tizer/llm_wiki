@@ -610,6 +610,8 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
     haystack.match_indices(needle).count()
 }
 
+/// Also reused by `file_ops::file_sync::read_meta` to populate `FileMeta.title`
+/// for the wiki-page delete-cleanup title snapshot (SPEC-11 PR7b).
 pub fn extract_title(content: &str, file_name: &str) -> String {
     let has_frontmatter = content.starts_with("---");
     let mut in_frontmatter = has_frontmatter;

@@ -8,10 +8,12 @@
  *
  * `cleanupDeletedWikiPages` runs AFTER its caller (project-file-sync.ts)
  * has already removed the target page(s) from disk — it only sweeps the
- * REST of the wiki for dangling references. That's the source of the
- * documented bug in 21c below: since the page is already gone, the
- * function can't read its frontmatter `title`, so `buildDeletedKeys`
- * only ever gets the slug-derived key.
+ * REST of the wiki for dangling references. Since the page is already
+ * gone, the function can't read its frontmatter `title` off disk; the
+ * caller (project-file-sync.ts) must supply it out-of-band via the
+ * optional `titles` map (sourced from the Rust file-sync snapshot's
+ * `titleBefore`, SPEC-11 PR7b), or `buildDeletedKeys` falls back to the
+ * slug-derived key only — see 21c below.
  *
  * Mock surface: `@/commands/fs` (real fs via temp dir, with
  * `listDirectory` wrapped so ONE test can inject a stale snapshot) and
@@ -112,18 +114,26 @@ describe("cleanupDeletedWikiPages — reference sweep (chain B)", () => {
     const other = await readFileRaw(`${tmp.path}/wiki/concepts/other-page.md`)
     expect(other).not.toContain("[[kv-cache]]")
     expect(other).toContain("the slug-form reference")
+    // Regression guard: without a `titles` map, the title-form wikilink is
+    // NOT recognized (no title-derived key to match against) and survives
+    // untouched — this is the documented, still-current fallback behavior
+    // for callers that can't supply a pre-deletion title (see 21c for the
+    // case where the caller does supply one).
+    expect(other).toContain("[[Key-Value Cache]]")
   })
 
-  it("21c: BUG — a title-form wikilink whose title diverges from the slug survives, because title is always \"\" here (source-lifecycle.ts:404); // source-lifecycle PR7 will fix", async () => {
+  it("21c: a title-form wikilink whose title diverges from the slug is cleaned when the caller supplies the pre-deletion title", async () => {
     const tmp = await seed("d21c")
-    await cleanupDeletedWikiPages(tmp.path, ["wiki/concepts/kv-cache.md"])
+    const titles = new Map([["wiki/concepts/kv-cache.md", "Key-Value Cache"]])
+    await cleanupDeletedWikiPages(tmp.path, ["wiki/concepts/kv-cache.md"], titles)
 
     const other = await readFileRaw(`${tmp.path}/wiki/concepts/other-page.md`)
-    // "Key-Value Cache" normalizes to "keyvaluecache", which does NOT match
-    // the slug-derived key "kvcache" (from "kv-cache") — so it is NOT
-    // recognized as a reference to the deleted page and survives untouched.
-    // This is the actual, current behavior — not the intended one.
-    expect(other).toContain("[[Key-Value Cache]]")
+    // "Key-Value Cache" normalizes to "keyvaluecache", matching the
+    // title-derived key contributed by the `titles` map — so the
+    // title-form wikilink is now recognized as a reference to the
+    // deleted page and stripped.
+    expect(other).not.toContain("[[Key-Value Cache]]")
+    expect(other).toContain("the title-form reference")
   })
 
   it("21d: filters a deleted page's slug out of surviving pages' `related:` frontmatter, keeping other entries", async () => {

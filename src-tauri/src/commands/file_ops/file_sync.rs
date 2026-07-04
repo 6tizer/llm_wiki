@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use walkdir::WalkDir;
 
+use crate::commands::search::extract_title;
 use crate::panic_guard::run_guarded;
 
 const SNAPSHOT_FILE: &str = ".llm-wiki/file-snapshot.json";
@@ -86,6 +87,8 @@ pub struct FileMeta {
     hash: Option<String>,
     size: u64,
     mtime_ms: i64,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -124,6 +127,7 @@ pub struct FileChangeTask {
     status: FileChangeStatus,
     hash_before: Option<String>,
     hash_after: Option<String>,
+    title_before: Option<String>,
     size: Option<u64>,
     mtime_ms: Option<i64>,
     created_at: i64,
@@ -732,10 +736,21 @@ fn enqueue_rescan_changes_for_prefixes(
     enqueue_paths(root, project_id, rels)
 }
 
+/// A pending snapshot title backfill (see `enqueue_paths`), carrying the
+/// hash/size observed alongside the freshly-read title as a baseline for
+/// the lost-update guard in `apply_title_backfills`.
+struct TitleBackfill {
+    rel: String,
+    title: Option<String>,
+    expected_hash: Option<String>,
+    expected_size: u64,
+}
+
 fn enqueue_paths(root: &Path, project_id: &str, rels: BTreeSet<String>) -> Result<(), String> {
     let snapshot = with_queue_lock(root, || read_snapshot(root))?;
     let now = now_ms();
     let mut changes = Vec::new();
+    let mut title_backfills = Vec::<TitleBackfill>::new();
 
     for rel in rels {
         let old = snapshot.files.get(&rel).cloned();
@@ -746,6 +761,23 @@ fn enqueue_paths(root: &Path, project_id: &str, rels: BTreeSet<String>) -> Resul
         // self-corrects by writing the current on-disk meta back to snapshot.
         let new = read_meta(root, &rel)?;
         if old.as_ref().map(|m| (&m.hash, m.size)) == new.as_ref().map(|m| (&m.hash, m.size)) {
+            // Content is unchanged, so no task is needed — but a legacy
+            // snapshot entry written before `FileMeta.title` existed (or one
+            // whose title otherwise drifted from the freshly-read value)
+            // would otherwise keep a stale/absent title forever, since only
+            // a hash/size change reaches the snapshot-write path below.
+            // Backfill it here so `title_before` on a later delete reflects
+            // reality instead of `None`.
+            if let (Some(old_meta), Some(new_meta)) = (&old, &new) {
+                if old_meta.title != new_meta.title {
+                    title_backfills.push(TitleBackfill {
+                        rel,
+                        title: new_meta.title.clone(),
+                        expected_hash: new_meta.hash.clone(),
+                        expected_size: new_meta.size,
+                    });
+                }
+            }
             continue;
         }
 
@@ -758,6 +790,8 @@ fn enqueue_paths(root: &Path, project_id: &str, rels: BTreeSet<String>) -> Resul
         changes.push((rel, kind, old, new));
     }
 
+    apply_title_backfills(root, title_backfills)?;
+
     if changes.is_empty() {
         return Ok(());
     }
@@ -768,6 +802,43 @@ fn enqueue_paths(root: &Path, project_id: &str, rels: BTreeSet<String>) -> Resul
             upsert_task(&mut queue, project_id, &rel, kind, old, new, now);
         }
         write_queue(root, &queue)
+    })
+}
+
+/// Applies pending title backfills to the snapshot in a single locked
+/// read-modify-write, merging the whole rescan batch into at most one disk
+/// write. Each backfill is only applied if the snapshot entry's hash/size
+/// still match the baseline observed when its title was read outside the
+/// lock — otherwise a concurrent writer (`process_queue`, `retry_file_change_task`,
+/// ...) has already advanced this path to new content, and applying the
+/// stale title would be a lost update (title reverted while hash moves
+/// forward, leaving an inconsistent entry). A skipped backfill is not lost:
+/// the next rescan re-derives it from the now-current on-disk title.
+fn apply_title_backfills(root: &Path, backfills: Vec<TitleBackfill>) -> Result<(), String> {
+    if backfills.is_empty() {
+        return Ok(());
+    }
+    with_queue_lock(root, || {
+        let mut snapshot = read_snapshot(root)?;
+        let mut changed = false;
+        for backfill in backfills {
+            let Some(meta) = snapshot.files.get_mut(&backfill.rel) else {
+                continue;
+            };
+            if meta.hash != backfill.expected_hash || meta.size != backfill.expected_size {
+                continue;
+            }
+            if meta.title != backfill.title {
+                meta.title = backfill.title;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+        snapshot.version = 1;
+        snapshot.updated_at = now_ms();
+        write_snapshot(root, &snapshot)
     })
 }
 
@@ -809,6 +880,7 @@ fn upsert_task(
         return;
     }
 
+    let title_before = old.as_ref().and_then(|m| m.title.clone());
     queue.tasks.push(FileChangeTask {
         id: format!("change_{}_{}", now, stable_path_hash(rel)),
         project_id: project_id.to_string(),
@@ -816,6 +888,7 @@ fn upsert_task(
         kind,
         status: FileChangeStatus::Pending,
         hash_before: old.and_then(|m| m.hash),
+        title_before,
         hash_after: new.as_ref().and_then(|m| m.hash.clone()),
         size: new.as_ref().map(|m| m.size),
         mtime_ms: new.as_ref().map(|m| m.mtime_ms),
@@ -1009,15 +1082,26 @@ fn read_meta(root: &Path, rel: &str) -> Result<Option<FileMeta>, String> {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let hash = if size <= MAX_HASH_BYTES {
-        Some(md5_file(&path)?)
-    } else {
+    let is_wiki_md = rel.starts_with("wiki/") && rel.ends_with(".md");
+    let mut title = None;
+    let hash = if size > MAX_HASH_BYTES {
         None
+    } else if is_wiki_md {
+        let bytes =
+            fs::read(&path).map_err(|e| format!("read failed for '{}': {e}", path.display()))?;
+        let mut hasher = Md5::new();
+        hasher.update(&bytes);
+        let file_name = rel.rsplit('/').next().unwrap_or(rel);
+        title = Some(extract_title(&String::from_utf8_lossy(&bytes), file_name));
+        Some(format!("{:x}", hasher.finalize()))
+    } else {
+        Some(md5_file(&path)?)
     };
     Ok(Some(FileMeta {
         hash,
         size,
         mtime_ms,
+        title,
     }))
 }
 
@@ -1041,6 +1125,7 @@ fn read_meta_fast(root: &Path, rel: &str) -> Result<Option<FileMeta>, String> {
         hash: None,
         size,
         mtime_ms,
+        title: None,
     }))
 }
 
@@ -1595,6 +1680,7 @@ mod tests {
                 status: FileChangeStatus::Failed,
                 hash_before: None,
                 hash_after: None,
+                title_before: None,
                 size: None,
                 mtime_ms: None,
                 created_at: 1,
@@ -1617,6 +1703,56 @@ mod tests {
         assert_eq!(queue.tasks.len(), 1);
         assert_eq!(queue.tasks[0].status, FileChangeStatus::Failed);
         assert_eq!(queue.tasks[0].retry_count, MAX_RETRY_COUNT);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upsert_task_merge_branch_preserves_title_before_from_first_insert() {
+        let root = temp_root("merge-title-before");
+        let rel = "wiki/concepts/a.md";
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::write(root.join(rel), "---\ntitle: \"Original Title\"\n---\n").unwrap();
+
+        let mut queue = FileChangeQueue::default();
+        let old = FileMeta {
+            hash: Some("h1".into()),
+            size: 1,
+            mtime_ms: 1,
+            title: Some("Original Title".into()),
+        };
+        upsert_task(
+            &mut queue,
+            "p1",
+            rel,
+            FileChangeKind::Modified,
+            Some(old),
+            read_meta(&root, rel).unwrap(),
+            now_ms(),
+        );
+        assert_eq!(queue.tasks.len(), 1);
+        assert_eq!(queue.tasks[0].title_before, Some("Original Title".into()));
+
+        // Second upsert on the same still-pending task must not touch
+        // `title_before` — it reflects the state at first observation, not
+        // whatever `old` happens to be passed on a later merge.
+        let other_old = FileMeta {
+            hash: Some("h2".into()),
+            size: 2,
+            mtime_ms: 2,
+            title: Some("Changed Meanwhile".into()),
+        };
+        upsert_task(
+            &mut queue,
+            "p1",
+            rel,
+            FileChangeKind::Modified,
+            Some(other_old),
+            read_meta(&root, rel).unwrap(),
+            now_ms(),
+        );
+        assert_eq!(queue.tasks.len(), 1);
+        assert_eq!(queue.tasks[0].title_before, Some("Original Title".into()));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1840,6 +1976,189 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(changed_count, QUEUE_EMIT_EVERY);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_meta_deserializes_legacy_snapshot_without_title_field() {
+        let legacy = r#"{"hash":"abc123","size":42,"mtimeMs":1000}"#;
+        let meta: FileMeta = serde_json::from_str(legacy).unwrap();
+        assert_eq!(meta.hash, Some("abc123".to_string()));
+        assert_eq!(meta.size, 42);
+        assert_eq!(meta.mtime_ms, 1000);
+        assert_eq!(meta.title, None);
+    }
+
+    #[test]
+    fn read_meta_extracts_frontmatter_title_for_wiki_markdown() {
+        let root = temp_root("wiki-title");
+        let rel = "wiki/concepts/kv-cache.md";
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::write(
+            root.join(rel),
+            "---\ntitle: \"Key-Value Cache\"\n---\n\n# KV Cache\n",
+        )
+        .unwrap();
+
+        let meta = read_meta(&root, rel).unwrap().unwrap();
+        assert_eq!(meta.title, Some("Key-Value Cache".to_string()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_meta_does_not_extract_title_for_non_wiki_markdown() {
+        let root = temp_root("non-wiki-title");
+        let rel = "raw/sources/notes.md";
+        fs::write(root.join(rel), "---\ntitle: \"Should Not Extract\"\n---\n").unwrap();
+
+        let meta = read_meta(&root, rel).unwrap().unwrap();
+        assert_eq!(meta.title, None);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deleted_wiki_page_task_carries_title_before_from_snapshot() {
+        let root = temp_root("delete-title-before");
+        let rel = "wiki/concepts/kv-cache.md";
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::write(root.join(rel), "---\ntitle: \"Key-Value Cache\"\n---\n").unwrap();
+
+        ensure_sync_dir(&root).unwrap();
+        sync_snapshot_paths(&root, BTreeSet::from([rel.to_string()])).unwrap();
+
+        fs::remove_file(root.join(rel)).unwrap();
+        enqueue_rescan_changes(&root, "p1", &default_watch_config()).unwrap();
+
+        let queue = read_queue(&root).unwrap();
+        let task = queue.tasks.iter().find(|t| t.path == rel).unwrap();
+        assert_eq!(task.kind, FileChangeKind::Deleted);
+        // Must come from the pre-deletion snapshot, not a fresh read (the
+        // file is already gone by the time this task is built).
+        assert_eq!(task.title_before, Some("Key-Value Cache".to_string()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_snapshot_title_is_backfilled_on_unchanged_rescan_then_survives_to_delete_task() {
+        let root = temp_root("legacy-title-backfill");
+        let rel = "wiki/concepts/kv-cache.md";
+        fs::create_dir_all(root.join("wiki/concepts")).unwrap();
+        fs::write(root.join(rel), "---\ntitle: \"Key-Value Cache\"\n---\n").unwrap();
+        ensure_sync_dir(&root).unwrap();
+
+        // Simulate a snapshot entry written before `FileMeta.title` existed:
+        // same hash/size as the file currently on disk, but no title.
+        let current = read_meta(&root, rel).unwrap().unwrap();
+        let legacy_snapshot = FileSnapshot {
+            version: 1,
+            updated_at: now_ms(),
+            files: BTreeMap::from([(
+                rel.to_string(),
+                FileMeta {
+                    hash: current.hash.clone(),
+                    size: current.size,
+                    mtime_ms: current.mtime_ms,
+                    title: None,
+                },
+            )]),
+        };
+        write_snapshot(&root, &legacy_snapshot).unwrap();
+
+        // Rescan with no content change: no task should be generated, but
+        // the snapshot's title should be backfilled from a fresh read.
+        enqueue_rescan_changes(&root, "p1", &default_watch_config()).unwrap();
+        assert!(read_queue(&root)
+            .unwrap()
+            .tasks
+            .iter()
+            .all(|t| t.path != rel));
+        let snapshot = read_snapshot(&root).unwrap();
+        assert_eq!(
+            snapshot.files.get(rel).and_then(|m| m.title.clone()),
+            Some("Key-Value Cache".to_string())
+        );
+
+        // Deleting the page and rescanning again must now carry the
+        // backfilled title on the Deleted task, not None.
+        fs::remove_file(root.join(rel)).unwrap();
+        enqueue_rescan_changes(&root, "p1", &default_watch_config()).unwrap();
+        let queue = read_queue(&root).unwrap();
+        let task = queue.tasks.iter().find(|t| t.path == rel).unwrap();
+        assert_eq!(task.kind, FileChangeKind::Deleted);
+        assert_eq!(task.title_before, Some("Key-Value Cache".to_string()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn title_backfill_skips_when_snapshot_baseline_has_moved_on() {
+        let root = temp_root("backfill-lost-update-guard");
+        ensure_sync_dir(&root).unwrap();
+        let rel = "wiki/concepts/kv-cache.md";
+
+        // Seed the snapshot entry the main loop would have observed when it
+        // read the title (the stale hash/size baseline it carries forward
+        // in the `TitleBackfill`).
+        write_snapshot(
+            &root,
+            &FileSnapshot {
+                version: 1,
+                updated_at: now_ms(),
+                files: BTreeMap::from([(
+                    rel.to_string(),
+                    FileMeta {
+                        hash: Some("stale-hash".into()),
+                        size: 10,
+                        mtime_ms: 1,
+                        title: None,
+                    },
+                )]),
+            },
+        )
+        .unwrap();
+
+        // Simulate a concurrent writer (e.g. `process_queue` completing a
+        // task for this same path) advancing the snapshot to new content in
+        // the window between the main loop's read and the locked backfill
+        // apply below.
+        with_queue_lock(&root, || {
+            let mut snapshot = read_snapshot(&root)?;
+            snapshot.files.insert(
+                rel.to_string(),
+                FileMeta {
+                    hash: Some("new-hash".into()),
+                    size: 20,
+                    mtime_ms: 2,
+                    title: Some("Renamed Concurrently".into()),
+                },
+            );
+            write_snapshot(&root, &snapshot)
+        })
+        .unwrap();
+
+        // The pending backfill still carries the stale baseline captured
+        // before the concurrent write.
+        let backfills = vec![TitleBackfill {
+            rel: rel.to_string(),
+            title: Some("Key-Value Cache".to_string()),
+            expected_hash: Some("stale-hash".to_string()),
+            expected_size: 10,
+        }];
+        apply_title_backfills(&root, backfills).unwrap();
+
+        let snapshot = read_snapshot(&root).unwrap();
+        let meta = snapshot.files.get(rel).unwrap();
+        // Baseline mismatch must skip the backfill entirely: applying it
+        // would have reverted `title` to the stale value while `hash`/`size`
+        // stayed at the concurrent writer's newer values — an inconsistent
+        // entry (lost update).
+        assert_eq!(meta.hash, Some("new-hash".to_string()));
+        assert_eq!(meta.size, 20);
+        assert_eq!(meta.title, Some("Renamed Concurrently".to_string()));
 
         let _ = fs::remove_dir_all(root);
     }
