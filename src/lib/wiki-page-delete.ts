@@ -48,7 +48,16 @@ import { withProjectLock } from "@/lib/project-mutex"
  * entities, queries, …) don't own image directories of their own,
  * so the media cascade is scoped to source pages only.
  *
- * Tolerates both `/` and `\` separators for Windows.
+ * Tolerates both `/` and `\` separators for Windows. Expects a path
+ * that contains a `/wiki/sources/` segment (absolute path, or any
+ * path prefixed with the project root) — a bare project-relative
+ * path like `wiki/sources/foo.md` won't match; join it onto the
+ * project root first.
+ *
+ * source-lifecycle.ts's cleanup chain applies the same rule but
+ * always receives a project-relative path, so it uses a plain
+ * `startsWith("wiki/sources/")` check inline instead of importing
+ * this — keep both in sync if the rule ever changes.
  */
 function isSourcePage(pagePath: string): boolean {
   const normalized = normalizePath(pagePath)
