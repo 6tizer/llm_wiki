@@ -33,7 +33,7 @@
 
 1. **PR1 Runtime 转正**：`LLM_WIKI_CORE_WORK_RUNTIME_ENABLED` 默认 true（或移除 gate）；禁用态 UI 分支清理（模型 Profiles、派生状态页的禁用提示删除；若保留关闭能力则整块隐藏而非禁用+提示）；全套 runtime smoke（profile 保存/探测/调度、派生重建按钮）作为 Wiring Gate 证据。**前置于 SPEC-12 PR3 与 SPEC-7 PR4/PR6。**
 2. **PR2 设置分组骨架**：设置侧栏三组导航（AI 与模型 / 知识流水线 / 应用）+ 现有页面归位迁移 + 两处更名 + 「资料监控/定时导入/MinerU」合并为「导入」一页。纯结构迁移，不改行为。**前置于 SPEC-7 PR6。**
-3. **PR3 模型配置合并页**：连接层（合并 legacy 15 家 provider + 搜索 6 家的密钥/端点管理）+ 分配矩阵（任务族 × profile，向量嵌入/图片描述从独立页降为矩阵行）；legacy「LLM 模型」转只读迁移向导（读取现有活跃 provider 生成对应 profile），一个版本周期后删除。依赖 PR1。
+3. **PR3 模型配置合并页**：连接层（合并 legacy 15 家 provider + 搜索 6 家的密钥/端点管理）+ 分配矩阵（任务族 × profile，向量嵌入/图片描述从独立页降为矩阵行）+ **权限默认值设置页 UI**（消费 SPEC-7 PR6 交付的契约——归属裁定见下节）；legacy「LLM 模型」转只读迁移向导（读取现有活跃 provider 生成对应 profile），一个版本周期后删除。依赖 PR1。
 4. **PR4 Wiki 健康中心 + 主导航收敛**：新页面骨架（总览=派生状态组件复用 / 待办=检查+待审阅 / 操作=标签体系+综合+索引+查重迁入）；主导航 8→5、文字标签、AX 名称补全；「深度研究」从待审阅页的抽屉独立为导航项内容区。
 5. **Closeout**：legacy 删除收尾、README/文档收口、全页面截图对照（light/dark/窄宽）。
 
@@ -42,9 +42,10 @@
 | 先后 | 原因 |
 |------|------|
 | SPEC-12 PR1 → SPEC-7 PR4/PR6 | 「自动 ▾」profile 选择器与权限默认值都要求 runtime 在生产活着 |
-| SPEC-12 PR2 → SPEC-7 PR6 | 权限默认值页落进新「AI 与模型」分组 |
+| SPEC-12 PR2 → SPEC-7 PR6 | PR6 的会话级权限 UI 引用的「设置修复入口」指向新「AI 与模型」分组 |
 | SPEC-7 PR3 ∥ SPEC-12 PR1/PR2 | 会话状态隔离不依赖设置结构，双轨并行 |
 | chat-store/chat 组件归 SPEC-7 轨独占；设置组件归 SPEC-12 轨独占 | 避免跨轨文件冲突 |
+| **权限默认值归属裁定**：SPEC-7 PR6 交付契约/事件 + 会话级权限 UI + footer；**设置页 UI 由本 SPEC PR3 承接** | 与文件边界一致，消除双认领 |
 
 对话侧的修订（四档路由删除 D4、提取双入口 D1、composer「自动 ▾ + ＋ + 来源」范式、空态建议卡、错误产品化）已作为 2026-07-05 修订节写入 `spec-7-unified-agentic-chat.md`，不在本 SPEC 范围。
 
@@ -58,6 +59,6 @@
 ## Non-goals
 
 - 对话区 composer 重构（SPEC-7 PR4）。
-- profile 事件回传与权限 UI（SPEC-7 PR6）。
+- profile 事件回传、会话级权限 UI 与 footer（SPEC-7 PR6）；权限默认值的**设置页 UI** 属本 SPEC PR3（见接口节裁定）。
 - 新增任何流水线能力；本 SPEC 只动信息架构与 runtime 门。
 - Swift shell（SPEC-9 deferred）。

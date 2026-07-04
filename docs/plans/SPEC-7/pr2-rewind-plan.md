@@ -12,7 +12,7 @@
 
 ## Non-goals（显式）
 
-- wiki 写工具自建 oldSha256/backup 快照 → **PR2b**（issue 待开）。
+- wiki 写工具自建 oldSha256/backup 快照 → **PR2b**（#292）。
 - 轮内（同 turn 多写）粒度 rewind——uuid 坐标系限制，调查文档已记。
 - rewind 历史多分支树 UI。
 - app reload 后恢复 rewind 目标（现状 runtime-only，reload 即失效 = 天然 fail-closed，矩阵 A15 记录）。
@@ -95,6 +95,6 @@ core.ts:154 现在自行 `getAllowedWikiTools(...)` 生成 allowedTools 且不�
 
 ## Follow-ups（本 PR 显式不做）
 
-- **PR2b**：wiki 写工具 oldSha256/backup 快照（开 issue 挂 #60/#190）。
+- **PR2b**（#292）：wiki 写工具 oldSha256/backup 快照（挂 #60/#190）。
 - agent-policy `merge_duplicate_group` 列入 READ 的上游修正（本 PR 只在门禁分类层纠正；policy 名单本身的语义修正另行小 PR，影响面是权限提示而非 rewind）。
 - app reload 后 rewind 目标持久化恢复（目前 fail-closed 失效，体验增强另议）。
