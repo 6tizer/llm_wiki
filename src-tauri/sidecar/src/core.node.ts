@@ -392,7 +392,7 @@ test("canUseTool pre-approves allowed Wiki read tools and denies disabled Wiki w
 		await canUseTool(
 			"mcp__llm_wiki__read_page",
 			{ path: "wiki/index.md" },
-			{ signal, toolUseID: "tool-1" },
+			{ signal, toolUseID: "tool-1", requestId: "req-1" },
 		),
 		{
 			behavior: "allow",
@@ -403,7 +403,7 @@ test("canUseTool pre-approves allowed Wiki read tools and denies disabled Wiki w
 		await canUseTool(
 			"mcp__llm_wiki__update_page",
 			{ path: "wiki/index.md" },
-			{ signal, toolUseID: "tool-2" },
+			{ signal, toolUseID: "tool-2", requestId: "req-2" },
 		),
 		{
 			behavior: "deny",
@@ -472,7 +472,7 @@ test("canUseTool routes Wiki write tools through the permission bridge under the
 	const decision = await canUseTool(
 		"mcp__llm_wiki__update_page",
 		{ path: "wiki/index.md", contents: "attacker controlled" },
-		{ signal, toolUseID: "tool-write-1" },
+		{ signal, toolUseID: "tool-write-1", requestId: "req-write-1" },
 	);
 
 	assert.deepEqual(bridgeCalls, [
@@ -487,6 +487,139 @@ test("canUseTool routes Wiki write tools through the permission bridge under the
 		behavior: "deny",
 		message: "denied by user",
 		toolUseID: "tool-write-1",
+	});
+});
+
+test("canUseTool forwards a sub-agent's agentID to the permission bridge under the default policy", async () => {
+	// SDK 0.3.186: tool calls made by a sub-agent (or background task) are
+	// routed through canUseTool with an `agentID` identifying the sub-agent,
+	// instead of being auto-rejected. Lock down that this integration path
+	// (core.ts canUseTool -> permissionBridge.requestPermission) forwards
+	// `options.agentID` through unchanged.
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const bridgeCalls: Array<{
+		toolName: string;
+		toolUseID: string;
+		agentID?: string;
+	}> = [];
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async (_streamId, toolName, _input, options) => {
+				bridgeCalls.push({
+					toolName,
+					toolUseID: options.toolUseID,
+					agentID: options.agentID,
+				});
+				return {
+					behavior: "deny",
+					message: "denied by user",
+					toolUseID: options.toolUseID,
+				};
+			},
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: true,
+		},
+	});
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	await canUseTool(
+		"mcp__llm_wiki__update_page",
+		{ path: "wiki/index.md", contents: "subagent write" },
+		{
+			signal: new AbortController().signal,
+			toolUseID: "tool-write-sub",
+			requestId: "req-write-sub",
+			agentID: "subagent-1",
+		},
+	);
+
+	assert.deepEqual(bridgeCalls, [
+		{
+			toolName: "mcp__llm_wiki__update_page",
+			toolUseID: "tool-write-sub",
+			agentID: "subagent-1",
+		},
+	]);
+});
+
+test("default policy write tools are not bare-allowed via allowedTools (SDK canUseTool shadowing)", async () => {
+	// SDK 0.3.198+ auto-approves any bare `allowedTools` entry before
+	// `canUseTool` is even consulted (confirmed against the 0.3.201 runtime
+	// warning CLAUDE_SDK_CAN_USE_TOOL_SHADOWED). If a write tool were still
+	// listed in `allowedTools`, the "ask" approval below would never fire in
+	// a real SDK — only in this mocked queryFn. This test locks down that
+	// `allowedTools` never contains write tools so the ask path stays live.
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const bridgeCalls: string[] = [];
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async (_streamId, toolName, _input, options) => {
+				bridgeCalls.push(toolName);
+				return { behavior: "allow", toolUseID: options.toolUseID };
+			},
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: true,
+			permissionPolicy: "default",
+		},
+	});
+
+	const allowedTools = capturedInput?.options?.allowedTools as string[] | undefined;
+	assert.ok(allowedTools);
+	assert.ok(allowedTools.includes("mcp__llm_wiki__read_page"));
+	assert.ok(!allowedTools.includes("mcp__llm_wiki__update_page"));
+	assert.ok(!allowedTools.includes("mcp__llm_wiki__run_pipeline"));
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	const decision = await canUseTool(
+		"mcp__llm_wiki__update_page",
+		{ path: "wiki/index.md" },
+		{ signal: new AbortController().signal, toolUseID: "tool-write-ask", requestId: "req-write-ask" },
+	);
+
+	assert.deepEqual(bridgeCalls, ["mcp__llm_wiki__update_page"]);
+	assert.deepEqual(decision, {
+		behavior: "allow",
+		toolUseID: "tool-write-ask",
 	});
 });
 
@@ -527,7 +660,7 @@ test("canUseTool allows a Wiki write once the permission bridge approves it", as
 	const decision = await canUseTool(
 		"mcp__llm_wiki__update_page",
 		{ path: "wiki/index.md", contents: "approved update" },
-		{ signal: new AbortController().signal, toolUseID: "tool-write-2" },
+		{ signal: new AbortController().signal, toolUseID: "tool-write-2", requestId: "req-write-2" },
 	);
 
 	assert.deepEqual(decision, {
@@ -575,7 +708,7 @@ test("canUseTool denies Wiki writes under the restricted policy without ever ask
 	const decision = await canUseTool(
 		"mcp__llm_wiki__update_page",
 		{ path: "wiki/index.md" },
-		{ signal: new AbortController().signal, toolUseID: "tool-write-3" },
+		{ signal: new AbortController().signal, toolUseID: "tool-write-3", requestId: "req-write-3" },
 	);
 
 	assert.deepEqual(decision, {
@@ -626,7 +759,7 @@ test("canUseTool fast-path allows Wiki writes under bypass policies without aski
 		const decision = await canUseTool(
 			"mcp__llm_wiki__update_page",
 			{ path: "wiki/index.md" },
-			{ signal: new AbortController().signal, toolUseID: "tool-write-4" },
+			{ signal: new AbortController().signal, toolUseID: "tool-write-4", requestId: "req-write-4" },
 		);
 
 		assert.deepEqual(decision, {
@@ -681,7 +814,7 @@ test("canUseTool asks permission bridge for non-Wiki tools", async () => {
 		await canUseTool(
 			"Bash",
 			{ command: "pwd" },
-			{ signal: new AbortController().signal, toolUseID: "tool-3" },
+			{ signal: new AbortController().signal, toolUseID: "tool-3", requestId: "req-3" },
 		),
 		{
 			behavior: "allow",
@@ -724,6 +857,12 @@ test("query request enables LLM Wiki MCP tools when project context is present",
 
 	assert.equal(capturedInput?.options?.tools, undefined);
 	assert.equal(capturedInput?.options?.permissionMode, "default");
+	// Write tools are intentionally absent from allowedTools even though
+	// enableWriteTools is true: a bare allowedTools entry auto-approves the
+	// tool call and shadows canUseTool (SDK 0.3.198+
+	// CLAUDE_SDK_CAN_USE_TOOL_SHADOWED). Write-tool gating goes exclusively
+	// through canUseTool + the PreToolUse hook. See the
+	// "default policy write tools are not bare-allowed" test below.
 	assert.deepEqual(capturedInput?.options?.allowedTools, [
 		"mcp__llm_wiki__list_projects",
 		"mcp__llm_wiki__list_pages",
@@ -743,24 +882,6 @@ test("query request enables LLM Wiki MCP tools when project context is present",
 		"mcp__llm_wiki__taxonomy_preview",
 		"mcp__llm_wiki__synthesis_preview",
 		"mcp__llm_wiki__get_knowledge_agents_config",
-		"mcp__llm_wiki__update_page",
-		"mcp__llm_wiki__create_entity",
-		"mcp__llm_wiki__create_concept",
-		"mcp__llm_wiki__save_query_page",
-		"mcp__llm_wiki__run_deep_research",
-		"mcp__llm_wiki__ingest_source",
-		"mcp__llm_wiki__caption_source_images",
-		"mcp__llm_wiki__fix_lint_result",
-		"mcp__llm_wiki__fix_lint_report",
-		"mcp__llm_wiki__run_lint_and_report",
-		"mcp__llm_wiki__enrich_wikilinks",
-		"mcp__llm_wiki__wiki_synthesis",
-		"mcp__llm_wiki__run_pipeline",
-		"mcp__llm_wiki__autofill_properties",
-		"mcp__llm_wiki__sweep_reviews",
-		"mcp__llm_wiki__okf_import",
-		"mcp__llm_wiki__taxonomy_apply",
-		"mcp__llm_wiki__taxonomy_rollback",
 	]);
 	assert.ok(capturedInput?.options?.mcpServers);
 	assert.ok(capturedInput?.options?.hooks);

@@ -151,10 +151,7 @@ export function createRequestHandler({
 			const permissionPolicy: AgentPermissionPolicy =
 				req.options.permissionPolicy ?? "default";
 			const changedPaths = new Set<string>();
-			const allowedTools = getAllowedWikiTools({
-				wikiToolsEnabled,
-				enableWriteTools,
-			});
+			const allowedTools = getAllowedWikiTools({ wikiToolsEnabled });
 			const mcpServers = wikiToolsEnabled
 				? {
 						llm_wiki: createLlmWikiMcpServer({
@@ -209,6 +206,19 @@ export function createRequestHandler({
 								permissionPolicy,
 							});
 							if (decision.decision === "allow") {
+								// Under the "bypass"/"bypassPermissions" policy,
+								// buildPermissionOptions sets permissionMode to
+								// "bypassPermissions", which makes the real SDK skip
+								// canUseTool entirely — this "allow" return is
+								// unreachable for that case in production (it only
+								// fires here in unit tests that call canUseTool
+								// directly). The real defense for bypass-policy write
+								// tools is the PreToolUse hook in agent-hooks.ts, which
+								// shares this same resolveWikiToolDecision call and
+								// therefore agrees on the same semantics. This branch
+								// still matters for read tools and for "ask"-style
+								// policies (acceptEdits/plan/dontAsk/auto/default),
+								// where the SDK does invoke canUseTool.
 								return {
 									behavior: "allow" as const,
 									toolUseID: options.toolUseID,

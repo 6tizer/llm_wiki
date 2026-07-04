@@ -48,11 +48,11 @@ test("SDK-native permission policies pass through", () => {
 
 test("allowed Wiki tools follow write mode", () => {
 	assert.deepEqual(
-		getAllowedWikiTools({ wikiToolsEnabled: false, enableWriteTools: true }),
+		getAllowedWikiTools({ wikiToolsEnabled: false }),
 		[],
 	);
 	assert.deepEqual(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: false }),
+		getAllowedWikiTools({ wikiToolsEnabled: true }),
 		[
 			"mcp__llm_wiki__list_projects",
 			"mcp__llm_wiki__list_pages",
@@ -74,41 +74,44 @@ test("allowed Wiki tools follow write mode", () => {
 			"mcp__llm_wiki__get_knowledge_agents_config",
 		],
 	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__update_page",
-		),
-	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__ingest_source",
-		),
-	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__run_deep_research",
-		),
-	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__sweep_reviews",
-		),
-	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__okf_import",
-		),
-	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__taxonomy_apply",
-		),
-	);
-	assert.ok(
-		getAllowedWikiTools({ wikiToolsEnabled: true, enableWriteTools: true }).includes(
-			"mcp__llm_wiki__taxonomy_rollback",
-		),
-	);
+});
+
+test("allowed Wiki tools never bare-allow write tools, even with writes enabled (SDK 0.3.198+ canUseTool shadowing)", () => {
+	// A bare entry in the SDK's `allowedTools` auto-approves the tool call
+	// and skips `canUseTool` entirely (SDK 0.3.201 `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`
+	// warning). Write tools must therefore never appear here regardless of
+	// `enableWriteTools`, or the "default" policy's ask-approval for writes
+	// would be silently bypassed. Gating instead happens exclusively via
+	// `resolveWikiToolDecision` in canUseTool (core.ts) and the PreToolUse
+	// hook (agent-hooks.ts).
+	const allowed = getAllowedWikiTools({ wikiToolsEnabled: true });
+	for (const writeTool of [
+		"mcp__llm_wiki__update_page",
+		"mcp__llm_wiki__create_entity",
+		"mcp__llm_wiki__create_concept",
+		"mcp__llm_wiki__save_query_page",
+		"mcp__llm_wiki__run_deep_research",
+		"mcp__llm_wiki__ingest_source",
+		"mcp__llm_wiki__caption_source_images",
+		"mcp__llm_wiki__fix_lint_result",
+		"mcp__llm_wiki__fix_lint_report",
+		"mcp__llm_wiki__run_lint_and_report",
+		"mcp__llm_wiki__enrich_wikilinks",
+		"mcp__llm_wiki__wiki_synthesis",
+		"mcp__llm_wiki__run_pipeline",
+		"mcp__llm_wiki__autofill_properties",
+		"mcp__llm_wiki__sweep_reviews",
+		"mcp__llm_wiki__okf_import",
+		"mcp__llm_wiki__taxonomy_apply",
+		"mcp__llm_wiki__taxonomy_rollback",
+	]) {
+		assert.ok(
+			!allowed.includes(writeTool),
+			`${writeTool} must not be bare-allowed; it would shadow canUseTool`,
+		);
+	}
+	// Read tools are still bare-allowed (no approval prompt needed for them).
+	assert.ok(allowed.includes("mcp__llm_wiki__read_page"));
 });
 
 test("wiki tool decision denies non-wiki tools and disabled writes", () => {
@@ -164,23 +167,35 @@ test("wiki tool decision fast-path allows read tools regardless of policy", () =
 	}
 });
 
-test("wiki tool decision routes write tools through the permission bridge under the default policy", () => {
-	assert.deepEqual(
-		resolveWikiToolDecision({
-			toolName: "mcp__llm_wiki__update_page",
-			enableWriteTools: true,
-			permissionPolicy: "default",
-		}),
-		{ decision: "ask" },
-	);
-	assert.deepEqual(
-		resolveWikiToolDecision({
-			toolName: "mcp__llm_wiki__run_pipeline",
-			enableWriteTools: true,
-			permissionPolicy: "default",
-		}),
-		{ decision: "ask" },
-	);
+test("wiki tool decision routes write tools through the permission bridge under the default and SDK-native ask-style policies", () => {
+	// The SDK only skips canUseTool entirely for "bypassPermissions" — every
+	// other permissionMode (including acceptEdits/plan/dontAsk/auto) still
+	// invokes canUseTool, so resolveWikiToolDecision's "ask" fallthrough is
+	// live code for all of them, not just "default".
+	for (const permissionPolicy of [
+		"default",
+		"acceptEdits",
+		"plan",
+		"dontAsk",
+		"auto",
+	] as const) {
+		assert.deepEqual(
+			resolveWikiToolDecision({
+				toolName: "mcp__llm_wiki__update_page",
+				enableWriteTools: true,
+				permissionPolicy,
+			}),
+			{ decision: "ask" },
+		);
+		assert.deepEqual(
+			resolveWikiToolDecision({
+				toolName: "mcp__llm_wiki__run_pipeline",
+				enableWriteTools: true,
+				permissionPolicy,
+			}),
+			{ decision: "ask" },
+		);
+	}
 });
 
 test("wiki tool decision denies write tools under the restricted policy even when writes are enabled", () => {

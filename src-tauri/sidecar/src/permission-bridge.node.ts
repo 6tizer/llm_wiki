@@ -32,6 +32,7 @@ test("permission bridge emits request and resolves allow decision", async () => 
 		{
 			signal: new AbortController().signal,
 			toolUseID: "tool-1",
+			requestId: "req-1",
 			title: "Claude wants to run Bash",
 			displayName: "Run command",
 			description: "pwd",
@@ -77,6 +78,7 @@ test("permission bridge resolves deny decisions and rejects killed streams", asy
 		{
 			signal: new AbortController().signal,
 			toolUseID: "tool-2",
+			requestId: "req-2",
 		},
 	);
 	const denyPayload = sent[0]?.data as { requestId: string };
@@ -101,6 +103,7 @@ test("permission bridge resolves deny decisions and rejects killed streams", asy
 		{
 			signal: new AbortController().signal,
 			toolUseID: "tool-3",
+			requestId: "req-3",
 		},
 	);
 	bridge.rejectStream("stream-1", "killed");
@@ -120,6 +123,7 @@ test("permission bridge auto-denies timed out requests", async () => {
 		{
 			signal: new AbortController().signal,
 			toolUseID: "tool-4",
+			requestId: "req-4",
 		},
 	);
 
@@ -127,5 +131,53 @@ test("permission bridge auto-denies timed out requests", async () => {
 		behavior: "deny",
 		message: "Permission request timed out: Bash",
 		toolUseID: "tool-4",
+	});
+});
+
+test("permission bridge carries a sub-agent's agentID through request and resolution (SDK 0.3.186 subagent tool-call routing)", async () => {
+	// As of SDK 0.3.186, tool calls made by a sub-agent (or a background
+	// task) are routed through canUseTool/the permission bridge instead of
+	// being auto-rejected. `options.agentID` identifies which sub-agent
+	// issued the call; the bridge must forward it in the emitted
+	// agent_permission_request payload without crashing, and resolve the
+	// call normally once the host responds.
+	const sent: AgentMessage[] = [];
+	const bridge = createPermissionBridge({
+		send: (msg) => sent.push(msg),
+	});
+
+	const pending = bridge.requestPermission(
+		"stream-1",
+		"mcp__llm_wiki__update_page",
+		{ path: "wiki/index.md" },
+		{
+			signal: new AbortController().signal,
+			toolUseID: "tool-sub-1",
+			requestId: "req-sub-1",
+			agentID: "subagent-42",
+		},
+	);
+
+	assert.equal(sent.length, 1);
+	const payload = sent[0]?.data as {
+		requestId: string;
+		agentID?: string;
+		toolName: string;
+	};
+	assert.equal(payload.agentID, "subagent-42");
+	assert.equal(payload.toolName, "mcp__llm_wiki__update_page");
+
+	bridge.handleResponse(
+		response(payload.requestId, {
+			behavior: "allow",
+		}),
+	);
+
+	assert.deepEqual(await pending, {
+		behavior: "allow",
+		updatedInput: undefined,
+		updatedPermissions: undefined,
+		toolUseID: "tool-sub-1",
+		decisionClassification: undefined,
 	});
 });
