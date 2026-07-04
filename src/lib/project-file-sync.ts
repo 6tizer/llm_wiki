@@ -236,11 +236,15 @@ function isIngestableRawSource(relativePath: string): boolean {
 }
 
 async function cleanupDeletedFiles(project: WikiProject, tasks: FileChangeTask[]): Promise<void> {
-  const deleted = tasks
-    .filter((task) => task.projectId === project.id && task.kind === "deleted")
-    .map((task) => normalizePath(task.path))
+  const deletedTasks = tasks.filter((task) => task.projectId === project.id && task.kind === "deleted")
+  const deleted = deletedTasks.map((task) => normalizePath(task.path))
 
   if (deleted.length === 0) return
+
+  const titlesBeforeDeletion = new Map<string, string>()
+  for (const task of deletedTasks) {
+    if (task.titleBefore) titlesBeforeDeletion.set(normalizePath(task.path), task.titleBefore)
+  }
 
   const rawSources = deleted.filter(isRawSourcePathForCascade)
   const wikiPages = deleted.filter(isWikiPageForCascade)
@@ -261,7 +265,7 @@ async function cleanupDeletedFiles(project: WikiProject, tasks: FileChangeTask[]
   const wikiPagesToClean = wikiPages.filter((path) => !deletedWikiSlugs.has(getFileStem(path)))
   if (wikiPagesToClean.length > 0) {
     try {
-      await cleanupDeletedWikiPages(project.path, wikiPagesToClean)
+      await cleanupDeletedWikiPages(project.path, wikiPagesToClean, titlesBeforeDeletion)
     } catch (err) {
       console.error("[file-sync] failed to clean deleted wiki pages:", err)
     }

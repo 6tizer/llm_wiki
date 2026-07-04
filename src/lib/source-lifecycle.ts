@@ -417,15 +417,17 @@ async function deleteSourceFolderUnlocked(
 export async function cleanupDeletedWikiPages(
   projectPath: string,
   relativePaths: string[],
+  titles?: Map<string, string>,
 ): Promise<void> {
   return withProjectLock(normalizePath(projectPath), () =>
-    cleanupDeletedWikiPagesUnlocked(projectPath, relativePaths),
+    cleanupDeletedWikiPagesUnlocked(projectPath, relativePaths, titles),
   )
 }
 
 async function cleanupDeletedWikiPagesUnlocked(
   projectPath: string,
   relativePaths: string[],
+  titles?: Map<string, string>,
 ): Promise<void> {
   const pp = normalizePath(projectPath)
   const deletedInfos = relativePaths
@@ -434,7 +436,7 @@ async function cleanupDeletedWikiPagesUnlocked(
         return [{
           slug: wikiPathToLegacyStemId(path),
           pageId: wikiPathToVectorPageId(pp, path),
-          title: "",
+          title: titles?.get(path) ?? "",
         }]
       } catch {
         return []
