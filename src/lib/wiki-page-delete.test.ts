@@ -85,19 +85,18 @@ describe("cascadeDeleteWikiPage", () => {
     expect(mockRemovePageEmbedding).not.toHaveBeenCalled()
   })
 
-  it("propagates removePageEmbedding errors to the caller (not silently swallowed)", async () => {
-    // Caller decides fault-tolerance policy. Some callers
-    // (ingest-queue cleanup, source-delete batches) want to
-    // continue past LanceDB hiccups; others (single-page delete
-    // from lint view) might want to surface the error.
+  it("warns but does not throw when removePageEmbedding fails after disk delete", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     mockRemovePageEmbedding.mockRejectedValueOnce(new Error("lancedb table missing"))
 
-    await expect(cascadeDeleteWikiPage("/proj", "/proj/wiki/foo.md")).rejects.toThrow(
-      "lancedb table missing",
-    )
-    // File delete still happened — leaving the cascade half-done
-    // is the lesser evil compared to never deleting the file.
+    await expect(cascadeDeleteWikiPage("/proj", "/proj/wiki/foo.md")).resolves.toBeUndefined()
+
     expect(mockDeleteFile).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      "[wiki-delete] failed to remove embedding for /proj/wiki/foo.md:",
+      expect.any(Error),
+    )
+    warn.mockRestore()
   })
 
   it("derives embedding id from the full wiki path, preserving directory segments", async () => {
@@ -511,5 +510,117 @@ describe("cascadeDeleteWikiPagesWithRefs", () => {
     )!
     expect(bobWrite[1]).not.toContain("[[alice-chen]]")
     expect(bobWrite[1]).not.toContain("[[alice-chen-1]]")
+  })
+
+  it("cleans references only for pages that were actually deleted when one delete fails", async () => {
+    const failed = `${PROJECT}/wiki/entities/alice-chen.md`
+    const deleted = `${PROJECT}/wiki/entities/bob.md`
+    mockDeleteFile.mockImplementation(async (p: string) => {
+      if (p === failed) throw new Error("EACCES")
+    })
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === failed) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === deleted) return `---\ntitle: "Bob"\n---\nbody`
+      if (p === `${PROJECT}/wiki/index.md`) {
+        return [
+          "# Wiki Index",
+          "",
+          "- [[alice-chen]] — engineering lead",
+          "- [[bob]] — designer",
+          "- [[carol]] — researcher",
+        ].join("\n")
+      }
+      if (p === `${PROJECT}/wiki/entities/carol.md`) {
+        return [
+          "---",
+          "title: Carol",
+          "related: [alice-chen, bob]",
+          "---",
+          "",
+          "Carol worked with [[alice-chen]] and [[bob]].",
+        ].join("\n")
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        fileNode("wiki/index.md"),
+        dirNode("wiki/entities", [
+          fileNode("wiki/entities/alice-chen.md"),
+          fileNode("wiki/entities/bob.md"),
+          fileNode("wiki/entities/carol.md"),
+        ]),
+      ]),
+    ])
+
+    const result = await cascadeDeleteWikiPagesWithRefs(PROJECT, [failed, deleted])
+
+    expect(result.deletedPaths).toEqual([deleted])
+    const index = mockWriteFile.mock.calls.find((c) => c[0] === `${PROJECT}/wiki/index.md`)![1]
+    expect(index).toContain("[[alice-chen]]")
+    expect(index).not.toContain("[[bob]]")
+    expect(index).toContain("[[carol]]")
+    const carol = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/entities/carol.md`,
+    )![1]
+    expect(carol).toContain("[[alice-chen]]")
+    expect(carol).not.toContain("[[bob]]")
+    expect(carol).toContain('related: ["alice-chen"]')
+  })
+
+  it("cleans references when disk delete succeeds but embedding removal fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    mockRemovePageEmbedding.mockRejectedValueOnce(new Error("lancedb table missing"))
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return `---\ntitle: "Alice Chen"\n---\nbody`
+      if (p === `${PROJECT}/wiki/index.md`) {
+        return [
+          "# Wiki Index",
+          "",
+          "- [[alice-chen]] — engineering lead",
+          "- [[bob]] — designer",
+        ].join("\n")
+      }
+      if (p === `${PROJECT}/wiki/entities/bob.md`) {
+        return [
+          "---",
+          "title: Bob",
+          "related: [alice-chen, carol]",
+          "---",
+          "",
+          "Bob worked with [[alice-chen|Alice Chen]].",
+        ].join("\n")
+      }
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        fileNode("wiki/index.md"),
+        dirNode("wiki/entities", [
+          fileNode("wiki/entities/alice-chen.md"),
+          fileNode("wiki/entities/bob.md"),
+        ]),
+      ]),
+    ])
+
+    const result = await cascadeDeleteWikiPagesWithRefs(PROJECT, [target])
+
+    expect(result.deletedPaths).toEqual([target])
+    const index = mockWriteFile.mock.calls.find((c) => c[0] === `${PROJECT}/wiki/index.md`)![1]
+    expect(index).not.toContain("[[alice-chen]]")
+    expect(index).toContain("[[bob]]")
+    const bob = mockWriteFile.mock.calls.find(
+      (c) => c[0] === `${PROJECT}/wiki/entities/bob.md`,
+    )![1]
+    expect(bob).not.toContain("[[alice-chen|Alice Chen]]")
+    expect(bob).toContain("Bob worked with Alice Chen.")
+    expect(bob).not.toContain("alice-chen")
+    expect(bob).toContain("carol")
+    expect(warn).toHaveBeenCalledWith(
+      `[wiki-delete] failed to remove embedding for ${target}:`,
+      expect.any(Error),
+    )
+    warn.mockRestore()
   })
 })

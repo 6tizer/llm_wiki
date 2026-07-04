@@ -68,6 +68,19 @@ export function buildDeletedKeys(infos: DeletedPageInfo[]): Set<string> {
 }
 
 /**
+ * Listing pages use line-oriented primary-wikilink cleanup, unlike prose pages
+ * where deleted wikilinks are stripped inline.
+ */
+export function isWikiListingPath(relativePath: string): boolean {
+  return (
+    relativePath === "wiki/index.md" ||
+    relativePath.endsWith("/index.md") ||
+    relativePath === "wiki/overview.md" ||
+    relativePath.endsWith("/overview.md")
+  )
+}
+
+/**
  * Extract the `title:` value from YAML-ish markdown frontmatter.
  * Returns empty string when no title line is found.
  *

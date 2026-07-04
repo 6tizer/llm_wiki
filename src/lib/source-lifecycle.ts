@@ -30,12 +30,14 @@ import { wikiPathToVectorPageId, wikiPathToLegacyStemId } from "@/lib/wiki-page-
 import {
   buildDeletedKeys,
   cleanIndexListing,
+  isWikiListingPath,
   normalizeWikiRefKey,
   stripDeletedWikilinks,
 } from "@/lib/wiki-cleanup"
 import { collectAllFilesIncludingDot } from "@/lib/sources-tree-delete"
 import { isPathAllowedBySourceWatch, normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import type { SourceWatchConfig } from "@/stores/wiki-store"
+import { withProjectLock } from "@/lib/project-mutex"
 
 export const INGESTABLE_SOURCE_EXTENSIONS = new Set([
   "md",
@@ -243,14 +245,26 @@ export async function deleteSourceFile(
   sourcePath: string,
   options: { fileAlreadyDeleted?: boolean; logReason?: string } = {},
 ): Promise<DeleteSourceResult> {
-  const result = await deleteSourceFiles(projectPath, [sourcePath], options)
-  return {
-    deletedWikiPaths: result.deletedWikiPaths,
-    rewrittenSourcePages: result.rewrittenSourcePages,
-  }
+  return withProjectLock(normalizePath(projectPath), async () => {
+    const result = await deleteSourceFilesUnlocked(projectPath, [sourcePath], options)
+    return {
+      deletedWikiPaths: result.deletedWikiPaths,
+      rewrittenSourcePages: result.rewrittenSourcePages,
+    }
+  })
 }
 
 export async function deleteSourceFiles(
+  projectPath: string,
+  sourcePaths: string[],
+  options: { fileAlreadyDeleted?: boolean; logReason?: string } = {},
+): Promise<DeleteSourcesResult> {
+  return withProjectLock(normalizePath(projectPath), () =>
+    deleteSourceFilesUnlocked(projectPath, sourcePaths, options),
+  )
+}
+
+async function deleteSourceFilesUnlocked(
   projectPath: string,
   sourcePaths: string[],
   options: { fileAlreadyDeleted?: boolean; logReason?: string } = {},
@@ -344,8 +358,8 @@ export async function deleteSourceFiles(
 
   let deletedWikiPaths: string[] = []
   if (pagesToDelete.length > 0) {
-    const { cascadeDeleteWikiPagesWithRefs } = await import("@/lib/wiki-page-delete")
-    const result = await cascadeDeleteWikiPagesWithRefs(pp, pagesToDelete)
+    const { cascadeDeleteWikiPagesWithRefsUnlocked } = await import("@/lib/wiki-page-delete")
+    const result = await cascadeDeleteWikiPagesWithRefsUnlocked(pp, pagesToDelete)
     deletedWikiPaths = result.deletedPaths
   }
 
@@ -369,10 +383,20 @@ export async function deleteSourceFolder(
   folder: FileNode,
   options: { folderAlreadyDeleted?: boolean } = {},
 ): Promise<DeleteSourceFolderResult> {
+  return withProjectLock(normalizePath(projectPath), () =>
+    deleteSourceFolderUnlocked(projectPath, folder, options),
+  )
+}
+
+async function deleteSourceFolderUnlocked(
+  projectPath: string,
+  folder: FileNode,
+  options: { folderAlreadyDeleted?: boolean } = {},
+): Promise<DeleteSourceFolderResult> {
   const deletedWikiPaths: string[] = []
   const files = collectAllFilesIncludingDot(folder).map((file) => file.path)
   if (files.length > 0) {
-    const result = await deleteSourceFiles(projectPath, files, {
+    const result = await deleteSourceFilesUnlocked(projectPath, files, {
       fileAlreadyDeleted: options.folderAlreadyDeleted,
       logReason: options.folderAlreadyDeleted ? "external folder delete" : "folder delete",
     })
@@ -391,6 +415,15 @@ export async function deleteSourceFolder(
 }
 
 export async function cleanupDeletedWikiPages(
+  projectPath: string,
+  relativePaths: string[],
+): Promise<void> {
+  return withProjectLock(normalizePath(projectPath), () =>
+    cleanupDeletedWikiPagesUnlocked(projectPath, relativePaths),
+  )
+}
+
+async function cleanupDeletedWikiPagesUnlocked(
   projectPath: string,
   relativePaths: string[],
 ): Promise<void> {
@@ -433,7 +466,7 @@ export async function cleanupDeletedWikiPages(
     }
 
     let updated = content
-    if (file.path === `${pp}/wiki/index.md` || file.name === "index.md") {
+    if (isWikiListingPath(getRelativePath(file.path, pp))) {
       updated = cleanIndexListing(updated, deletedKeys)
     }
     updated = stripDeletedWikilinks(updated, deletedKeys)
