@@ -58,7 +58,10 @@
 | [spec-5-fix-pipeline-wiring.md](./spec-5-fix-pipeline-wiring.md) | SPEC-5 并行流水线生产接线 + worker heartbeat / lease 回收 / commit-budget 自愈 / repair 消费者。 | completed |
 | [spec-10-security-hardening.md](./spec-10-security-hardening.md) | 安全加固：沙箱逃逸、clip server 鉴权、stdout 密钥泄露、权限绕过、子进程清理、能力面收敛。 | completed |
 | [spec-11-data-integrity.md](./spec-11-data-integrity.md) | 数据完整性：切项目清历史、编辑器串写、分块死循环、ingest/lint/dedup 误删覆盖、settings 静默保存。 | completed |
-| [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建；2026-07 review 已范围修正，依赖 SPEC-5-FIX。 | planned / rescoped |
+| [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建；2026-07 review 已范围修正，依赖 SPEC-5-FIX。 | in progress（Wave 3 主线） |
+| [SPEC-6/prs-implementation-plan.md](./SPEC-6/prs-implementation-plan.md) | Wave 3 derived 轨执行总方案：PR1-PR6 顺序、lane/gate 加权、三轨并行协调（runtime_db 窗口）。 | active |
+| [SPEC-6/pr1-marker-consumption-infrastructure-plan.md](./SPEC-6/pr1-marker-consumption-infrastructure-plan.md) | SPEC-6 PR1 执行计划：marker 状态流转/claim 折叠/游标/毒 marker 收敛（含 P0 修订与 PR2+ 消费者契约）。 | merged |
+| [SPEC-6/pr1-adversarial-matrix.md](./SPEC-6/pr1-adversarial-matrix.md) | SPEC-6 PR1 并发场景矩阵（design-first gate 凭据），Reviewer 逐格验证记录的依据。 | evidence |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | planned |
 | [spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md) | Swift/SwiftUI native shell 回填锚点；等 core boundary 稳定后进入。 | deferred / gated |

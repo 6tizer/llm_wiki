@@ -46,6 +46,14 @@ import {
 const DEFAULT_COMMIT_LIMIT = 100
 const DEFAULT_COMMIT_CONCURRENCY = 1
 const DEFAULT_COMMIT_BUDGET_TTL_MS = 120_000
+// Deliberately a strict subset of DERIVED_STALE_MARKER_LAYERS (SPEC-6 PR1
+// decision 7): "search"/"index_export"/"overview" are NOT marked here on
+// every commit, to avoid producing markers with no consumer (Wiring Gate
+// philosophy). "search" gets its own commit-time marker once its PR3
+// consumer lands; "index_export"/"overview" are refreshed by PR5's explicit
+// on-demand jobs (reason: "manual_rebuild") instead of on every commit. All
+// four layers use the same runtime_derived_marker_claim_batch/complete/
+// release infrastructure (SPEC-6 PR1) once a consumer exists.
 const COMMIT_DERIVED_STALE_MARKER_LAYERS = [
   "embedding",
   "graph",

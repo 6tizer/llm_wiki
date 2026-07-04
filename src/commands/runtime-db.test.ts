@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  runtimeDerivedMarkerClaimBatch,
+  runtimeDerivedMarkerCompleteBatch,
+  runtimeDerivedMarkerReleaseBatch,
   runtimeDerivedStaleMarkerList,
   runtimeDerivedStaleMarkerRecord,
   runtimeCommitBudgetClaim,
@@ -521,6 +524,121 @@ describe("runtime-db commands", () => {
         },
       },
     )
+  })
+
+  it("sends derived stale marker list cursor payloads", async () => {
+    const list = { enabled: true, status: "healthy", markers: [], nextCursor: null }
+    tauriMocks.invoke.mockResolvedValue(list)
+
+    await expect(
+      runtimeDerivedStaleMarkerList({
+        sinceMarkedAtMs: 123,
+        sinceMarkerId: "marker-1",
+      }),
+    ).resolves.toBe(list)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_derived_stale_marker_list", {
+      request: {
+        sinceMarkedAtMs: 123,
+        sinceMarkerId: "marker-1",
+      },
+    })
+  })
+
+  it("sends derived marker claim/complete/release batch payloads", async () => {
+    const claimed = {
+      job: { jobId: "job-1", kind: "derived-rebuild", state: "queued" },
+      markers: [{ markerId: "marker-1", status: "claimed" }],
+    }
+    const completed = {
+      job: { jobId: "job-1", state: "completed" },
+      markers: [{ markerId: "marker-1", status: "done" }],
+    }
+    const released = {
+      job: { jobId: "job-2", state: "cancelled" },
+      markers: [{ markerId: "marker-2", status: "cancelled" }],
+    }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(claimed)
+      .mockResolvedValueOnce(completed)
+      .mockResolvedValueOnce(released)
+
+    await expect(
+      runtimeDerivedMarkerClaimBatch({
+        layer: "embedding",
+        affectedPath: "wiki/Page.md",
+      }),
+    ).resolves.toBe(claimed)
+    await expect(
+      runtimeDerivedMarkerCompleteBatch({
+        jobId: "job-1",
+        leaseId: "lease-1",
+        markerIds: ["marker-1"],
+      }),
+    ).resolves.toBe(completed)
+    await expect(
+      runtimeDerivedMarkerReleaseBatch({
+        jobId: "job-2",
+        markerIds: ["marker-2"],
+        targetStatus: "cancelled",
+      }),
+    ).resolves.toBe(released)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_derived_marker_claim_batch", {
+      request: {
+        layer: "embedding",
+        affectedPath: "wiki/Page.md",
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_derived_marker_complete_batch", {
+      request: {
+        jobId: "job-1",
+        leaseId: "lease-1",
+        markerIds: ["marker-1"],
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_derived_marker_release_batch", {
+      request: {
+        jobId: "job-2",
+        markerIds: ["marker-2"],
+        targetStatus: "cancelled",
+      },
+    })
+  })
+
+  it("propagates derived marker claim batch failures", async () => {
+    tauriMocks.invoke.mockRejectedValue(new Error("claim failed"))
+
+    await expect(
+      runtimeDerivedMarkerClaimBatch({
+        layer: "embedding",
+        affectedPath: "wiki/Page.md",
+      }),
+    ).rejects.toThrow("claim failed")
+  })
+
+  it("propagates derived marker complete batch failures", async () => {
+    tauriMocks.invoke.mockRejectedValue(new Error("complete failed"))
+
+    await expect(
+      runtimeDerivedMarkerCompleteBatch({
+        jobId: "job-1",
+        leaseId: "lease-1",
+        markerIds: ["marker-1"],
+      }),
+    ).rejects.toThrow("complete failed")
+  })
+
+  it("propagates derived marker release batch failures", async () => {
+    tauriMocks.invoke.mockRejectedValue(new Error("release failed"))
+
+    await expect(
+      runtimeDerivedMarkerReleaseBatch({
+        jobId: "job-2",
+        markerIds: ["marker-2"],
+        targetStatus: "cancelled",
+      }),
+    ).rejects.toThrow("release failed")
   })
 
   it("sends runtime profile create, update, list, status, and delete payloads", async () => {
