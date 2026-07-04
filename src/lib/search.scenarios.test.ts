@@ -43,7 +43,7 @@ describe("searchWiki backend command contract", () => {
       ],
     })
 
-    const results = await searchWiki("/tmp/project", "attention")
+    const response = await searchWiki("/tmp/project", "attention")
 
     expect(mockInvoke).toHaveBeenCalledWith("search_project", {
       projectPath: "/tmp/project",
@@ -53,6 +53,20 @@ describe("searchWiki backend command contract", () => {
       queryEmbedding: null,
       embeddingConfig: expect.objectContaining({ enabled: false }),
     })
-    expect(results[0].path).toBe("/tmp/project/wiki/concepts/attention.md")
+    expect(response.results[0].path).toBe("/tmp/project/wiki/concepts/attention.md")
+  })
+
+  it("passes through the mode and vectorHits the backend reports instead of discarding them (decision 7)", async () => {
+    mockInvoke.mockResolvedValueOnce({
+      mode: "keyword",
+      tokenHits: 1,
+      vectorHits: 0,
+      results: [],
+    })
+
+    const response = await searchWiki("/tmp/project", "attention")
+
+    expect(response.mode).toBe("keyword")
+    expect(response.vectorHits).toBe(0)
   })
 })

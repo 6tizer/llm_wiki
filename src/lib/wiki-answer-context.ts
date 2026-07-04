@@ -75,7 +75,7 @@ export async function buildWikiAnswerContext({
 		readFile(`${pp}/purpose.md`).catch(() => ""),
 	]);
 
-	const searchResults = await searchWiki(pp, query);
+	const { results: searchResults } = await searchWiki(pp, query);
 	const topSearchResults = searchResults.slice(0, 10);
 
 	let index = rawIndex;

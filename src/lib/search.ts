@@ -17,12 +17,27 @@ export interface SearchResult {
   images: ImageRef[]
 }
 
+export type SearchRetrievalMode = "keyword" | "vector" | "hybrid"
+
 interface BackendSearchResponse {
-  // Reserved for result badges/debug UI. The backend already returns these
-  // signals so API and WebView search share the same retrieval contract.
-  mode: "keyword" | "vector" | "hybrid"
+  mode: SearchRetrievalMode
   results: SearchResult[]
   tokenHits: number
+  vectorHits: number
+}
+
+/**
+ * SPEC-6 PR6 decision 7: `search_project` already returns `mode`/
+ * `vectorHits` (which retrieval path actually served this query, and how
+ * many vector hits it found), but the WebView previously discarded both.
+ * Passing them through lets `search-view.tsx` tell the user when a search
+ * silently fell back to keyword-only — e.g. because the `embedding` layer
+ * is `dirty`/`building` and vector search had nothing (or a stale index)
+ * to search — instead of the fallback being invisible.
+ */
+export interface SearchWikiResponse {
+  results: SearchResult[]
+  mode: SearchRetrievalMode
   vectorHits: number
 }
 
@@ -61,8 +76,8 @@ export function tokenizeQuery(query: string): string[] {
 export async function searchWiki(
   projectPath: string,
   query: string,
-): Promise<SearchResult[]> {
-  if (!query.trim()) return []
+): Promise<SearchWikiResponse> {
+  if (!query.trim()) return { results: [], mode: "keyword", vectorHits: 0 }
   const pp = normalizePath(projectPath)
   const embCfg = useWikiStore.getState().embeddingConfig
 
@@ -75,8 +90,12 @@ export async function searchWiki(
     embeddingConfig: embCfg,
   })
 
-  return response.results.map((result) => ({
-    ...result,
-    path: `${pp}/${normalizePath(result.path).replace(/^\/+/, "")}`,
-  }))
+  return {
+    results: response.results.map((result) => ({
+      ...result,
+      path: `${pp}/${normalizePath(result.path).replace(/^\/+/, "")}`,
+    })),
+    mode: response.mode,
+    vectorHits: response.vectorHits,
+  }
 }

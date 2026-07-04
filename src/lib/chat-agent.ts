@@ -861,7 +861,7 @@ async function runGraphSearchTool(args: {
   signal?: AbortSignal
 }): Promise<ToolObservation> {
   throwIfAborted(args.signal)
-  const base = await args.searchWikiImpl(args.projectPath, args.queries[0] ?? "")
+  const { results: base } = await args.searchWikiImpl(args.projectPath, args.queries[0] ?? "")
   throwIfAborted(args.signal)
   const graph = await buildRetrievalGraph(args.projectPath, args.dataVersion)
   throwIfAborted(args.signal)
@@ -991,7 +991,8 @@ async function collectSearchResults(
   const results: SearchResult[] = []
   for (const query of queries.slice(0, 3)) {
     throwIfAborted(signal)
-    for (const result of await searchWikiImpl(projectPath, query)) {
+    const { results: pageResults } = await searchWikiImpl(projectPath, query)
+    for (const result of pageResults) {
       throwIfAborted(signal)
       const key = normalizePath(result.path)
       if (seen.has(key)) continue

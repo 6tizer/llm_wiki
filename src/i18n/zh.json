@@ -368,7 +368,8 @@
     "title": "搜索",
     "placeholder": "搜索 Wiki 页面...",
     "noResults": "未找到相关结果",
-    "startSearching": "输入关键词搜索 Wiki 页面"
+    "startSearching": "输入关键词搜索 Wiki 页面",
+    "fallbackBanner": "向量索引尚未就绪——当前仅展示关键词检索结果。"
   },
   "lint": {
     "title": "Wiki 检查",
@@ -448,6 +449,7 @@
       "taxonomy": "标签体系",
       "synthesis": "综合",
       "indexOverview": "索引 / 总览",
+      "derivedStatus": "派生状态",
       "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
@@ -926,6 +928,33 @@
         "noLlm": "请先配置 LLM 提供方，再重新生成总览。",
         "overviewFailed": "总览重建失败，请重试。",
         "overviewRebuilt": "已重建 {{path}}"
+      },
+      "derivedStatus": {
+        "title": "派生状态",
+        "description": "wiki 派生出的各层实时状态——向量嵌入、标签体系、综合、索引与总览。",
+        "noProject": "请先打开一个项目再查看派生层状态。",
+        "loadFailed": "加载派生层状态失败：{{error}}",
+        "rebuild": "重建",
+        "manageIn": "前往「{{section}}」管理",
+        "neverRebuilt": "从未重建",
+        "lastRebuilt": "上次重建于 {{time}}",
+        "rebuildQueued": "已为 {{count}} 个页面加入重建队列——后台任务稍后会自动处理。",
+        "rebuildFailed": "重建失败，请重试。",
+        "runtimeDisabled": "后台重建功能未启用——请先启用工作运行时再使用此按钮。",
+        "layers": {
+          "embedding": "向量嵌入",
+          "taxonomy": "标签体系",
+          "synthesis": "综合",
+          "index_export": "Wiki 索引",
+          "overview": "项目总览"
+        },
+        "status": {
+          "building": "重建中",
+          "failed": "失败",
+          "dirty": "待更新",
+          "stale": "已过期",
+          "ready": "已就绪"
+        }
       },
       "output": {
         "title": "输出偏好",

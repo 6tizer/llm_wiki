@@ -368,7 +368,8 @@
     "title": "Search",
     "placeholder": "Search wiki pages...",
     "noResults": "No results found",
-    "startSearching": "Type to search wiki pages"
+    "startSearching": "Type to search wiki pages",
+    "fallbackBanner": "Vector index isn't ready yet — showing keyword-only results for now."
   },
   "lint": {
     "title": "Wiki Lint",
@@ -448,6 +449,7 @@
       "taxonomy": "Tag Taxonomy",
       "synthesis": "Synthesis",
       "indexOverview": "Index / Overview",
+      "derivedStatus": "Derived Status",
       "general": "General",
       "output": "Output",
       "interface": "Interface",
@@ -926,6 +928,33 @@
         "noLlm": "Configure an LLM provider first to regenerate the overview.",
         "overviewFailed": "Overview rebuild failed. Please try again.",
         "overviewRebuilt": "Rebuilt {{path}}"
+      },
+      "derivedStatus": {
+        "title": "Derived Status",
+        "description": "Live status of every derived layer built from the wiki — embeddings, tags, synthesis, index, and overview.",
+        "noProject": "Open a project first to see derived layer status.",
+        "loadFailed": "Failed to load derived layer status: {{error}}",
+        "rebuild": "Rebuild",
+        "manageIn": "Manage in {{section}}",
+        "neverRebuilt": "Never rebuilt",
+        "lastRebuilt": "Last rebuilt {{time}}",
+        "rebuildQueued": "Queued {{count}} page(s) for rebuild — picked up by the background worker shortly.",
+        "rebuildFailed": "Rebuild failed. Please try again.",
+        "runtimeDisabled": "Background rebuild is disabled — enable the work runtime to use this button.",
+        "layers": {
+          "embedding": "Embeddings",
+          "taxonomy": "Tag Taxonomy",
+          "synthesis": "Synthesis",
+          "index_export": "Wiki Index",
+          "overview": "Project Overview"
+        },
+        "status": {
+          "building": "Building",
+          "failed": "Failed",
+          "dirty": "Dirty",
+          "stale": "Stale",
+          "ready": "Ready"
+        }
       },
       "output": {
         "title": "Output Preferences",

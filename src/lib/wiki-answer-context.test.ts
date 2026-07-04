@@ -14,7 +14,7 @@ vi.mock("@/commands/fs", () => ({
 }))
 
 vi.mock("@/lib/search", () => ({
-  searchWiki: vi.fn(async () => fsMock.searchResults),
+  searchWiki: vi.fn(async () => ({ results: fsMock.searchResults, mode: "hybrid", vectorHits: 0 })),
   tokenizeQuery: vi.fn((query: string) => query.toLowerCase().split(/\s+/).filter(Boolean)),
 }))
 

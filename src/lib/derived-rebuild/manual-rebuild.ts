@@ -104,39 +104,18 @@ import {
   runtimeDerivedMarkerClaimBatch,
   runtimeDerivedMarkerCompleteBatch,
   runtimeDerivedMarkerReleaseBatch,
-  runtimeDerivedStaleMarkerRecord,
-  runtimeEventAppend,
   runtimeJobClaim,
-  runtimeJobComplete,
-  runtimeJobCreate,
   runtimeJobFail,
   runtimeJobHeartbeat,
   type RuntimeJobClaim,
   type RuntimeJobRecord,
 } from "@/commands/runtime-db"
 import { JOB_RUNTIME_DEFAULTS, type DerivedStaleMarkerLayer } from "@/core-runtime/contract"
-
-/**
- * Dedicated throwaway job kind for minting the event FK a manual-rebuild
- * marker needs. Deliberately NOT `DERIVED_REBUILD_JOB_KIND`
- * (`"derived-rebuild"`) — that kind is reserved for jobs
- * `runtimeDerivedMarkerClaimBatch` creates itself, carrying a `markerIds`
- * payload every consumer/complete/fail path depends on
- * (`parse_derived_rebuild_marker_ids`). A job of that kind with no such
- * payload would be an unrecoverable ghost `queued` row forever — nothing
- * completes or fails it, and no consumer would ever legitimately claim it
- * since `index_export`/`overview` have no background poller.
- */
-const MANUAL_REBUILD_ANCHOR_JOB_KIND = "manual-rebuild-marker-event"
-
-/**
- * Sentinel `inputHash` for manual-rebuild markers. `index_export`/
- * `overview` aggregate the WHOLE wiki tree, not one page's content, so
- * there is no single content hash to record — the schema requires a
- * non-empty value for every non-`"delete"` reason, but nothing ever reads
- * this one back for equality (unlike `embedding`'s per-page content hash).
- */
-const MANUAL_REBUILD_INPUT_HASH = "sha256:manual-rebuild"
+import {
+  mintDerivedStaleMarkerAnchorEvent,
+  MANUAL_REBUILD_ANCHOR_JOB_KIND,
+  MANUAL_REBUILD_INPUT_HASH,
+} from "./manual-rebuild-marker"
 
 const RUNTIME_DISABLED_ERROR_PREFIX = "runtime-disabled:"
 
@@ -177,28 +156,24 @@ async function mintManualRebuildClaim(
   affectedPath: string,
   holder: string,
 ): Promise<MintedClaim> {
-  const anchor = await runtimeJobCreate({
-    kind: MANUAL_REBUILD_ANCHOR_JOB_KIND,
-    payload: JSON.stringify({ layer, affectedPath }),
-    maxAttempts: 1,
-  })
-  const anchorClaim = await runtimeJobClaim({ holder, jobId: anchor.jobId })
-  const event = await runtimeEventAppend({
-    jobId: anchorClaim.job.jobId,
-    payload: JSON.stringify({ kind: "manual_rebuild", layer, affectedPath }),
-  })
-  await runtimeJobComplete({ jobId: anchorClaim.job.jobId, leaseId: anchorClaim.lease.leaseId })
-
-  await runtimeDerivedStaleMarkerRecord({
+  // SPEC-6 PR6: the anchor create -> claim -> event-append -> complete ->
+  // record sequence lives in manual-rebuild-marker.ts's
+  // `mintDerivedStaleMarkerAnchorEvent`, shared with `ingest-write.ts`'s
+  // `recordEmbeddingStaleMarker` and this PR's new embedding/taxonomy
+  // Rebuild buttons — see that file's doc comment.
+  await mintDerivedStaleMarkerAnchorEvent({
+    anchorKind: MANUAL_REBUILD_ANCHOR_JOB_KIND,
+    holder,
+    claimMode: "by-id",
+    eventPayload: { kind: "manual_rebuild", layer, affectedPath },
     layer,
     affectedPath,
     inputHash: MANUAL_REBUILD_INPUT_HASH,
     // Opaque token (SPEC-6 PR1 investigation: base_version is caller-free
     // form) — just needs to differ from sourceEventId, which the Rust side
     // rejects a duplicate of.
-    baseVersion: `manual-rebuild:${Date.now()}:${event.eventId}`,
+    baseVersion: (eventId) => `manual-rebuild:${Date.now()}:${eventId}`,
     reason: "manual_rebuild",
-    sourceEventId: event.eventId,
   })
 
   // maxAttempts: 1 (Codex gate P2) — see the file doc comment: neither

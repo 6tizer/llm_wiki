@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { listDirectory, readFile } from "@/commands/fs"
 import type { ChatMessage, StreamCallbacks } from "@/lib/llm-client"
-import type { SearchResult } from "@/lib/search"
+import type { SearchWikiResponse } from "@/lib/search"
 import {
   buildChatAgentMessages,
   getChatAgentTools,
@@ -392,16 +392,20 @@ describe("chat agent router", () => {
       }))
       callbacks.onDone()
     })
-    const searchWiki = vi.fn(async (): Promise<SearchResult[]> => [
-      {
-        path: "/tmp/demo/wiki/something/wiki/foo.md",
-        title: "Nested Foo",
-        snippet: "Nested Foo",
-        titleMatch: true,
-        score: 1,
-        images: [],
-      },
-    ])
+    const searchWiki = vi.fn(async (): Promise<SearchWikiResponse> => ({
+      mode: "hybrid",
+      vectorHits: 0,
+      results: [
+        {
+          path: "/tmp/demo/wiki/something/wiki/foo.md",
+          title: "Nested Foo",
+          snippet: "Nested Foo",
+          titleMatch: true,
+          score: 1,
+          images: [],
+        },
+      ],
+    }))
 
     const result = await buildChatAgentMessages({
       project: { name: "Demo", path: "/tmp/demo" },
@@ -421,6 +425,64 @@ describe("chat agent router", () => {
     expect(result.references.map((ref) => ref.path)).toContain("/tmp/demo/wiki/concepts/related.md")
     expect(result.queryPages.map((page) => page.title)).toContain("Related Concept")
     expect(listDirectory).toHaveBeenCalledWith("/tmp/demo/wiki")
+  })
+
+  it("wiki_search executes with a real non-empty wikiQueries and materializes results through collectSearchResults' {results,mode,vectorHits} destructuring (Tester P1 regression lock)", async () => {
+    setWikiFiles({
+      "wiki/foo.md": page("Foo Page", "Foo body."),
+    })
+    const streamChat = vi.fn(async (
+      _config: LlmConfig,
+      _messages: ChatMessage[],
+      callbacks: StreamCallbacks,
+    ) => {
+      callbacks.onToken(JSON.stringify({
+        intent: "kb_search",
+        rewrittenQuery: "foo topic",
+        wikiQueries: ["foo topic"],
+        graphQueries: [],
+        externalQueries: [],
+        needsWiki: true,
+        needsGraph: false,
+        needsExternal: false,
+        isFollowUp: false,
+        reason: "local wiki question",
+      }))
+      callbacks.onDone()
+    })
+    const searchWiki = vi.fn(async (): Promise<SearchWikiResponse> => ({
+      mode: "hybrid",
+      vectorHits: 1,
+      results: [
+        {
+          path: "/tmp/demo/wiki/foo.md",
+          title: "Foo Page",
+          snippet: "Foo body.",
+          titleMatch: true,
+          score: 1,
+          images: [],
+        },
+      ],
+    }))
+
+    const result = await buildChatAgentMessages({
+      project: { name: "Demo", path: "/tmp/demo" },
+      llmConfig,
+      searchApiConfig,
+      text: "foo topic",
+      historyMessages: [{ role: "user", content: "foo topic" }],
+      dataVersion: 3,
+      options: {
+        useWebSearch: false,
+        useAnyTxtSearch: false,
+        mode: "standard",
+      },
+      deps: { streamChat, searchWiki },
+    })
+
+    expect(searchWiki).toHaveBeenCalledWith("/tmp/demo", "foo topic")
+    expect(result.references.map((ref) => ref.path)).toContain("/tmp/demo/wiki/foo.md")
+    expect(result.queryPages.map((page) => page.title)).toContain("Foo Page")
   })
 })
 
