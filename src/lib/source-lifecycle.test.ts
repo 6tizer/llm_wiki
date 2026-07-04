@@ -188,6 +188,14 @@ describe("source-lifecycle path helpers", () => {
       "/project",
       wikiPathToVectorPageId("/project", "/project/wiki/projects/log.md"),
     )
-    expect(mocks.deleteFile).toHaveBeenCalledWith("/project/wiki/media/log")
+    // wiki/projects/log.md is NOT a source-summary page (wiki/sources/<slug>.md),
+    // so it doesn't own a wiki/media/<slug>/ directory — the media cascade must
+    // stay gated to source pages (S10), same rule as cascadeDeleteWikiPage's
+    // isSourcePage gate in wiki-page-delete.ts (here applied inline via
+    // `path.startsWith("wiki/sources/")` since this path is absolute, that
+    // check is false regardless — same "not a source" outcome). See
+    // source-lifecycle-cleanup-chains.characterization.test.ts 21h/21i/21j
+    // for the full negative/positive/mixed-batch coverage.
+    expect(mocks.deleteFile).not.toHaveBeenCalledWith("/project/wiki/media/log")
   })
 })

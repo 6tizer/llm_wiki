@@ -18,6 +18,20 @@
  * Mock surface: `@/commands/fs` (real fs via temp dir, with
  * `listDirectory` wrapped so ONE test can inject a stale snapshot) and
  * `@/lib/embedding` (stub). `wiki-cleanup.ts` runs for real.
+ *
+ * S10: the media-directory cascade (21h/21i/21j below) is now gated
+ * the same way as chain A's `isSourcePage` check in
+ * wiki-page-delete.ts — but inline (`path.startsWith("wiki/sources/")`)
+ * rather than importing that helper, because this chain always
+ * receives a project-relative path (guaranteed by
+ * project-file-sync.ts's `isWikiPageForCascade`), so a prefix check is
+ * exact without any path-joining. Before S10 this chain deleted
+ * `wiki/media/<slug>/` unconditionally for ANY deleted wiki page,
+ * which could destroy a source page's images when a same-slug
+ * concept/entity page was deleted externally — see 21h (negative:
+ * concept-page deletion must NOT touch media, source page survives
+ * too), 21i (positive: source-page deletion still must), and 21j
+ * (mixed batch: gate applies per-item, not hoisted/short-circuited).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createTempProject, realFs, writeFileRaw, readFileRaw, fileExists } from "@/test-helpers/fs-temp"
@@ -202,16 +216,47 @@ describe("cleanupDeletedWikiPages — reference sweep (chain B)", () => {
     )
   })
 
-  it("21h: attempts to delete wiki/media/<slug> for ANY deleted page, not just source pages (unlike cascadeDeleteWikiPage's isSourcePage gate in wiki-page-delete.ts)", async () => {
+  it("21h: does NOT delete wiki/media/<slug> (or the co-existing source page) when the deleted page is a non-source page sharing the same slug — original motivation scenario", async () => {
     const tmp = await seed("d21h")
-    // kv-cache.md is a CONCEPT page, not a wiki/sources/ page — yet
-    // cleanupDeletedWikiPages unconditionally attempts to delete its
-    // media directory (source-lifecycle.ts:417), unlike
-    // cascadeDeleteWikiPage which gates that on isSourcePage.
+    // Original motivation scenario: a SOURCE page (wiki/sources/kv-cache.md,
+    // which genuinely owns wiki/media/kv-cache/) coexists with a CONCEPT
+    // page of the SAME slug (wiki/concepts/kv-cache.md). Deleting the
+    // concept page externally must not touch either the source page's
+    // file or its media directory. Previously (pre-S10) this call
+    // unconditionally attempted the media delete, which could destroy a
+    // same-slug SOURCE page's images when a concept page of the same
+    // name was removed externally — see 21i for the case that must
+    // still fire, and 21j for the mixed-batch case.
+    await writeFileRaw(`${tmp.path}/wiki/sources/kv-cache.md`, [
+      "---",
+      "type: source",
+      "---",
+      "",
+      "# KV Cache Source",
+    ].join("\n"))
     await writeFileRaw(`${tmp.path}/wiki/media/kv-cache/image.png`, "fake-bytes")
     expect(await fileExists(`${tmp.path}/wiki/media/kv-cache`)).toBe(true)
 
     await cleanupDeletedWikiPages(tmp.path, ["wiki/concepts/kv-cache.md"])
+
+    expect(mocks.deleteFile).not.toHaveBeenCalledWith(`${tmp.path}/wiki/media/kv-cache`)
+    expect(await fileExists(`${tmp.path}/wiki/media/kv-cache/image.png`)).toBe(true)
+    expect(await fileExists(`${tmp.path}/wiki/sources/kv-cache.md`)).toBe(true)
+  })
+
+  it("21i: DOES delete wiki/media/<slug> when the deleted page is a source-summary page (wiki/sources/<slug>.md) — positive guard against the 21h gate being inverted", async () => {
+    const tmp = await seed("d21i")
+    await writeFileRaw(`${tmp.path}/wiki/sources/kv-cache.md`, [
+      "---",
+      "type: source",
+      "---",
+      "",
+      "# KV Cache Source",
+    ].join("\n"))
+    await writeFileRaw(`${tmp.path}/wiki/media/kv-cache/image.png`, "fake-bytes")
+    expect(await fileExists(`${tmp.path}/wiki/media/kv-cache`)).toBe(true)
+
+    await cleanupDeletedWikiPages(tmp.path, ["wiki/sources/kv-cache.md"])
 
     // NOTE: the real fs adapter's deleteFile is `fs.unlink`, which can't
     // remove a non-empty directory (unlike the production Rust
@@ -219,5 +264,30 @@ describe("cleanupDeletedWikiPages — reference sweep (chain B)", () => {
     // remove_dir_all) — so the directory itself may still be present in
     // this test harness. The call itself is the behavior under test.
     expect(mocks.deleteFile).toHaveBeenCalledWith(`${tmp.path}/wiki/media/kv-cache`)
+  })
+
+  it("21j: mixed batch — gates the media delete PER ITEM, not hoisted/short-circuited across the batch", async () => {
+    const tmp = await seed("d21j")
+    await writeFileRaw(`${tmp.path}/wiki/sources/other-source.md`, [
+      "---",
+      "type: source",
+      "---",
+      "",
+      "# Other Source",
+    ].join("\n"))
+    await writeFileRaw(`${tmp.path}/wiki/media/other-source/image.png`, "fake-bytes")
+    await writeFileRaw(`${tmp.path}/wiki/media/kv-cache/image.png`, "fake-bytes")
+    expect(await fileExists(`${tmp.path}/wiki/media/other-source`)).toBe(true)
+    expect(await fileExists(`${tmp.path}/wiki/media/kv-cache`)).toBe(true)
+
+    // One call, mixed list: a source page AND a concept page.
+    await cleanupDeletedWikiPages(tmp.path, [
+      "wiki/sources/other-source.md",
+      "wiki/concepts/kv-cache.md",
+    ])
+
+    expect(mocks.deleteFile).toHaveBeenCalledWith(`${tmp.path}/wiki/media/other-source`)
+    expect(mocks.deleteFile).not.toHaveBeenCalledWith(`${tmp.path}/wiki/media/kv-cache`)
+    expect(await fileExists(`${tmp.path}/wiki/media/kv-cache/image.png`)).toBe(true)
   })
 })

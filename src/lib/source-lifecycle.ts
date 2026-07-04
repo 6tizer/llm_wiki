@@ -437,6 +437,13 @@ async function cleanupDeletedWikiPagesUnlocked(
           slug: wikiPathToLegacyStemId(path),
           pageId: wikiPathToVectorPageId(pp, path),
           title: titles?.get(path) ?? "",
+          // `path` here is always the caller-supplied project-relative
+          // path (project-file-sync.ts's isWikiPageForCascade guarantees
+          // a `wiki/`-prefixed relative path, never an absolute one) —
+          // so a plain prefix check is exact and needs no path-joining
+          // gymnastics. Same source-vs-other-page rule as
+          // cascadeDeleteWikiPage's isSourcePage in wiki-page-delete.ts.
+          isSource: normalizePath(path).startsWith("wiki/sources/"),
         }]
       } catch {
         return []
@@ -448,10 +455,18 @@ async function cleanupDeletedWikiPagesUnlocked(
 
   for (const info of deletedInfos) {
     await removePageEmbedding(pp, info.pageId)
-    try {
-      await deleteFile(`${pp}/wiki/media/${info.slug}`)
-    } catch {
-      // only source-summary pages usually own media; absence is normal
+    // Media cascade gated the same way as the other wiki-page-delete
+    // path (cascadeDeleteWikiPage in wiki-page-delete.ts): only
+    // source-summary pages (`wiki/sources/<slug>.md`) own an image
+    // directory at `wiki/media/<slug>/`. Concept/entity pages never
+    // do — deleting one must NOT touch a same-slug source's media,
+    // which would otherwise silently destroy that source's images.
+    if (info.isSource) {
+      try {
+        await deleteFile(`${pp}/wiki/media/${info.slug}`)
+      } catch {
+        // absence is normal — not every source has extracted images
+      }
     }
   }
 
