@@ -245,6 +245,9 @@ export interface RuntimeDerivedStaleMarkerListRequest {
   affectedPath?: string | null
   status?: string | null
   limit?: number | null
+  /** Composite cursor (SPEC-6 PR1 decision 6): must be provided together with `sinceMarkerId`, or omitted. */
+  sinceMarkedAtMs?: number | null
+  sinceMarkerId?: string | null
 }
 
 export interface RuntimeDerivedStaleMarkerRecord {
@@ -261,9 +264,61 @@ export interface RuntimeDerivedStaleMarkerRecord {
   lastError?: string | null
 }
 
+/** Round-trip verbatim as `sinceMarkedAtMs`/`sinceMarkerId` on the next `runtimeDerivedStaleMarkerList` call. */
+export interface RuntimeDerivedMarkerCursor {
+  markedAtMs: number
+  markerId: string
+}
+
 export interface RuntimeDerivedStaleMarkerList {
   enabled: boolean
   status: RuntimeDbHealthState
+  markers: RuntimeDerivedStaleMarkerRecord[]
+  nextCursor?: RuntimeDerivedMarkerCursor | null
+}
+
+/**
+ * Request payload for atomically folding every pending derived stale marker
+ * in one `(layer, affectedPath)` group into a single claimed batch backed by
+ * one queued `derived-rebuild` runtime job (SPEC-6 PR1 decision 3). See
+ * `DERIVED_REBUILD_JOB_KIND` in `@/core-runtime/derived-rebuild`.
+ */
+export interface RuntimeDerivedMarkerClaimBatchRequest {
+  layer: string
+  affectedPath: string
+  jobId?: string | null
+  maxAttempts?: number | null
+  priority?: number | null
+}
+
+/**
+ * Request payload for completing a derived-rebuild job's claimed marker
+ * batch. Requires the still-active lease from `runtimeJobClaimByKind`.
+ */
+export interface RuntimeDerivedMarkerCompleteBatchRequest {
+  jobId: string
+  leaseId: string
+  markerIds: string[]
+}
+
+/**
+ * Request payload for releasing a derived-rebuild job's claimed marker batch
+ * back to `pending`/`failed`/`cancelled` AFTER the job itself already
+ * transitioned via `runtimeJobFail`/`runtimeJobCancel`.
+ */
+export interface RuntimeDerivedMarkerReleaseBatchRequest {
+  jobId: string
+  markerIds: string[]
+  targetStatus: string
+  error?: string | null
+}
+
+/**
+ * Response payload shared by every derived marker batch transition —
+ * claim/complete/release all return the same shape.
+ */
+export interface RuntimeDerivedMarkerBatchTransition {
+  job: RuntimeJobRecord
   markers: RuntimeDerivedStaleMarkerRecord[]
 }
 
@@ -629,6 +684,30 @@ export function runtimeDerivedStaleMarkerList(
   request: RuntimeDerivedStaleMarkerListRequest = {},
 ): Promise<RuntimeDerivedStaleMarkerList> {
   return invoke<RuntimeDerivedStaleMarkerList>("runtime_derived_stale_marker_list", {
+    request,
+  })
+}
+
+export function runtimeDerivedMarkerClaimBatch(
+  request: RuntimeDerivedMarkerClaimBatchRequest,
+): Promise<RuntimeDerivedMarkerBatchTransition> {
+  return invoke<RuntimeDerivedMarkerBatchTransition>("runtime_derived_marker_claim_batch", {
+    request,
+  })
+}
+
+export function runtimeDerivedMarkerCompleteBatch(
+  request: RuntimeDerivedMarkerCompleteBatchRequest,
+): Promise<RuntimeDerivedMarkerBatchTransition> {
+  return invoke<RuntimeDerivedMarkerBatchTransition>("runtime_derived_marker_complete_batch", {
+    request,
+  })
+}
+
+export function runtimeDerivedMarkerReleaseBatch(
+  request: RuntimeDerivedMarkerReleaseBatchRequest,
+): Promise<RuntimeDerivedMarkerBatchTransition> {
+  return invoke<RuntimeDerivedMarkerBatchTransition>("runtime_derived_marker_release_batch", {
     request,
   })
 }
