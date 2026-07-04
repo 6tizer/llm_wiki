@@ -639,7 +639,7 @@ describe("autoIngest source summary paths", () => {
     const staleSummaryPath = path.join(tmp.path, "wiki", "sources", "config.md")
     const content = await fs.readFile(canonicalSummaryPath, "utf8")
 
-    expect(writtenPaths.map(p => p.replace(/\\/g, "/"))).toEqual([canonicalSummaryPath.replace(/\\/g, "/")])
+    expect(writtenPaths.map(p => p.replace(/\\/g, "/"))).toEqual([canonicalSummary])
     await expect(fs.access(staleSummaryPath)).rejects.toThrow()
     expect(content).toContain('sources: ["project-a/config.yaml"]')
   })

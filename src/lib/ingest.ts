@@ -5,7 +5,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useReviewStore } from "@/stores/review-store"
-import { getFileName, normalizePath } from "@/lib/path-utils"
+import { getFileName, normalizePath, isAbsolutePath } from "@/lib/path-utils"
 import {
   sourceIdentityForPath,
   sourceSummarySlugCandidatesFromIdentity,
@@ -28,6 +28,7 @@ import type { MultimodalConfig } from "@/stores/wiki-store"
 import {
   parseWikiSchemaRouting,
   validateWikiPageRouting,
+  loadProjectWikiSchemaRouting,
   type WikiSchemaRouting,
 } from "@/lib/wiki-schema"
 
@@ -323,7 +324,7 @@ async function parseSourceForIngest(
 ): Promise<ParsedIngestSource> {
   const mineruConfig = useWikiStore.getState().mineruConfig
   if (!mineruConfig.enabled || !isPdfSourcePath(sourcePath)) {
-    const content = await tryReadFile(sourcePath)
+    const content = await tryReadFile(sourcePath) ?? ""
     return { content, parser: "local", cacheContent: content }
   }
 
@@ -347,7 +348,7 @@ async function parseSourceForIngest(
     activity.updateItem(activityId, {
       detail: `MinerU failed; falling back to local PDF parser: ${message}`,
     })
-    const content = await tryReadFile(sourcePath)
+    const content = await tryReadFile(sourcePath) ?? ""
     return { content, parser: MINERU_FALLBACK_LOCAL_PARSER, cacheContent: content }
   }
 }
@@ -365,7 +366,7 @@ async function planSourceForIngestCache(sourcePath: string): Promise<IngestSourc
     }
   }
 
-  const content = await tryReadFile(sourcePath)
+  const content = await tryReadFile(sourcePath) ?? ""
   return { parser: "local", cacheContent: content, content }
 }
 
@@ -773,9 +774,10 @@ export async function autoIngest(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   folderContext?: string,
+  onPageWritten?: (record: WrittenPageRecord) => void,
 ): Promise<string[]> {
   return withProjectLock(normalizePath(projectPath), () =>
-    autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext),
+    autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext, onPageWritten),
   )
 }
 
@@ -875,6 +877,7 @@ async function autoIngestImpl(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   folderContext?: string,
+  onPageWritten?: (record: WrittenPageRecord) => void,
 ): Promise<string[]> {
   const pp = normalizePath(projectPath)
   const sp = normalizePath(sourcePath)
@@ -892,13 +895,27 @@ async function autoIngestImpl(
     filesWritten: [],
   })
 
-  let [sourcePlan, schema, purpose] = await Promise.all([
+  // Own copy of every page-write record from this run, independent of
+  // whatever the caller's `onPageWritten` does with it. Used below (see
+  // the self-undo note after the Step 3 write) to undo this run's own
+  // writes BEFORE releasing the per-project lock — closing a TOCTOU
+  // window where the ingest queue's external abort-guard cleanup (which
+  // necessarily runs AFTER the lock has already been released) could
+  // race a second task's legitimate read-merge-write of the same page.
+  const selfMeta = new Map<string, WrittenPageRecord>()
+  const trackedOnPageWritten = (record: WrittenPageRecord) => {
+    recordWrittenPageFirstSnapshot(selfMeta, record)
+    onPageWritten?.(record)
+  }
+
+  const [sourcePlanInitial, schemaContent, purposeContent] = await Promise.all([
     planSourceForIngestCache(sp),
     tryReadFile(`${pp}/schema.md`),
     tryReadFile(`${pp}/purpose.md`),
   ])
-  const index = ""
-  const overview = ""
+  let sourcePlan = sourcePlanInitial
+  const schema = schemaContent ?? ""
+  const purpose = purposeContent ?? ""
   const schemaRouting = parseWikiSchemaRouting(schema)
 
   let precheckedCachedFiles: string[] | null = null
@@ -1140,7 +1157,7 @@ async function autoIngestImpl(
       llmConfig,
       purpose,
       schema,
-      index,
+      "",
       sourceIdentity,
       sourceSummarySlug,
       folderContext,
@@ -1171,7 +1188,7 @@ async function autoIngestImpl(
     await streamChat(
       llmConfig,
       [
-        { role: "system", content: buildAnalysisPrompt(purpose, index, sourceContext) },
+        { role: "system", content: buildAnalysisPrompt(purpose, "", sourceContext) },
         { role: "user", content: `Analyze this source document:\n\n**File:** ${sourceIdentity}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}\n\n---\n\n${sourceContext}` },
       ],
       {
@@ -1203,7 +1220,7 @@ async function autoIngestImpl(
   await streamChat(
     llmConfig,
     [
-      { role: "system", content: buildGenerationPrompt(schema, purpose, index, sourceIdentity, overview, sourceContext, sourceSummaryPath) },
+      { role: "system", content: buildGenerationPrompt(schema, purpose, "", sourceIdentity, "", sourceContext, sourceSummaryPath) },
       {
         role: "user",
         content: [
@@ -1260,7 +1277,7 @@ async function autoIngestImpl(
             role: "system",
             content: buildReviewSuggestionPrompt(
               purpose,
-              index,
+              "",
               sourceIdentity,
               analysis,
               sourceContext,
@@ -1307,6 +1324,7 @@ async function autoIngestImpl(
     sourceSummaryPath,
     signal,
     Object.keys(schemaRouting.typeDirs).length > 0 ? schemaRouting : null,
+    trackedOnPageWritten,
   )
 
   // Surface parser / writer warnings to the activity panel so users
@@ -1349,9 +1367,18 @@ async function autoIngestImpl(
       analysis ? analysis.slice(0, 3000) : "(Analysis not available)",
       "",
     ].join("\n")
+    // Read before overwrite so a cancelled task can be undone the same
+    // way as a writeFileBlocks-driven write: restore this snapshot
+    // instead of deleting a page that already existed before this run.
+    const existing = await tryReadFile(sourceSummaryFullPath)
     try {
       await writeFile(sourceSummaryFullPath, fallbackContent)
       writtenPaths.push(sourceSummaryPath)
+      trackedOnPageWritten({
+        path: sourceSummaryPath,
+        wasCreated: existing === null,
+        previousContent: existing,
+      })
     } catch {
       // non-critical
     }
@@ -1370,6 +1397,59 @@ async function autoIngestImpl(
     multimodalConfig: mmCfg,
     signal,
   })
+
+  // Self-undo, still holding the per-project lock (autoIngest wraps
+  // this whole function in withProjectLock): if the run was aborted
+  // mid-write, undo THIS run's pages now, before returning — i.e.
+  // before the lock releases and any other queued task for the same
+  // project can read what's currently on disk. Without this, a second
+  // task merging into the SAME page could read this (soon to be
+  // cancelled) run's contribution as "existing" content, incorporate
+  // it into its own merge, and then have the queue's external
+  // abort-guard cleanup (ingest-queue.ts, which necessarily runs AFTER
+  // this function returns and the lock is gone) either leak this run's
+  // content forward or clobber the second task's legitimate write —
+  // a genuine TOCTOU race, not just the map-scoping bug D4 originally
+  // targeted.
+  //
+  // Keep this check after all source-summary fallback writes so an abort
+  // that lands during their read/write awaits is still covered before the
+  // project lock is released.
+  //
+  // Drop each successfully-undone path from `writtenPaths` afterward
+  // (in place — it's a destructured `const`, but still the same array
+  // the caller's `writtenFiles` ends up pointing at) so the queue's
+  // external cleanup sees nothing left to redo for THOSE pages and
+  // skips them. That redundancy avoidance isn't just about wasted
+  // work: two independent `writeFile` calls to the same path — this
+  // one, plus the external one repeating it a moment later — reopen a
+  // window where a concurrent reader can observe the file
+  // mid-truncate (`fs.writeFile` is not atomic), i.e. exactly the kind
+  // of transient-empty-read this whole self-undo exists to prevent.
+  //
+  // A path whose OWN undo throws (disk error mid-restore, etc.) is
+  // deliberately LEFT IN `writtenPaths` — the external cleanup in
+  // ingest-queue.ts is the fallback for exactly this case, and it can
+  // only do its job if it still sees the path. Silently dropping it
+  // here (an earlier version of this code did an unconditional
+  // `writtenPaths.length = 0`) would leave a page in a bad, half-undone
+  // state AND skip the external cleanup's `writtenFiles.length > 0`
+  // gate, defeating the fallback the comment above claims exists. The
+  // external cleanup remains the only undo path at all for other
+  // `autoIngest` callers whose signal aborts only after this function
+  // has already returned.
+  if (signal?.aborted) {
+    const failedToUndo: string[] = []
+    for (const p of writtenPaths) {
+      try {
+        await undoWrittenPage(pp, p, selfMeta.get(p))
+      } catch {
+        failedToUndo.push(p)
+      }
+    }
+    writtenPaths.length = 0
+    writtenPaths.push(...failedToUndo)
+  }
 
   if (writtenPaths.length > 0) {
     try {
@@ -1653,6 +1733,100 @@ async function matchingRawSourceIdentitiesForBasename(
   return matches
 }
 
+/** One page write from a single writeFileBlocks() call — lets a caller
+ *  (the ingest queue's cancel path, or `autoIngestImpl`'s own in-lock
+ *  self-undo below) undo just this task's contribution instead of
+ *  deleting a page other ingests also merged into. */
+export interface WrittenPageRecord {
+  path: string
+  wasCreated: boolean
+  previousContent: string | null
+}
+
+/**
+ * Records page-write metadata while preserving the first pre-write
+ * snapshot for each path, so cancellation undo restores the state from
+ * before the run touched the page even if the run writes it again.
+ */
+export function recordWrittenPageFirstSnapshot(
+  meta: Map<string, WrittenPageRecord>,
+  record: WrittenPageRecord,
+): void {
+  const existing = meta.get(record.path)
+  if (!existing) {
+    meta.set(record.path, record)
+    return
+  }
+  meta.set(record.path, {
+    ...record,
+    wasCreated: existing.wasCreated,
+    previousContent: existing.previousContent,
+  })
+}
+
+/**
+ * Undo one page write from a run that turned out not to count (e.g.
+ * cancelled mid-write). If the page existed before this run touched
+ * it, restore its pre-write snapshot; otherwise this run created it
+ * outright, so remove it — cascade-deleting any embeddings via a
+ * dynamic import so this module doesn't take a static dependency on
+ * the vector-store layer.
+ *
+ * Used by `autoIngestImpl`'s self-undo below, while STILL holding the
+ * per-project lock (see the TOCTOU note at its call site). Deliberately
+ * NOT shared with `ingest-queue.ts`'s external `cleanupWrittenFiles`
+ * (cancelTask / cancelAllTasks / pauseQueue): that module mocks
+ * `./ingest` down to just `autoIngest` in its unit tests, so pulling in
+ * a second named export from here would silently no-op under that
+ * mock. The restore-or-delete branch is duplicated there instead.
+ */
+async function undoWrittenPage(
+  projectPath: string,
+  path: string,
+  record: WrittenPageRecord | undefined,
+): Promise<void> {
+  const fullPath = isAbsolutePath(path) ? normalizePath(path) : `${projectPath}/${path}`
+  if (!record) {
+    console.warn(
+      `[ingest] Skipping undo for "${path}" because write metadata is missing; preserving the current page to avoid deleting pre-existing user content.`,
+    )
+    throw new Error(`Missing write metadata for ${path}`)
+  }
+  if (record && !record.wasCreated) {
+    const restoredContent = record.previousContent ?? ""
+    await writeFile(fullPath, restoredContent)
+    await reembedRestoredWikiPage(projectPath, fullPath, restoredContent)
+    return
+  }
+  const { cascadeDeleteWikiPage } = await import("@/lib/wiki-page-delete")
+  await cascadeDeleteWikiPage(projectPath, fullPath)
+}
+
+async function reembedRestoredWikiPage(
+  projectPath: string,
+  path: string,
+  content: string,
+): Promise<void> {
+  const embCfg = useWikiStore.getState().embeddingConfig
+  if (!embCfg.enabled || !embCfg.model) return
+  try {
+    const { embedPage } = await import("@/lib/embedding")
+    const {
+      isRootStructuralWikiPagePath,
+      normalizeProjectWikiMarkdownPath,
+      wikiPathToVectorPageId,
+    } = await import("@/lib/wiki-page-identity")
+    const wikiPath = normalizeProjectWikiMarkdownPath(projectPath, path)
+    if (isRootStructuralWikiPagePath(projectPath, wikiPath)) return
+    const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
+    const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
+    const title = titleMatch ? titleMatch[1].trim() : titleFallback
+    await embedPage(projectPath, wikiPathToVectorPageId(projectPath, path), title, content, embCfg)
+  } catch {
+    // embedding refresh is best-effort during self-undo cleanup
+  }
+}
+
 async function writeFileBlocks(
   projectPath: string,
   text: string,
@@ -1661,6 +1835,7 @@ async function writeFileBlocks(
   sourceSummaryPath?: string,
   signal?: AbortSignal,
   schemaRouting?: WikiSchemaRouting | null,
+  onPageWritten?: (record: WrittenPageRecord) => void,
 ): Promise<{ writtenPaths: string[]; warnings: string[]; hardFailures: string[] }> {
   const { blocks, warnings: parseWarnings } = parseFileBlocks(text)
   const warnings = [...parseWarnings]
@@ -1699,7 +1874,7 @@ async function writeFileBlocks(
     // unparseable frontmatter and the read-time fallback had to
     // paper over it forever.
     let content = sanitizeIngestedFileContent(rawContent)
-    if (!isLogPath(relativePath) && !isListingPath(relativePath)) {
+    if (sourceFileName && !isLogPath(relativePath) && !isListingPath(relativePath)) {
       content = canonicalizeSourcesField(content, sourceFileName)
     }
 
@@ -1744,15 +1919,28 @@ async function writeFileBlocks(
     try {
       if (isLogPath(relativePath)) {
         const existing = await tryReadFile(fullPath)
-        const appended = existing ? `${existing}\n\n${content.trim()}` : content.trim()
+        const appended = existing !== null && existing.length > 0
+          ? `${existing}\n\n${content.trim()}`
+          : content.trim()
         await writeFile(fullPath, appended)
+        onPageWritten?.({
+          path: relativePath,
+          wasCreated: existing === null,
+          previousContent: existing,
+        })
       } else if (
         isListingPath(relativePath)
       ) {
         // Nested listing pages keep the legacy wholesale-write behavior.
         // Root index/overview were skipped above because normal ingest no
         // longer owns those optional aggregate pages.
+        const existing = await tryReadFile(fullPath)
         await writeFile(fullPath, content)
+        onPageWritten?.({
+          path: relativePath,
+          wasCreated: existing === null,
+          previousContent: existing,
+        })
       } else {
         // ── Dedup check: normalized slug collision ──
         const dedupPath = await findExistingPageByNormalizedSlug(projectPath, relativePath)
@@ -1783,7 +1971,7 @@ async function writeFileBlocks(
         const existing = await tryReadFile(fullPath)
         const toWrite = await mergePageContent(
           content,
-          existing || null,
+          existing,
           buildPageMerger(llmConfig),
           {
             sourceFileName,
@@ -1793,6 +1981,11 @@ async function writeFileBlocks(
           },
         )
         await writeFile(fullPath, toWrite)
+        onPageWritten?.({
+          path: relativePath,
+          wasCreated: existing === null,
+          previousContent: existing,
+        })
       }
       writtenPaths.push(relativePath)
     } catch (err) {
@@ -1849,12 +2042,13 @@ export async function startIngest(
     )
   })
 
-  const [sourceContent, schema, purpose, index] = await Promise.all([
+  const [sourceContentRaw, schema, purpose, index] = await Promise.all([
     tryReadFile(sp),
     tryReadFile(`${pp}/wiki/schema.md`),
     tryReadFile(`${pp}/wiki/purpose.md`),
     tryReadFile(`${pp}/wiki/index.md`),
   ])
+  const sourceContent = sourceContentRaw ?? ""
 
   const systemPrompt = [
     "You are a knowledgeable assistant helping to build a wiki from source documents.",
@@ -2007,63 +2201,34 @@ export async function executeIngestWrites(
     signal,
   )
 
-  const writtenPaths: string[] = []
-  // Parse the LLM generation with the hardened parser. This replaces the
-  // legacy FILE_BLOCK_REGEX loop, which skipped every safety check that
-  // writeFileBlocks applies (see #119 P0-1): CRLF normalization, fence-aware
-  // closer, path-traversal guard (isSafeIngestPath), empty/unclosed-block
-  // surfacing. parseFileBlocks runs isSafeIngestPath internally and drops
-  // unsafe paths with a warning, so the loop below only ever sees wiki/-rooted
-  // traversal-safe paths. The chat-mode-specific behavior (source-summary
-  // rewrite, canonicalizeSourcesField, log append, absolute-path return) is
-  // preserved on top of the safe parser.
-  const { blocks: parsedBlocks, warnings: parseWarnings } = parseFileBlocks(accumulated)
-  for (const warning of parseWarnings) {
-    console.warn(`[executeIngestWrites] ${warning}`)
-  }
-
-  for (const { path: rawRelativePath, content: rawContent } of parsedBlocks) {
-    let relativePath = rawRelativePath
-    let content = rawContent
-
-    if (
-      activeSourceSummaryPath &&
-      relativePath.startsWith("wiki/sources/")
-    ) {
-      relativePath = activeSourceSummaryPath
-    }
-
-    if (
-      activeSourceIdentity &&
-      !isLogPath(relativePath) &&
-      !isListingPath(relativePath)
-    ) {
-      content = canonicalizeSourcesField(content, activeSourceIdentity)
-    }
-
-    const fullPath = `${pp}/${relativePath}`
-
-    try {
-      if (isLogPath(relativePath)) {
-        const existing = await tryReadFile(fullPath)
-        const appended = existing
-          ? `${existing}\n\n${content.trim()}`
-          : content.trim()
-        await writeFile(fullPath, appended)
-      } else {
-        await writeFile(fullPath, content)
-      }
-      writtenPaths.push(fullPath)
-    } catch (err) {
-      console.error(`Failed to write ${fullPath}:`, err)
-    }
-  }
+  // Delegate to writeFileBlocks — the same parse/sanitize/schema-route/
+  // merge pipeline autoIngest uses, instead of a hand-rolled loop that
+  // skipped merge-on-existing, schema routing, and per-block language
+  // guards. `writtenPaths` below are wiki-relative (not absolute like
+  // the old loop produced): the only caller (chat-panel's
+  // handleWriteToWiki) discards the return value, so this is a
+  // behavior-invisible change other than the fileList message below
+  // reading more cleanly.
+  const schemaRouting = await loadProjectWikiSchemaRouting(pp)
+  const { writtenPaths, warnings: writeWarnings } = await writeFileBlocks(
+    pp,
+    accumulated,
+    llmConfig,
+    activeSourceIdentity ?? "",
+    activeSourceSummaryPath ?? undefined,
+    signal,
+    schemaRouting,
+  )
 
   if (writtenPaths.length > 0) {
     const fileList = writtenPaths.map((p) => `- ${p}`).join("\n")
     getStore().addMessage("system", `Files written to wiki:\n${fileList}`)
   } else {
     getStore().addMessage("system", "No files were written. The LLM response did not contain valid FILE blocks.")
+  }
+
+  if (writeWarnings.length > 0) {
+    getStore().addMessage("system", `Ingest warnings:\n${writeWarnings.map((w) => `- ${w}`).join("\n")}`)
   }
 
   // Image cascade: surface any embedded images on the source-summary

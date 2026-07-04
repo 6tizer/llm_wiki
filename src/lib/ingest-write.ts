@@ -14,11 +14,11 @@ import { loadCaptionCache } from "@/lib/image-caption-pipeline"
 import { buildImageMarkdownSection } from "@/lib/extract-source-images"
 import type { MergeFn } from "@/lib/page-merge"
 
-export async function tryReadFile(path: string): Promise<string> {
+export async function tryReadFile(path: string): Promise<string | null> {
   try {
     return await readFile(path)
   } catch {
-    return ""
+    return null
   }
 }
 
@@ -137,7 +137,7 @@ export async function injectImagesIntoSourceSummary(
   console.log(`[ingest:diag] injectImagesIntoSourceSummary: target=${sourceSummaryFullPath}, images=${savedImages.length}`)
   try {
     const existing = await tryReadFile(sourceSummaryFullPath)
-    console.log(`[ingest:diag] injectImagesIntoSourceSummary: existing file ${existing ? `read OK (${existing.length} chars)` : "MISSING (will write stub)"}`)
+    console.log(`[ingest:diag] injectImagesIntoSourceSummary: existing file ${existing !== null ? `read OK (${existing.length} chars)` : "MISSING (will write stub)"}`)
     // Load captions from the on-disk cache so the safety-net
     // section embeds caption text as alt — the embedding pipeline
     // indexes whatever's in the wiki page, so without this, search
@@ -147,7 +147,7 @@ export async function injectImagesIntoSourceSummary(
     const newSection = buildImageMarkdownSection(savedImages as never, captionsBySha)
     const marker = "<!-- llm-wiki:embedded-images -->"
     const wrapped = `\n\n${marker}\n${newSection.trim()}\n${marker}\n`
-    if (existing) {
+    if (existing !== null) {
       // Strip any prior injection (paired markers) so re-ingest
       // doesn't accumulate stale references when images change.
       const stripped = existing.replace(

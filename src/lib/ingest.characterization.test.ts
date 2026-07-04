@@ -795,17 +795,16 @@ describe("B. writeFileBlocks", () => {
 // dedup, merge+backup). These tests pin the CURRENT gap down explicitly.
 
 describe("C. executeIngestWrites vs writeFileBlocks", () => {
-  it("13: executeIngestWrites overwrites wiki/index.md wholesale; writeFileBlocks skips the same block entirely (D5/PR5 will delegate to writeFileBlocks)", async () => {
+  it("13: executeIngestWrites now delegates to writeFileBlocks — root wiki/index.md is skipped by both paths (PR5 fix)", async () => {
     const tmp = track(await seedProject("c13"))
     await writeFileRaw(`${tmp.path}/wiki/index.md`, "# Old Index\n\nOriginal root index content.\n")
     await setupChatIngest(tmp)
     chatGenerationResponse = rawFileBlock("wiki/index.md", ["# New Root Index", "", "Chat-mode generated root index."])
 
     await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
-    expect(await readFileRaw(`${tmp.path}/wiki/index.md`)).toBe("# New Root Index\n\nChat-mode generated root index.")
+    expect(await readFileRaw(`${tmp.path}/wiki/index.md`)).toBe("# Old Index\n\nOriginal root index content.\n")
 
-    // Contrast: writeFileBlocks (via autoIngest) skips the same block.
-    await writeFileRaw(`${tmp.path}/wiki/index.md`, "# Old Index\n\nOriginal root index content.\n")
+    // Symmetric: writeFileBlocks (via autoIngest) skips the same block.
     await writeFileRaw(`${tmp.path}/raw/sources/other.md`, SUBSTANTIVE_SOURCE)
     generationResponse = [sourceSummaryBlock("other.md"), rawFileBlock("wiki/index.md", ["# Attempted Overwrite"])].join(
       "\n\n",
@@ -814,20 +813,37 @@ describe("C. executeIngestWrites vs writeFileBlocks", () => {
     expect(await readFileRaw(`${tmp.path}/wiki/index.md`)).toBe("# Old Index\n\nOriginal root index content.\n")
   })
 
-  it("14: executeIngestWrites has no schema-routing check — a type-violating page is written anyway (D5/PR5 will delegate to writeFileBlocks)", async () => {
+  it("14: executeIngestWrites now runs the schema-routing check via writeFileBlocks — a type-violating page is dropped (PR5 fix)", async () => {
     const tmp = track(await seedProject("c14"))
+    // loadProjectWikiSchemaRouting reads schema.md from the project ROOT
+    // (not wiki/schema.md) — seed it there so schemaRouting isn't null.
+    await writeFileRaw(
+      `${tmp.path}/schema.md`,
+      [
+        "# Schema",
+        "",
+        "## Page Types",
+        "",
+        "| Type | Directory | Purpose |",
+        "| ---- | --------- | ------- |",
+        "| source | wiki/sources/ | Source summaries |",
+        "| concept | wiki/concepts/ | Concepts |",
+      ].join("\n"),
+    )
     await setupChatIngest(tmp)
     chatGenerationResponse = fileBlock(
       "wiki/concepts/bad-source.md",
       ["type: source", 'title: "Bad Source"'],
-      ["# Bad Source", "", "Would violate schema routing if writeFileBlocks' check applied here."],
+      ["# Bad Source", "", "Violates schema routing — now enforced by the delegated writeFileBlocks check."],
     )
 
     await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
-    expect(await fileExists(`${tmp.path}/wiki/concepts/bad-source.md`)).toBe(true)
+    expect(await fileExists(`${tmp.path}/wiki/concepts/bad-source.md`)).toBe(false)
+    const messages = useChatStore.getState().messages.map((m) => m.content).join("\n")
+    expect(messages).toContain("Dropped")
   })
 
-  it("15: executeIngestWrites has no per-file language guard — writes regardless of output-language mismatch (D5/PR5 will delegate to writeFileBlocks)", async () => {
+  it("15: executeIngestWrites now runs the per-file language guard via writeFileBlocks — a mismatched page is dropped (PR5 fix)", async () => {
     const tmp = track(await seedProject("c15"))
     useWikiStore.setState({ outputLanguage: "Chinese" })
     await setupChatIngest(tmp)
@@ -837,15 +853,17 @@ describe("C. executeIngestWrites vs writeFileBlocks", () => {
       [
         "# English Chat Page",
         "",
-        "This entire page is written in English prose even though the target output language is Chinese, and executeIngestWrites has no per-file language guard to catch it.",
+        "This entire page is written in English prose even though the target output language is Chinese, and the delegated writeFileBlocks language guard now catches it.",
       ],
     )
 
     await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
-    expect(await fileExists(`${tmp.path}/wiki/concepts/english-chat.md`)).toBe(true)
+    expect(await fileExists(`${tmp.path}/wiki/concepts/english-chat.md`)).toBe(false)
+    const messages = useChatStore.getState().messages.map((m) => m.content).join("\n")
+    expect(messages).toContain("Dropped")
   })
 
-  it("16: executeIngestWrites has no normalized-slug dedup — a variant path creates a duplicate file (D5/PR5 will delegate to writeFileBlocks)", async () => {
+  it("16: executeIngestWrites now runs the delegated normalized-slug dedup — a variant path merges into the existing page instead of duplicating (PR5 fix)", async () => {
     const tmp = track(await seedProject("c16"))
     await writeFileRaw(
       `${tmp.path}/wiki/concepts/kv-cache.md`,
@@ -861,17 +879,20 @@ describe("C. executeIngestWrites vs writeFileBlocks", () => {
       ["# KV Cache", "", "Chat-mode contributed body."],
     )
 
-    await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
+    const writtenPaths = await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
 
     expect(await fileExists(`${tmp.path}/wiki/concepts/kv-cache.md`)).toBe(true)
-    expect(await fileExists(`${tmp.path}/wiki/concepts/KV_Cache.md`)).toBe(true)
+    expect(await fileExists(`${tmp.path}/wiki/concepts/KV_Cache.md`)).toBe(false)
+    expect(writtenPaths).toContain("wiki/concepts/kv-cache.md")
+    const messages = useChatStore.getState().messages.map((m) => m.content).join("\n")
+    expect(messages).toContain("Dedup")
   })
 
-  it("17: executeIngestWrites overwrites an existing page with no merge and no backup — D5 core target (bug: silent data loss)", async () => {
+  it("17: executeIngestWrites now merges into an existing page via the delegated writeFileBlocks instead of overwriting it — LOCKED_FIELDS roll back, no backup on a successful merge (PR5 fix)", async () => {
     const tmp = track(await seedProject("c17"))
     const oldContent = pageContent(
       ["type: concept", 'title: "Existing"', "created: 2020-01-01", "updated: 2020-01-01", 'sources: ["old-source.md"]', "tags: []", "related: []"],
-      ["# Existing", "", "Original body that executeIngestWrites will destroy without a trace."],
+      ["# Existing", "", "Original body that used to be destroyed without a trace."],
     )
     await writeFileRaw(`${tmp.path}/wiki/concepts/existing.md`, oldContent)
     await setupChatIngest(tmp)
@@ -883,14 +904,27 @@ describe("C. executeIngestWrites vs writeFileBlocks", () => {
 
     await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
 
+    // Confirm the merge LLM was actually invoked (not a silent
+    // overwrite) before asserting on its (mocked, fixed) output —
+    // see the shared "success" mergeMode response at the top of this
+    // file, also used by test 8d.
+    expect(mergeCallCount()).toBe(1)
     const result = await readFileRaw(`${tmp.path}/wiki/concepts/existing.md`)
-    expect(result).not.toContain("Original body that executeIngestWrites will destroy without a trace")
-    expect(result).toContain("Completely different body")
+    const today = new Date().toISOString().slice(0, 10)
+    expect(result).toContain("type: concept")
+    expect(result).not.toContain("wrong-type-from-llm")
+    expect(result).toContain("title: Existing")
+    expect(result).not.toContain("LLM Overwritten Title")
+    expect(result).toContain("created: 2020-01-01")
+    expect(result).toContain(`updated: ${today}`)
+    expect(result).toContain('"old-source.md"')
+    expect(result).toContain('"doc.md"')
+
     const historyDir = `${tmp.path}/.llm-wiki/page-history`
     expect(await fs.readdir(historyDir).catch(() => [])).toHaveLength(0)
   })
 
-  it("18: writeFileBlocks returns project-relative paths; executeIngestWrites returns absolute paths", async () => {
+  it("18: both writeFileBlocks and executeIngestWrites now return project-relative paths (PR5 fix — delegation)", async () => {
     const tmp = track(await seedProject("c18"))
     await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
     generationResponse = [
@@ -912,8 +946,8 @@ describe("C. executeIngestWrites vs writeFileBlocks", () => {
       ["# Shape B", "", "Written via executeIngestWrites."],
     )
     const chatWritten = await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
-    expect(chatWritten.every((p) => p.startsWith(tmp.path))).toBe(true)
-    expect(chatWritten).toContain(`${tmp.path}/wiki/concepts/shape-b.md`)
+    expect(chatWritten.every((p) => !p.startsWith(tmp.path))).toBe(true)
+    expect(chatWritten).toContain("wiki/concepts/shape-b.md")
   })
 
   it("19: both writeFileBlocks and executeIngestWrites append to wiki/log.md rather than overwrite (shared invariant)", async () => {
