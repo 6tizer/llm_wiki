@@ -585,6 +585,19 @@ export function runtimeJobFail(
   return invoke<RuntimeJobRecord>("runtime_job_fail", { request })
 }
 
+/**
+ * Retry a `failed` or eligible `retry-wait` runtime job by pulling the SAME
+ * `job_id` back to `queued` (attempt count preserved). For a
+ * `derived-rebuild` job this is the recovery half of the PR2+ consumer
+ * contract documented in `@/core-runtime/derived-rebuild` — polling only
+ * newly-pending markers never surfaces a crashed rebuild's retries, since
+ * its `claimed` markers stay claimed under this same job for its entire
+ * retry lifetime.
+ */
+export function runtimeJobRetry(jobId: string): Promise<RuntimeJobRecord> {
+  return invoke<RuntimeJobRecord>("runtime_job_retry", { request: { jobId } })
+}
+
 export function runtimeCommitBudgetClaim(
   request: RuntimeCommitBudgetClaimRequest,
 ): Promise<RuntimeCommitBudgetClaim> {

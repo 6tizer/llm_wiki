@@ -979,6 +979,49 @@ describe("embedPage", () => {
     expect(emb[0]).not.toBe(0.1)
   })
 
+  it("resolves {indexed, failed} counts on full success (SPEC-6 PR2)", async () => {
+    mockHttpFetch.mockImplementation(async () => okResponse([0.1, 0.2, 0.3]))
+
+    const result = await embedPage(
+      "/tmp/p",
+      "rope",
+      "RoPE",
+      "# RoPE\n\nRotary positional embeddings are a positional-encoding scheme.",
+      cfg,
+    )
+
+    expect(result).toEqual({ indexed: 1, failed: 0 })
+  })
+
+  it("resolves failed > 0 when some chunks fail but at least one succeeds", async () => {
+    const para = "a".repeat(1100)
+    const content = `${para}\n\n${para}`
+    let call = 0
+    mockHttpFetch.mockImplementation(async () => {
+      const i = call++
+      if (i === 1) return new Response("not found", { status: 404, statusText: "Not Found" })
+      return okResponse([0.5])
+    })
+
+    const result = await embedPage("/tmp/p", "page", "Page", content, cfg)
+
+    expect(result).toEqual({ indexed: 2, failed: 1 })
+  })
+
+  it("resolves indexed: 0, failed > 0 when every chunk fails", async () => {
+    mockHttpFetch.mockImplementation(async () => genericErrorResponse(500, "internal"))
+
+    const result = await embedPage("/tmp/p", "rope", "RoPE", "# RoPE\n\nbody text", cfg)
+
+    expect(result).toEqual({ indexed: 0, failed: 1 })
+  })
+
+  it("resolves {indexed: 0, failed: 0} when embedding is disabled", async () => {
+    const disabled = { ...cfg, enabled: false }
+    const result = await embedPage("/tmp/p", "rope", "RoPE", "body", disabled)
+    expect(result).toEqual({ indexed: 0, failed: 0 })
+  })
+
   it("keeps successful chunks even when some fail, preserving original chunk_index gaps", async () => {
     // Two 1100-char paragraphs under default opts produce exactly 3
     // chunks after packing + merging + overlap. Fail the middle embed

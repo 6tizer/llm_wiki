@@ -102,3 +102,18 @@ export function wikiPathToLegacyStemId(path: string): string {
   const fileName = wikiPath.split("/").pop() ?? ""
   return fileName.replace(/\.md$/, "")
 }
+
+/**
+ * Extract a wiki page's display title from its frontmatter `title:` field,
+ * falling back to the given default when absent (e.g. a path-derived
+ * stem). Shared by every embedding call site that needs a title before
+ * calling `embedPage` (ingest.ts's `legacyInlineEmbedPage`,
+ * ingest-write.ts's `reembedSourceSummary` runtime-disabled fallback, and
+ * embedding-consumer.ts's `processClaimedJob`) — pulled out during SPEC-6
+ * PR2 review after the exact same regex+fallback logic was found
+ * duplicated verbatim across all three.
+ */
+export function extractPageTitle(content: string, fallback: string): string {
+  const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
+  return titleMatch ? titleMatch[1].trim() : fallback
+}

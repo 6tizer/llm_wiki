@@ -29,9 +29,18 @@ import { createDeferred, flushMicrotasks, waitFor, type Deferred } from "@/test-
 vi.mock("@/commands/fs", () => realFs)
 
 vi.mock("@/lib/embedding", () => ({
-  embedPage: vi.fn(async () => {}),
+  embedPage: vi.fn(async () => ({ indexed: 0, failed: 0 })),
   removePageEmbedding: vi.fn(async () => {}),
 }))
+
+// SPEC-6 PR2: ingest.ts's self-undo re-embed hook (reembedRestoredWikiPage)
+// now records an "embedding" derived-stale marker instead of embedding
+// inline — stub only that one export, everything else in ingest-write.ts
+// keeps running for real.
+vi.mock("./ingest-write", async () => {
+  const actual = await vi.importActual<typeof import("./ingest-write")>("./ingest-write")
+  return { ...actual, recordEmbeddingStaleMarker: vi.fn(async () => {}) }
+})
 
 const TEST_PROJECT_ID = "cancel-cascade-project"
 let activeProjectPath = ""
@@ -92,12 +101,14 @@ import { autoIngest as _autoIngest } from "./ingest" // referenced only to keep 
 import { enqueueIngest, cancelTask, getQueue, clearQueueState, restoreQueue, cleanupWrittenFiles } from "./ingest-queue"
 import { useWikiStore } from "@/stores/wiki-store"
 import { embedPage, removePageEmbedding } from "@/lib/embedding"
+import { recordEmbeddingStaleMarker } from "./ingest-write"
 import { wikiPathToVectorPageId } from "./wiki-page-identity"
 
 void _autoIngest
 
 const mockRemovePageEmbedding = vi.mocked(removePageEmbedding)
 const mockEmbedPage = vi.mocked(embedPage)
+const mockRecordEmbeddingStaleMarker = vi.mocked(recordEmbeddingStaleMarker)
 
 interface Tmp {
   path: string
@@ -114,6 +125,7 @@ beforeEach(() => {
   activeProjectPath = ""
   mockRemovePageEmbedding.mockClear()
   mockEmbedPage.mockClear()
+  mockRecordEmbeddingStaleMarker.mockClear()
   useWikiStore.getState().setEmbeddingConfig({
     enabled: false,
     endpoint: "",
@@ -225,23 +237,26 @@ async function waitForRestoreWriteToSettle(
   })
 }
 
+/**
+ * SPEC-6 PR2: ingest.ts's self-undo path no longer re-embeds the restored
+ * page inline — it records an "embedding" derived-stale marker instead
+ * (`recordEmbeddingStaleMarker(affectedPath, content)`), consumed later by
+ * the embedding-consumer job. `title`/`model` are no longer part of that
+ * call's arguments (title is now derived by the consumer from disk at
+ * rebuild time; the embedding-enabled/model check already gates whether
+ * this is called at all), so this only waits on `affectedPath` + `content`.
+ */
 async function waitForRestoredPageReembed(
   projectPath: string,
   pagePath: string,
-  title: string,
   content: string,
-  model: string,
 ): Promise<void> {
-  const pageId = wikiPathToVectorPageId(projectPath, pagePath)
+  const { normalizeProjectWikiMarkdownPath } = await import("./wiki-page-identity")
+  const affectedPath = normalizeProjectWikiMarkdownPath(projectPath, pagePath)
   await waitForDisk(async () =>
-    mockEmbedPage.mock.calls.some(
-      ([calledProjectPath, calledPageId, calledTitle, calledContent, calledConfig]) =>
-        calledProjectPath === projectPath &&
-        calledPageId === pageId &&
-        calledTitle === title &&
-        calledContent === content &&
-        calledConfig.enabled === true &&
-        calledConfig.model === model,
+    mockRecordEmbeddingStaleMarker.mock.calls.some(
+      ([calledAffectedPath, calledContent]) =>
+        calledAffectedPath === affectedPath && calledContent === content,
     ),
   )
 }
@@ -480,13 +495,7 @@ describe("ingest-queue cancel cascade (D4)", () => {
     // Same restore behavior on the successful-merge path.
     expect(await fileExists(existingTopicPath)).toBe(true)
     expect(await readFileRaw(existingTopicPath)).toBe(originalExistingContent)
-    await waitForRestoredPageReembed(
-      tmp.path,
-      existingTopicPath,
-      "Existing Topic",
-      originalExistingContent,
-      "test-embedding-model",
-    )
+    await waitForRestoredPageReembed(tmp.path, existingTopicPath, originalExistingContent)
 
     // No LLM-merge failure occurred on this path, so tryBackup never
     // ran — page-history stays empty. Restoration here comes entirely
@@ -943,6 +952,19 @@ describe("ingest-queue cancel cascade (D4)", () => {
       ].join("\n"),
     ].join("\n\n")
 
+    // Enabled so the SECOND restore attempt — landing via the queue's
+    // external cleanup fallback (ingest-queue.ts's own
+    // reembedRestoredWikiPage, migrated in this gate-review round to the
+    // same recordEmbeddingStaleMarker shape ingest.ts's self-undo path
+    // uses) — actually exercises marker recording instead of early-
+    // returning on embedding being off.
+    useWikiStore.getState().setEmbeddingConfig({
+      enabled: true,
+      endpoint: "http://127.0.0.1:1234/v1/embeddings",
+      apiKey: "",
+      model: "test-embedding-model",
+    })
+
     // Inject a failure into ONLY the first restore-write attempt for
     // this page (autoIngestImpl's in-lock self-undo) — every other
     // write, including the merge write itself and any SUBSEQUENT
@@ -990,6 +1012,16 @@ describe("ingest-queue cancel cascade (D4)", () => {
     expect(restoreAttempts).toBeGreaterThanOrEqual(2)
     expect(await fileExists(existingTopicPath)).toBe(true)
     expect(await readFileRaw(existingTopicPath)).toBe(originalExistingContent)
+
+    // The external cleanup fallback (ingest-queue.ts's own
+    // reembedRestoredWikiPage) marks the restored page's embedding stale
+    // via the same marker system as ingest.ts's self-undo path — not the
+    // pre-migration direct embedPage call.
+    expect(mockRecordEmbeddingStaleMarker).toHaveBeenCalledWith(
+      "wiki/concepts/existing-topic.md",
+      originalExistingContent,
+    )
+    expect(mockEmbedPage).not.toHaveBeenCalled()
 
     writeFileSpy.mockRestore()
   })

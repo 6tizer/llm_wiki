@@ -1,6 +1,6 @@
 import { readFile, writeFile, fileExists, deleteFile, listDirectory, getFileMd5 } from "@/commands/fs"
 import { streamChat } from "@/lib/llm-client"
-import type { LlmConfig } from "@/stores/wiki-store"
+import type { LlmConfig, EmbeddingConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useActivityStore } from "@/stores/activity-store"
@@ -1503,11 +1503,23 @@ async function autoIngestImpl(
     )
   }
 
-  // ── Step 6: Generate embeddings (if enabled) ───────────────
+  // ── Step 6: Mark embedding stale for each written page (SPEC-6 PR2) ──
+  // Embedding is no longer generated inline here when the work-runtime
+  // feature flag is on — ingest completion doesn't wait on it. Instead,
+  // each non-structural written page gets an "embedding" layer
+  // derived-stale marker; the embedding-consumer job consumer
+  // (src/lib/derived-rebuild/embedding-consumer.ts) polls for those
+  // markers and does the actual rebuild off the ingest path.
+  //
+  // That flag defaults OFF, unlike the old unconditional inline embed this
+  // replaced — so `recordEmbeddingStaleMarker` returning "runtime-disabled"
+  // falls back to embedding inline right here (legacyInlineEmbedPage),
+  // otherwise every default-configuration user would silently stop getting
+  // embeddings at all (P0 regression, caught in PR2 review).
   const embCfg = useWikiStore.getState().embeddingConfig
   if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
     try {
-      const { embedPage } = await import("@/lib/embedding")
+      const { recordEmbeddingStaleMarker } = await import("./ingest-write")
       const {
         isRootStructuralWikiPagePath,
         normalizeProjectWikiMarkdownPath,
@@ -1517,19 +1529,18 @@ async function autoIngestImpl(
         const wikiPath = normalizeProjectWikiMarkdownPath(pp, wpath)
         const legacyId = wikiPath.split("/").pop()?.replace(/\.md$/, "") ?? ""
         if (!legacyId || isRootStructuralWikiPagePath(pp, wikiPath)) continue
-        const pageId = wikiPathToVectorPageId(pp, wpath)
         try {
           const content = await readFile(`${pp}/${wpath}`)
-          const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
-          const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
-          const title = titleMatch ? titleMatch[1].trim() : titleFallback
-          await embedPage(pp, pageId, title, content, embCfg)
-        } catch {
-          // non-critical
+          const status = await recordEmbeddingStaleMarker(wikiPath, content)
+          if (status === "runtime-disabled") {
+            await legacyInlineEmbedPage(pp, wikiPathToVectorPageId(pp, wpath), wikiPath, content, embCfg)
+          }
+        } catch (err) {
+          console.warn(`[ingest] Failed to read "${wikiPath}" for embedding marker:`, err)
         }
       }
     } catch {
-      // embedding module not available
+      // embedding marker module not available
     }
   }
 
@@ -1802,7 +1813,7 @@ async function reembedRestoredWikiPage(
   const embCfg = useWikiStore.getState().embeddingConfig
   if (!embCfg.enabled || !embCfg.model) return
   try {
-    const { embedPage } = await import("@/lib/embedding")
+    const { recordEmbeddingStaleMarker } = await import("./ingest-write")
     const {
       isRootStructuralWikiPagePath,
       normalizeProjectWikiMarkdownPath,
@@ -1810,12 +1821,38 @@ async function reembedRestoredWikiPage(
     } = await import("@/lib/wiki-page-identity")
     const wikiPath = normalizeProjectWikiMarkdownPath(projectPath, path)
     if (isRootStructuralWikiPagePath(projectPath, wikiPath)) return
-    const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
-    const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
-    const title = titleMatch ? titleMatch[1].trim() : titleFallback
-    await embedPage(projectPath, wikiPathToVectorPageId(projectPath, path), title, content, embCfg)
+    const status = await recordEmbeddingStaleMarker(wikiPath, content)
+    if (status === "runtime-disabled") {
+      await legacyInlineEmbedPage(projectPath, wikiPathToVectorPageId(projectPath, path), wikiPath, content, embCfg)
+    }
   } catch {
-    // embedding refresh is best-effort during self-undo cleanup
+    // embedding stale marker is best-effort during self-undo cleanup
+  }
+}
+
+/**
+ * Pre-PR2 inline embed path, kept as an explicit fallback for when the
+ * work-runtime feature flag is off (the default) and
+ * `recordEmbeddingStaleMarker` therefore can't hand the page to any
+ * consumer — see that function's doc comment (ingest-write.ts) for why
+ * this fallback is mandatory rather than a nice-to-have. Identical
+ * title-extraction logic to what step 6 used to do inline.
+ */
+async function legacyInlineEmbedPage(
+  projectPath: string,
+  pageId: string,
+  wikiPath: string,
+  content: string,
+  embCfg: EmbeddingConfig,
+): Promise<void> {
+  try {
+    const { embedPage } = await import("@/lib/embedding")
+    const { extractPageTitle } = await import("@/lib/wiki-page-identity")
+    const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
+    const title = extractPageTitle(content, titleFallback)
+    await embedPage(projectPath, pageId, title, content, embCfg)
+  } catch (err) {
+    console.warn(`[ingest] Legacy inline embed fallback failed for "${wikiPath}":`, err)
   }
 }
 

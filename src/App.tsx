@@ -433,6 +433,20 @@ function App() {
         console.error("Failed to restore dedup queue:", err)
       }
       if (isStale()) return
+      // Start the embedding-consumer derived-rebuild job poller (SPEC-6
+      // PR2). Unlike scheduled import this always runs (not gated by a
+      // per-project enabled flag) — it only does work when there are
+      // pending "embedding" markers, which requires embedding to be
+      // configured in the first place. Must start after ingest queue
+      // restore (above) so its ingest-busy backoff check has a live
+      // module to query.
+      try {
+        const { startEmbeddingConsumer } = await import("@/lib/derived-rebuild/embedding-consumer")
+        if (isStale()) return
+        startEmbeddingConsumer(proj)
+      } catch (err) {
+        console.error("Failed to start embedding consumer:", err)
+      }
       // Load per-project scheduled import config
       try {
         const savedScheduledImport = await loadScheduledImportConfig(proj.path)

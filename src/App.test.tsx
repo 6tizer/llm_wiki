@@ -123,7 +123,7 @@ vi.mock("@/lib/mineru-config", () => ({ normalizeMineruConfig: vi.fn((c: unknown
 // made controllable) so it can execute for real without touching disk,
 // the vector store, or file watchers.
 const ingestQueueMocks = vi.hoisted(() => ({
-  restoreQueue: vi.fn(async () => undefined),
+  restoreQueue: vi.fn(async (_id: string, _path: string) => undefined),
   pauseQueue: vi.fn(async () => undefined),
 }))
 vi.mock("@/lib/ingest-queue", () => ingestQueueMocks)
@@ -138,6 +138,15 @@ const scheduledImportMocks = vi.hoisted(() => ({
   stopScheduledImport: vi.fn(),
 }))
 vi.mock("@/lib/scheduled-import", () => scheduledImportMocks)
+// SPEC-6 PR2: mirrors scheduledImportMocks above — without this mock,
+// handleProjectOpened's dynamic `import("@/lib/derived-rebuild/
+// embedding-consumer")` would load the REAL module and start a genuine
+// setInterval poll loop that outlives individual tests in this file.
+const embeddingConsumerMocks = vi.hoisted(() => ({
+  startEmbeddingConsumer: vi.fn(),
+  stopEmbeddingConsumer: vi.fn(),
+}))
+vi.mock("@/lib/derived-rebuild/embedding-consumer", () => embeddingConsumerMocks)
 const projectFileSyncMocks = vi.hoisted(() => ({
   startProjectFileSync: vi.fn(async () => undefined),
   stopProjectFileSync: vi.fn(async () => undefined),
@@ -708,6 +717,53 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
       projB,
       expect.objectContaining({ enabled: true }),
     )
+    expect(useWikiStore.getState().project?.id).toBe("b")
+
+    unmount(root)
+  })
+
+  it("P1c (SPEC-6 PR2): stale embedding-consumer startup work cannot land after a newer project is queued", async () => {
+    const { root } = renderApp()
+    await flush()
+
+    const onSelectProject = welcomeScreenProps.current!.onSelectProject
+    const projA = project("a", "/tmp/a")
+    const projB = project("b", "/tmp/b")
+    fsMocks.openProject.mockImplementation(async (path: string) =>
+      path === projA.path ? projA : projB,
+    )
+
+    // startEmbeddingConsumer's own isStale() checkpoint sits right after
+    // ingest-queue restoreQueue (App.tsx) — stall THAT for A specifically
+    // so B can be queued while A is still short of reaching its own
+    // startEmbeddingConsumer call, mirroring the loadScheduledImportConfig
+    // stall the sibling scheduled-import test above uses for the same
+    // checkpoint shape.
+    const delayedARestore = deferred<undefined>()
+    ingestQueueMocks.restoreQueue.mockImplementation(async (_id: string, path: string) =>
+      path === projA.path ? delayedARestore.promise : undefined,
+    )
+
+    let pA!: Promise<void>
+    act(() => {
+      pA = onSelectProject(projA)
+    })
+    await flush()
+
+    let pB!: Promise<void>
+    act(() => {
+      pB = onSelectProject(projB)
+    })
+    await flush()
+
+    await act(async () => {
+      delayedARestore.resolve(undefined)
+    })
+    await flush(30)
+    await Promise.allSettled([pA, pB])
+
+    expect(embeddingConsumerMocks.startEmbeddingConsumer).not.toHaveBeenCalledWith(projA)
+    expect(embeddingConsumerMocks.startEmbeddingConsumer).toHaveBeenCalledWith(projB)
     expect(useWikiStore.getState().project?.id).toBe("b")
 
     unmount(root)

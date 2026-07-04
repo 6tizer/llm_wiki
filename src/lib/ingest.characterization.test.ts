@@ -120,12 +120,29 @@ vi.mock("./llm-client", () => ({
 }))
 
 vi.mock("@/lib/embedding", () => ({
-  embedPage: vi.fn(async () => {}),
+  embedPage: vi.fn(async () => ({ indexed: 0, failed: 0 })),
   removePageEmbedding: vi.fn(async () => {}),
 }))
 
+// SPEC-6 PR2: ingest records an "embedding" derived-stale marker instead of
+// embedding inline WHEN the work-runtime feature flag is on — consumed
+// later by embedding-consumer.ts. Default-mocked to "recorded" (flag on);
+// individual tests override to "runtime-disabled" to exercise the P0
+// regression-lock fallback (flag off, the actual default — see
+// legacyInlineEmbedPage in ingest.ts). Stub only `recordEmbeddingStaleMarker`
+// — every other ingest-write.ts export (buildPageMerger,
+// injectImagesIntoSourceSummary, tryReadFile, reembedSourceSummary) keeps
+// running for real, unchanged from before this mock existed.
+vi.mock("./ingest-write", async () => {
+  const actual = await vi.importActual<typeof import("./ingest-write")>("./ingest-write")
+  return { ...actual, recordEmbeddingStaleMarker: vi.fn(async () => "recorded" as const) }
+})
+
 import { autoIngest, executeIngestWrites } from "./ingest"
 import { streamChat } from "./llm-client"
+import { embedPage } from "@/lib/embedding"
+import { recordEmbeddingStaleMarker } from "./ingest-write"
+import { wikiPathToVectorPageId } from "./wiki-page-identity"
 import { saveIngestCache } from "@/lib/ingest-cache"
 import { sourceSummarySlugFromIdentity } from "@/lib/source-identity"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -134,6 +151,8 @@ import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 
 const mockStreamChat = vi.mocked(streamChat)
+const mockEmbedPage = vi.mocked(embedPage)
+const mockRecordEmbeddingStaleMarker = vi.mocked(recordEmbeddingStaleMarker)
 
 const SUBSTANTIVE_SOURCE =
   "This is a detailed source document with enough substantive prose to avoid the low-quality-source guard. It discusses several important ideas across multiple sentences so the pipeline treats it as real content worth ingesting."
@@ -252,6 +271,14 @@ beforeEach(() => {
   reviewResponse = ""
   mergeMode = "success"
   mockStreamChat.mockClear()
+  mockEmbedPage.mockClear()
+  // mockReset (not mockClear): A2c overrides this to "runtime-disabled" via
+  // mockResolvedValue (a persistent override, unlike mockResolvedValueOnce)
+  // to simulate the flag being off for every written page in that test —
+  // reset the implementation back to the "flag on" default here so that
+  // doesn't leak into later tests.
+  mockRecordEmbeddingStaleMarker.mockReset()
+  mockRecordEmbeddingStaleMarker.mockResolvedValue("recorded")
 })
 
 const cleanups: Array<() => Promise<void>> = []
@@ -346,6 +373,74 @@ describe("A. autoIngestImpl", () => {
     expect(written.length).toBeGreaterThan(0)
     for (const p of written) {
       expect(await fileExists(`${tmp.path}/${p}`)).toBe(true)
+    }
+  })
+
+  it("A2b (SPEC-6 PR2): with embedding enabled, ingest marks each written page's embedding stale instead of embedding inline, and skips structural pages", async () => {
+    const tmp = track(await seedProject("a2b"))
+    useWikiStore.setState({
+      embeddingConfig: { enabled: true, endpoint: "http://x", apiKey: "", model: "test-embed" },
+    })
+    await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
+    generationResponse = [
+      sourceSummaryBlock("doc.md"),
+      fileBlock(
+        "wiki/concepts/topic-a2b.md",
+        ["type: concept", 'title: "Topic A2b"', "created: 2026-05-01", "updated: 2026-05-01", 'sources: ["doc.md"]', "tags: []", "related: []"],
+        ["# Topic A2b", "", "Body content generated for the embedding-marker scenario."],
+      ),
+    ].join("\n\n")
+
+    const written = await autoIngest(tmp.path, `${tmp.path}/raw/sources/doc.md`, useWikiStore.getState().llmConfig)
+    expect(written.length).toBeGreaterThan(0)
+
+    // Ingest completion no longer waits on / calls embedding directly —
+    // that's now the embedding-consumer job's job.
+    expect(mockEmbedPage).not.toHaveBeenCalled()
+
+    // Every non-structural written page got its embedding marked stale.
+    expect(mockRecordEmbeddingStaleMarker).toHaveBeenCalledTimes(written.length)
+    const markedPaths = mockRecordEmbeddingStaleMarker.mock.calls.map(([affectedPath]) => affectedPath)
+    for (const p of written) {
+      expect(markedPaths).toContain(p)
+    }
+    // Root structural pages are never marked even if somehow written.
+    expect(markedPaths).not.toContain("wiki/index.md")
+    expect(markedPaths).not.toContain("wiki/overview.md")
+  })
+
+  it("A2c (P0 regression lock): with the work-runtime flag off (the actual default), ingest still embeds every written page inline", async () => {
+    const tmp = track(await seedProject("a2c"))
+    useWikiStore.setState({
+      embeddingConfig: { enabled: true, endpoint: "http://x", apiKey: "", model: "test-embed" },
+    })
+    // recordEmbeddingStaleMarker signals "runtime-disabled" exactly like it
+    // does for real when LLM_WIKI_CORE_WORK_RUNTIME_ENABLED isn't set — the
+    // actual out-of-the-box state for every user. Before this regression
+    // lock, that silently meant zero embeddings ever happened.
+    mockRecordEmbeddingStaleMarker.mockResolvedValue("runtime-disabled")
+    await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
+    generationResponse = [
+      sourceSummaryBlock("doc.md"),
+      fileBlock(
+        "wiki/concepts/topic-a2c.md",
+        ["type: concept", 'title: "Topic A2c"', "created: 2026-05-01", "updated: 2026-05-01", 'sources: ["doc.md"]', "tags: []", "related: []"],
+        ["# Topic A2c", "", "Body content generated for the runtime-disabled fallback scenario."],
+      ),
+    ].join("\n\n")
+
+    const written = await autoIngest(tmp.path, `${tmp.path}/raw/sources/doc.md`, useWikiStore.getState().llmConfig)
+    expect(written.length).toBeGreaterThan(0)
+
+    // The marker attempt still happens (and still reports disabled)...
+    expect(mockRecordEmbeddingStaleMarker).toHaveBeenCalledTimes(written.length)
+    // ...but every one of those pages falls back to the legacy inline
+    // embedPage call so the default-configuration user still gets
+    // embeddings, exactly as before SPEC-6 PR2.
+    expect(mockEmbedPage).toHaveBeenCalledTimes(written.length)
+    const embeddedPaths = mockEmbedPage.mock.calls.map(([, pageId]) => pageId)
+    for (const p of written) {
+      expect(embeddedPaths).toContain(wikiPathToVectorPageId(tmp.path, p))
     }
   })
 

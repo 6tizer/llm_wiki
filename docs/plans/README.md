@@ -62,6 +62,7 @@
 | [SPEC-6/prs-implementation-plan.md](./SPEC-6/prs-implementation-plan.md) | Wave 3 derived 轨执行总方案：PR1-PR6 顺序、lane/gate 加权、三轨并行协调（runtime_db 窗口）。 | active |
 | [SPEC-6/pr1-marker-consumption-infrastructure-plan.md](./SPEC-6/pr1-marker-consumption-infrastructure-plan.md) | SPEC-6 PR1 执行计划：marker 状态流转/claim 折叠/游标/毒 marker 收敛（含 P0 修订与 PR2+ 消费者契约）。 | merged |
 | [SPEC-6/pr1-adversarial-matrix.md](./SPEC-6/pr1-adversarial-matrix.md) | SPEC-6 PR1 并发场景矩阵（design-first gate 凭据），Reviewer 逐格验证记录的依据。 | evidence |
+| [SPEC-6/pr2-embedding-rebuild-plan.md](./SPEC-6/pr2-embedding-rebuild-plan.md) | SPEC-6 PR2 执行计划：embedding 移出 ingest 链、marker 驱动消费循环、方案 A 传统路径接线（含 work-runtime 禁用回退与 P0 教训）。 | merged |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | planned |
 | [spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md) | Swift/SwiftUI native shell 回填锚点；等 core boundary 稳定后进入。 | deferred / gated |
