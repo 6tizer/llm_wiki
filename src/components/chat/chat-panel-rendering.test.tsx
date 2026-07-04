@@ -318,6 +318,57 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("merges a batch tool event into existing toolCalls instead of overwriting them (SPEC-7 PR2 matrix A16)", async () => {
+    setupActiveProjectConversation({ storeMode: "agent" })
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    const callbacks = streamAgentMock.mock.calls[0]?.[2] as {
+      onToolEvent: (event: Record<string, unknown>) => void
+    }
+    const assistantMessageId = useChatStore
+      .getState()
+      .messages.find((m) => m.mode === "agent" && m.role === "assistant")?.id
+    expect(assistantMessageId).toBeTruthy()
+
+    act(() => {
+      // An earlier individual tool call (e.g. a wiki write) lands first.
+      callbacks.onToolEvent({
+        phase: "post",
+        toolName: "mcp__llm_wiki__update_page",
+        toolUseId: "tool-1",
+        ok: true,
+      })
+    })
+    act(() => {
+      // A later batch event (e.g. a parallel tool-call announcement) must
+      // not wipe out the earlier write call — the rewind fail-closed gate
+      // depends on seeing every recorded wiki tool call, not just the
+      // latest batch.
+      callbacks.onToolEvent({
+        phase: "batch",
+        toolCalls: [
+          { toolName: "mcp__llm_wiki__read_page", toolUseId: "tool-2" },
+        ],
+      })
+    })
+
+    const toolCalls = useChatStore
+      .getState()
+      .messages.find((m) => m.id === assistantMessageId)?.toolCalls
+    expect(toolCalls?.map((call) => call.toolName)).toEqual(
+      expect.arrayContaining([
+        "mcp__llm_wiki__update_page",
+        "mcp__llm_wiki__read_page",
+      ]),
+    )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("does not start duplicate explicit QA saves while one is in flight", async () => {
     setupActiveProjectConversation()
     let resolveSave: (value: { ok: boolean; saved: boolean }) => void = () => undefined
