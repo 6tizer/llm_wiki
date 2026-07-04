@@ -24,21 +24,23 @@ describe("agent stream integration helpers", () => {
     expect(sdkBlocksToText(message.message.content)).toBe("hello")
   })
 
-  it("detects SDK compact context summaries", () => {
+  it("detects SDK compact boundary system messages", () => {
     const message: SDKMessage = {
-      type: "assistant",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "We need to compact this context because it has run out. Summary follows.",
-          },
-        ],
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: {
+        post_tokens: 1200,
       },
     }
 
     expect(isSdkCompactSummaryMessage(message)).toBe(true)
+  })
+
+  it("detects compact boundary even when compact_metadata is absent", () => {
+    expect(isSdkCompactSummaryMessage({
+      type: "system",
+      subtype: "compact_boundary",
+    })).toBe(true)
   })
 
   it("does not treat ordinary assistant replies as compact summaries", () => {
@@ -74,21 +76,35 @@ describe("agent stream integration helpers", () => {
     })).toBe(false)
   })
 
-  it("detects compacted and summarizing context variants", () => {
+  it("does not classify assistant context text via regex", () => {
     expect(isSdkCompactSummaryMessage({
       type: "assistant",
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Context compacted to continue safely." }],
       },
-    })).toBe(true)
+    })).toBe(false)
     expect(isSdkCompactSummaryMessage({
       type: "assistant",
       message: {
         role: "assistant",
         content: [{ type: "text", text: "The context window is summarizing previous turns." }],
       },
-    })).toBe(true)
+    })).toBe(false)
+  })
+
+  it("ignores non-compact system subtypes", () => {
+    expect(isSdkCompactSummaryMessage({
+      type: "system",
+      subtype: "commands_changed",
+    })).toBe(false)
+    expect(isSdkCompactSummaryMessage({
+      type: "system",
+      subtype: "unknown",
+    })).toBe(false)
+    expect(isSdkCompactSummaryMessage({
+      type: "system",
+    })).toBe(false)
   })
 
   it("extracts final stats from SDK result messages", () => {

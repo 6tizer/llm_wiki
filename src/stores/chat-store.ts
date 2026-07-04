@@ -68,6 +68,7 @@ export interface DisplayMessage {
   agentBlocks?: SDKContentBlock[]
   sessionCompact?: boolean
   agentErrorKind?: AgentErrorKind
+  agentErrorDetail?: string
   agentResourceLimit?: AgentResourceLimitPayload
   wikiChanges?: AgentWikiChangeRecord[]
   toolCalls?: AgentToolCallRecord[]
@@ -168,6 +169,7 @@ interface ClearAgentRewindableOptions {
 
 interface FinishAgentStreamMessageOptions {
   agentErrorKind?: AgentErrorKind
+  agentErrorDetail?: string
 }
 
 interface ChatState {
@@ -175,14 +177,18 @@ interface ChatState {
   activeConversationId: string | null
   messages: DisplayMessage[]
   isStreaming: boolean
+  streamingConversationId: string | null
+  streamingAgentMessageId: string | null
   streamingContent: string
   mode: "chat" | "agent" | "ingest"
   ingestSource: string | null
   maxHistoryMessages: number
   activeAgentPermissionRequest: AgentPermissionRequestRecord | null
   queuedAgentPermissionRequests: AgentPermissionRequestRecord[]
+  agentPermissionRequestsByConversation: Record<string, AgentPermissionRequestRecord[]>
   agentRewindTargets: Record<string, AgentRewindRequestRecord>
   activeAgentRewindRequest: AgentRewindRequestRecord | null
+  agentRewindRequestsByConversation: Record<string, AgentRewindRequestRecord>
   /** Per-conversation rewind-in-progress lock (SPEC-7 PR2 matrix A6): a
    * global `isStreaming` flag can't express "conversation A is mid-rewind
    * while conversation B streams normally" — sends and rewinds within the
@@ -248,6 +254,11 @@ interface ChatState {
   resolveAgentPermission: (requestId: string, decision: AgentPermissionDecision) => void
   /** Deny and clear all active/queued Agent permission requests. */
   clearAgentPermissionRequests: (decision?: AgentPermissionDecision) => void
+  /** Deny and clear pending Agent permission requests for one conversation. */
+  clearAgentPermissionRequestsForConversation: (
+    conversationId: string,
+    decision?: AgentPermissionDecision
+  ) => void
   setMode: (mode: ChatState["mode"]) => void
   setIngestSource: (path: string | null) => void
   clearMessages: () => void
@@ -300,19 +311,73 @@ function startAgentPermissionTimer(request: AgentPermissionRequestRecord): Agent
   return activeRequest
 }
 
+function permissionPresentationFor(
+  state: Pick<ChatState, "activeConversationId" | "agentPermissionRequestsByConversation">
+): Pick<ChatState, "activeAgentPermissionRequest" | "queuedAgentPermissionRequests"> {
+  const requests = state.activeConversationId
+    ? state.agentPermissionRequestsByConversation[state.activeConversationId] ?? []
+    : []
+  return {
+    activeAgentPermissionRequest: requests[0] ?? null,
+    queuedAgentPermissionRequests: requests.slice(1),
+  }
+}
+
+function rewindPresentationFor(
+  state: Pick<ChatState, "activeConversationId" | "agentRewindRequestsByConversation">
+): Pick<ChatState, "activeAgentRewindRequest"> {
+  return {
+    activeAgentRewindRequest: state.activeConversationId
+      ? state.agentRewindRequestsByConversation[state.activeConversationId] ?? null
+      : null,
+  }
+}
+
+function withPresentations(
+  state: ChatState,
+  patch: Partial<ChatState>
+): Partial<ChatState> {
+  const nextState = { ...state, ...patch }
+  return {
+    ...patch,
+    ...permissionPresentationFor(nextState),
+    ...rewindPresentationFor(nextState),
+  }
+}
+
+function fallbackPermissionDecision(decision?: AgentPermissionDecision): AgentPermissionDecision {
+  return (
+    decision ??
+    {
+      behavior: "deny" as const,
+      message: i18n.t("agent.permission.timeoutDenied"),
+      interrupt: true,
+      decisionClassification: "user_reject" as const,
+    }
+  )
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
   messages: [],
   isStreaming: false,
+  streamingConversationId: null,
+  streamingAgentMessageId: null,
   streamingContent: "",
   mode: "chat",
   ingestSource: null,
   maxHistoryMessages: 10,
   activeAgentPermissionRequest: null,
   queuedAgentPermissionRequests: [],
+  // Fact source for permission queues. The active/queued fields above are
+  // display projections for activeConversationId; write via this map only.
+  agentPermissionRequestsByConversation: {},
   agentRewindTargets: {},
   activeAgentRewindRequest: null,
+  // Fact source for per-conversation rewind dialogs. activeAgentRewindRequest
+  // is only the activeConversationId projection; write via this map only.
+  agentRewindRequestsByConversation: {},
   agentRewindLocks: {},
 
   createConversation: () => {
@@ -324,10 +389,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     }
-    set((state) => ({
-      conversations: [newConversation, ...state.conversations],
-      activeConversationId: id,
-    }))
+    set((state) =>
+      withPresentations(state, {
+        conversations: [newConversation, ...state.conversations],
+        activeConversationId: id,
+      })
+    )
     return id
   },
 
@@ -344,15 +411,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       agentSessionId: source.agentSessionId,
       agentForkSessionPending: true,
     }
-    set((state) => ({
-      conversations: [newConversation, ...state.conversations],
-      activeConversationId: id,
-      activeAgentRewindRequest: null,
-    }))
+    set((state) =>
+      withPresentations(state, {
+        conversations: [newConversation, ...state.conversations],
+        activeConversationId: id,
+      })
+    )
     return id
   },
 
-  deleteConversation: (id) =>
+  deleteConversation: (id) => {
+    get().clearAgentPermissionRequestsForConversation(id)
     set((state) => {
       const remaining = state.conversations.filter((c) => c.id !== id)
       const removedMessageIds = new Set(
@@ -365,28 +434,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ([messageId]) => !removedMessageIds.has(messageId)
         )
       )
+      const nextPermissionRequests = { ...state.agentPermissionRequestsByConversation }
+      delete nextPermissionRequests[id]
       const newActiveId =
         state.activeConversationId === id
           ? (remaining[0]?.id ?? null)
           : state.activeConversationId
       const nextRewindLocks = { ...state.agentRewindLocks }
       delete nextRewindLocks[id]
-      return {
+      const nextRewindRequests = { ...state.agentRewindRequestsByConversation }
+      delete nextRewindRequests[id]
+      return withPresentations(state, {
         conversations: remaining,
         messages: state.messages.filter((m) => m.conversationId !== id),
         activeConversationId: newActiveId,
         agentRewindTargets: nextRewindTargets,
         agentRewindLocks: nextRewindLocks,
-        activeAgentRewindRequest:
-          state.activeAgentRewindRequest &&
-          removedMessageIds.has(state.activeAgentRewindRequest.chatMessageId)
-            ? null
-            : state.activeAgentRewindRequest,
-      }
-    }),
+        agentPermissionRequestsByConversation: nextPermissionRequests,
+        agentRewindRequestsByConversation: nextRewindRequests,
+      })
+    })
+  },
 
   setActiveConversation: (id) =>
-    set({ activeConversationId: id, activeAgentRewindRequest: null }),
+    set((state) =>
+      withPresentations(state, {
+        activeConversationId: id,
+      })
+    ),
 
   renameConversation: (id, title) =>
     set((state) => ({
@@ -456,7 +531,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setConversations: (conversations) => set({ conversations }),
 
-  setStreaming: (isStreaming) => set({ isStreaming }),
+  setStreaming: (isStreaming) =>
+    set((state) => ({
+      isStreaming,
+      streamingConversationId: isStreaming ? state.activeConversationId : null,
+      streamingAgentMessageId: isStreaming ? state.streamingAgentMessageId : null,
+    })),
 
   appendStreamToken: (token) =>
     set((state) => ({
@@ -474,6 +554,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (!targetId) {
         return {
           isStreaming: false,
+          streamingConversationId: null,
+          streamingAgentMessageId: null,
           streamingContent: "",
         }
       }
@@ -490,6 +572,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       return {
         isStreaming: false,
+        streamingConversationId: null,
+        streamingAgentMessageId: null,
         streamingContent: "",
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
@@ -509,6 +593,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (!targetId) {
         return {
           isStreaming: false,
+          streamingConversationId: null,
+          streamingAgentMessageId: null,
           streamingContent: "",
         }
       }
@@ -530,6 +616,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       return {
         isStreaming: false,
+        streamingConversationId: null,
+        streamingAgentMessageId: null,
         streamingContent: "",
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
@@ -557,6 +645,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (!activeConversationId) {
         return {
           isStreaming: false,
+          streamingConversationId: null,
+          streamingAgentMessageId: null,
           streamingContent: "",
         }
       }
@@ -573,6 +663,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       return {
         isStreaming: true,
+        streamingConversationId: activeConversationId,
+        streamingAgentMessageId: messageId,
         streamingContent: "",
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
@@ -603,14 +695,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // time — corrupting the wrong conversation on a mid-stream switch.
       const target = state.messages.find((m) => m.id === messageId)
       const targetConversationId = target?.conversationId ?? state.activeConversationId
+      const finishesCurrentStream = state.streamingAgentMessageId
+        ? state.streamingAgentMessageId === messageId
+        : state.isStreaming
       return {
-        isStreaming: false,
-        streamingContent: "",
+        isStreaming: finishesCurrentStream ? false : state.isStreaming,
+        streamingConversationId: finishesCurrentStream ? null : state.streamingConversationId,
+        streamingAgentMessageId: finishesCurrentStream ? null : state.streamingAgentMessageId,
+        streamingContent: finishesCurrentStream ? "" : state.streamingContent,
         messages: state.messages.map((m) =>
           m.id === messageId
             ? {
                 ...m,
-                content,
+                content: options?.agentErrorKind ? "" : content,
                 mode: "agent" as const,
                 agentSessionId: stats?.agentSessionId ?? m.agentSessionId,
                 costUsd: stats?.costUsd,
@@ -619,6 +716,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 durationMs: stats?.durationMs,
                 numTurns: stats?.numTurns,
                 agentErrorKind: options?.agentErrorKind,
+                agentErrorDetail: options?.agentErrorDetail,
               }
             : m
         ),
@@ -722,22 +820,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (!state.agentRewindTargets[messageId]) return {}
       const agentRewindTargets = { ...state.agentRewindTargets }
       delete agentRewindTargets[messageId]
-      return {
-        agentRewindTargets,
-        activeAgentRewindRequest:
-          !options?.keepActiveRequest &&
-          state.activeAgentRewindRequest?.chatMessageId === messageId
-            ? null
-            : state.activeAgentRewindRequest,
+      const agentRewindRequestsByConversation = Object.fromEntries(
+        Object.entries(state.agentRewindRequestsByConversation).filter(
+          ([, request]) => request.chatMessageId !== messageId || options?.keepActiveRequest
+        )
+      )
+      if (options?.keepActiveRequest) {
+        return {
+          agentRewindTargets,
+          agentRewindRequestsByConversation,
+          activeAgentRewindRequest: state.activeAgentRewindRequest,
+        }
       }
+      return withPresentations(state, {
+        agentRewindTargets,
+        agentRewindRequestsByConversation,
+      })
     }),
 
   requestAgentRewind: (messageId) =>
-    set((state) => ({
-      activeAgentRewindRequest: state.agentRewindTargets[messageId] ?? null,
-    })),
+    set((state) => {
+      const request = state.agentRewindTargets[messageId]
+      if (!request) {
+        const nextRequests = { ...state.agentRewindRequestsByConversation }
+        if (state.activeConversationId) delete nextRequests[state.activeConversationId]
+        return withPresentations(state, {
+          agentRewindRequestsByConversation: nextRequests,
+        })
+      }
+      const nextRequests = {
+        ...state.agentRewindRequestsByConversation,
+        [request.conversationId]: request,
+      }
+      return withPresentations(state, {
+        agentRewindRequestsByConversation: nextRequests,
+      })
+    }),
 
-  clearAgentRewindRequest: () => set({ activeAgentRewindRequest: null }),
+  clearAgentRewindRequest: () =>
+    set((state) => {
+      if (!state.activeConversationId) return { activeAgentRewindRequest: null }
+      const nextRequests = { ...state.agentRewindRequestsByConversation }
+      delete nextRequests[state.activeConversationId]
+      return withPresentations(state, {
+        agentRewindRequestsByConversation: nextRequests,
+      })
+    }),
 
   setAgentRewindLock: (conversationId, locked) =>
     set((state) => {
@@ -774,7 +902,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ([messageId]) => !removedIds.has(messageId)
         )
       )
-      return {
+      const agentRewindRequestsByConversation = { ...state.agentRewindRequestsByConversation }
+      const activeRequest = agentRewindRequestsByConversation[conversationId]
+      if (activeRequest && removedIds.has(activeRequest.chatMessageId)) {
+        delete agentRewindRequestsByConversation[conversationId]
+      }
+      return withPresentations(state, {
         messages: state.messages.filter(
           (m) => m.conversationId !== conversationId || keepIds.has(m.id)
         ),
@@ -789,38 +922,51 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : c
         ),
         agentRewindTargets,
-        activeAgentRewindRequest:
-          state.activeAgentRewindRequest &&
-          removedIds.has(state.activeAgentRewindRequest.chatMessageId)
-            ? null
-            : state.activeAgentRewindRequest,
-      }
+        agentRewindRequestsByConversation,
+      })
     })
+    if (applied) {
+      get().clearAgentPermissionRequestsForConversation(conversationId, {
+        behavior: "deny",
+        interrupt: true,
+        message: i18n.t("agent.permission.stopped"),
+        decisionClassification: "user_reject",
+      })
+    }
     return applied
   },
 
   requestAgentPermission: (payload, timeoutMs = DEFAULT_AGENT_PERMISSION_TIMEOUT_MS) =>
     new Promise<AgentPermissionDecision>((resolve) => {
       const now = Date.now()
+      // Defensive bucket for malformed callers. chat-panel always supplies
+      // conversationId; this bucket is never displayed and exits by timeout.
+      const conversationId = payload.conversationId ?? get().activeConversationId ?? "__unknown__"
       const request: AgentPermissionRequestRecord = {
         ...payload,
+        conversationId,
         receivedAt: now,
         expiresAt: 0,
         timeoutMs,
       }
       pendingAgentPermissionResolvers.set(request.requestId, { resolve, timer: null })
-
-      if (!get().activeAgentPermissionRequest) {
-        set({ activeAgentPermissionRequest: startAgentPermissionTimer(request) })
-        return
-      }
-
-      set((state) => ({
-        queuedAgentPermissionRequests: [
-          ...state.queuedAgentPermissionRequests,
-          request,
-        ],
-      }))
+      set((state) => {
+        const existingRequests =
+          state.agentPermissionRequestsByConversation[conversationId] ?? []
+        const queuedRequest = existingRequests.length === 0
+          ? startAgentPermissionTimer(request)
+          : request
+        const nextByConversation = {
+          ...state.agentPermissionRequestsByConversation,
+          [conversationId]: [
+            ...existingRequests,
+            queuedRequest,
+          ],
+        }
+        return withPresentations(state, {
+          agentPermissionRequestsByConversation: nextByConversation,
+        })
+      })
     }),
 
   resolveAgentPermission: (requestId, decision) => {
@@ -831,33 +977,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pending.resolve(decision)
     }
 
-    const state = get()
-    const activeMatches = state.activeAgentPermissionRequest?.requestId === requestId
-    const remainingQueue = state.queuedAgentPermissionRequests.filter(
-      (request) => request.requestId !== requestId
-    )
-    if (!activeMatches) {
-      set({ queuedAgentPermissionRequests: remainingQueue })
-      return
-    }
-    const [nextRequest, ...nextQueue] = remainingQueue
-    set({
-      activeAgentPermissionRequest: nextRequest
-        ? startAgentPermissionTimer(nextRequest)
-        : null,
-      queuedAgentPermissionRequests: nextQueue,
+    set((current) => {
+      const nextByConversation = Object.fromEntries(
+        Object.entries(current.agentPermissionRequestsByConversation)
+          .map(([conversationId, requests]) => {
+            const requestIndex = requests.findIndex(
+              (request) => request.requestId === requestId
+            )
+            if (requestIndex === -1) return [conversationId, requests] as const
+            const remaining = requests.filter(
+              (request) => request.requestId !== requestId
+            )
+            if (requestIndex === 0 && remaining[0]) {
+              return [
+                conversationId,
+                [startAgentPermissionTimer(remaining[0]), ...remaining.slice(1)],
+              ] as const
+            }
+            return [conversationId, remaining] as const
+          })
+          .filter(([, requests]) => requests.length > 0)
+      )
+      return withPresentations(current, {
+        agentPermissionRequestsByConversation: nextByConversation,
+      })
     })
   },
 
   clearAgentPermissionRequests: (decision) => {
-    const fallbackDecision =
-      decision ??
-      {
-        behavior: "deny" as const,
-        message: i18n.t("agent.permission.timeoutDenied"),
-        interrupt: true,
-        decisionClassification: "user_reject" as const,
-      }
+    const fallbackDecision = fallbackPermissionDecision(decision)
 
     for (const [requestId, pending] of pendingAgentPermissionResolvers) {
       pendingAgentPermissionResolvers.delete(requestId)
@@ -867,6 +1015,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       activeAgentPermissionRequest: null,
       queuedAgentPermissionRequests: [],
+      agentPermissionRequestsByConversation: {},
+    })
+  },
+
+  clearAgentPermissionRequestsForConversation: (conversationId, decision) => {
+    const fallbackDecision = fallbackPermissionDecision(decision)
+    const requests = get().agentPermissionRequestsByConversation[conversationId] ?? []
+    for (const request of requests) {
+      const pending = pendingAgentPermissionResolvers.get(request.requestId)
+      if (!pending) continue
+      pendingAgentPermissionResolvers.delete(request.requestId)
+      if (pending.timer) clearTimeout(pending.timer)
+      pending.resolve(fallbackDecision)
+    }
+    set((state) => {
+      const nextByConversation = { ...state.agentPermissionRequestsByConversation }
+      delete nextByConversation[conversationId]
+      return withPresentations(state, {
+        agentPermissionRequestsByConversation: nextByConversation,
+      })
     })
   },
 

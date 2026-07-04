@@ -49,11 +49,16 @@ export async function resetProjectState(): Promise<void> {
     mode: "chat",
     ingestSource: null,
     isStreaming: false,
+    streamingConversationId: null,
+    streamingAgentMessageId: null,
     streamingContent: "",
     activeAgentPermissionRequest: null,
     queuedAgentPermissionRequests: [],
+    agentPermissionRequestsByConversation: {},
     agentRewindTargets: {},
     activeAgentRewindRequest: null,
+    agentRewindRequestsByConversation: {},
+    agentRewindLocks: {},
   })
 
   useReviewStore.getState().setItems([])

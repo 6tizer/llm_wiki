@@ -124,6 +124,8 @@ export type AgentPermissionPolicy =
 
 export interface AgentPermissionRequestPayload {
 	requestId: string;
+	conversationId?: string;
+	streamId?: string;
 	toolName: string;
 	inputPreview: Record<string, unknown>;
 	suggestions?: unknown[];

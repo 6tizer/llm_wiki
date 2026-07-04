@@ -201,10 +201,16 @@ describe("ChatPanel agent mode rendering", () => {
       activeConversationId: null,
       messages: [],
       isStreaming: false,
+      streamingConversationId: null,
+      streamingAgentMessageId: null,
       streamingContent: "",
       mode: "chat",
+      activeAgentPermissionRequest: null,
+      queuedAgentPermissionRequests: [],
+      agentPermissionRequestsByConversation: {},
       agentRewindTargets: {},
       activeAgentRewindRequest: null,
+      agentRewindRequestsByConversation: {},
       agentRewindLocks: {},
     })
     useWikiStore.setState({ project: null })
@@ -254,6 +260,61 @@ describe("ChatPanel agent mode rendering", () => {
     expect(useChatStore.getState().messages.map((message) => message.content)).not.toContain(
       "/save-qa",
     )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("stops the streaming conversation's pending permissions after switching conversations", async () => {
+    useWikiStore.setState({
+      project: { id: "project-1", name: "Project", path: "/project" },
+    })
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-a", title: "A", createdAt: 1, updatedAt: 1 },
+        { id: "conv-b", title: "B", createdAt: 2, updatedAt: 2 },
+      ],
+      activeConversationId: "conv-b",
+      messages: [
+        { id: "a-user", conversationId: "conv-a", role: "user", content: "A", timestamp: 1 },
+        { id: "b-user", conversationId: "conv-b", role: "user", content: "B", timestamp: 2 },
+      ],
+      isStreaming: true,
+      streamingConversationId: "conv-a",
+      streamingAgentMessageId: "a-assistant",
+      streamingContent: "",
+      mode: "agent",
+    })
+    const permissionA = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-a",
+      conversationId: "conv-a",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-a",
+    })
+    const permissionB = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-b",
+      conversationId: "conv-b",
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-b",
+    })
+
+    const { container, root } = renderChatPanel()
+    const stopButton = findButtonByText(container, i18n.t("chat.stopGeneration"))
+    await act(async () => {
+      stopButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    await expect(permissionA).resolves.toMatchObject({
+      behavior: "deny",
+      interrupt: true,
+    })
+    useChatStore.getState().setActiveConversation("conv-b")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-b")
+    useChatStore.getState().resolveAgentPermission("permission-b", { behavior: "allow" })
+    await expect(permissionB).resolves.toMatchObject({ behavior: "allow" })
 
     act(() => root.unmount())
     container.remove()

@@ -7,6 +7,8 @@ export type AgentErrorKind =
   | "profile_unavailable"
   | "timeout"
   | "max_turns_exceeded"
+  | "model_not_found"
+  | "network"
   | "failed"
 export type AgentRunPhase = "idle" | "connecting" | "running"
 
@@ -78,6 +80,33 @@ export function classifyAgentError(message: string): AgentErrorKind {
     return "max_turns_exceeded"
   }
   if (
+    lower.includes("model not found") ||
+    lower.includes("unknown model") ||
+    lower.includes("model is not supported") ||
+    lower.includes("model not supported") ||
+    lower.includes("not a supported model") ||
+    (lower.includes("model") && lower.includes("does not exist")) ||
+    // Claude Code CLI's own wording for a bad --model value — the exact
+    // text observed in production (SPEC-12 audit A3, deepseek-v4-flash).
+    lower.includes("issue with the selected model") ||
+    (lower.includes("model") && lower.includes("may not exist")) ||
+    lower.includes("no such model")
+  ) {
+    return "model_not_found"
+  }
+  if (
+    lower.includes("econnrefused") ||
+    lower.includes("fetch failed") ||
+    lower.includes("etimedout") ||
+    lower.includes("dns lookup") ||
+    lower.includes("getaddrinfo") ||
+    lower.includes("enotfound") ||
+    lower.includes("network error") ||
+    lower.includes("network request failed")
+  ) {
+    return "network"
+  }
+  if (
     lower.includes("sidecar dist missing") ||
     lower.includes("sidecar binary missing") ||
     lower.includes("failed to spawn agent sidecar") ||
@@ -104,16 +133,6 @@ export function agentErrorKindFromError(err: unknown): AgentErrorKind {
   if (err instanceof AgentRunError) return err.kind
   const message = err instanceof Error ? err.message : String(err)
   return classifyAgentError(message)
-}
-
-/** Map an Agent error kind to the i18n key used for assistant error content. */
-export function agentErrorI18nKey(kind: AgentErrorKind): string {
-  if (kind === "unavailable") return "agent.error.unavailable"
-  if (kind === "missing_api_key") return "agent.error.missingApiKey"
-  if (kind === "profile_unavailable") return "agent.error.profileUnavailable"
-  if (kind === "timeout") return "agent.error.timeout"
-  if (kind === "max_turns_exceeded") return "agent.error.maxTurnsExceeded"
-  return "agent.error.failed"
 }
 
 /** Map the current runtime Agent phase to its status-line i18n key. */

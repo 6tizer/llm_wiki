@@ -36,7 +36,6 @@ import {
 	type AgentErrorKind,
 	type AgentRunPhase,
 	agentErrorKindFromError,
-	agentErrorI18nKey,
 	agentRunPhaseI18nKey,
 	getAgentPreflightError,
 } from "@/lib/agent/agent-run-state";
@@ -481,8 +480,8 @@ export function ChatPanel() {
 	);
 	const requestAgentRewind = useChatStore((s) => s.requestAgentRewind);
 	const requestAgentPermission = useChatStore((s) => s.requestAgentPermission);
-	const clearAgentPermissionRequests = useChatStore(
-		(s) => s.clearAgentPermissionRequests,
+	const clearAgentPermissionRequestsForConversation = useChatStore(
+		(s) => s.clearAgentPermissionRequestsForConversation,
 	);
 	const agentRewindTargets = useChatStore((s) => s.agentRewindTargets);
 	// Derive active messages via selector to re-render on message changes
@@ -562,16 +561,11 @@ export function ChatPanel() {
 			let streamId: string | undefined;
 			let sawSessionCompact = false;
 
-			const formatAgentError = (kind: AgentErrorKind, detail?: string) => {
-				const key = agentErrorI18nKey(kind);
-				return key === "agent.error.failed"
-					? t(key, { error: detail || t("agent.status.failed") })
-					: t(key);
-			};
-
 			const finishAgentError = (kind: AgentErrorKind, detail?: string) => {
 				if (settled) return;
 				settled = true;
+				const finishesCurrent =
+					useChatStore.getState().streamingAgentMessageId === messageId;
 				// SPEC-7 PR2 (fixes #60): do NOT clear the rewind target here.
 				// Rewind must remain available after the turn ends (error or
 				// success) — that's the whole point of the resume-only-for-rewind
@@ -580,14 +574,17 @@ export function ChatPanel() {
 				// unavailableReason handling below.
 				finishAgentStreamMessage(
 					messageId,
-					formatAgentError(kind, detail),
+					"",
 					undefined,
 					{
 						agentErrorKind: kind,
+						agentErrorDetail: detail,
 					},
 				);
-				abortRef.current = null;
-				setAgentRunPhase("idle");
+				if (finishesCurrent) {
+					abortRef.current = null;
+					setAgentRunPhase("idle");
+				}
 			};
 
 			const preflightError = getAgentPreflightError(project, llmConfig, {
@@ -617,11 +614,15 @@ export function ChatPanel() {
 			) => {
 				if (settled) return;
 				settled = true;
+				const finishesCurrent =
+					useChatStore.getState().streamingAgentMessageId === messageId;
 				// SPEC-7 PR2 (fixes #60): see comment in finishAgentError — the
 				// rewind target must survive normal completion too.
 				finishAgentStreamMessage(messageId, content, stats);
-				abortRef.current = null;
-				setAgentRunPhase("idle");
+				if (finishesCurrent) {
+					abortRef.current = null;
+					setAgentRunPhase("idle");
+				}
 			};
 
 			const markAgentRunning = () => {
@@ -692,7 +693,11 @@ export function ChatPanel() {
 						},
 						onPermissionRequest: (payload) => {
 							markAgentRunning();
-							return requestAgentPermission(payload);
+							return requestAgentPermission({
+								...payload,
+								streamId,
+								conversationId: convId,
+							});
 						},
 						onWikiChanged: (payload) => {
 							markAgentRunning();
@@ -956,7 +961,12 @@ export function ChatPanel() {
 				setChatAgentEvents([]);
 				abortRef.current = null;
 				if (isAbortLikeError(err)) {
-					useChatStore.setState({ isStreaming: false, streamingContent: "" });
+					useChatStore.setState({
+						isStreaming: false,
+						streamingConversationId: null,
+						streamingAgentMessageId: null,
+						streamingContent: "",
+					});
 				} else {
 					const message = err instanceof Error ? err.message : String(err);
 					finalizeStream(`Error: ${message}`, undefined, convId);
@@ -980,18 +990,22 @@ export function ChatPanel() {
 		],
 	);
 	const handleStop = useCallback(() => {
+		const streamingConversationId =
+			useChatStore.getState().streamingConversationId;
 		abortRef.current?.abort();
 		abortRef.current = null;
 		setAgentRunPhase("idle");
 		setChatAgentEvents([]);
 		setStreaming(false);
-		clearAgentPermissionRequests({
-			behavior: "deny",
-			interrupt: true,
-			message: t("agent.permission.stopped"),
-			decisionClassification: "user_reject",
-		});
-	}, [clearAgentPermissionRequests, setStreaming, t]);
+		if (streamingConversationId) {
+			clearAgentPermissionRequestsForConversation(streamingConversationId, {
+				behavior: "deny",
+				interrupt: true,
+				message: t("agent.permission.stopped"),
+				decisionClassification: "user_reject",
+			});
+		}
+	}, [clearAgentPermissionRequestsForConversation, setStreaming, t]);
 	const handleRegenerate = useCallback(async () => {
 		if (isStreaming) return;
 		// Find the last user message in active conversation

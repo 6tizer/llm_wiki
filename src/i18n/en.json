@@ -290,13 +290,48 @@
       "connecting": "Connecting to Agent...",
       "running": "Agent is running..."
     },
-    "error": {
-      "unavailable": "Agent is unavailable: no project is open.",
-      "missingApiKey": "Agent needs an API key. Configure the current provider in Settings.",
-      "profileUnavailable": "No Agent-run profile is available. Check Settings > Model Profiles for Agent Chat compatibility warnings.",
-      "timeout": "Agent timed out. You can retry this request.",
-      "maxTurnsExceeded": "Agent reached the max turn limit. Split the task and continue, or raise Max turns in Settings > Agent.",
-      "failed": "Agent failed: {{error}}"
+    "errorNotice": {
+      "details": "Details",
+      "unavailable": {
+        "title": "Agent unavailable",
+        "description": "No project is open or the Agent sidecar is unavailable.",
+        "action": "Open a project and try again."
+      },
+      "missing_api_key": {
+        "title": "API key required",
+        "description": "The current provider is missing an API key.",
+        "action": "Open Settings and configure the provider credentials."
+      },
+      "profile_unavailable": {
+        "title": "No compatible Agent profile",
+        "description": "No runtime profile is currently eligible for Agent Chat.",
+        "action": "Open Settings and check Model Profiles compatibility."
+      },
+      "timeout": {
+        "title": "Agent timed out",
+        "description": "The run did not finish before the timeout.",
+        "action": "Try the request again."
+      },
+      "max_turns_exceeded": {
+        "title": "Max turns reached",
+        "description": "The run reached the configured turn limit.",
+        "action": "Split the task, continue in a smaller batch, or adjust Agent settings."
+      },
+      "model_not_found": {
+        "title": "Model not found",
+        "description": "The configured model is unavailable or not supported by the provider.",
+        "action": "Switch models or open Settings to update the model configuration."
+      },
+      "network": {
+        "title": "Network error",
+        "description": "Agent could not connect to the provider or local endpoint.",
+        "action": "Check the connection and retry."
+      },
+      "failed": {
+        "title": "Agent failed",
+        "description": "The run stopped with an unexpected error.",
+        "action": "Check the details, adjust the request, and try again."
+      }
     },
     "resourceLimit": {
       "max_files_changed": {

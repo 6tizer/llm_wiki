@@ -30,11 +30,25 @@ export function computeAgentRewindGateDecision(args: {
   conversation: Conversation | undefined
   messages: DisplayMessage[]
   isStreaming: boolean
+  streamingConversationId?: string | null
   rewindLocked: boolean
 }): AgentRewindGateDecision {
-  const { target, conversation, messages, isStreaming, rewindLocked } = args
+  const {
+    target,
+    conversation,
+    messages,
+    isStreaming,
+    streamingConversationId,
+    rewindLocked,
+  } = args
 
-  if (rewindLocked || isStreaming) {
+  // `isStreaming && streamingConversationId === null` should be unreachable
+  // because store updates set/clear them together; if observed, fail open so
+  // another conversation's rewind is not blocked by an unowned global flag.
+  if (
+    rewindLocked ||
+    (isStreaming && streamingConversationId === target.conversationId)
+  ) {
     return { allowed: false, reason: "locked" }
   }
   if (!conversation) {

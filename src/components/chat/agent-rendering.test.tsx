@@ -344,6 +344,58 @@ describe("agent message rendering", () => {
     expect(html).not.toContain("Rewind files")
   })
 
+  it("renders agent errors as a notice with raw detail collapsed", () => {
+    const detail = "Provider failed with redacted key sk-***1234"
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          content: "Agent failed.",
+          mode: "agent",
+          agentErrorKind: "model_not_found",
+          agentErrorDetail: detail,
+        })}
+      />,
+    )
+
+    expect(html).toContain("Model not found")
+    expect(html).toContain("Switch models")
+    expect(html).toContain("Details")
+    expect(html).toContain(detail)
+    expect(html).not.toContain("Agent failed: Provider failed")
+  })
+
+  it("renders legacy persisted agent errors with non-empty content through the notice", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          content: "Agent failed: old raw message",
+          mode: "agent",
+          agentErrorKind: "failed",
+          agentErrorDetail: "old raw message",
+        })}
+      />,
+    )
+
+    expect(html).toContain("Agent failed")
+    expect(html).toContain("old raw message")
+    expect(html).not.toContain("Agent failed: old raw message")
+  })
+
+  it("renders permission-deny text as normal agent output when no agentErrorKind is set", () => {
+    const html = renderToStaticMarkup(
+      <ChatMessage
+        message={assistantMessage({
+          content: "Permission denied by user.",
+          mode: "agent",
+        })}
+      />,
+    )
+
+    expect(html).toContain("Permission denied by user.")
+    expect(html).not.toContain("Agent failed")
+    expect(html).not.toContain("Details")
+  })
+
   it("uses agent block text as a fallback for references when content is empty", () => {
     const html = renderToStaticMarkup(
       <ChatMessage

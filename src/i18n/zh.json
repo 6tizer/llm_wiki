@@ -290,13 +290,48 @@
       "connecting": "正在连接 Agent...",
       "running": "Agent 正在运行..."
     },
-    "error": {
-      "unavailable": "Agent 不可用：当前未打开项目。",
-      "missingApiKey": "Agent 需要 API key。请在设置中配置当前 provider。",
-      "profileUnavailable": "没有可用的 Agent-run Profile。请在设置 > Model Profiles 查看 Agent Chat 兼容性提示。",
-      "timeout": "Agent 已超时。你可以重试这次请求。",
-      "maxTurnsExceeded": "Agent 已达到最大轮数。你可以拆分任务后继续，或在 Settings > Agent 调高最大轮数。",
-      "failed": "Agent 失败：{{error}}"
+    "errorNotice": {
+      "details": "详情",
+      "unavailable": {
+        "title": "Agent 不可用",
+        "description": "当前未打开项目，或 Agent sidecar 不可用。",
+        "action": "打开项目后重试。"
+      },
+      "missing_api_key": {
+        "title": "需要 API key",
+        "description": "当前 provider 缺少 API key。",
+        "action": "打开设置，配置 provider 凭证。"
+      },
+      "profile_unavailable": {
+        "title": "没有兼容的 Agent Profile",
+        "description": "当前没有可用于 Agent Chat 的 runtime profile。",
+        "action": "打开设置，检查 Model Profiles 兼容性。"
+      },
+      "timeout": {
+        "title": "Agent 已超时",
+        "description": "本次运行未在超时前完成。",
+        "action": "请重试这次请求。"
+      },
+      "max_turns_exceeded": {
+        "title": "已达到最大轮数",
+        "description": "本次运行达到当前配置的轮数上限。",
+        "action": "拆分任务、分批继续，或调整 Agent 设置。"
+      },
+      "model_not_found": {
+        "title": "模型不存在",
+        "description": "当前配置的模型不可用，或 provider 不支持该模型。",
+        "action": "切换模型，或打开设置更新模型配置。"
+      },
+      "network": {
+        "title": "网络错误",
+        "description": "Agent 无法连接到 provider 或本地端点。",
+        "action": "检查连接后重试。"
+      },
+      "failed": {
+        "title": "Agent 失败",
+        "description": "本次运行因未知错误停止。",
+        "action": "查看详情，调整请求后重试。"
+      }
     },
     "resourceLimit": {
       "max_files_changed": {
