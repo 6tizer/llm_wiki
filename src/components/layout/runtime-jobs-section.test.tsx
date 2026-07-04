@@ -213,6 +213,43 @@ describe("RuntimeJobsSection", () => {
     expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(2)
   })
 
+  it("resets the poll cadence after a user action instead of leaving the stale timer armed (SPEC-6 PR6 usePolling migration regression lock)", async () => {
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([job("job-running", "running")]))
+    runtimeDbMocks.runtimeJobPause.mockResolvedValue(job("job-running", "paused"))
+
+    const { container, root } = renderHarness()
+    await flush()
+    expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(1)
+
+    // Halfway through the 2s "active" cadence, the user clicks Pause.
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+    })
+    await click(container.querySelector("button[aria-label='Pause']")!)
+    await flush()
+    // The action's own refreshNow() call fetches immediately.
+    expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(2)
+
+    // The ORIGINAL timer (armed at mount for 2s, so due 1s from here) must
+    // have been cleared by refreshNow — advancing only 1s must NOT re-fire
+    // it. Pre-fix, calling refresh() directly here left this stale timer
+    // running alongside the action's extra fetch, so it WOULD have fired.
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+      await Promise.resolve()
+    })
+    expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(2)
+
+    // The NEW schedule (2s from the action's refreshNow call) fires next.
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+      await Promise.resolve()
+    })
+    expect(runtimeDbMocks.runtimeJobList).toHaveBeenCalledTimes(3)
+
+    unmount(root)
+  })
+
   it("shows only legal actions for each runtime job state", async () => {
     runtimeDbMocks.runtimeJobList.mockResolvedValue(list([
       job("job-queued", "queued"),

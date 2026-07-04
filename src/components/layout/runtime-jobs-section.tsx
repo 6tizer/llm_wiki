@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   AlertCircle,
@@ -34,6 +34,7 @@ import {
   type BulkKnowledgePrepareJobPayload,
 } from "@/core-runtime/parallel-knowledge"
 import { useWikiStore } from "@/stores/wiki-store"
+import { usePolling } from "@/lib/hooks/use-polling"
 
 const ACTIVE_POLL_INTERVAL_MS = 2_000
 const IDLE_POLL_INTERVAL_MS = 10_000
@@ -59,7 +60,8 @@ export interface RuntimeJobsState {
   diagnostics: RuntimeJobsDiagnostics
   capturedAtMs: number | null
   actionJobId: string | null
-  refresh: () => Promise<void>
+  /** Clears any pending poll timer, refreshes immediately, and reschedules from the fresh delay — see `usePolling`. */
+  refreshNow: () => Promise<void>
   pauseJob: (jobId: string) => Promise<void>
   resumeJob: (jobId: string) => Promise<void>
   cancelJob: (jobId: string) => Promise<void>
@@ -189,32 +191,28 @@ export function useRuntimeJobsState(): RuntimeJobsState {
     [snapshot],
   )
 
-  useEffect(() => {
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-
-    async function poll(): Promise<void> {
-      await refresh()
-      if (cancelled || !project) return
-      timer = setTimeout(() => {
-        void poll()
-      }, pollDelayRef.current)
-    }
-
-    void poll()
-
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
-  }, [project, refresh])
+  // SPEC-6 PR6 decision 4: shared timer-handle poll loop (`usePolling`) —
+  // `refreshNow` clears any pending timer, refreshes immediately, and
+  // reschedules from the fresh delay, fixing the pre-existing bug where an
+  // action-triggered refresh (pause/resume/cancel below) left the
+  // already-scheduled timer armed alongside the extra fetch instead of
+  // resetting the poll cadence (spec-5-8-post-review-findings.md:108).
+  const { refreshNow } = usePolling({
+    enabled: !!project,
+    // Restores the pre-extraction `[project, refresh]` effect-dependency
+    // behavior: switching to a DIFFERENT project restarts polling
+    // immediately instead of waiting out the outgoing project's cadence.
+    restartKey: project?.id ?? null,
+    poll: refresh,
+    getDelayMs: () => pollDelayRef.current,
+  })
 
   async function runAction(jobId: string, action: (id: string) => Promise<RuntimeJobRecord>): Promise<void> {
     setActionJobId(jobId)
     setActionError(null)
     try {
       await action(jobId)
-      await refresh()
+      await refreshNow()
     } catch (error) {
       setActionError(errorText(error))
     } finally {
@@ -228,7 +226,7 @@ export function useRuntimeJobsState(): RuntimeJobsState {
     diagnostics,
     capturedAtMs: snapshot?.capturedAtMs ?? null,
     actionJobId,
-    refresh,
+    refreshNow,
     pauseJob: (jobId) => runAction(jobId, runtimeJobPause),
     resumeJob: (jobId) => runAction(jobId, runtimeJobResume),
     cancelJob: (jobId) => runAction(jobId, runtimeJobCancel),

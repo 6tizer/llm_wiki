@@ -63,6 +63,39 @@
 - **lane**：full（UI 状态机）；Simplicity 用 ZCode read-only reviewer。
 - **SPEC Closeout Gate**（`gates.md`）：端到端 integration fixture 跑通「commit → marker → 后台 rebuild → UI 状态流转 → 手动 rebuild」；deferred wiring 清零或显式移交；安排 SPEC-6 子系统多代理深度 review，发现分流 FIX/P3 backlog；`docs/plans/README.md` 状态行更新 + `.agent-loop/HANDOFF.md` 重写。
 
+## SPEC-6 收口（PR6 Closeout Gate 交付物 b）
+
+> PR6 实现完成，active / in review（分支 `codex/spec6-pr6-derived-status`，详细计划 [`pr6-derived-status-ui-plan.md`](./pr6-derived-status-ui-plan.md)，合并后回填 completed + PR 编号）：per-layer 派生状态 UI（`derived-status-section.tsx`，5 态 + stale 展示变体，`graph`/`search` 隐藏）+ `usePolling<T>`（修「外部触发不重置定时器」）+ `manual-rebuild-marker.ts`（`ingest-write.ts`/`manual-rebuild.ts`/新按钮三处调用点共享去重）+ embedding/taxonomy 手动 Rebuild 按钮 + 搜索 fallback 提示条（`search.ts` 透传 mode/vectorHits）+ 端到端 fixture（`derived-status.e2e.test.ts`：commit→pending→自动 consumer→done 与 手动按钮 mint-to-close 两条路径）。
+>
+> 本节是 PR1-PR6 全过程中每个计划文档、file doc comment 里散落记录的 deferred/follow-up/gap 条目的一次性盘点收口（未找到独立成文的「PR6 前置调查报告」——`.agent/` 与 `docs/plans/SPEC-6/*.md` 均未见此文件；本表由逐份计划文档 + 相关源码文件头注释重新审计得出，共 18 个去重后的独立条目，逐项标注处置）。
+
+| # | 来源 | 条目 | 处置 |
+|---|------|------|------|
+| 1 | pr1 计划 `:26-27` | Marker 消费循环「宿主」（真正的后台 worker loop）PR1 未交付，只给了 claim/complete/release API | **已接线**（PR2 的 `embedding-consumer.ts`、PR3+4 的 `taxonomy-consumer.ts` 就是这个宿主，PR6 之前已闭环） |
+| 2 | pr1 计划 `:26` | `search` 层 marker 生产延后到「PR3 若落消费者」 | **已闭环**：PR3+4 调查证实 `search` 无物化产物，永不会有消费者；PR6 决策 2 将 `search`（连同 `graph`）整层从 UI 隐藏（`VISIBLE_DERIVED_LAYERS` 过滤），不再生产/展示 |
+| 3 | pr1 计划 `:26` | `index_export`/`overview` 延后到 PR5 按需触发 | **已接线**（PR5 落地；PR6 在 `derived-status-section.tsx` 加「前往对应 section」指引，不重复按钮） |
+| 4 | pr1 计划 `:28`（设计决策 9） | `runtime_db.rs` mod split | **已完成**（#281 已合并——SPEC-8 PR10，maint 轨独立任务，非 PR6 范围但确认落地） |
+| 5 | pr1 对抗矩阵 `:59` R2/R3/R4 等 | SPEC-11 `withProjectLock` 不覆盖 marker 消费期间的项目删除竞态；矩阵未列的 R2/R3/L2/L3 场景 | **显式移交**：issue #286（未在 PR1-PR6 任何一个 PR 中处理，遗留为后续并发加固候选） |
+| 6 | pr2 计划 `:16,43` | `ingest.ts` 用非原子 `writeFile`（应为 `writeFileAtomic`） | **显式移交**：SPEC-8/11 域，PR6 未动；无独立 issue，SPEC-8/11 开工时再立 |
+| 7 | pr2 计划 `:19,44` | `runtimeJobList` 无 kind/state 过滤参数，PR2 靠客户端过滤 workaround | **显式移交**：性能优化候选，PR6 未做（`status.ts` 的 `fetchAllDerivedStaleMarkers` 同样是全量拉取 + 客户端分桶，同一取舍，见计划决策 3） |
+| 8 | pr2 计划 `:45` | `recordEmbeddingStaleMarker` 锚点 job 在 claim/event-append/complete 中途失败会留一行永久 `queued` 孤儿 | **显式移交**：issue #287（孤儿 marker/anchor 回收统一承接，见下方三条同类条目） |
+| 9 | pr2 计划 `:46` | `embedding-consumer.ts`'s `safeFailClaim`：`runtimeJobFail` 与 `runtimeDerivedMarkerReleaseBatch` 非原子，中间崩溃会让 marker 永久卡 `claimed` | **显式移交**：issue #287（诊断层面，PR6 的状态 UI 会把这种 marker 展示为 `building` 卡死，但不会自动修复——需要一个「收敛终态 job 的孤儿 marker」扫描任务） |
+| 10 | pr3-4 计划 `:10,46` | 历史遗留的 `"graph"` pending marker（摘除前产生的）未清理/迁移，标注「PR6 诊断层过滤」 | **已闭环**：与 #2 同一处置——PR6 把 `graph` 整层从 `VISIBLE_DERIVED_LAYERS` 过滤，历史堆积的 pending marker 自然不再展示 |
+| 11 | pr3-4 计划 `:12`；prs-implementation-plan `:51` | Synthesis stale 徽标 UI 标注「归 PR6」 | **已闭环**：`derived-status-section.tsx` 对 synthesis 展示 stale 文案变体（dirty 且无自动 consumer） |
+| 12 | pr3-4 计划 `:14,45` | Synthesis 直写 wiki 页面，绕过 commit/staging 审计链路 | **显式移交**：架构级改动，候选 SPEC-7/8 或独立 PR，PR6 不做；无独立 issue，SPEC-7/8 开工时再立 |
+| 13 | pr3-4 计划 `:47` | 若未来需要「重启后 graph 视图 stale 提示」，可能重新引入 graph marker；当前判定内存 `dataVersion` 机制已够用 | **显式移交**：未规划，非 PR6 范围 |
+| 14 | pr3-4 计划 `:48`；prs-implementation-plan `:53`（Simplicity P2） | 提取共享 `createDerivedRebuildConsumer(config)`——`embedding-consumer.ts`/`taxonomy-consumer.ts` 约 247 行逐字重复（世代计数/tick guard/双信号轮询/心跳/safeComplete-safeFail） | **显式移交**：独立 PR，以两份既有测试为 characterization 基线；PR6 未做（PR6 新增的 `manual-rebuild-marker.ts` 去重的是「锚点 job 铸造」这一块，是另一处重复面，不是这个 consumer tick-loop 骨架） |
+| 15 | pr5 计划 `:19`（决策 6） | `ingest.ts` 里只读的 `index.md` 上下文注入 LLM prompt 未清理（并非死代码，删除会改变 prompt 行为） | **显式移交**：独立 SPEC-8 评估，PR6 未动 |
+| 16 | pr5 计划 `:44` | 建议 PR6 若要展示「上次重建时间」，直接读 marker `done` 行的 `updated_at_ms`，无需新存储 | **已闭环**：`DerivedLayerBucket.lastRebuiltAtMs` 正是从 marker 的 done 行 `updatedAtMs` 取最大值算出（`status.ts`） |
+| 17 | pr5 计划 `:45` | Overview 重建是盲覆盖，无 diff 预览/确认弹窗；建议留给「PR6+」 | **显式移交**：PR6 仍是「Rebuild」按钮直接触发，未加确认弹窗/diff 预览——原文本就标注给「PR6+」，继续移交到该按钮的下一次改进 |
+| 18 | spec-6-derived-knowledge-rebuild.md `:77-81` | SPEC 级非目标：不做「所有高级 rebuild 调度策略」 | **显式移交**：开放性 SPEC 级非目标，无具体 PR 承接 |
+| — | spec-5-8-post-review-findings.md `:108` | `runtime-jobs-section.tsx` 自适应轮询无法被外部触发重置定时器 | **已闭环**：`usePolling<T>` 的 `refreshNow` 正是修这个 bug，回归锁测试 + sabotage 自验证见 `use-polling.test.tsx`/`runtime-jobs-section.test.tsx` |
+| — | manual-rebuild.ts 文件头注释「Residual gaps」 | (a) mint 锚点 job 与其 complete 之间崩溃留孤儿 `running` 锚点 job；(b) claim_batch 成功后到 execute/complete-or-fail 完成前崩溃，折叠 job 卡 `queued`/`retry-wait`，markers 卡 `claimed`，`index_export`/`overview` 无消费者可自愈——两处均标注「PR6 诊断候选」 | **显式移交**：issue #287（与 #8/#9 同一批孤儿 marker/anchor 回收；PR6 交付了「状态可见」——会展示成挂起的 building/dirty——但没有交付「自动诊断/reconcile 孤儿 job」的专门动作） |
+| — | synthesis-staleness.ts 文件头注释（同类风险） | claim_batch 成功、complete_batch 之前崩溃，synthesis marker 卡 `claimed`，无 poller 收敛 | **显式移交**：issue #287（同上，统一批次回收；PR6 未建专门 reconcile 动作） |
+| — | runtime-diagnostics.ts `REPAIR_JOB_KINDS` 注释 | 三个 bulk-knowledge repair job kind 是「设计上的结构性孤儿」，无消费者 | **不在 SPEC-6 范围**：SPEC-5-FIX 遗留项，诊断层已可见（`RuntimeDiagnosticsSection`），非 SPEC-6/PR6 承接对象，仅收录以确认未被误判为 SPEC-6 遗留 |
+
+小结：18 个去重条目中，**7 个由 PR6 本次闭环或已确认完成**（#2/#3 部分、#4 已合并 #281、#10、#11、#16、`usePolling` bug），**2 个有明确 issue 号追踪**（#5 → issue #286；#8/#9/两条同类残余 gap → issue #287 统一承接），其余为**显式域移交**（部分明确「无独立 issue，SPEC-7/8/11 开工时再立」），无「静默消失」的遗留项。
+
 ## 每 PR 固定循环（权威见 pr-loop.md，此处仅列 SPEC-6 执行时的检查单）
 
 1. **Start**：derived 轨 worktree 内 `agent-loop-preflight.sh` → bind（issue #189）→ `gitnexus status`（stale 则 analyze，必带 `GITNEXUS_MAX_FILE_SIZE=1024`）→ 切 `codex/spec6-<slug>` 分支。

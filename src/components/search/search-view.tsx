@@ -1,13 +1,14 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react"
-import { Search, FileText, ImageIcon, X, ArrowUpRight } from "lucide-react"
+import { Search, FileText, ImageIcon, X, ArrowUpRight, AlertTriangle } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
-import { searchWiki, tokenizeQuery, type SearchResult, type ImageRef } from "@/lib/search"
+import { searchWiki, tokenizeQuery, type SearchResult, type ImageRef, type SearchRetrievalMode } from "@/lib/search"
 import { useTranslation } from "react-i18next"
 import { normalizePath } from "@/lib/path-utils"
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { isImeComposing } from "@/lib/keyboard-utils"
+import { useDerivedLayerStore } from "@/stores/derived-layer-store"
 
 /**
  * One image hit displayed in the Images section.
@@ -36,6 +37,10 @@ export function SearchView() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
+  // SPEC-6 PR6 decision 7: which retrieval path actually served the last
+  // query — used (alongside the `embedding` layer's own status below) to
+  // decide whether to show the "vector index not ready" fallback banner.
+  const [retrievalMode, setRetrievalMode] = useState<SearchRetrievalMode>("hybrid")
   // Lightbox state — null when closed. Held inline rather than via
   // a global store: nothing else needs to know which image is in
   // the lightbox, and search-view-local state means the modal
@@ -55,15 +60,23 @@ export function SearchView() {
         ++requestSeqRef.current
         setSearching(false)
         setResults([])
+        // Codex P3: clearing the query and pressing Enter must reset the
+        // fallback banner's conditions too — otherwise the LAST real
+        // search's `hasSearched`/`retrievalMode` linger and the banner
+        // (and the "no results" empty state) stay visible over an
+        // now-empty query.
+        setHasSearched(false)
+        setRetrievalMode("hybrid")
         return
       }
       const seq = ++requestSeqRef.current
       setSearching(true)
       setHasSearched(true)
       try {
-        const found = await searchWiki(normalizePath(project.path), q)
+        const { results: found, mode } = await searchWiki(normalizePath(project.path), q)
         if (seq !== requestSeqRef.current) return
         setResults(found)
+        setRetrievalMode(mode)
       } catch (err) {
         if (seq !== requestSeqRef.current) return
         console.error("Search failed:", err)
@@ -74,6 +87,26 @@ export function SearchView() {
     },
     [project],
   )
+
+  // Best-effort, one-shot refresh of the embedding layer's derived status
+  // (no full polling loop here — `derived-status-section.tsx` in Settings
+  // already owns that) so the fallback banner below can reflect a
+  // reasonably fresh `dirty`/`building` state even if the user never
+  // opened Settings this session.
+  const loadDerivedSnapshot = useDerivedLayerStore((s) => s.loadSnapshot)
+  useEffect(() => {
+    if (project) void loadDerivedSnapshot()
+  }, [project, loadDerivedSnapshot])
+
+  const embeddingBucket = useDerivedLayerStore((s) => s.buckets?.embedding)
+  // Tester P3: a `failed` embedding layer means its rebuild attempt did NOT
+  // converge — the vector index is just as incomplete/stale as `dirty`, so
+  // it warrants the same fallback notice, not silence.
+  const embeddingNotReady =
+    embeddingBucket?.status === "dirty" ||
+    embeddingBucket?.status === "building" ||
+    embeddingBucket?.status === "failed"
+  const showFallbackBanner = hasSearched && !searching && (retrievalMode !== "hybrid" || embeddingNotReady)
 
   // Flatten + dedupe images across results. Two results referencing
   // the same image (e.g. the source-summary AND a concept page that
@@ -213,6 +246,16 @@ export function SearchView() {
           />
         </div>
       </div>
+
+      {showFallbackBanner && (
+        <div
+          className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-200"
+          data-testid="search-fallback-banner"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{t("search.fallbackBanner")}</span>
+        </div>
+      )}
 
       {/*
        * Body. Two independently scrollable regions: images (capped

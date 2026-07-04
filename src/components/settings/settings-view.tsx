@@ -21,6 +21,7 @@ import {
   GitMerge,
   Layers,
   ListTree,
+  Activity,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -55,6 +56,7 @@ import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
 import { TagTaxonomySection } from "./sections/tag-taxonomy-section"
 import { SynthesisSection } from "./sections/synthesis-section"
 import { IndexOverviewSection } from "./sections/index-overview-section"
+import { DerivedStatusSection } from "./sections/derived-status-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -81,6 +83,7 @@ export type CategoryId =
   | "taxonomy"
   | "synthesis"
   | "index-overview"
+  | "derived-status"
   | "general"
   | "output"
   | "interface"
@@ -121,6 +124,7 @@ const CATEGORIES: Category[] = [
   { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
   { id: "synthesis", labelKey: "settings.categories.synthesis", icon: GitMerge },
   { id: "index-overview", labelKey: "settings.categories.indexOverview", icon: ListTree },
+  { id: "derived-status", labelKey: "settings.categories.derivedStatus", icon: Activity },
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -138,6 +142,7 @@ const INLINE_PERSIST_SETTINGS_CATEGORIES = new Set<CategoryId>([
   "taxonomy",
   "synthesis",
   "index-overview",
+  "derived-status",
 ])
 
 export function isMacLikeRuntime(
@@ -907,6 +912,8 @@ export function SettingsView() {
         return <SynthesisSection project={project} />
       case "index-overview":
         return <IndexOverviewSection project={project} />
+      case "derived-status":
+        return <DerivedStatusSection project={project} onNavigateToCategory={setActive} />
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":
@@ -920,7 +927,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [activeCategory, draft, project, setDraft])
+  }, [activeCategory, draft, project, setDraft, setActive])
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">

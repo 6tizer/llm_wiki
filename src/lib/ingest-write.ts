@@ -240,39 +240,29 @@ export async function recordEmbeddingStaleMarker(
   content: string,
 ): Promise<RecordEmbeddingStaleMarkerResult> {
   try {
-    const {
-      runtimeJobCreate,
-      runtimeJobClaimByKind,
-      runtimeJobComplete,
-      runtimeEventAppend,
-      runtimeDerivedStaleMarkerRecord,
-    } = await import("@/commands/runtime-db")
+    // SPEC-6 PR6: the anchor create -> claim -> event-append -> complete ->
+    // record sequence lives in manual-rebuild-marker.ts's
+    // `mintDerivedStaleMarkerAnchorEvent`, shared with `manual-rebuild.ts`
+    // and the new embedding/taxonomy Rebuild buttons — see that file's doc
+    // comment. Dynamically imported (like the rest of this function's
+    // runtime-db access) to keep it out of the eagerly-loaded ingest path.
+    const { mintDerivedStaleMarkerAnchorEvent } = await import(
+      "@/lib/derived-rebuild/manual-rebuild-marker"
+    )
     const { hashMarkdownContent } = await import("@/core-runtime/markdown-commit")
 
     const inputHash = await hashMarkdownContent(content)
 
-    await runtimeJobCreate({
-      kind: INGEST_MARKER_EVENT_JOB_KIND,
-      payload: JSON.stringify({ affectedPath }),
-      maxAttempts: 1,
-    })
-    const claim = await runtimeJobClaimByKind({
-      kind: INGEST_MARKER_EVENT_JOB_KIND,
+    await mintDerivedStaleMarkerAnchorEvent({
+      anchorKind: INGEST_MARKER_EVENT_JOB_KIND,
       holder: INGEST_MARKER_EVENT_HOLDER,
-    })
-    const event = await runtimeEventAppend({
-      jobId: claim.job.jobId,
-      payload: JSON.stringify({ kind: "auto-ingest", affectedPath }),
-    })
-    await runtimeJobComplete({ jobId: claim.job.jobId, leaseId: claim.lease.leaseId })
-
-    await runtimeDerivedStaleMarkerRecord({
+      claimMode: "by-kind",
+      eventPayload: { kind: "auto-ingest", affectedPath },
       layer: "embedding",
       affectedPath,
       inputHash,
       baseVersion: inputHash,
       reason: "commit",
-      sourceEventId: event.eventId,
     })
     return "recorded"
   } catch (err) {
