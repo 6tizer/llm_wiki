@@ -64,6 +64,7 @@
 | [SPEC-6/pr1-adversarial-matrix.md](./SPEC-6/pr1-adversarial-matrix.md) | SPEC-6 PR1 并发场景矩阵（design-first gate 凭据），Reviewer 逐格验证记录的依据。 | evidence |
 | [SPEC-6/pr2-embedding-rebuild-plan.md](./SPEC-6/pr2-embedding-rebuild-plan.md) | SPEC-6 PR2 执行计划：embedding 移出 ingest 链、marker 驱动消费循环、方案 A 传统路径接线（含 work-runtime 禁用回退与 P0 教训）。 | merged |
 | [SPEC-6/pr3-4-taxonomy-synthesis-plan.md](./SPEC-6/pr3-4-taxonomy-synthesis-plan.md) | SPEC-6 PR3+4（合并）执行计划：原 PR3（graph/search job 化）证实两者均无物化产物而并入 taxonomy consumer + COMMIT 层摘除 graph；taxonomy growth 聚合消费循环、synthesis 手动重跑闭环、SPEC-11 S5 死链自愈核实。 | merged |
+| [SPEC-6/pr5-index-overview-plan.md](./SPEC-6/pr5-index-overview-plan.md) | SPEC-6 PR5 执行计划：index_export/overview 手动重建 job 化——自产自销 marker 闭环共享 helper、index 扫描+格式化纯函数、overview LLM 单页生成、独立 settings section。 | active |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | in progress（PR10 先行） |
 | [SPEC-8/pr10-runtime-db-mod-split-plan.md](./SPEC-8/pr10-runtime-db-mod-split-plan.md) | SPEC-8 PR10 执行计划：runtime_db.rs 保行为拆分为 runtime_db/ 15 模块（行号测绘、可见性纪律、characterization 验证）。 | merged |

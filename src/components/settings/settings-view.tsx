@@ -20,6 +20,7 @@ import {
   Tags,
   GitMerge,
   Layers,
+  ListTree,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
@@ -53,6 +54,7 @@ import { AgentSection } from "./sections/agent-section"
 import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
 import { TagTaxonomySection } from "./sections/tag-taxonomy-section"
 import { SynthesisSection } from "./sections/synthesis-section"
+import { IndexOverviewSection } from "./sections/index-overview-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
@@ -78,6 +80,7 @@ export type CategoryId =
   | "knowledge-agents"
   | "taxonomy"
   | "synthesis"
+  | "index-overview"
   | "general"
   | "output"
   | "interface"
@@ -117,6 +120,7 @@ const CATEGORIES: Category[] = [
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
   { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
   { id: "synthesis", labelKey: "settings.categories.synthesis", icon: GitMerge },
+  { id: "index-overview", labelKey: "settings.categories.indexOverview", icon: ListTree },
   { id: "general", labelKey: "settings.categories.general", icon: Settings },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
@@ -133,6 +137,7 @@ const INLINE_PERSIST_SETTINGS_CATEGORIES = new Set<CategoryId>([
   "knowledge-agents",
   "taxonomy",
   "synthesis",
+  "index-overview",
 ])
 
 export function isMacLikeRuntime(
@@ -900,6 +905,8 @@ export function SettingsView() {
         return <TagTaxonomySection project={project} />
       case "synthesis":
         return <SynthesisSection project={project} />
+      case "index-overview":
+        return <IndexOverviewSection project={project} />
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":

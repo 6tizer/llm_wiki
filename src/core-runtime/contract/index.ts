@@ -202,10 +202,14 @@ export const MARKDOWN_COMMIT_BASE_HASH_CASES = [
  *   job — see synthesis-staleness.ts) a real derived artifact and a
  *   `runtime_derived_marker_claim_batch`/`complete`/`release`-backed
  *   consumer that converges it: `embedding-consumer.ts` (SPEC-6 PR2),
- *   `taxonomy-consumer.ts` (SPEC-6 PR3+4); `index_export`/`overview` will
- *   get PR5's on-demand manual-rebuild jobs (not yet implemented — until
- *   PR5 lands, these two layers accumulate markers with no consumer yet,
- *   which is the accepted interim state, not a bug).
+ *   `taxonomy-consumer.ts` (SPEC-6 PR3+4); `index_export`/`overview` are
+ *   converged by SPEC-6 PR5's on-demand manual-rebuild loop instead of a
+ *   background poller — see `src/lib/derived-rebuild/manual-rebuild.ts`.
+ *   Neither layer is ever recorded on commit (kept out of
+ *   `COMMIT_DERIVED_STALE_MARKER_LAYERS` in commit-integration.ts, decision
+ *   5): the only marker either layer ever gets is minted and closed by that
+ *   same manual rebuild call, so there is no accumulation-with-no-consumer
+ *   window to worry about for these two.
  * - **Declared, no materialized artifact**: `"graph"`, `"search"`. `"graph"`
  *   (wiki-graph.ts) always recomputes live from the committed wiki tree —
  *   graph-relevance.ts's cache is an in-memory read-through, not a rebuild

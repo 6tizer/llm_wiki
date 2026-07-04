@@ -447,6 +447,7 @@
       "knowledgeAgents": "Knowledge Agents",
       "taxonomy": "标签体系",
       "synthesis": "综合",
+      "indexOverview": "索引 / 总览",
       "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
@@ -910,6 +911,21 @@
           "not_enough_tagged_pages": "有足够标签数的页面不足。",
           "no_cluster_meets_minimum": "没有簇达到最少页面数。"
         }
+      },
+      "indexOverview": {
+        "title": "索引 / 总览",
+        "description": "手动重建 wiki 的根索引页与总览页。",
+        "noProject": "请先打开一个项目再重建索引或总览。",
+        "rebuild": "重建",
+        "indexTitle": "Wiki 索引",
+        "indexDescription": "扫描 wiki/ 并按页面类型分组重写 wiki/index.md。确定性执行，不调用 LLM。",
+        "indexFailed": "索引重建失败，请重试。",
+        "indexRebuilt": "已重建 wiki/index.md（{{count}} 个页面）",
+        "overviewTitle": "项目总览",
+        "overviewDescription": "调用已配置的 LLM，根据当前页面索引重新生成 wiki/overview.md。",
+        "noLlm": "请先配置 LLM 提供方，再重新生成总览。",
+        "overviewFailed": "总览重建失败，请重试。",
+        "overviewRebuilt": "已重建 {{path}}"
       },
       "output": {
         "title": "输出偏好",
