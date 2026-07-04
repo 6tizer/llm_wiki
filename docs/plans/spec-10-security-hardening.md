@@ -1,6 +1,6 @@
 # SPEC-10: Security Hardening / 安全加固
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 覆盖：`spec-5-8-post-review-findings.md` 二（S1-S4 安全 P0）+ 相关 Rust/chat 安全 P1/P2 | 依赖：无硬前置（可与 SPEC-5-FIX 并行）| 执行顺序：S1/S2 建议作为最高优先级独立 hotfix，先于 SPEC-6/7 实现
+> 类型：阶段 SPEC | 状态：completed via #250/#252/#254/#261/#265/#266/#271 | 覆盖：`spec-5-8-post-review-findings.md` 二（S1-S4 安全 P0）+ 相关 Rust/chat 安全 P1/P2 | 依赖：无硬前置（可与 SPEC-5-FIX 并行）| 执行顺序：已完成，SPEC-6 解锁
 
 ## 目标与成功标准
 
@@ -27,12 +27,12 @@
 
 ## 预期 PR 拆分
 
-1. **S1 沙箱逃逸修复**（最高优先级 hotfix）：`path_safety.rs:74-93` 祖先校验重写 + 绝对路径拒绝 + 合并两套沙箱实现；补漏洞分支测试（父目录不存在 + 项目外绝对路径）。
-2. **S2 clip server 鉴权**（最高优先级 hotfix）：Origin/token 校验 + `projectPath` 已知项目白名单 + 错误响应 json! 化 + 单线程 panic 防护（`clip_server.rs` 走 `run_guarded`、去裸 unwrap）。
-3. **S3 密钥泄露收口**：stdout 脱敏通道 + `eprintln!` 前脱敏 + `redact_profile_pool_text` 前缀补齐；测试覆盖"stdout/stderr 含凭证被脱敏"。
-4. **S4 权限绕过**：wiki 写工具接入 `permissionPolicy` 档位与权限审批入口（与 SPEC-7 permission bridge 对齐）；"允许永久" suggestions 为空时不写空白名单。
-5. **子进程生命周期**：退出路径清理子进程；接线优雅 kill、SIGKILL 兜底；`claude_cli.rs`/`codex_cli.rs` 补 `process_group(0)` 修 kill 不对称。
-6. **能力面收敛**（纵深防御）：percent_decode 字符边界修复；`assetProtocol.scope` 收窄；子进程 `.env_clear()` + 显式 allowlist；zip/office 解压 + base64 读文件大小上限（照 `MAX_HASH_BYTES` 模式）。
+1. **S1 沙箱逃逸修复**（最高优先级 hotfix）：`path_safety.rs:74-93` 祖先校验重写 + 绝对路径拒绝 + 合并两套沙箱实现；补漏洞分支测试（父目录不存在 + 项目外绝对路径）。（#250，merged）
+2. **S2 clip server 鉴权**（最高优先级 hotfix）：Origin/token 校验 + `projectPath` 已知项目白名单 + 错误响应 json! 化 + 单线程 panic 防护（`clip_server.rs` 走 `run_guarded`、去裸 unwrap）。（#252，merged）
+3. **S3 密钥泄露收口**：stdout 脱敏通道 + `eprintln!` 前脱敏 + `redact_profile_pool_text` 前缀补齐；测试覆盖"stdout/stderr 含凭证被脱敏"。（#254，merged）
+4. **S4 权限绕过**：wiki 写工具接入 `permissionPolicy` 档位与权限审批入口（与 SPEC-7 permission bridge 对齐）；"允许永久" suggestions 为空时不写空白名单。（#261，merged）
+5. **子进程生命周期**：退出路径清理子进程；接线优雅 kill、SIGKILL 兜底；`claude_cli.rs`/`codex_cli.rs` 补 `process_group(0)` 修 kill 不对称。（#265，merged）
+6. **能力面收敛**（纵深防御）：percent_decode 字符边界修复；`assetProtocol.scope` 收窄；子进程 `.env_clear()` + 显式 allowlist；zip/office 解压 + base64 读文件大小上限（照 `MAX_HASH_BYTES` 模式）。（#266/#271，merged）
 
 ## 验证策略
 
@@ -45,7 +45,7 @@
 
 ## Gate 结论摘要
 
-本 SPEC 来自 `spec-5-8-post-review-findings.md` 的深度 review 证据。S1/S2 因可被外部利用，建议作为独立 hotfix PR 优先合并。实现 PR 必须重新按 PR-level workflow 跑 GitNexus impact、focused tests、Simplicity、Tester、Reviewer 和 detect，并对安全 PR 额外做攻击场景验证。
+本 SPEC 来自 `spec-5-8-post-review-findings.md` 的深度 review 证据。S1/S2 因可被外部利用，建议作为独立 hotfix PR 优先合并。实现 PR 必须重新按 PR-level workflow 跑 GitNexus impact、focused tests、Simplicity、Tester、Reviewer 和 detect，并对安全 PR 额外做攻击场景验证。合并落点：PR1-PR6 已通过 #250/#252/#254/#261/#265/#266/#271 合并。
 
 ## Non-goals / Follow-up
 

@@ -225,6 +225,27 @@ async function waitForRestoreWriteToSettle(
   })
 }
 
+async function waitForRestoredPageReembed(
+  projectPath: string,
+  pagePath: string,
+  title: string,
+  content: string,
+  model: string,
+): Promise<void> {
+  const pageId = wikiPathToVectorPageId(projectPath, pagePath)
+  await waitForDisk(async () =>
+    mockEmbedPage.mock.calls.some(
+      ([calledProjectPath, calledPageId, calledTitle, calledContent, calledConfig]) =>
+        calledProjectPath === projectPath &&
+        calledPageId === pageId &&
+        calledTitle === title &&
+        calledContent === content &&
+        calledConfig.enabled === true &&
+        calledConfig.model === model,
+    ),
+  )
+}
+
 function sourceSummaryFileBlock(sourceId: string): string {
   return [
     "---FILE: wiki/sources/placeholder.md---",
@@ -459,12 +480,12 @@ describe("ingest-queue cancel cascade (D4)", () => {
     // Same restore behavior on the successful-merge path.
     expect(await fileExists(existingTopicPath)).toBe(true)
     expect(await readFileRaw(existingTopicPath)).toBe(originalExistingContent)
-    expect(mockEmbedPage).toHaveBeenCalledWith(
+    await waitForRestoredPageReembed(
       tmp.path,
-      wikiPathToVectorPageId(tmp.path, existingTopicPath),
+      existingTopicPath,
       "Existing Topic",
       originalExistingContent,
-      expect.objectContaining({ enabled: true, model: "test-embedding-model" }),
+      "test-embedding-model",
     )
 
     // No LLM-merge failure occurred on this path, so tryBackup never
