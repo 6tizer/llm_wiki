@@ -8,6 +8,19 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
+import type {
+  ApiConfig,
+  EmbeddingConfig,
+  LlmConfig,
+  MineruConfig,
+  MultimodalConfig,
+  OutputLanguage,
+  ProviderConfigs,
+  ProxyConfig,
+  ScheduledImportConfig,
+  SearchApiConfig,
+  SourceWatchConfig,
+} from "@/stores/wiki-store"
 import type { WikiProject } from "@/types/wiki"
 import type { FileNode } from "@/types/wiki"
 import type { ReviewItem } from "@/stores/review-store"
@@ -37,20 +50,34 @@ const projectStoreMocks = vi.hoisted(() => ({
   getLastProject: vi.fn(async (): Promise<WikiProject | null> => null),
   getRecentProjects: vi.fn(async (): Promise<WikiProject[]> => []),
   saveLastProject: vi.fn(async () => undefined),
-  loadLlmConfig: vi.fn(async () => null),
-  loadLanguage: vi.fn(async () => null),
-  loadSearchApiConfig: vi.fn(async () => null),
-  loadEmbeddingConfig: vi.fn(async () => null),
-  loadMineruConfig: vi.fn(async () => null),
-  loadMultimodalConfig: vi.fn(async () => null),
-  loadOutputLanguage: vi.fn(async () => null),
-  loadProviderConfigs: vi.fn(async () => null),
-  loadActivePresetId: vi.fn(async () => null),
-  loadProxyConfig: vi.fn(async () => null),
-  loadScheduledImportConfig: vi.fn(async () => null),
+  loadLlmConfig: vi.fn<() => Promise<LlmConfig | null>>(async () => null),
+  loadLanguage: vi.fn<() => Promise<string | null>>(async () => null),
+  loadSearchApiConfig: vi.fn<() => Promise<SearchApiConfig | null>>(async () => null),
+  loadEmbeddingConfig: vi.fn<() => Promise<EmbeddingConfig | null>>(async () => null),
+  loadMineruConfig: vi.fn<() => Promise<MineruConfig | null>>(async () => null),
+  loadMultimodalConfig: vi.fn<() => Promise<MultimodalConfig | null>>(async () => null),
+  loadOutputLanguage: vi.fn<(projectId?: string) => Promise<OutputLanguage | null>>(
+    async () => null,
+  ),
+  loadProviderConfigs: vi.fn<() => Promise<ProviderConfigs | null>>(async () => null),
+  loadActivePresetId: vi.fn<() => Promise<string | null>>(async () => null),
+  loadProxyConfig: vi.fn<() => Promise<ProxyConfig | null>>(async () => null),
+  loadScheduledImportConfig: vi.fn<(projectPath: string) => Promise<ScheduledImportConfig | null>>(
+    async () => null,
+  ),
   saveScheduledImportConfig: vi.fn(async () => undefined),
-  loadSourceWatchConfig: vi.fn(async () => ({ enabled: false, interval: 60 })),
-  loadApiConfig: vi.fn(async () => null),
+  loadSourceWatchConfig: vi.fn<() => Promise<SourceWatchConfig>>(
+    async () => ({
+      enabled: false,
+      autoIngest: false,
+      includeExtensions: [],
+      excludeExtensions: [],
+      excludeDirs: [],
+      excludeGlobs: [],
+      maxFileSizeMb: 10,
+    }),
+  ),
+  loadApiConfig: vi.fn<() => Promise<ApiConfig | null>>(async () => null),
   loadZoomLevel: vi.fn(async () => 1),
   loadTheme: vi.fn(async () => "system"),
   saveLlmConfig: vi.fn(async () => undefined),
@@ -631,7 +658,15 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
       if (path === projA.path) return delayedAConfig.promise
       return { enabled: true, path: `${path}/raw/sources`, interval: 10, lastScan: null }
     })
-    projectStoreMocks.loadSourceWatchConfig.mockResolvedValue({ enabled: true, interval: 60 })
+    projectStoreMocks.loadSourceWatchConfig.mockResolvedValue({
+      enabled: true,
+      autoIngest: false,
+      includeExtensions: [],
+      excludeExtensions: [],
+      excludeDirs: [],
+      excludeGlobs: [],
+      maxFileSizeMb: 10,
+    })
 
     let pA!: Promise<void>
     act(() => {
