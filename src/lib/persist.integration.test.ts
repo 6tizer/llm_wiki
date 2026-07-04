@@ -172,12 +172,14 @@ describe("chat persistence — round-trip (new format)", () => {
         updatedAt: expired,
         agentSessionId: "expired-session",
         agentForkSessionPending: true,
+        agentResumeSessionAt: "assistant-uuid-expired",
       },
       {
         ...makeConv("fresh", "Fresh Agent"),
         updatedAt: fresh,
         agentSessionId: "fresh-session",
         agentForkSessionPending: true,
+        agentResumeSessionAt: "assistant-uuid-fresh",
       },
       {
         ...makeConv("ordinary", "Ordinary"),
@@ -193,9 +195,11 @@ describe("chat persistence — round-trip (new format)", () => {
 
     expect(expiredConv).not.toHaveProperty("agentSessionId")
     expect(expiredConv).not.toHaveProperty("agentForkSessionPending")
+    expect(expiredConv).not.toHaveProperty("agentResumeSessionAt")
     expect(freshConv).toMatchObject({
       agentSessionId: "fresh-session",
       agentForkSessionPending: true,
+      agentResumeSessionAt: "assistant-uuid-fresh",
     })
     expect(ordinaryConv).not.toHaveProperty("agentSessionId")
   })
@@ -208,6 +212,7 @@ describe("chat persistence — round-trip (new format)", () => {
         updatedAt: now - AGENT_SESSION_MAX_AGE_MS - 1,
         agentSessionId: "old-session",
         agentForkSessionPending: true,
+        agentResumeSessionAt: "assistant-uuid-old",
       },
       {
         ...makeConv("recent", "Recent Agent"),
@@ -227,6 +232,7 @@ describe("chat persistence — round-trip (new format)", () => {
     ) as Conversation[]
     expect(raw[0]).not.toHaveProperty("agentSessionId")
     expect(raw[0]).not.toHaveProperty("agentForkSessionPending")
+    expect(raw[0]).not.toHaveProperty("agentResumeSessionAt")
     expect(raw[1].agentSessionId).toBe("recent-session")
   })
 

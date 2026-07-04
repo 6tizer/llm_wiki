@@ -7,7 +7,14 @@ import {
 	type AgentPermissionResponseMessage,
 } from "./permission-bridge.js";
 import { handleRewindFilesRequest } from "./rewind-bridge.js";
-import type { AgentKillRequest, AgentMessage, AgentRequest, RewindFilesRequest } from "./types.js";
+import { handleRewindSessionRequest } from "./rewind-session-bridge.js";
+import type {
+	AgentKillRequest,
+	AgentMessage,
+	AgentRequest,
+	RewindFilesRequest,
+	RewindSessionRequest,
+} from "./types.js";
 
 const rl = createInterface({ input: process.stdin });
 const activeQueries = new Map<string, AbortController>();
@@ -75,7 +82,8 @@ rl.on("line", (line) => {
 			| AgentKillRequest
 			| AppToolResponseMessage
 			| AgentPermissionResponseMessage
-			| RewindFilesRequest;
+			| RewindFilesRequest
+			| RewindSessionRequest;
 		if (parsed.type === "app_tool_response") {
 			appToolBridge.handleResponse(parsed);
 			return;
@@ -90,6 +98,21 @@ rl.on("line", (line) => {
 				activeSdkQueries,
 				send,
 				onSettled: scheduleExitIfIdle,
+			});
+			return;
+		}
+		if (parsed.type === "rewind_session") {
+			handleRewindSessionRequest({
+				request: parsed,
+				queryFn: query,
+				activeQueries,
+				send,
+				error: console.error,
+				onSettled: scheduleExitIfIdle,
+			}).catch((err) => {
+				console.error("[sidecar] unhandled rewind_session error:", err);
+				activeQueries.delete(parsed.streamId);
+				scheduleExitIfIdle();
 			});
 			return;
 		}

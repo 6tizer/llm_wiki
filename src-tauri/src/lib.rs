@@ -569,6 +569,7 @@ pub fn run() {
             commands::agent::agent_tool_response,
             commands::agent::agent_permission_response,
             commands::agent::agent_rewind_files,
+            commands::agent::agent_rewind_session,
             commands::extract_images::extract_pdf_images_cmd,
             commands::extract_images::extract_office_images_cmd,
             commands::extract_images::extract_and_save_pdf_images_cmd,

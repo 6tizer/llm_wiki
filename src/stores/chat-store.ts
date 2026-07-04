@@ -20,6 +20,13 @@ export interface Conversation {
   updatedAt: number
   agentSessionId?: string
   agentForkSessionPending?: boolean
+  /**
+   * Target assistant uuid for a delayed session-rewind fork (SPEC-7 PR2):
+   * applied together with `agentForkSessionPending` on the NEXT send via
+   * agent-transport-options.ts's builder. Always set/cleared together with
+   * `agentForkSessionPending` by the rewind orchestration — never set alone.
+   */
+  agentResumeSessionAt?: string
 }
 
 export interface MessageReference {
@@ -107,7 +114,18 @@ export interface AgentPermissionRequestRecord extends AgentPermissionRequestPayl
 /** Runtime-only rewind target; live stream ids are intentionally not persisted. */
 export interface AgentRewindRequestRecord {
   chatMessageId: string
+  /** Conversation this target belongs to — the rewind orchestration
+   * addresses by this id, never by "the currently active conversation"
+   * (SPEC-7 PR2 matrix A12: a project/conversation switch mid-rewind must
+   * not write pending state to the wrong conversation). */
+  conversationId: string
   streamId: string
+  /** Agent session this target was captured against. The rewind
+   * orchestration resumes THIS session, not necessarily the conversation's
+   * current agentSessionId (which may have moved on past a fork — matrix
+   * A9: a target from before a fork boundary must be gated off, not
+   * silently resumed against the wrong/newer session). */
+  agentSessionId?: string
   userMessageId: string
   assistantMessageId?: string
   requestedAt: number
@@ -139,6 +157,7 @@ interface AgentStreamMessagePatch {
 
 interface AgentRewindablePatch {
   streamId?: string
+  agentSessionId?: string
   userMessageId?: string
   assistantMessageId?: string
 }
@@ -164,6 +183,11 @@ interface ChatState {
   queuedAgentPermissionRequests: AgentPermissionRequestRecord[]
   agentRewindTargets: Record<string, AgentRewindRequestRecord>
   activeAgentRewindRequest: AgentRewindRequestRecord | null
+  /** Per-conversation rewind-in-progress lock (SPEC-7 PR2 matrix A6): a
+   * global `isStreaming` flag can't express "conversation A is mid-rewind
+   * while conversation B streams normally" — sends and rewinds within the
+   * SAME conversation must mutually exclude each other. */
+  agentRewindLocks: Record<string, boolean>
 
   // Conversation management
   createConversation: () => string
@@ -193,7 +217,6 @@ interface ChatState {
     stats?: AgentStreamStats,
     options?: FinishAgentStreamMessageOptions
   ) => void
-  setAgentToolCalls: (messageId: string, toolCalls: AgentToolCallRecord[]) => void
   updateAgentProgress: (messageId: string, event: AgentToolCallRecord) => void
   appendAgentWikiChange: (messageId: string, payload: AgentWikiChangedPayload) => void
   markAgentMessageRewindable: (messageId: string, payload: AgentRewindablePatch) => void
@@ -203,6 +226,19 @@ interface ChatState {
   ) => void
   requestAgentRewind: (messageId: string) => void
   clearAgentRewindRequest: () => void
+  setAgentRewindLock: (conversationId: string, locked: boolean) => void
+  /**
+   * Applies a successful rewind's orchestration atomically: truncates the
+   * conversation's timeline to (and including) `throughMessageId`, and sets
+   * the delayed-fork pending fields so the NEXT send applies
+   * `forkSession + resumeSessionAt` (SPEC-7 PR2 design point 5). Returns
+   * false (no-op) if `throughMessageId` isn't found in `conversationId`'s
+   * timeline.
+   */
+  applyAgentRewindSuccess: (
+    conversationId: string,
+    target: { throughMessageId: string; resumeSessionAt?: string }
+  ) => boolean
   /** Queue an Agent permission request and resolve when the user decides or timeout denies it. */
   requestAgentPermission: (
     payload: AgentPermissionRequestPayload,
@@ -277,6 +313,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   queuedAgentPermissionRequests: [],
   agentRewindTargets: {},
   activeAgentRewindRequest: null,
+  agentRewindLocks: {},
 
   createConversation: () => {
     const id = generateConversationId()
@@ -332,11 +369,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         state.activeConversationId === id
           ? (remaining[0]?.id ?? null)
           : state.activeConversationId
+      const nextRewindLocks = { ...state.agentRewindLocks }
+      delete nextRewindLocks[id]
       return {
         conversations: remaining,
         messages: state.messages.filter((m) => m.conversationId !== id),
         activeConversationId: newActiveId,
         agentRewindTargets: nextRewindTargets,
+        agentRewindLocks: nextRewindLocks,
         activeAgentRewindRequest:
           state.activeAgentRewindRequest &&
           removedMessageIds.has(state.activeAgentRewindRequest.chatMessageId)
@@ -500,6 +540,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 agentForkSessionPending: stats?.agentSessionId
                   ? undefined
                   : c.agentForkSessionPending,
+                agentResumeSessionAt: stats?.agentSessionId
+                  ? undefined
+                  : c.agentResumeSessionAt,
                 updatedAt: Date.now(),
               }
             : c
@@ -587,19 +630,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 agentForkSessionPending: stats?.agentSessionId
                   ? undefined
                   : c.agentForkSessionPending,
+                agentResumeSessionAt: stats?.agentSessionId
+                  ? undefined
+                  : c.agentResumeSessionAt,
                 updatedAt: Date.now(),
               }
             : c
         ),
       }
     }),
-
-  setAgentToolCalls: (messageId, toolCalls) =>
-    set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === messageId ? { ...m, toolCalls } : m
-      ),
-    })),
 
   updateAgentProgress: (messageId, event) =>
     set((state) => ({
@@ -656,12 +695,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           : m
       )
-      if (!payload.streamId || !userMessageId) {
+      if (!payload.streamId || !userMessageId || !existingMessage) {
         return { messages: nextMessages }
       }
+      const existingTarget = state.agentRewindTargets[messageId]
       const target: AgentRewindRequestRecord = {
         chatMessageId: messageId,
+        conversationId: existingMessage.conversationId,
         streamId: payload.streamId,
+        agentSessionId: payload.agentSessionId ?? existingTarget?.agentSessionId,
         userMessageId,
         assistantMessageId,
         requestedAt: Date.now(),
@@ -696,6 +738,66 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })),
 
   clearAgentRewindRequest: () => set({ activeAgentRewindRequest: null }),
+
+  setAgentRewindLock: (conversationId, locked) =>
+    set((state) => {
+      if (!locked) {
+        if (!(conversationId in state.agentRewindLocks)) return {}
+        const agentRewindLocks = { ...state.agentRewindLocks }
+        delete agentRewindLocks[conversationId]
+        return { agentRewindLocks }
+      }
+      return {
+        agentRewindLocks: { ...state.agentRewindLocks, [conversationId]: true },
+      }
+    }),
+
+  applyAgentRewindSuccess: (conversationId, target) => {
+    let applied = false
+    set((state) => {
+      const conversationMessages = state.messages.filter(
+        (m) => m.conversationId === conversationId
+      )
+      const cutIndex = conversationMessages.findIndex(
+        (m) => m.id === target.throughMessageId
+      )
+      if (cutIndex === -1) return {}
+      applied = true
+      const removedIds = new Set(
+        conversationMessages.slice(cutIndex + 1).map((m) => m.id)
+      )
+      const keepIds = new Set(
+        conversationMessages.slice(0, cutIndex + 1).map((m) => m.id)
+      )
+      const agentRewindTargets = Object.fromEntries(
+        Object.entries(state.agentRewindTargets).filter(
+          ([messageId]) => !removedIds.has(messageId)
+        )
+      )
+      return {
+        messages: state.messages.filter(
+          (m) => m.conversationId !== conversationId || keepIds.has(m.id)
+        ),
+        conversations: state.conversations.map((c) =>
+          c.id === conversationId
+            ? {
+                ...c,
+                agentForkSessionPending: true,
+                agentResumeSessionAt: target.resumeSessionAt,
+                updatedAt: Date.now(),
+              }
+            : c
+        ),
+        agentRewindTargets,
+        activeAgentRewindRequest:
+          state.activeAgentRewindRequest &&
+          removedIds.has(state.activeAgentRewindRequest.chatMessageId)
+            ? null
+            : state.activeAgentRewindRequest,
+      }
+    })
+    return applied
+  },
 
   requestAgentPermission: (payload, timeoutMs = DEFAULT_AGENT_PERMISSION_TIMEOUT_MS) =>
     new Promise<AgentPermissionDecision>((resolve) => {

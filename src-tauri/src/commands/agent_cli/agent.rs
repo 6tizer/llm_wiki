@@ -181,6 +181,66 @@ pub struct AgentSpawnArgs {
     sandbox: Option<AgentSandboxOptions>,
 }
 
+/// Args for `agent_rewind_session` — a resume-only, one-shot rewind run that
+/// does not depend on an active stream (SPEC-7 PR2, fixes #60: rewind used to
+/// only work while the original turn's stream was still alive). Deliberately
+/// a much smaller surface than `AgentSpawnArgs`: the sidecar's rewind bridge
+/// hardcodes the no-tools/maxTurns:1/bypassPermissions options itself rather
+/// than accepting them from the frontend, so this struct only carries what's
+/// needed to resume the right session and reach it (profile/auth mirrors
+/// AgentSpawnArgs exactly — same claim mechanism, see `resolve_agent_profile_claim`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRewindSessionArgs {
+    stream_id: String,
+    agent_session_id: String,
+    rewind_user_message_id: String,
+    fallback_assistant_message_id: Option<String>,
+    cwd: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    agent_profile_auth_style: Option<String>,
+    agent_profile_id: Option<String>,
+    agent_profile_claim_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentRewindSessionRequest {
+    r#type: &'static str,
+    stream_id: String,
+    agent_session_id: String,
+    rewind_user_message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_assistant_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_profile_auth_style: Option<String>,
+}
+
+fn build_agent_rewind_session_request(args: AgentRewindSessionArgs) -> AgentRewindSessionRequest {
+    AgentRewindSessionRequest {
+        r#type: "rewind_session",
+        stream_id: args.stream_id,
+        agent_session_id: args.agent_session_id,
+        rewind_user_message_id: args.rewind_user_message_id,
+        fallback_assistant_message_id: args.fallback_assistant_message_id,
+        cwd: args.cwd,
+        model: args.model,
+        api_key: args.api_key,
+        base_url: args.base_url,
+        agent_profile_auth_style: args.agent_profile_auth_style,
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentRequestOptions {
@@ -350,19 +410,21 @@ fn sanitize_agent_stderr_for_frontend(stderr: &str) -> String {
     runtime_db::sanitize_profile_pool_text_for_log(stderr)
 }
 
-fn apply_agent_profile_config(
-    args: &mut AgentSpawnArgs,
+/// Shared profile-claim resolution used by both `agent_spawn` and
+/// `agent_rewind_session` — the rewind path must claim/release a profile
+/// through the exact same mechanism as a normal streamed run (matrix A18),
+/// not a bespoke one, so both commands funnel through this one function.
+fn resolve_agent_profile_claim(
     project_root: Option<&Path>,
     runtime_enabled: bool,
-) -> Result<Option<AgentProfileClaimOwner>, String> {
-    if args.agent_profile_id.is_none() && args.agent_profile_claim_id.is_none() {
+    agent_profile_id: Option<&str>,
+    agent_profile_claim_id: Option<&str>,
+) -> Result<Option<(AgentProfileClaimOwner, runtime_db::AgentRunProfileConfig)>, String> {
+    if agent_profile_id.is_none() && agent_profile_claim_id.is_none() {
         return Ok(None);
     }
 
-    let (Some(profile_id), Some(claim_id)) = (
-        args.agent_profile_id.as_deref(),
-        args.agent_profile_claim_id.as_deref(),
-    ) else {
+    let (Some(profile_id), Some(claim_id)) = (agent_profile_id, agent_profile_claim_id) else {
         return Err(
             "agent-profile-invalid: agentProfileId and agentProfileClaimId are both required"
                 .to_string(),
@@ -381,11 +443,7 @@ fn apply_agent_profile_config(
         runtime_enabled,
         claim_id: claim_id.to_string(),
     };
-    args.model = Some(config.agent_sdk_model_id);
-    args.base_url = config.endpoint;
-    args.agent_profile_auth_style = Some(config.auth_style);
-    args.api_key = config.secret_value;
-    Ok(Some(owner))
+    Ok(Some((owner, config)))
 }
 
 fn start_agent_profile_claim_renewer(owner: AgentProfileClaimOwner) -> tokio::task::JoinHandle<()> {
@@ -444,13 +502,116 @@ pub async fn agent_spawn(
 ) -> Result<(), String> {
     let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
     let project_root = root_state.get();
-    let profile_claim_owner =
-        apply_agent_profile_config(&mut args, project_root.as_deref(), runtime_enabled)?;
+    let profile_claim_owner = match resolve_agent_profile_claim(
+        project_root.as_deref(),
+        runtime_enabled,
+        args.agent_profile_id.as_deref(),
+        args.agent_profile_claim_id.as_deref(),
+    )? {
+        Some((owner, config)) => {
+            args.model = Some(config.agent_sdk_model_id);
+            args.base_url = config.endpoint;
+            args.agent_profile_auth_style = Some(config.auth_style);
+            args.api_key = config.secret_value;
+            Some(owner)
+        }
+        None => None,
+    };
     let logged_base_url = args.base_url.as_deref().map(redact_url_userinfo_for_log);
     eprintln!(
         "[agent_spawn] stream_id={}, model={:?}, base_url={:?}",
         args.stream_id, args.model, logged_base_url
     );
+
+    let stream_id = args.stream_id.clone();
+    let internal_api_token = inject_internal_api_token(&mut args);
+    let request = build_agent_request(args);
+    let request_line = format!(
+        "{}\n",
+        serde_json::to_string(&request)
+            .map_err(|e| format!("Failed to serialize agent request: {e}"))?
+    );
+
+    spawn_agent_sidecar_process(
+        app,
+        state.children.clone(),
+        stream_id,
+        request_line,
+        profile_claim_owner,
+        internal_api_token,
+    )
+    .await
+}
+
+/// Args for `agent_rewind_session` reuse `AgentState.children` (the same map
+/// `agent_kill`/`kill_all`/app-shutdown already sweep) so this ephemeral,
+/// no-active-stream-required rewind run is killable and reaped exactly like
+/// a normal streamed run — no separate tracking structure to keep in sync.
+#[tauri::command]
+pub async fn agent_rewind_session(
+    app: AppHandle,
+    state: State<'_, AgentState>,
+    root_state: State<'_, ProjectRootState>,
+    mut args: AgentRewindSessionArgs,
+) -> Result<(), String> {
+    let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
+    let project_root = root_state.get();
+    let profile_claim_owner = match resolve_agent_profile_claim(
+        project_root.as_deref(),
+        runtime_enabled,
+        args.agent_profile_id.as_deref(),
+        args.agent_profile_claim_id.as_deref(),
+    )? {
+        Some((owner, config)) => {
+            args.model = Some(config.agent_sdk_model_id);
+            args.base_url = config.endpoint;
+            args.agent_profile_auth_style = Some(config.auth_style);
+            args.api_key = config.secret_value;
+            Some(owner)
+        }
+        None => None,
+    };
+    let logged_base_url = args.base_url.as_deref().map(redact_url_userinfo_for_log);
+    eprintln!(
+        "[agent_rewind_session] stream_id={}, agent_session_id={}, model={:?}, base_url={:?}",
+        args.stream_id, args.agent_session_id, args.model, logged_base_url
+    );
+
+    let stream_id = args.stream_id.clone();
+    let request = build_agent_rewind_session_request(args);
+    let request_line = format!(
+        "{}\n",
+        serde_json::to_string(&request)
+            .map_err(|e| format!("Failed to serialize rewind session request: {e}"))?
+    );
+
+    // No wiki tools / internal API token for the one-shot rewind query — the
+    // sidecar's rewind bridge never registers the wiki MCP server.
+    spawn_agent_sidecar_process(
+        app,
+        state.children.clone(),
+        stream_id,
+        request_line,
+        profile_claim_owner,
+        None,
+    )
+    .await
+}
+
+/// Shared by `agent_spawn` and `agent_rewind_session`: resolve node/PATH,
+/// spawn the sidecar binary, write the first request line to its stdin,
+/// register it in `children_map` (so `agent_kill`/`kill_all` can reach it),
+/// and run the background reader task that forwards stdout events, emits
+/// the `:done` event on exit, and releases the profile claim exactly once
+/// per process regardless of which command started it.
+async fn spawn_agent_sidecar_process(
+    app: AppHandle,
+    children_map: Arc<Mutex<HashMap<String, AgentProcess>>>,
+    stream_id: String,
+    request_line: String,
+    profile_claim_owner: Option<AgentProfileClaimOwner>,
+    internal_api_token: Option<String>,
+) -> Result<(), String> {
     // Resolve the enhanced (login-shell-augmented) PATH once and use it for
     // BOTH the "is node on PATH" availability check below AND the PATH
     // actually handed to the spawned process. Checking against one PATH
@@ -509,14 +670,6 @@ pub async fn agent_spawn(
         .take()
         .ok_or_else(|| "Missing stderr handle".to_string())?;
 
-    let stream_id = args.stream_id.clone();
-    let internal_api_token = inject_internal_api_token(&mut args);
-    let request = build_agent_request(args);
-    let request_line = format!(
-        "{}\n",
-        serde_json::to_string(&request)
-            .map_err(|e| format!("Failed to serialize agent request: {e}"))?
-    );
     if let Some(token) = &internal_api_token {
         api_server::register_agent_internal_api_token(token);
     }
@@ -531,7 +684,7 @@ pub async fn agent_spawn(
         }
     }
 
-    state.children.lock().await.insert(
+    children_map.lock().await.insert(
         stream_id.clone(),
         AgentProcess {
             child,
@@ -539,7 +692,7 @@ pub async fn agent_spawn(
         },
     );
 
-    let children = Arc::clone(&state.children);
+    let children = Arc::clone(&children_map);
     let app_for_task = app.clone();
     let stream_id_task = stream_id.clone();
     let internal_api_token_task = internal_api_token.clone();
@@ -1443,6 +1596,111 @@ mod tests {
         for marker_path in marker_paths {
             let _ = std::fs::remove_file(&marker_path);
         }
+    }
+
+    fn rewind_session_args_with_optional_fields_none() -> AgentRewindSessionArgs {
+        AgentRewindSessionArgs {
+            stream_id: "rewind-stream-1".to_string(),
+            agent_session_id: "session-abc".to_string(),
+            rewind_user_message_id: "user-uuid-1".to_string(),
+            fallback_assistant_message_id: None,
+            cwd: None,
+            model: None,
+            api_key: None,
+            base_url: None,
+            agent_profile_auth_style: None,
+            agent_profile_id: None,
+            agent_profile_claim_id: None,
+        }
+    }
+
+    #[test]
+    fn rewind_session_request_serializes_type_and_required_fields() {
+        let request =
+            build_agent_rewind_session_request(rewind_session_args_with_optional_fields_none());
+        let value: Value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(
+            value.get("type").and_then(Value::as_str),
+            Some("rewind_session")
+        );
+        assert_eq!(
+            value.get("streamId").and_then(Value::as_str),
+            Some("rewind-stream-1")
+        );
+        assert_eq!(
+            value.get("agentSessionId").and_then(Value::as_str),
+            Some("session-abc")
+        );
+        assert_eq!(
+            value.get("rewindUserMessageId").and_then(Value::as_str),
+            Some("user-uuid-1")
+        );
+    }
+
+    #[test]
+    fn rewind_session_request_omits_absent_optional_fields() {
+        let request =
+            build_agent_rewind_session_request(rewind_session_args_with_optional_fields_none());
+        let value: Value = serde_json::to_value(request).unwrap();
+
+        assert!(value.get("fallbackAssistantMessageId").is_none());
+        assert!(value.get("cwd").is_none());
+        assert!(value.get("model").is_none());
+        assert!(value.get("apiKey").is_none());
+        assert!(value.get("baseUrl").is_none());
+        assert!(value.get("agentProfileAuthStyle").is_none());
+    }
+
+    #[test]
+    fn rewind_session_request_serializes_present_optional_fields() {
+        let mut args = rewind_session_args_with_optional_fields_none();
+        args.fallback_assistant_message_id = Some("assistant-uuid-1".to_string());
+        args.cwd = Some("/wiki".to_string());
+        args.model = Some("claude-sonnet-4-5".to_string());
+        args.api_key = Some("sk-test".to_string());
+        args.base_url = Some("https://example.com".to_string());
+        args.agent_profile_auth_style = Some("bearer".to_string());
+
+        let request = build_agent_rewind_session_request(args);
+        let value: Value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(
+            value.get("fallbackAssistantMessageId").and_then(Value::as_str),
+            Some("assistant-uuid-1")
+        );
+        assert_eq!(value.get("cwd").and_then(Value::as_str), Some("/wiki"));
+        assert_eq!(
+            value.get("model").and_then(Value::as_str),
+            Some("claude-sonnet-4-5")
+        );
+        assert_eq!(value.get("apiKey").and_then(Value::as_str), Some("sk-test"));
+        assert_eq!(
+            value.get("baseUrl").and_then(Value::as_str),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            value.get("agentProfileAuthStyle").and_then(Value::as_str),
+            Some("bearer")
+        );
+    }
+
+    #[test]
+    fn rewind_session_request_never_serializes_profile_claim_fields() {
+        // agentProfileId/agentProfileClaimId are consumed by
+        // resolve_agent_profile_claim (inlined in agent_rewind_session)
+        // before the request is built (mirrors AgentSpawnArgs — see
+        // agent_profile_claim_fields_are_not_serialized_to_sidecar_request
+        // above) and must never reach the sidecar request payload.
+        let mut args = rewind_session_args_with_optional_fields_none();
+        args.agent_profile_id = Some("profile-agent".to_string());
+        args.agent_profile_claim_id = Some("claim-agent".to_string());
+
+        let request = build_agent_rewind_session_request(args);
+        let text = serde_json::to_string(&request).unwrap();
+
+        assert!(!text.contains("agentProfileId"));
+        assert!(!text.contains("agentProfileClaimId"));
     }
 }
 
