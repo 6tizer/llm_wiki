@@ -96,13 +96,26 @@ export function KnowledgeTree() {
       }
       setArmedPath(null)
       setDeletingPath(pagePath)
+      const projectId = project.id
+      const pp = normalizePath(project.path)
       try {
-        const pp = normalizePath(project.path)
         await cascadeDeleteWikiPagesWithRefs(pp, [pagePath])
+        // The cascade delete has already landed on disk for `pp`'s
+        // project. If the user switched projects while we were awaiting,
+        // the UI refresh below must not run — it would reload the OLD
+        // project's pages/tree into what's now the NEW project's view
+        // (same project.id guard as rescanProjectFileSync in
+        // project-file-sync.ts).
+        if (useWikiStore.getState().project?.id !== projectId) return
         // Refresh: page list, file tree, any data-version subscribers.
+        // `loadPages` re-reads every wiki page over IPC in a loop — by
+        // far the widest await window in this handler — so re-check
+        // immediately after it too.
         await loadPages()
+        if (useWikiStore.getState().project?.id !== projectId) return
         try {
           const tree = await listDirectory(pp)
+          if (useWikiStore.getState().project?.id !== projectId) return
           setFileTree(tree)
         } catch {
           // non-critical
@@ -111,7 +124,7 @@ export function KnowledgeTree() {
         if (selectedFile === pagePath) setSelectedFile(null)
       } catch (err) {
         console.error("[KnowledgeTree] delete failed:", err)
-        window.alert(`Failed to delete: ${err}`)
+        window.alert(`Failed to delete "${pagePath}" in project "${project.name}" (${pp}): ${err}`)
       } finally {
         setDeletingPath(null)
       }
