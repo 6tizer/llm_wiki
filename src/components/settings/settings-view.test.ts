@@ -26,6 +26,7 @@ import {
   initialDraft,
   mineruConfigFromDraft,
   persistAppPreferences,
+  SETTINGS_GROUPS,
   SettingsView,
   shouldShowGlobalSettingsSaveBar,
 } from "./settings-view"
@@ -59,6 +60,7 @@ vi.mock("@/lib/project-file-sync", () => ({
 }))
 
 vi.mock("@/lib/scheduled-import", () => ({
+  scanAndImport: vi.fn(async () => undefined),
   startScheduledImport: vi.fn(() => undefined),
   stopScheduledImport: vi.fn(() => undefined),
 }))
@@ -157,6 +159,18 @@ describe("settings platform categories", () => {
     ])
   })
 
+  it("keeps settings groups aligned with the flat category order", () => {
+    const groupedIds = SETTINGS_GROUPS.flatMap((group) => group.categoryIds)
+    const uniqueGroupedIds = new Set(groupedIds)
+
+    expect(groupedIds).toEqual(getSettingsCategories(true).map((category) => category.id))
+    expect(uniqueGroupedIds.size).toBe(groupedIds.length)
+
+    const nonMacIds = getSettingsCategories(false).map((category) => category.id)
+    expect(new Set(nonMacIds).size).toBe(nonMacIds.length)
+    expect(nonMacIds).toEqual(groupedIds.filter((id) => id !== "general"))
+  })
+
   it("falls back when active category is not available", () => {
     const nonMacCategories = getSettingsCategories(false)
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
@@ -166,9 +180,47 @@ describe("settings platform categories", () => {
       expect(nonMacCategories.some((category) => category.id === id)).toBe(true)
     }
   })
+
+  it("migrates removed import-related category ids to Import", () => {
+    const categories = getSettingsCategories(true)
+
+    expect(coerceSettingsCategory("source-watch", categories)).toBe("import")
+    expect(coerceSettingsCategory("scheduled-import", categories)).toBe("import")
+    expect(coerceSettingsCategory("mineru", categories)).toBe("import")
+
+    expect(coerceSettingsCategory("import", categories)).toBe("import")
+    expect(coerceSettingsCategory("no-such-category", categories)).toBe("llm")
+    expect(coerceSettingsCategory("MINERU", categories)).toBe("llm")
+    expect(coerceSettingsCategory("source-watch", getSettingsCategories(false))).toBe("import")
+
+    for (const legacyId of ["source-watch", "scheduled-import", "mineru"]) {
+      expect(categories.some((category) => (category.id as string) === legacyId)).toBe(false)
+    }
+  })
+
+  it("keeps renamed categories on their original ids and label keys", () => {
+    const categories = getSettingsCategories(true)
+    const agent = categories.find((category) => category.id === "agent")
+    const knowledgeAgents = categories.find((category) => category.id === "knowledge-agents")
+
+    expect(agent?.labelKey).toBe("settings.categories.agent")
+    expect(knowledgeAgents?.labelKey).toBe("settings.categories.knowledgeAgents")
+  })
 })
 
 describe("SettingsView category rendering", () => {
+  it("renders grouped settings navigation with an accessible nav label", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    expect(container.querySelector("nav[aria-label='Settings categories']")).not.toBeNull()
+    expect(container.textContent).toContain("AI & Models")
+    expect(container.textContent).toContain("Knowledge Pipeline")
+    expect(container.textContent).toContain("Application")
+
+    unmount(root)
+  })
+
   it("renders ModelProfilesSection after clicking the Model Profiles sidebar category", async () => {
     const { container, root } = renderSettingsView()
     await flush()
@@ -180,6 +232,25 @@ describe("SettingsView category rendering", () => {
     await flush()
 
     expect(container.textContent).toContain("Mock Model Profiles Section")
+
+    unmount(root)
+  })
+
+  it("renders the merged Import page with source watch, scheduled import, and MinerU sections", async () => {
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    const importButton = container.querySelector("[data-testid='settings-category-import']")
+    if (!importButton) throw new Error("import category button not found")
+
+    await click(importButton)
+    await flush()
+
+    expect(container.textContent).toContain("Source Folder Auto Watch")
+    // "Scan Now" is unique to ScheduledImportSection — the plain
+    // "Scheduled Import" heading also exists on the import page shell.
+    expect(container.textContent).toContain("Scan Now")
+    expect(container.textContent).toContain("MinerU PDF Parser")
 
     unmount(root)
   })
