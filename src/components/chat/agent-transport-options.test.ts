@@ -113,6 +113,55 @@ describe("buildAgentTransportOptionsFromState", () => {
     })
   })
 
+  it("applies resumeSessionAt only alongside a pending fork (SPEC-7 PR2)", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [
+        {
+          id: "c1",
+          title: "Agent",
+          createdAt: 1,
+          updatedAt: 1,
+          agentSessionId: "session-1",
+          agentForkSessionPending: true,
+          agentResumeSessionAt: "assistant-uuid-1",
+        },
+      ],
+      activeConversationId: "c1",
+      resourceConfig: DEFAULT_AGENT_RESOURCE_CONFIG,
+    })
+
+    expect(options).toMatchObject({
+      resume: "session-1",
+      forkSession: true,
+      resumeSessionAt: "assistant-uuid-1",
+    })
+  })
+
+  it("ignores an orphaned resumeSessionAt when no fork is pending", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [
+        {
+          id: "c1",
+          title: "Agent",
+          createdAt: 1,
+          updatedAt: 1,
+          agentSessionId: "session-1",
+          agentResumeSessionAt: "assistant-uuid-1",
+        },
+      ],
+      activeConversationId: "c1",
+      resourceConfig: DEFAULT_AGENT_RESOURCE_CONFIG,
+    })
+
+    expect(options?.resumeSessionAt).toBeUndefined()
+  })
+
   it("returns null without an active project", () => {
     expect(
       buildAgentTransportOptionsFromState({

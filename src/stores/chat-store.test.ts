@@ -16,6 +16,7 @@ function resetChatStore(): void {
     queuedAgentPermissionRequests: [],
     agentRewindTargets: {},
     activeAgentRewindRequest: null,
+    agentRewindLocks: {},
   })
 }
 
@@ -685,6 +686,155 @@ describe("chat store agent data model", () => {
       streamId: "stream-1",
       userMessageId: "user-sdk-1",
     })
+  })
+
+  it("captures conversationId and agentSessionId on the rewind target (SPEC-7 PR2 A9/A12)", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().markAgentMessageRewindable("m1", {
+      streamId: "stream-1",
+      agentSessionId: "session-1",
+      userMessageId: "user-sdk-1",
+      assistantMessageId: "assistant-sdk-1",
+    })
+
+    expect(useChatStore.getState().agentRewindTargets.m1).toMatchObject({
+      conversationId: convId,
+      agentSessionId: "session-1",
+    })
+  })
+
+  it("keeps the previously captured agentSessionId when a later patch omits it", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    useChatStore.getState().markAgentMessageRewindable("m1", {
+      streamId: "stream-1",
+      agentSessionId: "session-1",
+      userMessageId: "user-sdk-1",
+    })
+    useChatStore.getState().markAgentMessageRewindable("m1", {
+      streamId: "stream-1",
+      assistantMessageId: "assistant-sdk-1",
+    })
+
+    expect(useChatStore.getState().agentRewindTargets.m1).toMatchObject({
+      agentSessionId: "session-1",
+      assistantMessageId: "assistant-sdk-1",
+    })
+  })
+
+  it("applyAgentRewindSuccess truncates the conversation timeline and sets delayed-fork pending fields (A3/A4)", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        makeAssistantMessage("m1", convId),
+        makeAssistantMessage("m2", convId),
+        makeAssistantMessage("m3", convId),
+      ],
+    })
+
+    const applied = useChatStore.getState().applyAgentRewindSuccess(convId, {
+      throughMessageId: "m2",
+      resumeSessionAt: "assistant-sdk-1",
+    })
+
+    expect(applied).toBe(true)
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["m1", "m2"])
+    const conversation = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === convId)
+    expect(conversation).toMatchObject({
+      agentForkSessionPending: true,
+      agentResumeSessionAt: "assistant-sdk-1",
+    })
+  })
+
+  it("applyAgentRewindSuccess is a no-op when the target message is not found", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [makeAssistantMessage("m1", convId)],
+    })
+
+    const applied = useChatStore.getState().applyAgentRewindSuccess(convId, {
+      throughMessageId: "does-not-exist",
+      resumeSessionAt: "assistant-sdk-1",
+    })
+
+    expect(applied).toBe(false)
+    expect(useChatStore.getState().messages).toHaveLength(1)
+  })
+
+  it("applyAgentRewindSuccess only touches the target conversation, not others (A12)", () => {
+    const convId = useChatStore.getState().createConversation()
+    const otherConvId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        makeAssistantMessage("m1", convId),
+        makeAssistantMessage("m2", convId),
+        makeAssistantMessage("other-1", otherConvId),
+      ],
+    })
+
+    useChatStore.getState().applyAgentRewindSuccess(convId, {
+      throughMessageId: "m1",
+      resumeSessionAt: "assistant-sdk-1",
+    })
+
+    expect(
+      useChatStore.getState().messages.some((m) => m.id === "other-1")
+    ).toBe(true)
+    const other = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === otherConvId)
+    expect(other?.agentForkSessionPending).toBeUndefined()
+  })
+
+  it("applyAgentRewindSuccess latest-wins when called again with a newer target (A19)", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        makeAssistantMessage("m1", convId),
+        makeAssistantMessage("m2", convId),
+      ],
+    })
+
+    useChatStore.getState().applyAgentRewindSuccess(convId, {
+      throughMessageId: "m2",
+      resumeSessionAt: "assistant-sdk-2",
+    })
+    useChatStore.getState().applyAgentRewindSuccess(convId, {
+      throughMessageId: "m1",
+      resumeSessionAt: "assistant-sdk-1",
+    })
+
+    const conversation = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === convId)
+    expect(conversation?.agentResumeSessionAt).toBe("assistant-sdk-1")
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["m1"])
+  })
+
+  it("setAgentRewindLock sets and clears a per-conversation lock", () => {
+    useChatStore.getState().setAgentRewindLock("conv-1", true)
+    expect(useChatStore.getState().agentRewindLocks["conv-1"]).toBe(true)
+
+    useChatStore.getState().setAgentRewindLock("conv-1", false)
+    expect(useChatStore.getState().agentRewindLocks["conv-1"]).toBeUndefined()
+  })
+
+  it("deleteConversation clears that conversation's rewind lock", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.getState().setAgentRewindLock(convId, true)
+
+    useChatStore.getState().deleteConversation(convId)
+
+    expect(useChatStore.getState().agentRewindLocks[convId]).toBeUndefined()
   })
 
   it("chatMessagesToLLM drops agent metadata", () => {

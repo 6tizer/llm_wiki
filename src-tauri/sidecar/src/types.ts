@@ -159,6 +159,31 @@ export interface RewindFilesRequest {
 	messageId?: string;
 }
 
+/**
+ * One-shot resume-only rewind (SPEC-7 PR2, fixes #60): unlike
+ * `RewindFilesRequest`, this does NOT require an active stream — the sidecar
+ * spins up its own throwaway `resume` Query, verifies it landed on the right
+ * session, calls `rewindFiles`, then closes. See rewind-session-bridge.ts.
+ */
+export interface RewindSessionRequest {
+	type: "rewind_session";
+	streamId: string;
+	agentSessionId: string;
+	rewindUserMessageId: string;
+	cwd?: string;
+	model?: string;
+	apiKey?: string;
+	baseUrl?: string;
+	agentProfileAuthStyle?: "none" | "bearer" | "x-api-key" | "api-key" | "oauth-local-cli";
+}
+
+export type RewindSessionUnavailableReason =
+	| "missing_message_id"
+	| "unsupported"
+	| "transport_not_ready"
+	| "session_mismatch"
+	| "spawn_failed";
+
 export interface AgentMessage {
 	streamId: string;
 	type:
@@ -176,6 +201,7 @@ export interface AgentMessage {
 		| "agent_task_done"
 		| "agent_task_error"
 		| "rewind_files"
+		| "rewind_session"
 		| "prompt_suggestion"
 		| "partial_message"
 		| "hook_event"

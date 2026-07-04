@@ -15,7 +15,7 @@ import { createLlmWikiMcpServer } from "./wiki-tools.js";
 // Keep this default in sync with DEFAULT_AGENT_RESOURCE_CONFIG in the frontend.
 export const DEFAULT_AGENT_MAX_TURNS = 30;
 
-type QueryInput = Parameters<typeof sdkQuery>[0];
+export type QueryInput = Parameters<typeof sdkQuery>[0];
 export interface RewindFilesResult {
 	canRewind: boolean;
 	error?: string;
@@ -65,7 +65,7 @@ export function appendIntentOverride(
 	return `${systemPrompt}\n\n${intentOverride}`;
 }
 
-function applyAgentProfileEnv(
+export function applyAgentProfileEnv(
 	env: Record<string, string | undefined>,
 	options: AgentRequest["options"],
 ): void {

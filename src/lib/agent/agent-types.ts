@@ -170,7 +170,11 @@ export interface AgentRewindFilesPayload {
 		| "inactive_stream"
 		| "unsupported"
 		| "missing_message_id"
-		| "transport_closed";
+		| "transport_closed"
+		// SPEC-7 PR2 resume-only-for-rewind path (agent_rewind_session):
+		| "transport_not_ready"
+		| "session_mismatch"
+		| "spawn_failed";
 }
 
 export interface AgentSummaryPayload {

@@ -259,6 +259,160 @@ export async function rewindAgentFiles(
 	}
 }
 
+/**
+ * Resume-only-for-rewind (SPEC-7 PR2, fixes #60): rewind a turn whose
+ * stream has already ended (or whose process has already exited — the
+ * common case, since core.ts unconditionally drops activeSdkQueries when a
+ * stream finishes and the sidecar self-exits shortly after). Unlike
+ * `rewindAgentFiles`, this does not require an active stream — it spawns
+ * its own one-shot sidecar process via `agent_rewind_session`.
+ *
+ * `options.resume` MUST be the session id to rewind (the caller is
+ * responsible for setting it — normally the rewind target's own captured
+ * `agentSessionId`, which may differ from the conversation's CURRENT
+ * agentSessionId after a fork; matrix A9 is enforced by the frontend gate
+ * before this is ever called, not here).
+ *
+ * Profile claim handling mirrors `streamAgent` exactly (matrix A18): same
+ * `claimAgentProfileForRun`/`releaseUntransferredAgentProfileClaim` calls,
+ * so the rewind path never bypasses the claim/release lifecycle a normal
+ * run goes through.
+ */
+export async function rewindAgentSession(
+	options: AgentTransportOptions,
+	rewindUserMessageId: string,
+): Promise<AgentRewindFilesPayload> {
+	const agentSessionId = options.resume;
+	if (!agentSessionId) {
+		return {
+			ok: false,
+			error: "No Agent session to resume for rewind",
+			unavailableReason: "missing_message_id",
+		};
+	}
+	if (!rewindUserMessageId) {
+		return {
+			ok: false,
+			error: "Missing SDK user message id",
+			unavailableReason: "missing_message_id",
+		};
+	}
+
+	const streamId = crypto.randomUUID();
+	let unlistenData: UnlistenFn | undefined;
+	let unlistenDone: UnlistenFn | undefined;
+	let settled = false;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let profileClaim: RuntimeProfilePoolClaim | null = null;
+	let profileClaimTransferredToRust = false;
+	let resolveResult: (payload: AgentRewindFilesPayload) => void = () => {};
+
+	const cleanup = () => {
+		if (timeout) clearTimeout(timeout);
+		const offData = unlistenData;
+		const offDone = unlistenDone;
+		unlistenData = undefined;
+		unlistenDone = undefined;
+		safeUnlisten(offData, `agent:${streamId}:rewind-session`);
+		safeUnlisten(offDone, `agent:${streamId}:rewind-session-done`);
+	};
+
+	const result = new Promise<AgentRewindFilesPayload>((resolve) => {
+		resolveResult = (payload) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(payload);
+		};
+	});
+
+	timeout = setTimeout(() => {
+		resolveResult({
+			ok: false,
+			error: "Timed out waiting for Agent rewind-session result",
+		});
+	}, 30_000);
+
+	try {
+		unlistenData = await listen<string>(`agent:${streamId}`, (event) => {
+			try {
+				const wrapper = JSON.parse(event.payload) as {
+					streamId: string;
+					type: string;
+					data: unknown;
+				};
+				if (wrapper.type === "rewind_session") {
+					resolveResult({
+						...(wrapper.data as AgentRewindFilesPayload),
+						streamId: wrapper.streamId,
+					});
+					return;
+				}
+				if (wrapper.type === "error") {
+					const errMsg =
+						(wrapper.data as Record<string, unknown>)?.error ??
+						"Unknown sidecar error";
+					resolveResult({ ok: false, error: String(errMsg) });
+				}
+			} catch (err) {
+				resolveResult({ ok: false, error: errorMessage(err) });
+			}
+		});
+		unlistenDone = await listen<AgentDonePayload>(
+			`agent:${streamId}:done`,
+			(event) => {
+				const { code, stderr } = event.payload ?? {};
+				if (code !== undefined && code !== 0) {
+					const detail = stderr?.trim() ? `: ${stderr.trim()}` : "";
+					resolveResult({
+						ok: false,
+						error: `Agent rewind process exited with code ${code}${detail}`,
+						unavailableReason: "spawn_failed",
+					});
+				}
+			},
+		);
+
+		profileClaim = await claimAgentProfileForRun(streamId, options);
+
+		const payload: Record<string, unknown> = {
+			streamId,
+			agentSessionId,
+			rewindUserMessageId,
+			cwd: options.cwd,
+			model: options.model,
+			apiKey: options.apiKey,
+			baseUrl: options.baseUrl,
+		};
+		if (profileClaim) {
+			delete payload.apiKey;
+			delete payload.baseUrl;
+			delete payload.model;
+			payload.agentProfileId = profileClaim.profileId;
+			payload.agentProfileClaimId = profileClaim.claimId;
+		}
+		try {
+			await invoke("agent_rewind_session", { args: payload });
+			profileClaimTransferredToRust = Boolean(profileClaim);
+		} catch (invokeErr) {
+			if (profileClaim && !profileClaimTransferredToRust) {
+				await releaseUntransferredAgentProfileClaim(
+					profileClaim.claimId,
+					invokeErr,
+				);
+			}
+			resolveResult({
+				ok: false,
+				error: errorMessage(invokeErr),
+				unavailableReason: "spawn_failed",
+			});
+		}
+		return await result;
+	} finally {
+		cleanup();
+	}
+}
+
 function defaultPermissionDecision(): AgentPermissionDecision {
 	return {
 		behavior: "deny",

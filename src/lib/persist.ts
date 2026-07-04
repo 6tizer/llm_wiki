@@ -123,6 +123,7 @@ export function cleanExpiredAgentSessionRefs(
     const {
       agentSessionId: _agentSessionId,
       agentForkSessionPending: _pending,
+      agentResumeSessionAt: _resumeAt,
       ...cleaned
     } = conversation
     return cleaned

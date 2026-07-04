@@ -37,6 +37,18 @@ export function buildAgentTransportOptionsFromState({
   const agentSessionId = activeConversation?.agentSessionId || undefined
   const forkSession = Boolean(agentSessionId) &&
     activeConversation?.agentForkSessionPending === true
+  // SPEC-7 PR2 design point 5: resumeSessionAt only ever applies alongside
+  // a pending fork — the "copy conversation" fork (forkAgentConversation in
+  // chat-store.ts) legitimately sets agentForkSessionPending WITHOUT a
+  // resumeSessionAt (it forks to a fresh continuation, no rewind target
+  // involved), so the inverse (resumeSessionAt with no pending fork) is the
+  // only truly inconsistent state worth flagging.
+  const resumeSessionAt = forkSession ? activeConversation?.agentResumeSessionAt : undefined
+  if (!forkSession && activeConversation?.agentResumeSessionAt) {
+    console.warn(
+      "[agent-transport-options] agentResumeSessionAt set without a pending fork — ignoring",
+    )
+  }
 
   return {
     cwd: project.path,
@@ -47,6 +59,7 @@ export function buildAgentTransportOptionsFromState({
     baseUrl: agentBaseUrl(llmConfig),
     resume: agentSessionId,
     forkSession,
+    resumeSessionAt,
     persistSession: true,
     permissionPolicy: "default",
     enableWikiTools: true,

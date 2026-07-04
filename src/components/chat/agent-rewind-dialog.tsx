@@ -10,37 +10,102 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { rewindAgentFiles } from "@/lib/agent/agent-transport"
+import { useAgentSettingsStore } from "@/stores/agent-settings-store"
+import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
+import {
+  computeAgentRewindGateDecision,
+  type AgentRewindGateDecision,
+} from "@/lib/agent/agent-rewind-gate"
+import {
+  retryAgentRewindPersistence,
+  runAgentRewind,
+} from "@/lib/agent/agent-rewind-orchestration"
+import { buildAgentTransportOptionsFromState } from "./agent-transport-options"
+
+/** Same getState()-based builder pattern chat-panel.tsx uses (not imported
+ * from there directly — chat-panel.tsx imports this dialog, so importing
+ * back would be circular). */
+function buildRewindTransportOptions() {
+  const wikiState = useWikiStore.getState()
+  const chatState = useChatStore.getState()
+  const agentSettings = useAgentSettingsStore.getState()
+  return buildAgentTransportOptionsFromState({
+    project: wikiState.project,
+    llmConfig: wikiState.llmConfig,
+    apiConfig: wikiState.apiConfig,
+    conversations: chatState.conversations,
+    activeConversationId: chatState.activeConversationId,
+    resourceConfig: agentSettings.resourceConfig,
+  })
+}
+
+function gateBlockedI18nKey(reason: Exclude<AgentRewindGateDecision, { allowed: true }>["reason"]): string {
+  if (reason === "wiki_write_after_target") return "agent.rewind.blockedWikiWrite"
+  if (reason === "cross_fork") return "agent.rewind.blockedCrossFork"
+  return "agent.rewind.blockedLocked"
+}
 
 export function AgentRewindDialogHost() {
   const { t } = useTranslation()
   const request = useChatStore((s) => s.activeAgentRewindRequest)
   const clearAgentRewindRequest = useChatStore((s) => s.clearAgentRewindRequest)
   const clearAgentMessageRewindable = useChatStore((s) => s.clearAgentMessageRewindable)
+  const conversations = useChatStore((s) => s.conversations)
+  const messages = useChatStore((s) => s.messages)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const agentRewindLocks = useChatStore((s) => s.agentRewindLocks)
+  const project = useWikiStore((s) => s.project)
   const [error, setError] = useState<string | null>(null)
+  const [persistError, setPersistError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     setError(null)
+    setPersistError(null)
     setPending(false)
+    setRetrying(false)
   }, [request])
+
+  const gate: AgentRewindGateDecision | null = request
+    ? computeAgentRewindGateDecision({
+        target: request,
+        conversation: conversations.find((c) => c.id === request.conversationId),
+        messages,
+        isStreaming,
+        rewindLocked: Boolean(agentRewindLocks[request.conversationId]),
+      })
+    : null
 
   const confirm = useCallback(() => {
     if (!request || pending) return
     setPending(true)
     setError(null)
-    void rewindAgentFiles(request.streamId, request.userMessageId)
-      .then((payload) => {
-        if (!payload.ok) {
-          const message = payload.error ?? "Unknown rewind error"
+    setPersistError(null)
+    void runAgentRewind({
+      target: request,
+      projectPath: project?.path,
+      buildOptions: buildRewindTransportOptions,
+    })
+      .then((outcome) => {
+        if (!outcome.ok) {
+          if (outcome.gate && !outcome.gate.allowed) {
+            setError(t(gateBlockedI18nKey(outcome.gate.reason)))
+            return
+          }
+          const message = outcome.payload?.error ?? "Unknown rewind error"
           console.warn("[agent] rewind failed:", message)
-          if (payload.unavailableReason) {
+          if (outcome.payload?.unavailableReason) {
             clearAgentMessageRewindable(request.chatMessageId, {
               keepActiveRequest: true,
             })
           }
           setError(message)
+          return
+        }
+        if (outcome.persistError) {
+          setPersistError(outcome.persistError)
           return
         }
         clearAgentRewindRequest()
@@ -52,7 +117,26 @@ export function AgentRewindDialogHost() {
       .finally(() => {
         setPending(false)
       })
-  }, [clearAgentMessageRewindable, clearAgentRewindRequest, pending, request])
+  }, [clearAgentMessageRewindable, clearAgentRewindRequest, pending, project?.path, request])
+
+  const retryPersist = useCallback(() => {
+    if (!project?.path || retrying) return
+    setRetrying(true)
+    void retryAgentRewindPersistence(project.path)
+      .then((outcome) => {
+        if (outcome.ok) {
+          setPersistError(null)
+          clearAgentRewindRequest()
+          return
+        }
+        setPersistError(outcome.error ?? "Unknown save error")
+      })
+      .finally(() => {
+        setRetrying(false)
+      })
+  }, [clearAgentRewindRequest, project?.path, retrying])
+
+  const blocked = gate !== null && !gate.allowed
 
   return (
     <Dialog open={Boolean(request)} onOpenChange={(open) => {
@@ -65,7 +149,9 @@ export function AgentRewindDialogHost() {
             {t("agent.rewind.title")}
           </DialogTitle>
           <DialogDescription>
-            {t("agent.rewind.description")}
+            {blocked && gate && !gate.allowed
+              ? t(gateBlockedI18nKey(gate.reason))
+              : t("agent.rewind.description")}
           </DialogDescription>
         </DialogHeader>
         {error ? (
@@ -73,11 +159,29 @@ export function AgentRewindDialogHost() {
             {t("agent.rewind.failed", { error })}
           </div>
         ) : null}
+        {persistError ? (
+          <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+            <span>{t("agent.rewind.persistWarning", { error: persistError })}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={retryPersist}
+              disabled={retrying}
+            >
+              {t("agent.rewind.retryPersist")}
+            </Button>
+          </div>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={clearAgentRewindRequest} disabled={pending}>
             {t("agent.rewind.cancel")}
           </Button>
-          <Button variant="destructive" onClick={confirm} disabled={pending}>
+          <Button
+            variant="destructive"
+            onClick={confirm}
+            disabled={pending || blocked || Boolean(persistError)}
+          >
             {t("agent.rewind.confirm")}
           </Button>
         </DialogFooter>

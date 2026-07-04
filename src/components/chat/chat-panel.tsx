@@ -443,6 +443,13 @@ export function ChatPanel() {
 	useSourceFiles(); // Keep source file cache warm
 	const activeConversationId = useChatStore((s) => s.activeConversationId);
 	const isStreaming = useChatStore((s) => s.isStreaming);
+	const agentRewindLocks = useChatStore((s) => s.agentRewindLocks);
+	// SPEC-7 PR2 matrix A6: a rewind orchestration in progress for the active
+	// conversation must block new sends the same way an active stream does —
+	// isStreaming alone can't express a per-conversation rewind lock.
+	const activeConversationRewindLocked = Boolean(
+		activeConversationId && agentRewindLocks[activeConversationId],
+	);
 	const streamingContent = useChatStore((s) => s.streamingContent);
 	const mode = useChatStore((s) => s.mode);
 	const addMessage = useChatStore((s) => s.addMessage);
@@ -464,7 +471,6 @@ export function ChatPanel() {
 	const finishAgentStreamMessage = useChatStore(
 		(s) => s.finishAgentStreamMessage,
 	);
-	const setAgentToolCalls = useChatStore((s) => s.setAgentToolCalls);
 	const updateAgentProgress = useChatStore((s) => s.updateAgentProgress);
 	const appendAgentWikiChange = useChatStore((s) => s.appendAgentWikiChange);
 	const markAgentMessageRewindable = useChatStore(
@@ -525,6 +531,14 @@ export function ChatPanel() {
 				convId = createConversation();
 			}
 
+			if (useChatStore.getState().agentRewindLocks[convId]) {
+				// A6: a rewind orchestration is in progress for this conversation.
+				console.warn(
+					"[agent] send blocked — a rewind is in progress for this conversation",
+				);
+				return;
+			}
+
 			const activeConversation = useChatStore
 				.getState()
 				.conversations.find((conversation) => conversation.id === convId);
@@ -558,7 +572,12 @@ export function ChatPanel() {
 			const finishAgentError = (kind: AgentErrorKind, detail?: string) => {
 				if (settled) return;
 				settled = true;
-				clearAgentMessageRewindable(messageId);
+				// SPEC-7 PR2 (fixes #60): do NOT clear the rewind target here.
+				// Rewind must remain available after the turn ends (error or
+				// success) — that's the whole point of the resume-only-for-rewind
+				// path (agent_rewind_session). Only an actually-unavailable rewind
+				// (sidecar/session gone) clears the target, via onRewindFiles'
+				// unavailableReason handling below.
 				finishAgentStreamMessage(
 					messageId,
 					formatAgentError(kind, detail),
@@ -598,7 +617,8 @@ export function ChatPanel() {
 			) => {
 				if (settled) return;
 				settled = true;
-				clearAgentMessageRewindable(messageId);
+				// SPEC-7 PR2 (fixes #60): see comment in finishAgentError — the
+				// rewind target must survive normal completion too.
 				finishAgentStreamMessage(messageId, content, stats);
 				abortRef.current = null;
 				setAgentRunPhase("idle");
@@ -626,6 +646,7 @@ export function ChatPanel() {
 							if (isSdkUserMessage(message) && message.uuid) {
 								markAgentMessageRewindable(messageId, {
 									streamId,
+									agentSessionId: message.session_id,
 									userMessageId: message.uuid,
 								});
 								return;
@@ -636,6 +657,7 @@ export function ChatPanel() {
 							});
 							markAgentMessageRewindable(messageId, {
 								streamId,
+								agentSessionId: message.session_id,
 								assistantMessageId: message.uuid,
 							});
 						},
@@ -653,8 +675,17 @@ export function ChatPanel() {
 						onToolEvent: (event) => {
 							markAgentRunning();
 							if (event.phase === "batch") {
-								const records = agentToolBatchToRecords(event);
-								if (records.length > 0) setAgentToolCalls(messageId, records);
+								// SPEC-7 PR2 matrix A16: this used to call
+								// setAgentToolCalls(messageId, records), which REPLACES
+								// the message's whole toolCalls array — wiki-write calls
+								// recorded by an earlier batch/event within the same
+								// assistant message were silently dropped, which made the
+								// rewind fail-closed gate (A2/A17) blind to them. Merge
+								// each batch record through the same per-call dedupe
+								// updateAgentProgress already uses instead.
+								for (const record of agentToolBatchToRecords(event)) {
+									updateAgentProgress(messageId, record);
+								}
 								return;
 							}
 							updateAgentProgress(messageId, agentToolEventToRecord(event));
@@ -735,7 +766,6 @@ export function ChatPanel() {
 			markAgentMessageRewindable,
 			project,
 			requestAgentPermission,
-			setAgentToolCalls,
 			startAgentStreamMessage,
 			t,
 			updateAgentProgress,
@@ -1171,7 +1201,7 @@ export function ChatPanel() {
 				<ChatInput
 					onSend={handleSend}
 					onStop={handleStop}
-					isStreaming={isStreaming}
+					isStreaming={isStreaming || activeConversationRewindLocked}
 					anyTxtAvailable={anyTxtAvailable}
 					imageInputAvailable={mode === "chat"}
 					showSearchToggles={mode === "chat"}

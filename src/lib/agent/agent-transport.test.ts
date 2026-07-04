@@ -68,7 +68,7 @@ vi.mock("./agent-app-tools", () => ({
 	runAgentAppTool: appToolMocks.runAgentAppTool,
 }));
 
-import { rewindAgentFiles, streamAgent } from "./agent-transport";
+import { rewindAgentFiles, rewindAgentSession, streamAgent } from "./agent-transport";
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -1401,5 +1401,162 @@ describe("streamAgent", () => {
 		expect(tauriMocks.listen).not.toHaveBeenCalled();
 		expect(callbacks.onDone).toHaveBeenCalledWith(null);
 		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+});
+
+describe("rewindAgentSession", () => {
+	it("invokes agent_rewind_session with the resume session and rewind uuid, and resolves on the rewind_session event", async () => {
+		const promise = rewindAgentSession(
+			{ apiKey: "test-key", resume: "session-abc", cwd: "/tmp/wiki" },
+			"user-uuid-1",
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_rewind_session",
+				expect.anything(),
+			);
+		});
+		const call = tauriMocks.invoke.mock.calls.find(
+			([command]) => command === "agent_rewind_session",
+		);
+		const payload = call?.[1] as { args: Record<string, unknown> };
+		expect(payload.args.agentSessionId).toBe("session-abc");
+		expect(payload.args.rewindUserMessageId).toBe("user-uuid-1");
+		expect(payload.args.cwd).toBe("/tmp/wiki");
+
+		const streamId = payload.args.streamId as string;
+		tauriMocks.emitString(
+			`agent:${streamId}`,
+			JSON.stringify({
+				streamId,
+				type: "rewind_session",
+				data: { ok: true, result: { canRewind: true, filesChanged: ["wiki/page.md"] } },
+			}),
+		);
+
+		await expect(promise).resolves.toMatchObject({
+			ok: true,
+			result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+		});
+	});
+
+	it("fails closed without invoking when there is no session to resume", async () => {
+		const result = await rewindAgentSession({ apiKey: "test-key" }, "user-uuid-1");
+
+		expect(result.ok).toBe(false);
+		expect(result.unavailableReason).toBe("missing_message_id");
+		expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+			"agent_rewind_session",
+			expect.anything(),
+		);
+	});
+
+	it("fails closed without invoking when the rewind uuid is missing", async () => {
+		const result = await rewindAgentSession(
+			{ apiKey: "test-key", resume: "session-abc" },
+			"",
+		);
+
+		expect(result.ok).toBe(false);
+		expect(result.unavailableReason).toBe("missing_message_id");
+		expect(tauriMocks.invoke).not.toHaveBeenCalledWith(
+			"agent_rewind_session",
+			expect.anything(),
+		);
+	});
+
+	it("resolves with a spawn_failed error when the process exits nonzero before any rewind_session event (A10)", async () => {
+		const promise = rewindAgentSession(
+			{ apiKey: "test-key", resume: "session-abc" },
+			"user-uuid-1",
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_rewind_session",
+				expect.anything(),
+			);
+		});
+		const call = tauriMocks.invoke.mock.calls.find(
+			([command]) => command === "agent_rewind_session",
+		);
+		const payload = call?.[1] as { args: { streamId: string } };
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 1,
+			stderr: "sidecar crashed",
+		});
+
+		const result = await promise;
+		expect(result.ok).toBe(false);
+		expect(result.unavailableReason).toBe("spawn_failed");
+		expect(result.error).toContain("sidecar crashed");
+	});
+
+	it("claims an Agent-run profile the same way streamAgent does, and releases it on invoke failure (A18)", async () => {
+		tauriMocks.invoke.mockImplementation(
+			async (command: string): Promise<unknown> => {
+				if (command === "runtime_profile_pool_list") {
+					return {
+						enabled: true,
+						status: "healthy",
+						activeClaims: [],
+						circuitBreakers: [],
+					};
+				}
+				if (command === "runtime_profile_pool_claim") {
+					return {
+						claimId: "claim-rewind",
+						profileId: "profile-rewind",
+						expiresAtMs: 1_200_000,
+						claim: {
+							claimId: "claim-rewind",
+							profileId: "profile-rewind",
+							kind: "agent-run",
+							taskFamily: "agent",
+							holder: "agent:rewind",
+							acquiredAtMs: 1,
+							expiresAtMs: 1_200_000,
+							status: "active",
+						},
+					};
+				}
+				if (command === "agent_rewind_session") {
+					throw new Error("spawn exploded");
+				}
+				return undefined;
+			},
+		);
+
+		const result = await rewindAgentSession(
+			{
+				apiKey: "legacy-key",
+				baseUrl: "https://legacy.example",
+				model: "legacy-model",
+				projectPath: "/tmp/wiki",
+				resume: "session-abc",
+			},
+			"user-uuid-1",
+		);
+
+		expect(result.ok).toBe(false);
+		expect(result.unavailableReason).toBe("spawn_failed");
+		const spawnCall = tauriMocks.invoke.mock.calls.find(
+			([command]) => command === "agent_rewind_session",
+		);
+		const spawnPayload = spawnCall?.[1] as { args: Record<string, unknown> };
+		expect(spawnPayload.args.agentProfileId).toBe("profile-rewind");
+		expect(spawnPayload.args.agentProfileClaimId).toBe("claim-rewind");
+		expect(spawnPayload.args.apiKey).toBeUndefined();
+		expect(spawnPayload.args.baseUrl).toBeUndefined();
+		expect(spawnPayload.args.model).toBeUndefined();
+
+		expect(tauriMocks.invoke).toHaveBeenCalledWith(
+			"runtime_profile_pool_release",
+			expect.objectContaining({
+				request: expect.objectContaining({ claimId: "claim-rewind" }),
+			}),
+		);
 	});
 });
