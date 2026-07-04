@@ -1,6 +1,19 @@
 # SPEC-7: Unified Agentic Chat / Claude Agent SDK 产品化
 
-> 类型：阶段 SPEC | 状态：reviewed / augmented by 2026-07 review / ready for PR split | 覆盖：#190、#60、#66、#67、#68、#84、#86 | 依赖：SPEC-1 shell/core boundary、SPEC-2 job creation API、SPEC-4 Agent-run Profile preflight、**SPEC-10（权限绕过/密钥泄露修复）**
+> 类型：阶段 SPEC | 状态：PR1/PR2 completed（#277/#291），PR3-PR7 ready | 覆盖：#190、#60、#66、#67、#68、#84、#86 | 依赖：SPEC-1 shell/core boundary、SPEC-2 job creation API、SPEC-4 Agent-run Profile preflight、**SPEC-10（权限绕过/密钥泄露修复）**、**SPEC-12 PR1/PR2（runtime 转正 + 设置分组，前置于本 SPEC PR4/PR6）**
+
+## 2026-07-05 UI 走查修订（必读，约束 PR3-PR6 范围）
+
+依据：`SPEC-12/ui-audit-2026-07.md`（生产 app 全页走查 + Notion AI 实机对照 + 用户裁定 D1-D5）。
+
+- **PR4 范围修订**：
+  - 路由四档（fast/standard/deep/local_first）**删除而非下沉**（裁定 D4，取代下文「下沉为高级控制」的旧表述）：统一 Agent 化后，深度=profile 选择的结果、本地优先=profile 隐私属性，全部收进模型选择器语义。
+  - composer 目标范式（Notion N1-N3）：输入框 + 「＋」（文件/图片，拖入等价）+ 「来源 ▾」（网页搜索/AnyTXT 收纳）+ 「**自动 ▾**」（模型/profile/权限选择器，默认自动路由，运行中显示真实 claimed profile）。不再有平铺 checkbox 与模式切换。
+  - 「提取」双入口（裁定 D1）：资料页「选文件→讨论→写入」+ 对话页拖入/「＋」触发，同一条 ingest 流程；chat 顶层「提取」模式移除。
+  - 空态建议卡（N5）与任务向文案（N7）并入本 PR。
+- **PR3 范围追加**：错误产品化——模型/权限/限额类错误映射为可操作卡片（换模型/去设置），CLI 原文进详情折叠（走查 A5；实证 A3：用户遭遇 deepseek-v4-flash CLI 报错原文透传、无从预判用哪个模型）。
+- **PR6 调整**：profile 事件回传（Core→shell）同时服务 PR4 的「自动 ▾」运行态显示，事件管道提前至 PR4 之前或并入 PR4；权限默认值页落进 SPEC-12 PR2 的「AI 与模型」分组（依赖 SPEC-12 PR2）。
+- **PR5 追加**：Agent 写操作接入待审阅动线（变更预览 accept/reject，Notion N8），与 rewind（#291）同屏。
 
 ## 2026-07 Review 补充（必读）
 

@@ -115,16 +115,21 @@
 | SPEC-4-FIX | completed via #228, #230, #232 | #228/#230/#232 |
 | SPEC-5 | completed by #236/#238/#240/#242/#244/#246 | #236/#238/#240/#242/#244/#246 |
 | SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
-| SPEC-6 | completed（closeout hotfix in review） | #280/#283/#284/#285/#288 |
-| SPEC-7 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
+| SPEC-6 | completed（closeout hotfix merged #290） | #280/#283/#284/#285/#288/#290 |
+| SPEC-7 | PR1/PR2 completed（#277/#291）；PR3-PR7 范围经 2026-07-05 UI 走查修订 | in progress |
 | SPEC-8 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
 | SPEC-9 | deferred / gated | deferred |
 | SPEC-10 | completed via #250/#252/#254/#261/#265/#266/#271 | #250/#252/#254/#261/#265/#266/#271 |
 | SPEC-11 | completed via #262/#263/#256/#270/#274/#268/#275/#272/#273 | #262/#263/#256/#270/#274/#268/#275/#272/#273 |
+| SPEC-12 | reviewed / ready for PR split（UI IA 收敛：runtime 转正/设置重组/Wiki 健康中心） | pending |
 
 2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
-当前优先级：
+当前优先级（2026-07-05 更新，轨间并行布局）：
+
+0. **双轨并行主线**：pipeline 轨跑 SPEC-12（PR1 runtime 转正最先——它是 SPEC-12 PR3 与 SPEC-7 PR4/PR6 的共同前置；PR2 设置分组前置于 SPEC-7 PR6）；agent 轨跑 SPEC-7 PR3（会话状态隔离 + 错误产品化，无前置依赖，即刻可开）→ PR4/PR5/PR6 按修订后范围推进。文件边界：chat-store/chat 组件归 agent 轨，设置组件归 pipeline 轨。maint 轨填缝（#292 PR2b、#286/#287/#289、SPEC-8 剩余）。走查依据与裁定见 `SPEC-12/ui-audit-2026-07.md`。
+
+历史优先级记录：
 
 1. SPEC-6：**收口完成**。PR1-PR6 全部 merged（#280/#283/#284/#285/#288）。PR6 merge 后按计划执行的 SPEC-6 全子系统多代理深度 review 已分流：本轮 closeout hotfix（`SPEC-6/closeout-hotfix-plan.md`）修复其中的 P0/P1（per-path marker 状态归约、搜索 fallback banner 拆分、cancel 孤儿 marker 释放、dedup-queue 忙退避、runtime-disabled 默认态 UI）；其余发现开新 issue 追踪——#286（marker 消费未被 `withProjectLock` 覆盖，可与项目/源删除竞态）、#287（孤儿 claimed marker / anchor job 崩溃窗口 reconcile + 诊断，扩展自 PR6 收口表 #8/#9）、#289（dedup 合并写入未接入 derived-rebuild marker 系统，向量索引在每次合并后漂移）；详见 `SPEC-6/prs-implementation-plan.md`「closeout 深度 review 结论」节。
 2. SPEC-8 剩余：维护性精简穿插，`runtime_db` mod split PR10 按原计划推进（SPEC-6 PR1 merge 窗口已过，可正常推进）。
