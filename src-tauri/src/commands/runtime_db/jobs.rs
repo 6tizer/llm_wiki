@@ -231,7 +231,7 @@ pub(crate) fn runtime_job_claim_by_kind_for_project(
     )
 }
 
-pub(crate) fn runtime_job_claim_matching_kind_for_project(
+fn runtime_job_claim_matching_kind_for_project(
     project_root: Option<&Path>,
     enabled: bool,
     request: RuntimeJobClaimRequest,
@@ -300,7 +300,7 @@ pub(crate) fn runtime_job_claim_matching_kind_for_project(
     })
 }
 
-pub(crate) fn select_queued_job_id_tx(
+fn select_queued_job_id_tx(
     tx: &Transaction<'_>,
     kind_filter: Option<&str>,
     excluded_job_ids: &[String],
@@ -671,7 +671,7 @@ pub(crate) fn runtime_job_list_for_project(
     })
 }
 
-pub(crate) fn terminal_running_operation(
+fn terminal_running_operation(
     project_root: Option<&Path>,
     enabled: bool,
     job_id: &str,
@@ -709,7 +709,7 @@ pub(crate) fn ensure_job_exists(tx: &Transaction<'_>, job_id: &str) -> Result<()
     }
 }
 
-pub(crate) fn ensure_no_active_lease(tx: &Transaction<'_>, job_id: &str) -> Result<(), String> {
+fn ensure_no_active_lease(tx: &Transaction<'_>, job_id: &str) -> Result<(), String> {
     let active_count = tx
         .query_row(
             "SELECT COUNT(*)
@@ -726,7 +726,7 @@ pub(crate) fn ensure_no_active_lease(tx: &Transaction<'_>, job_id: &str) -> Resu
     }
 }
 
-pub(crate) fn read_job(connection: &Connection, job_id: &str) -> Result<RuntimeJobRecord, String> {
+fn read_job(connection: &Connection, job_id: &str) -> Result<RuntimeJobRecord, String> {
     connection
         .query_row(&job_select_sql("WHERE job_id = ?1"), [job_id], map_job_row)
         .map_err(|err| format!("job-read-failed: {err}"))
@@ -749,7 +749,7 @@ pub(crate) fn read_lease_tx(
     .map_err(|err| format!("lease-read-failed: {err}"))
 }
 
-pub(crate) fn read_jobs(connection: &Connection) -> Result<Vec<RuntimeJobRecord>, String> {
+fn read_jobs(connection: &Connection) -> Result<Vec<RuntimeJobRecord>, String> {
     let mut statement = connection
         .prepare(&job_select_sql("ORDER BY created_at_ms ASC, job_id ASC"))
         .map_err(|err| format!("jobs-read-prepare-failed: {err}"))?;
@@ -760,7 +760,7 @@ pub(crate) fn read_jobs(connection: &Connection) -> Result<Vec<RuntimeJobRecord>
         .map_err(|err| format!("jobs-read-failed: {err}"))
 }
 
-pub(crate) fn read_leases(connection: &Connection) -> Result<Vec<RuntimeJobLeaseRecord>, String> {
+fn read_leases(connection: &Connection) -> Result<Vec<RuntimeJobLeaseRecord>, String> {
     let mut statement = connection
         .prepare(&lease_select_sql(
             "ORDER BY acquired_at_ms ASC, lease_id ASC",
@@ -773,7 +773,7 @@ pub(crate) fn read_leases(connection: &Connection) -> Result<Vec<RuntimeJobLease
         .map_err(|err| format!("leases-read-failed: {err}"))
 }
 
-pub(crate) fn job_select_sql(suffix: &str) -> String {
+fn job_select_sql(suffix: &str) -> String {
     format!(
         "SELECT job_id,
                 kind,
@@ -795,7 +795,7 @@ pub(crate) fn job_select_sql(suffix: &str) -> String {
     )
 }
 
-pub(crate) fn lease_select_sql(suffix: &str) -> String {
+fn lease_select_sql(suffix: &str) -> String {
     format!(
         "SELECT lease_id,
                 job_id,
@@ -809,7 +809,7 @@ pub(crate) fn lease_select_sql(suffix: &str) -> String {
     )
 }
 
-pub(crate) fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
+fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobRecord> {
     Ok(RuntimeJobRecord {
         job_id: row.get(0)?,
         kind: row.get(1)?,
@@ -830,7 +830,7 @@ pub(crate) fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJo
     })
 }
 
-pub(crate) fn map_lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobLeaseRecord> {
+fn map_lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeJobLeaseRecord> {
     Ok(RuntimeJobLeaseRecord {
         lease_id: row.get(0)?,
         job_id: row.get(1)?,

@@ -620,7 +620,7 @@ fn probe_outcome(
     }
 }
 
-pub(crate) fn capability_json(
+fn capability_json(
     target: &RuntimeProfileProbeTarget,
     checks: serde_json::Value,
     model_call_supported: bool,

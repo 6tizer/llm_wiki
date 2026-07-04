@@ -144,7 +144,9 @@ pub(crate) fn normalize_list_limit(
     }
 }
 
-pub(crate) fn normalize_affected_path(raw: &str) -> Result<NormalizedAffectedPath, String> {
+pub(in crate::commands::runtime_db) fn normalize_affected_path(
+    raw: &str,
+) -> Result<NormalizedAffectedPath, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("invalid-affected-path: affectedPath must not be empty".to_string());

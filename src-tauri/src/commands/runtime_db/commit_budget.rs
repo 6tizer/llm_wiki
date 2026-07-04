@@ -249,10 +249,7 @@ fn normalize_commit_budget_ttl(ttl_ms: Option<i64>) -> Result<i64, String> {
     }
 }
 
-pub(crate) fn ensure_claim_id_available(
-    tx: &Transaction<'_>,
-    claim_id: &str,
-) -> Result<(), String> {
+fn ensure_claim_id_available(tx: &Transaction<'_>, claim_id: &str) -> Result<(), String> {
     let existing = tx
         .query_row(
             "SELECT COUNT(*)

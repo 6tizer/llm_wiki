@@ -950,7 +950,7 @@ fn ensure_staging_artifact_path_available_tx(
     }
 }
 
-pub(crate) fn ensure_path_budget(
+pub(in crate::commands::runtime_db) fn ensure_path_budget(
     tx: &Transaction<'_>,
     affected_path: &NormalizedAffectedPath,
     now: i64,
