@@ -96,6 +96,29 @@
 
 小结：18 个去重条目中，**7 个由 PR6 本次闭环或已确认完成**（#2/#3 部分、#4 已合并 #281、#10、#11、#16、`usePolling` bug），**2 个有明确 issue 号追踪**（#5 → issue #286；#8/#9/两条同类残余 gap → issue #287 统一承接），其余为**显式域移交**（部分明确「无独立 issue，SPEC-7/8/11 开工时再立」），无「静默消失」的遗留项。
 
+## SPEC-6 closeout 深度 review 结论（PR6 #288 merge 后，Closeout Gate 交付物 d）
+
+> PR6（#288）合并于 2026-07-04T14:33Z 后，按 Closeout Gate 交付物 d 的承诺执行了一次 SPEC-6 全子系统多代理深度 review。本节记录其三维度 verdict 摘要和分流处置；修复本体落在 closeout hotfix PR（[`closeout-hotfix-plan.md`](./closeout-hotfix-plan.md)，分支 `codex/spec6-closeout-hotfix`）。
+
+**三维度 verdict 摘要**：
+
+| 维度 | Verdict | 依据 |
+|------|---------|------|
+| Tester / 正确性 | **BLOCK → 5 项 P0/P1，本 PR 全部修复** | `classifyLayerStatus` 对层内全历史 marker 用 `.some()`（无 GC，一条旧 `failed` 永久压制新 `done`，P0）；搜索 fallback banner 单一文案掩盖两种不同触发源，其中一种在语义上是假话（hybrid 结果却说 keyword-only，P1）；`derived-rebuild` job cancel 只转 job 状态、不释放其 claimed marker batch（孤儿，P1）；embedding/taxonomy consumer 忙退避只看 ingest-queue、漏看会并发改写同批页面的 dedup-queue（P1）；`derived-status-section` 把「工作运行时功能默认关闭」的正常态误判为 error，渲染假 Ready 卡片 + 错误横幅（P1） |
+| Simplicity | **PASS，仅 1 项既有 P2 backlog** | 无新增发现；沿用 PR3+4/PR6 已记录的 `createDerivedRebuildConsumer(config)` 共享骨架提取（本表第 14 条），本次 review 未追加新的简化项 |
+| Reviewer / 架构一致性 | **WARN → 跨 job/marker/queue 子系统的收敛缺口，域外分流，不在本 PR 内改** | 崩溃窗口下的孤儿 marker/anchor job 无自愈路径（扩展 #287）；marker 消费未被 `withProjectLock` 覆盖，可与项目/源删除竞态（沿用 #286）；dedup 合并写入完全绕过 derived-rebuild marker 系统，合并后向量索引静默漂移（新建 #289）——三者都是需要独立设计 + 独立 PR 的架构级收敛工作，与本轮可安全内联修的 P0/P1 分属不同风险等级 |
+
+**分流表**：
+
+| 去向 | 数量 | 内容 |
+|------|------|------|
+| 本 PR（closeout hotfix，直接修复） | 5 | 见上表 Tester 行；详细落点/测试/sabotage 见 [`closeout-hotfix-plan.md`](./closeout-hotfix-plan.md) |
+| issue #287（追加，评论形式挂载于既有 issue，未开新号） | +7 | Post-#288 review 追加的 7 条：①诊断粒度应到 `(layer, affectedPath)` 而非仅层聚合（一条卡住的 marker 会掩盖整层健康度）；②`runtime_derived_stale_markers` 无终态行 GC，`fetchAllDerivedStaleMarkers` 在 10k 行硬顶（`maxPages`）会静默丢弃最新行而非最旧行；③`foldPendingMarkers` 默认 `limit 100` 无分页，>100 个 pending 分组时收敛变慢；④`discoverSynthesisCandidates` 排除逻辑是否会让某些页面的 synthesis marker 永久无法被手动 closeout 触达（未证实，待核实）；⑤`recordEmbeddingStaleMarker` 的 `"error"` 结果分支是该页面到下次 commit 前的静默永久 embedding 缺口，需要诊断计数；⑥`safeFailClaim` 的 job-fail→marker-release 两步非原子在 UI 侧的镜像：终态 failed 的 job 若 release 那一步失败，`derived-status` 会把该层永久展示成 `building`；⑦Settings 里的「Reindex All」（`embedding-section.tsx`）完全绕过 marker 系统，成功全量重建后过期的 `dirty`/`failed` marker 不会被这次重建带走 |
+| issue #289（新建） | 1 | `dedup-runner.ts` 的 `executeMerge` 写规范化后的合并页、重写引用它的页面、删除被合并页，但从不记录 embedding stale marker、也从不调用 `removePageEmbedding`——不管工作运行时开关状态，向量索引在每次去重合并后都会残留被删页面的旧向量、以及被重写页面的过期向量 |
+| P2/P3 backlog（不开新 issue，随下次touch 对应文件顺带评估） | 1（既有条目，未新增） | 本表第 14 条：`embedding-consumer.ts`/`taxonomy-consumer.ts` 共享骨架提取（`createDerivedRebuildConsumer(config)`），本次 review 复核后判定仍是独立 PR 级工作量，不随 hotfix 顺带做 |
+
+`#286`（marker 消费未被 `withProjectLock` 覆盖）本次 review 复核后判定范围不变，未追加新场景，继续按原状态跟踪，不重复计入分流表。
+
 ## 每 PR 固定循环（权威见 pr-loop.md，此处仅列 SPEC-6 执行时的检查单）
 
 1. **Start**：derived 轨 worktree 内 `agent-loop-preflight.sh` → bind（issue #189）→ `gitnexus status`（stale 则 analyze，必带 `GITNEXUS_MAX_FILE_SIZE=1024`）→ 切 `codex/spec6-<slug>` 分支。

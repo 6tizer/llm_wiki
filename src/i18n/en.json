@@ -369,7 +369,8 @@
     "placeholder": "Search wiki pages...",
     "noResults": "No results found",
     "startSearching": "Type to search wiki pages",
-    "fallbackBanner": "Vector index isn't ready yet — showing keyword-only results for now."
+    "fallbackBanner": "Vector index isn't ready yet — showing keyword-only results for now.",
+    "staleIndexBanner": "Vector index may be stale or still rebuilding — results may be incomplete."
   },
   "lint": {
     "title": "Wiki Lint",

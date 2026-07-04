@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react"
 import {
+  runtimeDerivedMarkerReleaseBatch,
   runtimeJobCancel,
   runtimeJobPause,
   runtimeJobResume,
@@ -18,6 +19,7 @@ import {
   type RuntimeJobRecord,
   type RuntimeJobState,
 } from "@/commands/runtime-db"
+import { DERIVED_REBUILD_JOB_KIND, parseDerivedRebuildJobPayload } from "@/core-runtime/derived-rebuild"
 import {
   captureRuntimeDiagnosticsSnapshot,
   type RuntimeDiagnosticsSnapshot,
@@ -41,6 +43,22 @@ const IDLE_POLL_INTERVAL_MS = 10_000
 const QUIET_POLL_INTERVAL_MS = 30_000
 const ERROR_POLL_INTERVAL_MS = 30_000
 const TERMINAL_STATES = new Set<RuntimeJobState>(["completed", "failed", "cancelled"])
+
+/**
+ * Closeout hotfix P1 #3: the two throwaway "anchor" job kinds minted purely
+ * to give a `runtime_event_append` call a valid `job_id` FK (see
+ * `mintDerivedStaleMarkerAnchorEvent` in
+ * `@/lib/derived-rebuild/manual-rebuild-marker.ts`) are completed inline in
+ * the same tick they're created — by the time this panel could ever render
+ * one, cancelling it does nothing useful and only risks confusing a user
+ * into thinking they stopped a rebuild that was never theirs to cancel.
+ * Kept as local string literals (not imported) to avoid pulling in
+ * `@/lib/ingest-write.ts`'s much heavier dependency graph just for one
+ * constant; must stay in sync with `INGEST_MARKER_EVENT_JOB_KIND`
+ * (ingest-write.ts) and `MANUAL_REBUILD_ANCHOR_JOB_KIND`
+ * (manual-rebuild-marker.ts).
+ */
+const ANCHOR_JOB_KINDS = new Set<string>(["auto-ingest-marker-event", "manual-rebuild-marker-event"])
 
 export interface RuntimeJobsSummary {
   visible: boolean
@@ -220,6 +238,22 @@ export function useRuntimeJobsState(): RuntimeJobsState {
     }
   }
 
+  async function cancelJob(jobId: string): Promise<void> {
+    setActionJobId(jobId)
+    setActionError(null)
+    try {
+      const cancelledJob = await runtimeJobCancel(jobId)
+      if (cancelledJob.kind === DERIVED_REBUILD_JOB_KIND) {
+        await releaseCancelledDerivedRebuildMarkers(cancelledJob)
+      }
+      await refreshNow()
+    } catch (error) {
+      setActionError(errorText(error))
+    } finally {
+      setActionJobId(null)
+    }
+  }
+
   return {
     list,
     summary,
@@ -229,7 +263,38 @@ export function useRuntimeJobsState(): RuntimeJobsState {
     refreshNow,
     pauseJob: (jobId) => runAction(jobId, runtimeJobPause),
     resumeJob: (jobId) => runAction(jobId, runtimeJobResume),
-    cancelJob: (jobId) => runAction(jobId, runtimeJobCancel),
+    cancelJob,
+  }
+}
+
+/**
+ * Closeout hotfix P1 #3: cancelling a `derived-rebuild` job via
+ * `runtimeJobCancel` transitions the JOB to `cancelled` but leaves its
+ * claimed `runtime_derived_stale_markers` batch orphaned in `claimed`
+ * forever — no consumer will ever poll a job id that no longer exists, and
+ * `bucketDerivedLayerStatus` (`status.ts`) has no "claimed but abandoned"
+ * state to fall back to. Release the batch to `cancelled` right after
+ * (mirrors the existing `safeFailClaim` pattern in
+ * `embedding-consumer.ts`/`taxonomy-consumer.ts`, but from the UI action
+ * side instead of a consumer's own failure path). Best-effort: a failure
+ * here must not surface as a cancel failure to the user — the job DID
+ * cancel; the markers being stuck `claimed` a while longer is a lesser,
+ * silently-logged problem, not a reason to make Cancel itself look broken.
+ */
+async function releaseCancelledDerivedRebuildMarkers(job: RuntimeJobRecord): Promise<void> {
+  try {
+    const { markerIds } = parseDerivedRebuildJobPayload(job.payload)
+    if (markerIds.length === 0) return
+    await runtimeDerivedMarkerReleaseBatch({
+      jobId: job.jobId,
+      markerIds,
+      targetStatus: "cancelled",
+    })
+  } catch (err) {
+    console.warn(
+      `[runtime-jobs-section] failed to release cancelled derived-rebuild markers for job ${job.jobId}:`,
+      err,
+    )
   }
 }
 
@@ -398,7 +463,11 @@ function RuntimeJobRow({
   const isBusy = actionJobId === job.jobId
   const canPause = job.state === "queued" || job.state === "running"
   const canResume = job.state === "paused"
-  const canCancel = ["queued", "running", "paused", "retry-wait"].includes(job.state)
+  // Anchor jobs (closeout hotfix P1 #3) complete inline the same tick
+  // they're created — this panel showing a Cancel button for one at all
+  // would be a UI ghost, not a real action.
+  const canCancel =
+    !ANCHOR_JOB_KINDS.has(job.kind) && ["queued", "running", "paused", "retry-wait"].includes(job.state)
   const isSuspectedStuck = job.state === "running" && leaseHealth === "suspected-stuck"
   const suspectedStuckLabel = isSuspectedStuck ? t("runtimeJobs.state.suspectedStuck") : null
   const Icon = isSuspectedStuck ? AlertTriangle : iconForJobState(job.state)

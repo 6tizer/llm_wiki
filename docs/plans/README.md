@@ -58,14 +58,15 @@
 | [spec-5-fix-pipeline-wiring.md](./spec-5-fix-pipeline-wiring.md) | SPEC-5 并行流水线生产接线 + worker heartbeat / lease 回收 / commit-budget 自愈 / repair 消费者。 | completed |
 | [spec-10-security-hardening.md](./spec-10-security-hardening.md) | 安全加固：沙箱逃逸、clip server 鉴权、stdout 密钥泄露、权限绕过、子进程清理、能力面收敛。 | completed |
 | [spec-11-data-integrity.md](./spec-11-data-integrity.md) | 数据完整性：切项目清历史、编辑器串写、分块死循环、ingest/lint/dedup 误删覆盖、settings 静默保存。 | completed |
-| [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建；2026-07 review 已范围修正，依赖 SPEC-5-FIX。 | PR1-PR5 merged（#280/#283/#284/#285）/ pending PR6 |
+| [spec-6-derived-knowledge-rebuild.md](./spec-6-derived-knowledge-rebuild.md) | embedding、graph、taxonomy、synthesis、optional index/overview 的异步派生重建；2026-07 review 已范围修正，依赖 SPEC-5-FIX。 | completed（PR1-PR6 merged #280/#283/#284/#285/#288 + closeout hotfix in review） |
 | [SPEC-6/prs-implementation-plan.md](./SPEC-6/prs-implementation-plan.md) | Wave 3 derived 轨执行总方案：PR1-PR6 顺序、lane/gate 加权、三轨并行协调（runtime_db 窗口）。 | active |
 | [SPEC-6/pr1-marker-consumption-infrastructure-plan.md](./SPEC-6/pr1-marker-consumption-infrastructure-plan.md) | SPEC-6 PR1 执行计划：marker 状态流转/claim 折叠/游标/毒 marker 收敛（含 P0 修订与 PR2+ 消费者契约）。 | merged |
 | [SPEC-6/pr1-adversarial-matrix.md](./SPEC-6/pr1-adversarial-matrix.md) | SPEC-6 PR1 并发场景矩阵（design-first gate 凭据），Reviewer 逐格验证记录的依据。 | evidence |
 | [SPEC-6/pr2-embedding-rebuild-plan.md](./SPEC-6/pr2-embedding-rebuild-plan.md) | SPEC-6 PR2 执行计划：embedding 移出 ingest 链、marker 驱动消费循环、方案 A 传统路径接线（含 work-runtime 禁用回退与 P0 教训）。 | merged |
 | [SPEC-6/pr3-4-taxonomy-synthesis-plan.md](./SPEC-6/pr3-4-taxonomy-synthesis-plan.md) | SPEC-6 PR3+4（合并）执行计划：原 PR3（graph/search job 化）证实两者均无物化产物而并入 taxonomy consumer + COMMIT 层摘除 graph；taxonomy growth 聚合消费循环、synthesis 手动重跑闭环、SPEC-11 S5 死链自愈核实。 | merged |
 | [SPEC-6/pr5-index-overview-plan.md](./SPEC-6/pr5-index-overview-plan.md) | SPEC-6 PR5 执行计划：index_export/overview 手动重建 job 化——自产自销 marker 闭环共享 helper、index 扫描+格式化纯函数、overview LLM 单页生成、独立 settings section。 | merged |
-| [SPEC-6/pr6-derived-status-ui-plan.md](./SPEC-6/pr6-derived-status-ui-plan.md) | SPEC-6 PR6 执行计划（收口 PR）：per-layer 派生状态 UI（5 态 + stale 展示变体，graph/search 隐藏）、`usePolling` 抽取修 timer 重置 bug、`manual-rebuild-marker.ts` 共享去重 helper（三处调用点零复制）、embedding/taxonomy 手动 rebuild 按钮、搜索 fallback 提示条、端到端 fixture。 | active / in review |
+| [SPEC-6/pr6-derived-status-ui-plan.md](./SPEC-6/pr6-derived-status-ui-plan.md) | SPEC-6 PR6 执行计划（收口 PR）：per-layer 派生状态 UI（5 态 + stale 展示变体，graph/search 隐藏）、`usePolling` 抽取修 timer 重置 bug、`manual-rebuild-marker.ts` 共享去重 helper（三处调用点零复制）、embedding/taxonomy 手动 rebuild 按钮、搜索 fallback 提示条、端到端 fixture。 | merged（#288） |
+| [SPEC-6/closeout-hotfix-plan.md](./SPEC-6/closeout-hotfix-plan.md) | SPEC-6 收口后（PR6 合并后）多代理深度 review 的 P0/P1 分流修复：per-path marker 状态归约、搜索 fallback banner 拆分、cancel 孤儿 marker 释放、dedup-queue 忙退避补齐、runtime-disabled 默认态 UI。 | active / in review |
 | [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | planned |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | in progress（PR10 先行） |
 | [SPEC-8/pr10-runtime-db-mod-split-plan.md](./SPEC-8/pr10-runtime-db-mod-split-plan.md) | SPEC-8 PR10 执行计划：runtime_db.rs 保行为拆分为 runtime_db/ 15 模块（行号测绘、可见性纪律、characterization 验证）。 | merged |
@@ -114,7 +115,7 @@
 | SPEC-4-FIX | completed via #228, #230, #232 | #228/#230/#232 |
 | SPEC-5 | completed by #236/#238/#240/#242/#244/#246 | #236/#238/#240/#242/#244/#246 |
 | SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
-| SPEC-6 | PR1-PR5 merged / pending PR6 | #280/#283/#284/#285 |
+| SPEC-6 | completed（closeout hotfix in review） | #280/#283/#284/#285/#288 |
 | SPEC-7 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
 | SPEC-8 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
 | SPEC-9 | deferred / gated | deferred |
@@ -125,7 +126,7 @@
 
 当前优先级：
 
-1. SPEC-6：derived rebuild 收口。PR1-PR5 已 merged，PR6（UI 状态 + closeout）in review、pending merge；合并后回填 completed + PR 编号，并安排一次 SPEC-6 全子系统多代理深度 review（PR6 Closeout Gate 的 post-merge 步骤），发现分流到 FIX PR / P3 backlog。
+1. SPEC-6：**收口完成**。PR1-PR6 全部 merged（#280/#283/#284/#285/#288）。PR6 merge 后按计划执行的 SPEC-6 全子系统多代理深度 review 已分流：本轮 closeout hotfix（`SPEC-6/closeout-hotfix-plan.md`）修复其中的 P0/P1（per-path marker 状态归约、搜索 fallback banner 拆分、cancel 孤儿 marker 释放、dedup-queue 忙退避、runtime-disabled 默认态 UI）；其余发现开新 issue 追踪——#286（marker 消费未被 `withProjectLock` 覆盖，可与项目/源删除竞态）、#287（孤儿 claimed marker / anchor job 崩溃窗口 reconcile + 诊断，扩展自 PR6 收口表 #8/#9）、#289（dedup 合并写入未接入 derived-rebuild marker 系统，向量索引在每次合并后漂移）；详见 `SPEC-6/prs-implementation-plan.md`「closeout 深度 review 结论」节。
 2. SPEC-8 剩余：维护性精简穿插，`runtime_db` mod split PR10 按原计划推进（SPEC-6 PR1 merge 窗口已过，可正常推进）。
 3. SPEC-7 / SPEC-9 门控：SPEC-7 PR1 SDK alignment 可并行准备，但不得替代 SPEC-4-FIX PR3 的 Agent-run profile 最小兼容基座；SPEC-7 PR2 rewind 必须等 SDK alignment 完成，SPEC-7 PR4 unified input shell hard-blocked by runtime job ledger 和 commit-layer clarity。
 4. Swift/native：Swift/SwiftUI/iOS/native 实现继续 deferred；SPEC-9 只有在 SPEC-1 到 SPEC-8（含 SPEC-5-FIX/10/11）的 core boundary 和关键 runtime API 稳定后才进入实现。

@@ -71,7 +71,7 @@ describe("DerivedStatusSection", () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     mocks.runtimeDerivedStaleMarkerList.mockResolvedValue(emptyList())
-    useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null })
+    useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false })
   })
 
   afterEach(() => {
@@ -205,6 +205,25 @@ describe("DerivedStatusSection", () => {
     await flush()
 
     expect(container.querySelector("[data-testid='derived-status-error']")?.textContent).toContain("db is damaged")
+
+    unmount(root)
+  })
+
+  it("renders a neutral runtime-disabled notice — no error banner, no ready-badged layer cards — when the work runtime feature flag is off, resolved (not rejected) with enabled:false (closeout hotfix P1 gate-fix: the real backend response for this case resolves Ok({enabled:false}), it never rejects)", async () => {
+    mocks.runtimeDerivedStaleMarkerList.mockResolvedValue({
+      enabled: false,
+      status: "disabled",
+      markers: [],
+      nextCursor: null,
+    })
+
+    const { container, root } = renderSection({ project })
+    await flush()
+
+    expect(container.querySelector("[data-testid='derived-status-runtime-disabled']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-error']")).toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-card-embedding']")).toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-badge-ready']")).toBeNull()
 
     unmount(root)
   })

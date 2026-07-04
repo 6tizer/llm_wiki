@@ -314,7 +314,7 @@ import { runtimeDerivedStaleMarkerList } from "@/commands/runtime-db"
 const PROJECT: WikiProject = { id: "p1", name: "P", path: "/proj" }
 
 async function snapshot() {
-  const markers = await fetchAllDerivedStaleMarkers({ list: runtimeDerivedStaleMarkerList })
+  const { markers } = await fetchAllDerivedStaleMarkers({ list: runtimeDerivedStaleMarkerList })
   return bucketDerivedLayerStatus(markers)
 }
 

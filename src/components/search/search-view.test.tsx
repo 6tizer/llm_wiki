@@ -185,11 +185,15 @@ describe("SearchView — stale search results", () => {
   })
 })
 
-describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7)", () => {
+describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7; split into keyword-fallback vs stale-index banners in the closeout hotfix)", () => {
   beforeEach(() => {
     searchMocks.searchWiki.mockReset()
     useWikiStore.getState().setProject({ id: "p", name: "P", path: "/tmp/p" })
     useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null })
+    // Both banners are gated on the user having embedding turned on at all
+    // (closeout hotfix P0 #2c) — the store's own default is `enabled: false`,
+    // which would silently suppress every test in this block otherwise.
+    useWikiStore.getState().setEmbeddingConfig({ enabled: true, endpoint: "", apiKey: "", model: "" })
   })
 
   it("does not show the banner for a hybrid-mode search with no embedding staleness", async () => {
@@ -236,7 +240,7 @@ describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7)", () => 
     unmount(root)
   })
 
-  it("shows the banner when mode is hybrid but the embedding layer is dirty", async () => {
+  it("shows the STALE-INDEX banner (not the keyword-fallback one) when mode is hybrid but the embedding layer is dirty (closeout hotfix P0 #2b: the query DID come back hybrid, so 'keyword-only' would be false)", async () => {
     searchMocks.searchWiki.mockResolvedValue(response([makeResult("/wiki/a.md", "A")], { mode: "hybrid" }))
 
     const { container, root } = renderView()
@@ -252,12 +256,13 @@ describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7)", () => 
     await typeAndEnter(input, "alpha")
     await flush()
 
-    expect(container.querySelector("[data-testid='search-fallback-banner']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='search-stale-index-banner']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='search-fallback-banner']")).toBeNull()
 
     unmount(root)
   })
 
-  it("shows the banner when mode is hybrid but the embedding layer is building", async () => {
+  it("shows the stale-index banner when mode is hybrid but the embedding layer is building", async () => {
     searchMocks.searchWiki.mockResolvedValue(response([makeResult("/wiki/a.md", "A")], { mode: "hybrid" }))
 
     const { container, root } = renderView()
@@ -270,12 +275,12 @@ describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7)", () => 
     await typeAndEnter(input, "alpha")
     await flush()
 
-    expect(container.querySelector("[data-testid='search-fallback-banner']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='search-stale-index-banner']")).not.toBeNull()
 
     unmount(root)
   })
 
-  it("shows the banner when mode is hybrid but the embedding layer is failed (Tester P3: a failed rebuild is just as incomplete as dirty)", async () => {
+  it("shows the stale-index banner when mode is hybrid but the embedding layer is failed (Tester P3: a failed rebuild is just as incomplete as dirty)", async () => {
     searchMocks.searchWiki.mockResolvedValue(response([makeResult("/wiki/a.md", "A")], { mode: "hybrid" }))
 
     const { container, root } = renderView()
@@ -288,12 +293,12 @@ describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7)", () => 
     await typeAndEnter(input, "alpha")
     await flush()
 
-    expect(container.querySelector("[data-testid='search-fallback-banner']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='search-stale-index-banner']")).not.toBeNull()
 
     unmount(root)
   })
 
-  it("does not show the banner while a search is still in flight", async () => {
+  it("does not show either banner while a search is still in flight", async () => {
     const pending = deferred<ReturnType<typeof response>>()
     searchMocks.searchWiki.mockImplementationOnce(() => pending.promise)
 
@@ -307,12 +312,33 @@ describe("SearchView — vector fallback banner (SPEC-6 PR6 decision 7)", () => 
     await typeAndEnter(input, "alpha")
 
     expect(container.querySelector("[data-testid='search-fallback-banner']")).toBeNull()
+    expect(container.querySelector("[data-testid='search-stale-index-banner']")).toBeNull()
 
     await act(async () => {
       pending.resolve(response([makeResult("/wiki/a.md", "A")], { mode: "hybrid" }))
     })
     await flush()
-    expect(container.querySelector("[data-testid='search-fallback-banner']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='search-stale-index-banner']")).not.toBeNull()
+
+    unmount(root)
+  })
+
+  it("shows neither banner when embedding is disabled, even for a non-hybrid mode AND a dirty embedding layer (closeout hotfix P0 #2c: disabled is a deliberate persistent choice, not a transient state)", async () => {
+    useWikiStore.getState().setEmbeddingConfig({ enabled: false, endpoint: "", apiKey: "", model: "" })
+    searchMocks.searchWiki.mockResolvedValue(response([makeResult("/wiki/a.md", "A")], { mode: "keyword" }))
+
+    const { container, root } = renderView()
+    await flush()
+    useDerivedLayerStore.setState({
+      buckets: { embedding: { layer: "embedding", status: "dirty", stale: false, lastRebuiltAtMs: null } },
+    })
+
+    const input = container.querySelector("input") as HTMLInputElement
+    await typeAndEnter(input, "alpha")
+    await flush()
+
+    expect(container.querySelector("[data-testid='search-fallback-banner']")).toBeNull()
+    expect(container.querySelector("[data-testid='search-stale-index-banner']")).toBeNull()
 
     unmount(root)
   })

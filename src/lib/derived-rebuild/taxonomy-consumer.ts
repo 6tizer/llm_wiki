@@ -69,7 +69,8 @@ import {
   type DerivedRebuildJobPayload,
 } from "@/core-runtime/derived-rebuild"
 import { applyTagTaxonomyGrowth, type TagTaxonomyOperationReport } from "@/lib/agent/tag-taxonomy"
-import { getQueueSummary } from "@/lib/ingest-queue"
+import { getQueueSummary as getIngestQueueSummary } from "@/lib/ingest-queue"
+import { getQueueSummary as getDedupQueueSummary } from "@/lib/dedup-queue"
 import { normalizePath } from "@/lib/path-utils"
 import type { WikiProject } from "@/types/wiki"
 
@@ -172,7 +173,10 @@ async function runTick(generation: number): Promise<void> {
   // reads every wiki page's frontmatter, so back off the whole tick while
   // ingest is actively writing pages for this project rather than risk a
   // read mid non-atomic write. Markers stay pending and converge later.
-  if (getQueueSummary().processing > 0) return
+  //
+  // Closeout hotfix P1 #4: also back off while dedup merges are in
+  // flight — same non-atomic-rewrite race, different queue.
+  if (getIngestQueueSummary().processing > 0 || getDedupQueueSummary().processing > 0) return
   assertCurrentRun(generation)
 
   await recoverRetryWaitJobs(generation)

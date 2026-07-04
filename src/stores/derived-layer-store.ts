@@ -21,11 +21,30 @@ import type { DerivedStaleMarkerLayer } from "@/core-runtime/contract"
  * reading `useDerivedLayerStore.getState().buckets?.[layer]` as its
  * `current`, rather than this store growing its own bespoke
  * optimistic-write/rollback method.
+ *
+ * `runtimeDisabled` (closeout hotfix P1 #5, corrected P1 gate-fix): the
+ * DEFAULT configuration has the work runtime feature flag off, which is
+ * the expected, persistent steady state for most users, not an error.
+ * `runtimeDerivedStaleMarkerList`/`fetchAllDerivedStaleMarkers` never
+ * REJECTS for this case — `runtime_derived_stale_marker_list_for_project`
+ * (`runtime_db/markers.rs`) resolves `Ok({ enabled: false, ... })`, same as
+ * every other `_list` command in this codebase. Detection therefore has to
+ * read `enabled` off the successful response (mirroring how
+ * `runtime-jobs-section.tsx`'s `summarizeRuntimeJobs` already reads
+ * `list.enabled`/`list.status` off `RuntimeJobList`), NOT a caught
+ * rejection — an earlier version of this fix wrongly assumed a thrown
+ * `runtime-disabled:`-prefixed error (copying `ingest-write.ts`'s
+ * `recordEmbeddingStaleMarker`, a different command shape that legitimately
+ * throws), which meant the check could never fire in production and the
+ * disabled-state UI card was dead code covered only by a fake-shaped test
+ * mock. `catch` below now only ever handles a REAL rejected promise (IPC
+ * failure, DB corruption, etc.).
  */
 export interface DerivedLayerStoreState {
   buckets: DerivedLayerBuckets | null
   capturedAtMs: number | null
   error: string | null
+  runtimeDisabled: boolean
   loadSnapshot: () => Promise<void>
   setLayerBucket: (layer: DerivedStaleMarkerLayer, bucket: DerivedLayerBucket) => void
 }
@@ -34,13 +53,18 @@ export const useDerivedLayerStore = create<DerivedLayerStoreState>((set) => ({
   buckets: null,
   capturedAtMs: null,
   error: null,
+  runtimeDisabled: false,
 
   loadSnapshot: async () => {
     try {
-      const markers = await fetchAllDerivedStaleMarkers({ list: runtimeDerivedStaleMarkerList })
-      set({ buckets: bucketDerivedLayerStatus(markers), capturedAtMs: Date.now(), error: null })
+      const { markers, enabled } = await fetchAllDerivedStaleMarkers({ list: runtimeDerivedStaleMarkerList })
+      if (!enabled) {
+        set({ error: null, runtimeDisabled: true })
+        return
+      }
+      set({ buckets: bucketDerivedLayerStatus(markers), capturedAtMs: Date.now(), error: null, runtimeDisabled: false })
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : String(err) })
+      set({ error: err instanceof Error ? err.message : String(err), runtimeDisabled: false })
     }
   },
 

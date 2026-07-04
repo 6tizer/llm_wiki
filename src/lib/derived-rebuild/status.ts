@@ -30,7 +30,7 @@
  * from before PR3+4's follow-up closed that gap.
  */
 
-import type { RuntimeDerivedStaleMarkerRecord, RuntimeDerivedStaleMarkerList, RuntimeDerivedStaleMarkerListRequest } from "@/commands/runtime-db"
+import type { RuntimeDbHealthState, RuntimeDerivedStaleMarkerRecord, RuntimeDerivedStaleMarkerList, RuntimeDerivedStaleMarkerListRequest } from "@/commands/runtime-db"
 import { DERIVED_STALE_MARKER_LAYERS, type DerivedStaleMarkerLayer } from "@/core-runtime/contract"
 
 const HIDDEN_LAYERS = new Set<DerivedStaleMarkerLayer>(["graph", "search"])
@@ -85,13 +85,61 @@ export function bucketDerivedLayerStatus(
   return buckets
 }
 
+/**
+ * Reduce to one status per `(layer, affectedPath)` group (closeout hotfix
+ * P0 #1): the marker table has no GC, so a path's full history can contain
+ * an old `failed` row alongside a newer `done`/`pending` row for the same
+ * path. Classifying off the full history via `.some()` let one stale
+ * `failed` marker permanently pin the layer at `failed` even after the
+ * path re-converged. Instead, take the latest marker per path — ordered by
+ * `markedAtMs` DESC, falling through to `markerId` on a tie — and only then
+ * apply the `building > failed > dirty > ready` priority across those
+ * per-path latest markers.
+ */
 function classifyLayerStatus(
   markers: readonly RuntimeDerivedStaleMarkerRecord[],
 ): DerivedLayerBucketStatus {
-  if (markers.some((marker) => marker.status === "claimed")) return "building"
-  if (markers.some((marker) => marker.status === "failed")) return "failed"
-  if (markers.some((marker) => marker.status === "pending" || marker.status === "cancelled")) return "dirty"
+  const latestPerPath = latestMarkerPerPath(markers)
+  if (latestPerPath.some((marker) => marker.status === "claimed")) return "building"
+  if (latestPerPath.some((marker) => marker.status === "failed")) return "failed"
+  if (latestPerPath.some((marker) => marker.status === "pending" || marker.status === "cancelled")) return "dirty"
   return "ready"
+}
+
+/** One marker per `affectedPath` — the one with the greatest `(markedAtMs, markerId)` pair. */
+function latestMarkerPerPath(
+  markers: readonly RuntimeDerivedStaleMarkerRecord[],
+): RuntimeDerivedStaleMarkerRecord[] {
+  const latestByPath = new Map<string, RuntimeDerivedStaleMarkerRecord>()
+  for (const marker of markers) {
+    const current = latestByPath.get(marker.affectedPath)
+    if (!current || isNewerMarker(marker, current)) {
+      latestByPath.set(marker.affectedPath, marker)
+    }
+  }
+  return [...latestByPath.values()]
+}
+
+/**
+ * `markedAtMs` is the real ordering signal. `markerId` is a random
+ * `Uuid::new_v4()` (see `runtime_derived_stale_marker_record_for_project`
+ * in `runtime_db/markers.rs`) whenever the caller doesn't supply one —
+ * which is every production call site — so on a `markedAtMs` tie this
+ * comparison buys only a **deterministic, reproducible pick**, not a
+ * meaningful "which one is actually newer" answer: two markers recorded in
+ * the same millisecond carry no real happened-before signal anywhere in
+ * this schema. Comparing lexicographically (rather than, say, insertion
+ * order) is deliberate for a different reason: it matches the backend
+ * list cursor's own tiebreak (`ORDER BY marked_at_ms ASC, marker_id ASC`),
+ * so this reduction is consistent with how a paginated read would
+ * enumerate the same rows — not because that order carries chronology.
+ */
+function isNewerMarker(
+  candidate: RuntimeDerivedStaleMarkerRecord,
+  current: RuntimeDerivedStaleMarkerRecord,
+): boolean {
+  if (candidate.markedAtMs !== current.markedAtMs) return candidate.markedAtMs > current.markedAtMs
+  return candidate.markerId > current.markerId
 }
 
 function lastDoneAtMs(markers: readonly RuntimeDerivedStaleMarkerRecord[]): number | null {
@@ -110,6 +158,23 @@ export interface FetchAllDerivedStaleMarkersOptions {
 }
 
 /**
+ * `enabled`/`status` are carried through from the FIRST page's response
+ * (closeout hotfix P1): `runtime_derived_stale_marker_list_for_project`
+ * (`runtime_db/markers.rs`) resolves `Ok({ enabled: false, status:
+ * "disabled", markers: [], nextCursor: null })` when the work runtime
+ * feature flag is off — it never rejects for that case, same convention
+ * every other `_list` command in this codebase uses (e.g.
+ * `runtime_job_list_for_project`). A disabled/no-project response always
+ * has an empty `markers` array and no `nextCursor`, so page 0 IS the whole
+ * answer; there is no later page whose `enabled`/`status` could differ.
+ */
+export interface FetchAllDerivedStaleMarkersResult {
+  readonly markers: RuntimeDerivedStaleMarkerRecord[]
+  readonly enabled: boolean
+  readonly status: RuntimeDbHealthState
+}
+
+/**
  * Single logical "list every derived-stale marker" read (decision 3),
  * paging through `nextCursor` when the backend caps a single response
  * short of the full table. `maxPages` is a hard safety stop, not an
@@ -117,12 +182,14 @@ export interface FetchAllDerivedStaleMarkersOptions {
  */
 export async function fetchAllDerivedStaleMarkers(
   options: FetchAllDerivedStaleMarkersOptions,
-): Promise<RuntimeDerivedStaleMarkerRecord[]> {
+): Promise<FetchAllDerivedStaleMarkersResult> {
   const pageLimit = options.pageLimit ?? 500
   const maxPages = options.maxPages ?? 20
   const all: RuntimeDerivedStaleMarkerRecord[] = []
   let sinceMarkedAtMs: number | undefined
   let sinceMarkerId: string | undefined
+  let enabled = true
+  let status: RuntimeDbHealthState = "healthy"
 
   for (let page = 0; page < maxPages; page += 1) {
     const response = await options.list({
@@ -130,11 +197,15 @@ export async function fetchAllDerivedStaleMarkers(
       sinceMarkedAtMs,
       sinceMarkerId,
     })
+    if (page === 0) {
+      enabled = response.enabled
+      status = response.status
+    }
     all.push(...response.markers)
     if (!response.nextCursor) break
     sinceMarkedAtMs = response.nextCursor.markedAtMs
     sinceMarkerId = response.nextCursor.markerId
   }
 
-  return all
+  return { markers: all, enabled, status }
 }

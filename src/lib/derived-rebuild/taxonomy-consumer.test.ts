@@ -13,6 +13,7 @@ import type { TagTaxonomyOperationReport } from "@/lib/agent/tag-taxonomy"
 
 const mocks = vi.hoisted(() => ({
   getQueueSummary: vi.fn(),
+  getDedupQueueSummary: vi.fn(),
   applyTagTaxonomyGrowth: vi.fn(),
   runtimeJobList: vi.fn(),
   runtimeJobRetry: vi.fn(),
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/ingest-queue", () => ({ getQueueSummary: mocks.getQueueSummary }))
+vi.mock("@/lib/dedup-queue", () => ({ getQueueSummary: mocks.getDedupQueueSummary }))
 vi.mock("@/lib/agent/tag-taxonomy", () => ({
   applyTagTaxonomyGrowth: mocks.applyTagTaxonomyGrowth,
 }))
@@ -110,6 +112,7 @@ function successReport(overrides: Partial<TagTaxonomyOperationReport> = {}): Tag
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.getQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, completed: 0, total: 0 })
+  mocks.getDedupQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, total: 0 })
   mocks.runtimeJobList.mockResolvedValue(emptyJobList())
   mocks.runtimeDerivedStaleMarkerList.mockResolvedValue(emptyMarkerList())
   mocks.runtimeJobClaimByKind.mockRejectedValue(NO_QUEUED_JOB)
@@ -499,6 +502,18 @@ describe("taxonomy-consumer — busy backoff (SPEC-6 PR2 decision 2, reused)", (
 
     startTaxonomyConsumer(PROJECT)
     await vi.waitFor(() => expect(mocks.getQueueSummary).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(mocks.runtimeJobList).not.toHaveBeenCalled()
+    expect(mocks.runtimeDerivedStaleMarkerList).not.toHaveBeenCalled()
+    expect(mocks.runtimeJobClaimByKind).not.toHaveBeenCalled()
+  })
+
+  it("skips the entire tick when the dedup queue is actively processing for this project (closeout hotfix P1 #4)", async () => {
+    mocks.getDedupQueueSummary.mockReturnValue({ pending: 0, processing: 1, failed: 0, total: 1 })
+
+    startTaxonomyConsumer(PROJECT)
+    await vi.waitFor(() => expect(mocks.getDedupQueueSummary).toHaveBeenCalled())
     await new Promise((resolve) => setTimeout(resolve, 10))
 
     expect(mocks.runtimeJobList).not.toHaveBeenCalled()
