@@ -479,7 +479,7 @@ describe("ChatPanel agent mode rendering", () => {
         lng: "en",
       }),
     ).toBe(
-      "Runs commands and edits files without asking — including shell commands.",
+      "Runs commands and edits any files without asking — including shell commands.",
     )
     expect(
       i18n.t("chat.agentRouting.policyOptions.restricted.description", { lng: "zh" }),
