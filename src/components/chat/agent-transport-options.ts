@@ -64,6 +64,7 @@ export function buildAgentTransportOptionsFromState({
     resumeSessionAt,
     persistSession: true,
     permissionPolicy: "default",
+    agentProgressSummaries: true,
     ...(disallowedTools ? { disallowedTools } : {}),
     enableWikiTools: true,
     enableWriteTools: true,

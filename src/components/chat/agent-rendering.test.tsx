@@ -56,11 +56,41 @@ describe("agent message rendering", () => {
       />,
     )
 
-    expect(html).toContain("Tool calls")
+    expect(html).toContain("Activity timeline")
     expect(html).toContain("wiki_read")
     expect(html).toContain("Failed")
     expect(html).toContain("boom")
     expect(html).toContain("wiki/index.md")
+  })
+
+  it("renders lightweight progress, permission, and rewind status rows", () => {
+    const html = renderToStaticMarkup(
+      <AgentToolTimeline
+        defaultCollapsed={false}
+        toolCalls={[]}
+        progressSummaries={[{ text: "Analyzing authentication module", timestamp: 123 }]}
+        permissionEvents={[
+          {
+            toolName: "wiki_write",
+            decision: "allow_temporary",
+            timestamp: 456,
+          },
+          {
+            toolName: "bash",
+            decision: "deny_interrupt",
+            timestamp: 789,
+          },
+        ]}
+        rewindUnavailableReason="inactive_stream"
+      />,
+    )
+
+    expect(html).toContain("Activity timeline")
+    expect(html).toContain("Analyzing authentication module")
+    expect(html).toContain("Progress update")
+    expect(html).toContain("Allowed wiki_write")
+    expect(html).toContain("Denied and interrupted bash")
+    expect(html).toContain("Rewind is unavailable because this Agent stream is no longer active.")
   })
 
   it("renders SDK content blocks", () => {
@@ -105,7 +135,7 @@ describe("agent message rendering", () => {
 	    const html = renderToStaticMarkup(<ChatMessage message={assistantMessage()} />)
 
     expect(html).toContain("Plain answer")
-    expect(html).not.toContain("Tool calls")
+    expect(html).not.toContain("Activity timeline")
     expect(html).not.toContain("Agent run")
 	    expect(html).not.toContain("Wiki changes")
 	    expect(html).not.toContain("Rewind files")
@@ -173,7 +203,7 @@ describe("agent message rendering", () => {
     expect(html).toContain("data:image/png;base64,AAAA")
     expect(html).toContain("see this")
     expect(html).toContain("self-end")
-    expect(html).not.toContain("Tool calls")
+    expect(html).not.toContain("Activity timeline")
     expect(html).not.toContain("Agent run")
   })
 
@@ -275,7 +305,7 @@ describe("agent message rendering", () => {
 
     expect(html).toContain("Agent text")
     expect(html).toContain("Tool use")
-    expect(html).toContain("Tool calls")
+    expect(html).toContain("Activity timeline")
     expect(html).toContain("Agent run")
   })
 
@@ -339,7 +369,7 @@ describe("agent message rendering", () => {
     expect(html).toContain("Context summarized")
     expect(html).toContain("Internal summary details are hidden")
     expect(html).not.toContain(hiddenSdkText)
-    expect(html).not.toContain("Tool calls")
+    expect(html).not.toContain("Activity timeline")
     expect(html).not.toContain("Agent run")
     expect(html).not.toContain("Rewind files")
   })

@@ -31,6 +31,7 @@ describe("buildAgentTransportOptionsFromState", () => {
     })
 
     expect(options).toMatchObject({
+      agentProgressSummaries: true,
       maxTurns: 30,
       maxFilesChanged: 10,
       maxWriteBytes: 262144,

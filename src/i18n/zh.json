@@ -273,10 +273,27 @@
       "contextSummarizedDetail": "Agent 已压缩前面的会话上下文。内部摘要细节不会显示在对话中。"
     },
     "timeline": {
-      "title": "工具调用",
+      "title": "活动时间线",
       "input": "输入",
       "error": "错误",
-      "empty": "无工具调用"
+      "empty": "无工具调用",
+      "progress": "进度更新",
+      "permission": {
+        "allow_temporary": "已允许 {{toolName}}",
+        "allow_permanent": "已允许 {{toolName}}",
+        "deny": "已拒绝 {{toolName}}",
+        "deny_interrupt": "已拒绝并中断 {{toolName}}",
+        "timeout": "{{toolName}} 超时后已拒绝"
+      },
+      "rewindUnavailable": {
+        "inactive_stream": "回滚不可用：此 Agent stream 已不再活跃。",
+        "unsupported": "回滚不可用：当前 Agent runtime 不支持。",
+        "missing_message_id": "回滚不可用：此检查点缺少 message id。",
+        "transport_closed": "回滚不可用：Agent transport 已关闭。",
+        "transport_not_ready": "回滚不可用：Agent transport 尚未就绪。",
+        "session_mismatch": "回滚不可用：此检查点属于另一个 session。",
+        "spawn_failed": "回滚不可用：Agent 无法启动回滚 runtime。"
+      }
     },
     "blocks": {
       "toolUse": "工具调用",

@@ -2,6 +2,7 @@
 
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { renderToStaticMarkup } from "react-dom/server"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import i18n from "@/i18n"
@@ -25,6 +26,7 @@ vi.mock("@/lib/agent/agent-rewind-orchestration", () => ({
 }))
 
 import { AgentRewindDialogHost } from "./agent-rewind-dialog"
+import { AgentToolTimeline } from "./agent-tool-timeline"
 import { useChatStore, type AgentRewindRequestRecord, type DisplayMessage } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 
@@ -183,6 +185,36 @@ describe("AgentRewindDialogHost", () => {
     expect(useChatStore.getState().agentRewindTargets.m1).toBeUndefined()
     // Dialog stays open (keepActiveRequest) so the disclosure is visible.
     expect(useChatStore.getState().activeAgentRewindRequest).not.toBeNull()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("records rewind unavailable reasons from the dialog rewind path", async () => {
+    runAgentRewindMock.mockResolvedValue({
+      status: "rewind_failed",
+      payload: { ok: false, unavailableReason: "inactive_stream" },
+    })
+    const { container, root } = renderDialog()
+
+    const confirmButton = findButtonByText(container, i18n.t("agent.rewind.confirm"))
+    await act(async () => {
+      confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+    await flushMicrotasks()
+
+    const message = useChatStore.getState().messages.find((item) => item.id === "m1")
+    expect(message?.agentRewindUnavailableReason).toBe("inactive_stream")
+    expect(useChatStore.getState().agentRewindTargets.m1).toBeUndefined()
+
+    const html = renderToStaticMarkup(
+      <AgentToolTimeline
+        toolCalls={[]}
+        rewindUnavailableReason={message?.agentRewindUnavailableReason}
+        defaultCollapsed={false}
+      />,
+    )
+    expect(html).toContain("Rewind is unavailable because this Agent stream is no longer active.")
 
     act(() => root.unmount())
     container.remove()
