@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>一个会自我构建和维护的个人知识库。</strong><br>
-  把文档喂给它，LLM 阅读、编译成结构化互联的 Wiki，并持续保持更新。
+  <strong>一个 agentic 知识工作台：一个对话入口，构建、维护并调用你的个人 Wiki。</strong><br>
+  把文档喂给它，LLM 编译出结构化互联的 Wiki；和它对话，受权限管控的 Agent 让 Wiki 持续更新并为你所用。
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ## 这是什么？
 
-LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库。
+LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成有组织、互相链接的知识库——并提供一个统一的 agentic 对话入口：查询它、指挥它，并审计它做出的每一次改动。
 
 当前只主动维护 Apple Silicon Mac 桌面应用。Windows/Linux 产物可能存在于旧 release 或历史文档里，但它们只是 legacy artifacts，不是当前 active release 或 CI target。
 
@@ -39,7 +39,9 @@ LLM Wiki Agent 是一个 macOS-first 桌面应用，把一堆文档自动变成�
 
 Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完全归你所有。你负责筛选源文件、提出问题；LLM 负责阅读、总结、交叉引用和繁琐的维护工作。长期格式方向是兼容 Google Open Knowledge Format（OKF）知识包，同时保留本地 wikilink 和 Obsidian 工作流。
 
-它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个能自主研究和更新 Wiki 的内置 Agent SDK sidecar。
+它最初是 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的一个实现，如今已成长为一个完整应用，带有知识图谱、向量搜索、网络研究、Chrome 剪藏插件，以及一个统一的 agentic 对话——其受权限管控的 Agent 能自主研究和更新 Wiki。
+
+> **Fork 说明**：本项目源自 [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) 的 fork，此后已分道演进为独立产品，启用自有版本线（当前 **0.7.0-alpha**）：统一对话入口（Chat/Agent/Ingest 三模式切换已移除）、Agent 权限体系、带写前快照的会话回滚、Wiki 健康中心、模型 Profile 池，以及基于 SQLite 的 Work Runtime。原始应用的功劳归上游；两个项目的功能集已不再等同，本 fork 的更新检查指向本仓库。
 
 <p align="center">
   <img src="assets/llm_wiki_arch.jpg" width="100%" alt="LLM Wiki 架构">
@@ -47,7 +49,9 @@ Wiki 就是磁盘上的 markdown：一个 git 仓库、一个 Obsidian 库，完
 
 ## 核心亮点
 
-- **内置 Agent SDK sidecar** —— 基于 Claude Agent SDK 的 Agent 运行在应用内，配有专属 Wiki 工具、多轮对话、工具调用时间线、权限审批、session resume/fork。它能搜索、读取、写入 Wiki 页面，执行研究，并驱动多 Agent 流水线（compiler → linter → fixer → synthesizer → qa）。
+- **统一 agentic 对话** —— 一个输入框搞定一切：附件、来源限定、自动路由决定每条消息的执行方式。会写 Wiki 的 Agent 运行走逐步权限审批（也可按会话切换为只读 / 跳过确认），每次工具调用都落在活动时间线上，每笔 Wiki 写入可审阅、可单独撤销，整段会话可带快照精确回滚文件。
+- **Wiki 健康中心** —— 派生状态总览（向量、标签、综合、索引、总览）+ 一键重建 + lint/审阅收件箱，主导航收敛为五个带标签入口。
+- **模型 Profiles 与 Work Runtime** —— 按任务族分配的 profile 池，支持自动故障转移和旧配置一键迁移向导；Agent 与导入任务由 SQLite 任务台账（租约、崩溃恢复）承载。
 - **两步 ingest** —— LLM 先分析源文档，再生成页面，带源文件溯源和 SHA-256 增量缓存。
 - **知识图谱** —— 4 信号相关性引擎 + Louvain 社区检测，呈现知识簇、惊喜连接和知识缺口。
 - **混合搜索** —— 分词关键词搜索（英文 + 中文 CJK）配合可选的 LanceDB 向量语义搜索。
@@ -112,8 +116,7 @@ my-wiki/
 - **混合检索** —— 分词搜索（英文单词 + 中文 CJK bigram）配合可选向量搜索（LanceDB）
 - **图谱扩展上下文** —— 用 top 命中作为种子做 2 跳相关性遍历
 - **可配置上下文窗口** —— 4K → 1M tokens，按比例分配预算
-- **多会话对话** —— 持久化 session、引用来源面板、重新生成、保存到 Wiki
-- **普通 Chat 对齐上游** —— 普通 Chat/RAG/UI 尽量贴近 upstream LLM Wiki v0.5.x，合适时吸收 Chat Agent Router 能力
+- **多会话对话** —— 持久化 session、引用来源面板、重新生成、保存到 Wiki，支持按会话覆盖模型 profile 与权限档位
 - **思考过程显示** —— 为 DeepSeek / QwQ 类模型折叠展示 `<think>` 推理块
 - **KaTeX 数学渲染** —— 各视图均支持行内与块级 LaTeX
 
@@ -124,7 +127,8 @@ my-wiki/
 
 ### Agent
 - **内置 Agent（Claude Agent SDK）** —— 专属 Wiki MCP 工具（`read_page`、`search_pages`、`update_page`、`create_entity` / `create_concept`、`get_graph`），基于 hooks 的权限控制，session resume / fork / continue，成本上限
-- **工具调用时间线与权限审批** —— 实时看到 Agent 在做什么，并就地审批敏感操作
+- **权限三档与活动时间线** —— 逐步确认（默认）/ 只读 / 跳过确认，可按会话切换；每次工具调用与审批都记录在时间线上，并披露本次运行实际使用的模型 profile
+- **可审阅写入与会话回滚** —— 逐条审阅 Agent 写入的 Wiki 页面并可单独撤销；会话可回退到更早节点，写前快照 + fail-closed 保护（绝不盲写覆盖你后来的手动改动）
 - **多 Agent 流水线** —— 5 个内置角色（compiler / linter / fixer / synthesizer / qa）按串行或并行编排
 - **属性自动填充** —— ingest 时自动为概念/实体填充状态和标签
 - **Lint 闭环** —— Agent 驱动的检测与自动修复，带并发控制
@@ -158,10 +162,7 @@ my-wiki/
 
 ### 预编译二进制
 
-从 [Releases](https://github.com/6tizer/llm_wiki/releases) 下载：
-- **macOS** —— `.dmg`（Apple Silicon）
-
-Windows/Linux 产物可能仍存在于旧 release 中，但只作为 legacy artifacts。当前 active release 和 CI 只面向 Apple Silicon macOS。
+本 fork 尚未发布预编译版本（应用内更新检查也会如实提示）——请按下方从源码构建。随着版本线接近 1.0，将开放 [Releases](https://github.com/6tizer/llm_wiki/releases) 渠道。当前唯一 active 目标是 Apple Silicon macOS；上游项目旧 release 里的 Windows/Linux 产物属于已分叉代码库的 legacy artifacts。
 
 ### 从源码构建
 
@@ -189,8 +190,8 @@ npm run tauri build    # 生产构建
 3. *（可选）* 配置网络搜索提供商、向量嵌入、源文件夹自动监听
 4. **源文件** → 导入文档（PDF、DOCX、MD……）
 5. 观察 **活动面板**，LLM 自动构建 Wiki 页面
-6. 用 **对话** 查询知识库（或切换到 **Agent** 模式）
-7. 浏览 **知识图谱**，处理 **审核** 条目，运行 **Lint** 保持健康
+6. **对话** —— 一个输入框搞定一切：提问、附上文档、用 **来源 ▾** 限定范围，自动路由决定执行方式；会写 Wiki 的 Agent 运行会逐步征求你的确认
+7. 浏览 **知识图谱**，并在 **Wiki 健康中心** 保持健康——派生状态重建 + lint/审阅收件箱
 
 ## Agent & API
 
@@ -198,7 +199,7 @@ npm run tauri build    # 生产构建
 
 LLM Wiki Agent 内置一个基于 **Claude Agent SDK** 的 Agent，以 Node.js sidecar 进程运行，通过 stdin/stdout JSON-lines 与 Rust 后端通信。
 
-术语说明：上游 LLM Wiki v0.5.x 也在普通 Chat 里加入了 **Chat Agent Router**。这个上游 Agent 是一个 TypeScript planner，会在一次聊天中按需调用只读的项目文件、Wiki、图谱、Web、AnyTXT 工具，再交给当前配置的 LLM provider 回答。本 fork 里的 **Agent SDK sidecar** 指独立的 Claude Agent SDK runtime，包含可写 Wiki 工具、权限审批、session 生命周期和多 Agent 工作流。后续上游同步可以吸收 Chat Agent Router 的有用能力，但不能把它当成 sidecar 的替代品。
+术语说明：本应用的早期版本（以及上游 llm_wiki，含其 Chat Agent Router）曾提供彼此割裂的 **Chat / Agent / Ingest 三模式**。本 fork 已彻底移除模式切换：只有一个输入框，每条消息自动路由；带可写 Wiki 工具、权限审批与 session 生命周期的 Claude Agent SDK sidecar 是唯一的 Agent runtime。
 
 - **Wiki MCP 工具** —— `read_page`、`search_pages`、`update_page`、`create_entity` / `create_concept`、`get_graph`
 - **Hooks 与权限** —— Wiki 工具在安全边界内自动允许（写入限制在 `wiki/**/*.md`）；内置工具走 SDK 权限审批
@@ -232,6 +233,7 @@ src-tauri/                  # Rust 后端（Tauri v2）
 │   ├── commands/
 │   │   ├── file_ops/       # 文件同步、图片提取、文件系统
 │   │   ├── search/         # 关键词 / 向量 / 混合搜索、向量库
+│   │   ├── runtime_db/     # Work Runtime：SQLite 任务台账、租约、模型 profile 池
 │   │   └── agent_cli/      # Agent sidecar 桥接、Claude CLI、Codex CLI
 │   ├── api_server.rs       # 本地 HTTP API 服务
 │   └── lib.rs              # 入口
@@ -252,9 +254,11 @@ src/                        # 前端（React + TypeScript）
 └── i18n/                   # 国际化
 ```
 
-## 路线图
+## 路线图与版本
 
-当前产品方向从已完成的 [`mac-product-baseline`](docs/plans/mac-product-baseline.md) 出发，继续推进三条对齐主线：普通 Chat/RAG/UI 对齐上游 Chat Agent Router，sidecar 对齐 Claude Agent SDK，Wiki bundle 兼容 Google OKF。详见 [`docs/plans/`](docs/plans/) 的当前计划索引。
+开发以一系列 SPEC 推进（实时索引见 [`docs/plans/`](docs/plans/)）。SPEC-1 至 SPEC-12——架构分解、Work Runtime、模型 Profiles、并行知识流水线、派生知识重建、统一 agentic 对话（SPEC-7）、UI 信息架构收敛（SPEC-12）——已全部完成，仅余三个：SPEC-4（模型 profile 在已交付基座之上的完整形态）、SPEC-8（可维护性工具链）、SPEC-9（Swift shell，暂缓）。
+
+本 fork 的版本线自 **0.7.0-alpha** 重新起算，独立于上游的 0.5.x 编号。剩余 SPEC 完成后升 **1.0.0**；在此之前应用会显示 `-alpha` 渠道后缀。
 
 ## 致谢
 

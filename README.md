@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>A personal knowledge base that builds and maintains itself.</strong><br>
-  Feed it documents — an LLM reads them, compiles a structured, interlinked wiki, and keeps it current.
+  <strong>An agentic knowledge workbench: one chat that builds, maintains, and answers from your personal wiki.</strong><br>
+  Feed it documents — an LLM compiles a structured, interlinked wiki. Talk to it — a permission-controlled agent keeps that wiki current and puts it to work.
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 
 ## What is this?
 
-LLM Wiki Agent is a macOS-first desktop app that turns a pile of documents into an organized, interlinked knowledge base — automatically.
+LLM Wiki Agent is a macOS-first desktop app that turns a pile of documents into an organized, interlinked knowledge base — and gives you a single agentic chat to query it, direct it, and audit every change it makes.
 
 Current active maintenance targets the Mac desktop app for Apple Silicon. Windows/Linux artifacts may exist in older releases or historical documentation, but they are legacy artifacts, not current active release or CI targets.
 
@@ -39,7 +39,9 @@ Most LLM-and-documents workflows look like RAG: you upload files, the model retr
 
 The wiki is just markdown on disk: a git repo, an Obsidian vault, yours to keep. You curate sources and ask questions; the LLM does the reading, summarizing, cross-referencing, and bookkeeping. The long-term format direction is Google Open Knowledge Format (OKF)-compatible knowledge bundles, while keeping local wikilinks and Obsidian workflows intact.
 
-It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and has grown into a full application with a knowledge graph, vector search, web research, a Chrome clipper, and a built-in Agent SDK sidecar that can research and update the wiki on its own.
+It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) and has grown into a full application with a knowledge graph, vector search, web research, a Chrome clipper, and a unified agentic chat whose permission-controlled agent can research and update the wiki on its own.
+
+> **Fork status.** This project began as a fork of [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) and has since diverged into an independent product with its own version line (currently **0.7.0-alpha**): a unified chat entry (the Chat/Agent/Ingest mode switch is gone), an agent permission system, conversation rewind with write snapshots, a Wiki Health Center, a model profile pool, and a SQLite-backed work runtime. Credit for the original application belongs upstream; the two projects are no longer feature-equivalent, and this fork's update checks point at this repository.
 
 <p align="center">
   <img src="assets/llm_wiki_arch.jpg" width="100%" alt="LLM Wiki Architecture">
@@ -47,7 +49,9 @@ It started as an implementation of [Andrej Karpathy's LLM Wiki pattern](https://
 
 ## Highlights
 
-- **Built-in Agent SDK sidecar** — an agent powered by the Claude Agent SDK runs inside the app with custom wiki tools, multi-turn dialog, tool-call timeline, permission approval, and session resume/fork. It can search, read, and write wiki pages, run research, and drive a multi-agent pipeline (compiler → linter → fixer → synthesizer → qa).
+- **Unified agentic chat** — one composer for everything: attach documents, scope sources, and let automatic routing decide how each message runs. Write-capable agent runs go through per-step permission approval (or read-only / skip-confirmations policies, switchable per conversation), every tool call lands on an activity timeline, each wiki write is reviewable and individually undoable, and whole conversations can be rewound with snapshot-backed file restore.
+- **Wiki Health Center** — a derived-state dashboard (embeddings, tags, synthesis, index, overview) with one-click rebuilds, plus the lint and review inboxes, inside a five-section labeled navigation.
+- **Model profiles & work runtime** — a profile pool with per-task-family assignment and automatic failover, a migration wizard from single-model config, and a SQLite job ledger (leases, crash recovery) underneath agent and ingest runs.
 - **Two-step ingest** — the LLM analyzes a source first, then generates pages, with source traceability and SHA-256 incremental caching.
 - **Knowledge graph** — a 4-signal relevance engine plus Louvain community detection, surfacing clusters, surprising connections, and knowledge gaps.
 - **Hybrid search** — tokenized keyword search (English + CJK) with optional vector semantic search via LanceDB.
@@ -112,8 +116,7 @@ my-wiki/
 - **Hybrid retrieval** — tokenized search (English words + CJK bigrams) with optional vector search (LanceDB)
 - **Graph-expanded context** — top hits seed a 2-hop relevance traversal
 - **Configurable context window** — 4K → 1M tokens with proportional budget allocation
-- **Multi-conversation chat** — persistent sessions, cited references panel, regenerate, save-to-wiki
-- **Upstream-aligned normal Chat** — normal Chat/RAG/UI should stay close to upstream LLM Wiki v0.5.x, including the Chat Agent Router where it fits
+- **Multi-conversation chat** — persistent sessions, cited references panel, regenerate, save-to-wiki, per-conversation model profile and permission overrides
 - **Thinking display** — collapsible `<think>` reasoning blocks for DeepSeek / QwQ-style models
 - **KaTeX math** — inline and block LaTeX rendering everywhere
 
@@ -124,7 +127,8 @@ my-wiki/
 
 ### Agent
 - **Built-in agent (Claude Agent SDK)** — custom wiki MCP tools (`read_page`, `search_pages`, `update_page`, `create_entity` / `create_concept`, `get_graph`), hooks-based permission control, session resume / fork / continue, cost limits
-- **Tool-call timeline & permission approval** — see what the agent is doing and approve sensitive actions inline
+- **Permission policies & activity timeline** — three policies (per-step confirmation / read-only / skip confirmations) switchable per conversation; every tool call and approval is recorded on the timeline, with the active model profile disclosed per run
+- **Reviewable writes & rewind** — review every wiki page the agent wrote and undo individual writes; rewind a conversation to an earlier point with pre-write snapshots and fail-closed restore (later manual edits are never blindly overwritten)
 - **Multi-agent pipeline** — 5 built-in roles (compiler / linter / fixer / synthesizer / qa) orchestrated in sequence or parallel
 - **Property autofill** — auto-fill status and tags for concepts/entities during ingest
 - **Lint loop** — agent-driven detection and auto-fix with concurrency control
@@ -158,10 +162,7 @@ The near-term product direction remains a Mac app built with Tauri, Rust, TypeSc
 
 ### Pre-built binaries
 
-Download from [Releases](https://github.com/6tizer/llm_wiki/releases):
-- **macOS** — `.dmg` (Apple Silicon)
-
-Windows/Linux artifacts may appear in older releases, but they are legacy artifacts only. Current active releases and CI target macOS Apple Silicon.
+This fork has not published pre-built releases yet (the in-app update checker will tell you the same) — build from source below. A [Releases](https://github.com/6tizer/llm_wiki/releases) channel will open as the version line approaches 1.0. macOS Apple Silicon is the only active target; Windows/Linux artifacts in the upstream project's older releases are legacy artifacts of a diverged codebase.
 
 ### Build from source
 
@@ -189,8 +190,8 @@ npm run tauri build    # Production build
 3. *(Optional)* configure web search providers, vector embeddings, and source folder auto-watch
 4. **Sources** → import documents (PDF, DOCX, MD, …)
 5. Watch the **Activity Panel** as the LLM builds wiki pages
-6. **Chat** to query your knowledge base (or switch to **Agent** mode)
-7. Explore the **Knowledge Graph**, handle **Review** items, and run **Lint** to keep things healthy
+6. **Chat** — one input for everything: ask questions, attach documents, scope context with **Sources ▾**, and let automatic routing decide how each message runs; agent runs that write to the wiki ask for permission step by step
+7. Explore the **Knowledge Graph**, and keep things healthy in the **Wiki Health Center** — derived-state rebuilds plus the lint and review inboxes
 
 ## Agent & API
 
@@ -198,7 +199,7 @@ npm run tauri build    # Production build
 
 LLM Wiki Agent ships a built-in agent powered by the **Claude Agent SDK**, running as a bundled sidecar binary in production and a Node.js sidecar in development. It communicates with the Rust backend over stdin/stdout JSON-lines.
 
-Terminology note: upstream LLM Wiki v0.5.x also added a **Chat Agent Router** inside normal Chat. That upstream agent is a TypeScript planner that routes a chat turn through read-only project/wiki/graph/web/AnyTXT tools before calling the configured LLM provider. In this fork, **Agent SDK sidecar** means the separate Claude Agent SDK runtime with write-capable wiki tools, permission approval, session lifecycle, and multi-agent workflows. Future upstream sync work should port useful Chat Agent Router behavior without treating it as a replacement for the sidecar.
+Terminology note: earlier versions of this app (and upstream llm_wiki, with its separate Chat Agent Router) exposed distinct **Chat / Agent / Ingest modes**. This fork removed the mode switch entirely: there is one composer, each message is routed automatically, and the Claude Agent SDK sidecar — with write-capable wiki tools, permission approval, and session lifecycle — is the single agent runtime.
 
 - **Wiki MCP tools** — `read_page`, `search_pages`, `update_page`, `create_entity` / `create_concept`, `get_graph`
 - **Hooks & permissions** — wiki tools auto-allowed within safe boundaries (writes restricted to `wiki/**/*.md`); built-in tools go through SDK permission approval
@@ -232,6 +233,7 @@ src-tauri/                  # Rust backend (Tauri v2)
 │   ├── commands/
 │   │   ├── file_ops/       # File sync, image extraction, filesystem
 │   │   ├── search/         # Keyword / vector / hybrid search, vectorstore
+│   │   ├── runtime_db/     # Work runtime: SQLite job ledger, leases, model profile pool
 │   │   └── agent_cli/      # Agent sidecar bridge, Claude CLI, Codex CLI
 │   ├── api_server.rs       # Local HTTP API server
 │   └── lib.rs              # Entry point
@@ -252,9 +254,11 @@ src/                        # Frontend (React + TypeScript)
 └── i18n/                   # Internationalization
 ```
 
-## Roadmap
+## Roadmap & versioning
 
-The active product direction starts from the completed [`mac-product-baseline`](docs/plans/mac-product-baseline.md), then continues through three alignment tracks: upstream Chat Agent Router alignment for normal Chat/RAG/UI, Claude Agent SDK alignment for the sidecar, and Google OKF compatibility for wiki bundles. See [`docs/plans/`](docs/plans/) for the current plan index.
+Development runs as a sequence of SPECs (see the live index in [`docs/plans/`](docs/plans/)). SPEC-1 through SPEC-12 — architecture decomposition, the work runtime, model profiles, parallel knowledge pipelines, derived-knowledge rebuilds, unified agentic chat (SPEC-7), and the UI IA consolidation (SPEC-12) — are complete except three: SPEC-4 (model profile completion beyond the shipped baseline), SPEC-8 (maintainability tooling), and SPEC-9 (Swift shell, deferred).
+
+This fork's version line restarted at **0.7.0-alpha**, independent of upstream's 0.5.x numbering. **1.0.0** lands when the remaining specs do; until then the app displays the `-alpha` channel suffix.
 
 ## Credits
 
