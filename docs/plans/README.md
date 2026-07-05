@@ -121,18 +121,18 @@
 | SPEC-5 | completed by #236/#238/#240/#242/#244/#246 | #236/#238/#240/#242/#244/#246 |
 | SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
 | SPEC-6 | completed（closeout hotfix merged #290） | #280/#283/#284/#285/#288/#290 |
-| SPEC-7 | PR1/PR2 completed（#277/#291）；PR3-PR7 范围经 2026-07-04 UI 走查修订 | in progress |
+| SPEC-7 | completed（2026-07-05 closeout；含 #292 阶段一） | #277/#291/#296/#298/#300/#301/#303/#304/#306/#307 + closeout hotfix |
 | SPEC-8 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
 | SPEC-9 | deferred / gated | deferred |
 | SPEC-10 | completed via #250/#252/#254/#261/#265/#266/#271 | #250/#252/#254/#261/#265/#266/#271 |
 | SPEC-11 | completed via #262/#263/#256/#270/#274/#268/#275/#272/#273 | #262/#263/#256/#270/#274/#268/#275/#272/#273 |
-| SPEC-12 | reviewed / ready for PR split（UI IA 收敛：runtime 转正/设置重组/Wiki 健康中心） | pending |
+| SPEC-12 | completed（2026-07-05 closeout） | #295/#297/#299/#302/#305/#308 |
 
 2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
 当前优先级（2026-07-04 更新，轨间并行布局）：
 
-0. **双轨并行主线**：pipeline 轨跑 SPEC-12（PR1 runtime 转正最先——它是 SPEC-12 PR3 与 SPEC-7 PR4/PR6 的共同前置；PR2 设置分组前置于 SPEC-7 PR6）；agent 轨跑 SPEC-7 PR3（会话状态隔离 + 错误产品化，无前置依赖，即刻可开）→ PR4/PR5/PR6 按修订后范围推进。文件边界：chat-store/chat 组件归 agent 轨，设置组件归 pipeline 轨。maint 轨填缝（#292 PR2b、#286/#287/#289、SPEC-8 剩余）。走查依据与裁定见 `SPEC-12/ui-audit-2026-07.md`。
+0. **双轨主线已收官（2026-07-05）**：SPEC-7 与 SPEC-12 全部 closeout（closeout 节见各 SPEC 文档）。后续候选：SPEC-8 剩余（含 QA fixture 壳接管 #86 语境）、#309（appTool 快照阶段二）、#310（运行时任务族路由，legacy 退役前置）、#286/#287/#289、#311/#312/#313/#314。
 
 历史优先级记录：
 

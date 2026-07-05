@@ -1,6 +1,19 @@
 # SPEC-12: UI 信息架构收敛（设置重组 · Wiki 健康中心 · Runtime 转正）
 
-> 类型：阶段 SPEC | 状态：reviewed / ready for PR split | 依据：2026-07-04 生产 app 全页 UI 走查（`SPEC-12/ui-audit-2026-07.md`）+ 用户裁定 D1-D5 | 依赖：SPEC-4/4-FIX（profile 体系）、SPEC-5-FIX/6（runtime 与派生层）、与 SPEC-7 PR3-PR6 交错（见「与 SPEC-7 的接口」）
+> 类型：阶段 SPEC | 状态：**completed（2026-07-05 closeout）** | 依据：2026-07-04 生产 app 全页 UI 走查（`SPEC-12/ui-audit-2026-07.md`）+ 用户裁定 D1-D5 | 依赖：SPEC-4/4-FIX（profile 体系）、SPEC-5-FIX/6（runtime 与派生层）、与 SPEC-7 PR3-PR6 交错（见「与 SPEC-7 的接口」）
+
+## 2026-07-05 Closeout
+
+全部 PR 已合并：PR1 runtime 转正 #295、PR2 设置分组骨架 #297、PR3 模型配置合并页 #299、PR3b 权限默认值设置页（消费 SPEC-7 PR6 契约）#305、PR4 Wiki 健康中心+主导航 8→5 #302、closeout hotfix #308。
+
+**范围修正记录（相对原文）**：
+- legacy「LLM 模型」**未转只读**：streamChat 等十余消费方仍直读 llmConfig（App 启动 resolve 链必须存活），只读化+删除与运行时任务族路由同 timeline → #310。
+- 分配矩阵为**纯 UI 视图层**（编辑 taskFamilies；仅 agent/ingest 有运行时消费方，其余行如实标注「尚未接入」）→ 运行时路由 #310。
+- embedding/multimodal **保留独立页**（矩阵行只读+跳转），降为矩阵行待 #310。
+- 派生状态页**双挂**（设置侧保留=状态查看+前向跳转健康中心；D2「治理操作从设置消失」指四工作台，已迁出）——closeout 裁定。
+- 迁移向导密钥一次性快照 staleness 提示 → #312。
+
+Closeout Gate：双维度多代理深度 review（设置 IA 路径 + 导航/健康中心路径）已执行，P1×3 闭环于 #308；截图对照：最终 main 生产构建实机验证五项带标签导航/Wiki 健康中心/合并页/迁移向导（各 PR body 附证据；期间一度出现的白屏经对照实验判定为机器显示睡眠环境问题，与代码无关）。23→20→16 项设置入口对账零丢失（深度 review 维度一核验）。
 
 ## 背景与三个病根
 
