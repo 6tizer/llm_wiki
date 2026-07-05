@@ -69,7 +69,9 @@
   },
   "sidebar": {
     "knowledge": "Knowledge",
-    "files": "Files"
+    "files": "Files",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
   },
   "explore": {
     "navLabel": "Explore tools",

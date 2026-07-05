@@ -27,6 +27,7 @@ export type StoreBoundaryCategory =
 export type StoreBoundarySurface =
   | "app-state.json"
   | "zustand"
+  | "zustand+localStorage"
   | "project-path-key"
   | "project-identity-file"
   | "runtime-db-deferred"
@@ -47,6 +48,7 @@ export type StoreBoundaryEntryId =
   | "rust-project-file-sync-enabled"
   | "ui-theme"
   | "ui-zoom-level"
+  | "ui-sidebar-collapsed"
   | "update-check-persisted-state"
   | "update-check-session-state"
   | "model-provider-config"
@@ -300,6 +302,19 @@ export const STORE_BOUNDARY_ENTRIES: readonly StoreBoundaryEntry[] = [
     projectScoped: false,
     migrationRule: "keep as UI shell preference",
     compatibilityNote: "DOM zoom remains UI shell state.",
+  },
+  {
+    id: "ui-sidebar-collapsed",
+    currentSurface: "zustand+localStorage",
+    currentKeys: ["sidebarCollapsed", "llmwiki.sidebarCollapsed"],
+    owner: "ui-shell",
+    category: "app-ui-preference",
+    rustLocked: false,
+    crossLanguageReadByRust: false,
+    secretBearing: false,
+    projectScoped: false,
+    migrationRule: "keep as browser-local UI shell preference unless native shell adapter owns it later",
+    compatibilityNote: "Zustand field sidebarCollapsed mirrors localStorage key llmwiki.sidebarCollapsed for the cross-restart right sidebar layout preference.",
   },
   {
     id: "update-check-persisted-state",
