@@ -31,10 +31,17 @@
 ## 范围与 PR 拆分（设计确认后细化）
 
 1. **PR1 供应商模板库 + 三步向导**：模板数据文件（分组/endpoint/auth 字段/apiKeyUrl/endpointCandidates/默认模型映射/agent 先验，取代并扩展现有 LLM_PRESETS）；三步向导 UI（选模板→填 Key（profile-secrets 钥匙串）→测试）；完成自动 runtimeProfileCreate 生成默认 profile 并按 agent 先验设 task families。
-2. **PR2 测试三色 + 卡片健康徽章**：probe 冒烟化（连通/key/模型/TTFB）、三色结果卡与修复建议、卡片常显徽章；agent 勾选性=模板先验 ∧ 冒烟（自定义端点走完整探测）。
-3. **PR3 调用点全量迁移 + fallback 面板**（#310）：全部 streamChat 消费方走 pool claim；每任务族有序 fallback 队列 UI + 自动转移开关 + 熔断参数面板 + 转移事件日志/timeline 披露。
+2. **PR2 测试三色 + 模型列表 + 多模型接入**：①供应商实时模型列表拉取（modelsUrl/自动候选）+ 向导 modelId 从列表选择/多选批量建 profile（共享 secretRef）；②probe 冒烟三色（健康/降级/不可用）结果卡与修复建议、卡片常显徽章；③迁移向导按模板库映射校正 endpoint/apiMode；agent 勾选性=模板先验 ∧ 冒烟。
+3. **PR3 调用点全量迁移 + fallback 面板 + 连接分组**（#310）：全部 streamChat 消费方走 pool claim；每任务族有序 fallback 队列 UI + 自动转移开关 + 熔断参数面板 + 转移事件日志/timeline 披露；Profiles 列表按连接分组、组内一键加模型。
 4. **PR4 legacy 退役 + 迁移收尾**：legacy「LLM 模型」只读化→删除；迁移向导升级为「导入旧配置」一次性入口（吸收 #312 staleness 提示）；embedding/multimodal 页降为矩阵行（SPEC-12 deferred 项）。
 5. **Closeout**：e2e（三步向导真机）、深度 review、docs。
+
+
+## 2026-07-05 实测缺口回灌（用户三报告，PR2/PR3 范围修订）
+
+1. **模型号权威性**（报告 #3：LongCat-2.0 / deepseek-v4-flash 被供应商拒）：硬编码模型号在国产厂商侧天然易腐。**采 CC Switch 系统解：拉取供应商实时模型列表**——模板加 `modelsUrl?`，后端按 `/v1/models`、`/models` 及剥兼容子路径自动候选；向导第二步填 Key 后「获取模型列表」，modelId 从实时列表选择（可手输兜底）；probe 用所选模型实测。LongCat-2.0 为内审轮误改已单独回退（源值 LongCat-Flash-Chat）。→ **进 PR2**。
+2. **一连接多模型**（报告 #2：DeepSeek Pro/Flash 被迫建两个 profile 重复填 Key）：CC Switch 语义=一个供应商下多模型映射。我们采**轻方案**：profile 仍是（连接×模型）粒度（调度/熔断按模型隔离是优点），但①向导第二步支持从模型列表**多选**，一次批量创建多个 profile **共享同一 secretRef**（一次填 Key）；②Profiles 列表按「连接」（providerId+endpoint+secretRef）分组展示，组内一键加模型。重实体方案（独立 connection 表）推迟，除非分组 UI 撞墙。→ **进 PR2（向导多选+共享 secretRef）与 PR3（列表分组）**。
+3. **legacy 端点沿用污染**（报告 #1：Kimi 等 legacy 端点/apiMode 与模板真相不一致，迁移向导 `endpointFromResolvedConfig` 原样沿用进 profile 致测试失败）：legacy「LLM 模型」预设与模板库存在同名不同值（如 kimi：legacy=api.moonshot.ai/v1+chat_completions，模板=api.moonshot.cn/anthropic）。修法：**迁移向导产出前按模板库做映射校正**（providerId/模型可识别时优先模板 endpoint/apiMode，UI 显示映射说明，允许用户保留原值），模板库为单一真相。→ **进 PR2**；根治=PR4 legacy 退役（原计划）。
 
 ## 非目标
 
