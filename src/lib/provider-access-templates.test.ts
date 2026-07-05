@@ -32,7 +32,7 @@ describe("provider access templates", () => {
   it("keeps ids unique and every group populated", () => {
     const ids = PROVIDER_ACCESS_TEMPLATES.map((template) => template.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(PROVIDER_ACCESS_TEMPLATES).toHaveLength(22)
+    expect(PROVIDER_ACCESS_TEMPLATES).toHaveLength(28)
 
     for (const group of GROUPS) {
       expect(PROVIDER_ACCESS_TEMPLATES.some((template) => template.group === group)).toBe(true)
@@ -46,9 +46,13 @@ describe("provider access templates", () => {
     }
   })
 
-  it("keeps non-local endpoints on https and local endpoints on localhost", () => {
+  it("keeps endpoints compatible with their transport", () => {
     for (const template of PROVIDER_ACCESS_TEMPLATES) {
-      if (template.group === "local") {
+      if (template.apiMode === "local-cli") {
+        expect(template.endpoint).toBe("")
+        continue
+      }
+      if (template.id === "ollama" || template.id === "lm-studio") {
         expect(template.endpoint).toMatch(/^http:\/\/localhost:/)
         continue
       }
@@ -76,5 +80,50 @@ describe("provider access templates", () => {
     expect(providerAccessTemplateById("volcengine-ark")?.defaultModelId).toBe("doubao-seed-2-1-pro-260628")
     expect(providerAccessTemplateById("openrouter")?.defaultModelId).toBe("anthropic/claude-sonnet-5")
     expect(providerAccessTemplateById("aws-bedrock")?.notes).toContain("SigV4")
+  })
+
+  it("includes legacy-only model-call providers and local CLI templates", () => {
+    expect(providerAccessTemplateById("groq")).toMatchObject({
+      group: "intl-official",
+      endpoint: "https://api.groq.com/openai/v1",
+      apiMode: "openai-chat-completions",
+      agentSupport: "none",
+    })
+    expect(providerAccessTemplateById("xai")).toMatchObject({
+      group: "intl-official",
+      endpoint: "https://api.x.ai/v1",
+      apiMode: "openai-chat-completions",
+      agentSupport: "none",
+    })
+    expect(providerAccessTemplateById("nvidia-nim")).toMatchObject({
+      group: "gateway",
+      endpoint: "https://integrate.api.nvidia.com/v1",
+      apiMode: "openai-chat-completions",
+      agentSupport: "none",
+    })
+    expect(providerAccessTemplateById("ollama-cloud")).toMatchObject({
+      group: "local",
+      endpoint: "https://ollama.com/v1",
+      apiMode: "openai-chat-completions",
+      agentSupport: "none",
+    })
+    for (const id of ["claude-code-cli", "codex-cli"]) {
+      expect(providerAccessTemplateById(id)).toMatchObject({
+        group: "local",
+        endpoint: "",
+        apiMode: "local-cli",
+        authStyle: "oauth-local-cli",
+        agentSupport: "none",
+      })
+    }
+  })
+
+  it("folds legacy regional variants into endpoint candidates", () => {
+    expect(providerAccessTemplateById("kimi")?.endpointCandidates)
+      .toEqual(["https://api.moonshot.cn/anthropic", "https://api.moonshot.ai/anthropic"])
+    expect(providerAccessTemplateById("minimax")?.endpointCandidates)
+      .toEqual(["https://api.minimaxi.com/anthropic", "https://api.minimax.io/anthropic"])
+    expect(providerAccessTemplateById("dashscope")?.endpointCandidates)
+      .toContain("https://coding.dashscope.aliyuncs.com/apps/anthropic")
   })
 })
