@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from "react"
+import type { ComponentProps } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
@@ -64,16 +65,29 @@ function runtimeProfile(
   }
 }
 
-function renderProfiles(): { container: HTMLDivElement; root: Root } {
+function renderProfiles(
+  props: Partial<ComponentProps<typeof ModelProfilesSection>> = {},
+): { container: HTMLDivElement; root: Root } {
   const container = document.createElement("div")
   document.body.appendChild(container)
   const root = createRoot(container)
 
   act(() => {
-    root.render(<ModelProfilesSection />)
+    root.render(<ModelProfilesSection {...props} />)
   })
 
   return { container, root }
+}
+
+async function rerenderProfiles(
+  root: Root,
+  props: Partial<ComponentProps<typeof ModelProfilesSection>>,
+): Promise<void> {
+  await act(async () => {
+    root.render(<ModelProfilesSection {...props} />)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
 }
 
 async function renderProfilesWithList(result: {
@@ -109,6 +123,16 @@ async function input(element: HTMLInputElement, value: string): Promise<void> {
     element.dispatchEvent(new Event("input", { bubbles: true }))
     await Promise.resolve()
   })
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 function unmount(root: Root): void {
@@ -346,6 +370,137 @@ describe("ModelProfilesSection UI", () => {
 
     expect(container.textContent).toContain("Primary profile")
     expect(container.querySelector<HTMLInputElement>("[data-testid='profile-task-future-family']")?.checked).toBe(true)
+
+    unmount(root)
+  })
+
+  it("keeps profile B selected after saving B and a background refresh arrives", async () => {
+    const profileA = runtimeProfile({ profileId: "profile-a", displayName: "A profile" })
+    const profileB = runtimeProfile({ profileId: "profile-b", displayName: "B profile", modelId: "b-old" })
+    const savedB = runtimeProfile({ ...profileB, displayName: "B saved", modelId: "b-saved" })
+    runtimeDbMocks.runtimeProfileList.mockReset()
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [profileA, profileB],
+    })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(savedB)
+
+    const { container, root } = renderProfiles({ refreshToken: 0 })
+    await flush()
+
+    await click(container.querySelector("[data-testid='profile-select-profile-b']") as HTMLButtonElement)
+    const displayName = container.querySelector<HTMLInputElement>("[data-testid='profile-display-name']")
+    const save = container.querySelector<HTMLButtonElement>("[data-testid='profile-save']")
+    if (!displayName || !save) throw new Error("profile form not found")
+    await input(displayName, "B saved")
+    await click(save)
+
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [profileA, savedB],
+    })
+    await rerenderProfiles(root, { refreshToken: 1 })
+
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-display-name']")?.value).toBe("B saved")
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-model']")?.value).toBe("b-saved")
+
+    unmount(root)
+  })
+
+  it("keeps an unsaved profile B draft while a background refresh updates profile A in the list", async () => {
+    const profileA = runtimeProfile({ profileId: "profile-a", displayName: "A profile" })
+    const profileB = runtimeProfile({ profileId: "profile-b", displayName: "B profile", modelId: "b-old" })
+    const updatedA = runtimeProfile({ ...profileA, displayName: "A updated" })
+    runtimeDbMocks.runtimeProfileList.mockReset()
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [profileA, profileB],
+    })
+
+    const { container, root } = renderProfiles({ refreshToken: 0 })
+    await flush()
+
+    await click(container.querySelector("[data-testid='profile-select-profile-b']") as HTMLButtonElement)
+    const displayName = container.querySelector<HTMLInputElement>("[data-testid='profile-display-name']")
+    if (!displayName) throw new Error("profile display name not found")
+    await input(displayName, "B unsaved draft")
+
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [updatedA, profileB],
+    })
+    await rerenderProfiles(root, { refreshToken: 1 })
+
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-display-name']")?.value)
+      .toBe("B unsaved draft")
+    expect(container.textContent).toContain("A updated")
+
+    unmount(root)
+  })
+
+  it("falls back to the first profile when the selected profile disappears during refresh", async () => {
+    const profileA = runtimeProfile({ profileId: "profile-a", displayName: "A profile" })
+    const profileB = runtimeProfile({ profileId: "profile-b", displayName: "B profile" })
+    runtimeDbMocks.runtimeProfileList.mockReset()
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [profileA, profileB],
+    })
+
+    const { container, root } = renderProfiles({ refreshToken: 0 })
+    await flush()
+    await click(container.querySelector("[data-testid='profile-select-profile-b']") as HTMLButtonElement)
+
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [profileA],
+    })
+    await rerenderProfiles(root, { refreshToken: 1 })
+
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-display-name']")?.value).toBe("A profile")
+    expect(container.textContent).not.toContain("B profile")
+
+    unmount(root)
+  })
+
+  it("keeps the form visible during a background refresh", async () => {
+    const profileA = runtimeProfile({ profileId: "profile-a", displayName: "A profile" })
+    const profileB = runtimeProfile({ profileId: "profile-b", displayName: "B profile" })
+    const pendingRefresh = deferred<{
+      enabled: boolean
+      status: "healthy"
+      profiles: RuntimeProfileRecord[]
+    }>()
+    runtimeDbMocks.runtimeProfileList.mockReset()
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [profileA, profileB],
+    })
+
+    const { container, root } = renderProfiles({ refreshToken: 0 })
+    await flush()
+
+    runtimeDbMocks.runtimeProfileList.mockReturnValueOnce(pendingRefresh.promise)
+    await rerenderProfiles(root, { refreshToken: 1 })
+
+    expect(container.querySelector("[data-testid='profile-save']")).not.toBeNull()
+    expect(container.textContent).not.toContain("Loading profiles")
+
+    await act(async () => {
+      pendingRefresh.resolve({
+        enabled: true,
+        status: "healthy",
+        profiles: [profileA, profileB],
+      })
+      await Promise.resolve()
+    })
 
     unmount(root)
   })

@@ -70,8 +70,8 @@ vi.mock("./sections/synthesis-section", () => ({
     `Mock Synthesis Section:${project?.path ?? "no-project"}`,
 }))
 
-vi.mock("./sections/model-profiles-section", () => ({
-  ModelProfilesSection: () => "Mock Model Profiles Section",
+vi.mock("./sections/model-config-section", () => ({
+  ModelConfigSection: () => "Mock Model Config Section",
 }))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -152,10 +152,11 @@ describe("settings platform categories", () => {
     expect(getSettingsCategories(false).some((category) => category.id === "general")).toBe(false)
   })
 
-  it("places Model Profiles directly after LLM Models", () => {
-    expect(getSettingsCategories(true).map((category) => category.id).slice(0, 2)).toEqual([
-      "llm",
-      "model-profiles",
+  it("places Model Configuration first in AI and Models", () => {
+    expect(getSettingsCategories(true).map((category) => category.id).slice(0, 3)).toEqual([
+      "model-config",
+      "embedding",
+      "multimodal",
     ])
   })
 
@@ -174,8 +175,8 @@ describe("settings platform categories", () => {
   it("falls back when active category is not available", () => {
     const nonMacCategories = getSettingsCategories(false)
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
-    expect(coerceSettingsCategory("general", nonMacCategories)).toBe("llm")
-    for (const id of ["model-profiles", "knowledge-agents", "taxonomy", "synthesis"] as const) {
+    expect(coerceSettingsCategory("general", nonMacCategories)).toBe("model-config")
+    for (const id of ["model-config", "knowledge-agents", "taxonomy", "synthesis"] as const) {
       expect(coerceSettingsCategory(id, nonMacCategories)).toBe(id)
       expect(nonMacCategories.some((category) => category.id === id)).toBe(true)
     }
@@ -189,13 +190,35 @@ describe("settings platform categories", () => {
     expect(coerceSettingsCategory("mineru", categories)).toBe("import")
 
     expect(coerceSettingsCategory("import", categories)).toBe("import")
-    expect(coerceSettingsCategory("no-such-category", categories)).toBe("llm")
-    expect(coerceSettingsCategory("MINERU", categories)).toBe("llm")
+    expect(coerceSettingsCategory("no-such-category", categories)).toBe("model-config")
+    expect(coerceSettingsCategory("MINERU", categories)).toBe("model-config")
     expect(coerceSettingsCategory("source-watch", getSettingsCategories(false))).toBe("import")
 
     for (const legacyId of ["source-watch", "scheduled-import", "mineru"]) {
       expect(categories.some((category) => (category.id as string) === legacyId)).toBe(false)
     }
+  })
+
+  it("migrates removed model category ids to Model Configuration", () => {
+    const categories = getSettingsCategories(true)
+
+    for (const legacyId of ["llm", "model-profiles", "web-search"]) {
+      expect(coerceSettingsCategory(legacyId, categories)).toBe("model-config")
+      expect(categories.some((category) => (category.id as string) === legacyId)).toBe(false)
+    }
+  })
+
+  it("coerces model configuration boundaries consistently across platforms", () => {
+    const macCategories = getSettingsCategories(true)
+    const nonMacCategories = getSettingsCategories(false)
+
+    expect(coerceSettingsCategory("model-config", macCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("model-config", nonMacCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("llm", nonMacCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("model-profiles", nonMacCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("web-search", nonMacCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("MODEL-CONFIG", macCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("no-such-category", nonMacCategories)).toBe("model-config")
   })
 
   it("keeps renamed categories on their original ids and label keys", () => {
@@ -221,17 +244,15 @@ describe("SettingsView category rendering", () => {
     unmount(root)
   })
 
-  it("renders ModelProfilesSection after clicking the Model Profiles sidebar category", async () => {
+  it("renders ModelConfigSection as the first settings category", async () => {
     const { container, root } = renderSettingsView()
     await flush()
 
-    const modelProfilesButton = container.querySelector("[data-testid='settings-category-model-profiles']")
-    if (!modelProfilesButton) throw new Error("model profiles category button not found")
-
-    await click(modelProfilesButton)
-    await flush()
-
-    expect(container.textContent).toContain("Mock Model Profiles Section")
+    expect(container.querySelector("[data-testid='settings-category-model-config']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-llm']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-model-profiles']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-web-search']")).toBeNull()
+    expect(container.textContent).toContain("Mock Model Config Section")
 
     unmount(root)
   })
@@ -314,8 +335,8 @@ describe("settings app preference save flow", () => {
 })
 
 describe("settings global Save bar visibility", () => {
-  it("hides for Model Profiles because runtime profiles persist inline", () => {
-    expect(shouldShowGlobalSettingsSaveBar("model-profiles")).toBe(false)
+  it("hides for Model Configuration because it persists inline", () => {
+    expect(shouldShowGlobalSettingsSaveBar("model-config")).toBe(false)
   })
 
   it("hides for Knowledge Agents because it persists inline", () => {

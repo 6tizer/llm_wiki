@@ -485,6 +485,7 @@
     },
     "categories": {
       "llm": "LLM Models",
+      "modelConfig": "Model Configuration",
       "modelProfiles": "Model Profiles",
       "embedding": "Embeddings",
       "multimodal": "Image Captioning",
@@ -509,6 +510,44 @@
       "about": "About"
     },
     "sections": {
+      "modelConfig": {
+        "title": "Model Configuration",
+        "description": "Manage legacy provider connections, runtime model profiles, and the task-family assignment matrix in one place.",
+        "connections": "Connections",
+        "profiles": "Profiles",
+        "taskMatrixHeading": "Task assignment matrix",
+        "migration": {
+          "title": "Create a runtime Profile from the active provider",
+          "description": "Generate a Model Profile from {{preset}} for future unified routing. This does not change current chat, ingest, embedding, or vision behavior.",
+          "create": "Create Profile",
+          "created": "Profile created.",
+          "complete": "Migrated profile exists: {{name}}. Edit it in Profiles when needed.",
+          "failed": "Migration failed: {{message}}"
+        },
+        "taskMatrix": {
+          "title": "Task assignment matrix",
+          "description": "Toggle which task families each runtime profile advertises. Only taskFamilies are updated; capability freshness follows the existing Profile probe rules.",
+          "loading": "Loading task assignments…",
+          "empty": "No profiles yet. Create a Profile above before assigning task families.",
+          "taskFamily": "Task family",
+          "effective": "Effective",
+          "notWired": "Not wired to runtime selection yet — currently has no effect",
+          "configure": "Go to configuration",
+          "toggle": "Toggle {{family}} for {{profile}}",
+          "saved": "Task assignments saved.",
+          "saveFailed": "Save failed: {{message}}",
+          "families": {
+            "chat": "Chat",
+            "ingest": "Ingest",
+            "review": "Review",
+            "synthesis": "Synthesis",
+            "taxonomy": "Taxonomy",
+            "agent": "Agent",
+            "vision": "Vision",
+            "embedding": "Embedding"
+          }
+        }
+      },
       "llm": {
         "title": "LLM Models",
         "description": "Legacy/default provider configuration. Only one provider is active here at a time for older fallback paths; runtime Model Profiles can hold multiple schedulable model records.",

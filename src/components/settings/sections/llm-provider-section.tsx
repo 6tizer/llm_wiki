@@ -12,6 +12,7 @@ import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
 import { AZURE_OPENAI_API_VERSION } from "@/lib/azure-openai"
 import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/lib/connection-tests"
 import { persistMany } from "@/lib/store-helpers"
+import { ProviderMigrationBanner } from "./provider-migration-banner"
 
 export function LlmProviderSection() {
   const { t } = useTranslation()
@@ -130,6 +131,8 @@ export function LlmProviderSection() {
           {t("settings.sections.llm.description")}
         </p>
       </div>
+
+      <ProviderMigrationBanner />
 
       <div className="space-y-2">
         {LLM_PRESETS.map((preset) => (
