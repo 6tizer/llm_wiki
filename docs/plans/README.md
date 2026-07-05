@@ -67,12 +67,12 @@
 | [SPEC-6/pr5-index-overview-plan.md](./SPEC-6/pr5-index-overview-plan.md) | SPEC-6 PR5 执行计划：index_export/overview 手动重建 job 化——自产自销 marker 闭环共享 helper、index 扫描+格式化纯函数、overview LLM 单页生成、独立 settings section。 | merged |
 | [SPEC-6/pr6-derived-status-ui-plan.md](./SPEC-6/pr6-derived-status-ui-plan.md) | SPEC-6 PR6 执行计划（收口 PR）：per-layer 派生状态 UI（5 态 + stale 展示变体，graph/search 隐藏）、`usePolling` 抽取修 timer 重置 bug、`manual-rebuild-marker.ts` 共享去重 helper（三处调用点零复制）、embedding/taxonomy 手动 rebuild 按钮、搜索 fallback 提示条、端到端 fixture。 | merged（#288） |
 | [SPEC-6/closeout-hotfix-plan.md](./SPEC-6/closeout-hotfix-plan.md) | SPEC-6 收口后（PR6 合并后）多代理深度 review 的 P0/P1 分流修复：per-path marker 状态归约、搜索 fallback banner 拆分、cancel 孤儿 marker 释放、dedup-queue 忙退避补齐、runtime-disabled 默认态 UI。 | active / in review |
-| [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | in progress（PR1/PR2 merged #277/#291；PR3-PR7 范围经 2026-07-04 走查修订） |
+| [spec-7-unified-agentic-chat.md](./spec-7-unified-agentic-chat.md) | Unified Agentic Chat、Claude Agent SDK productization、session/permission/timeline。 | completed（2026-07-05 closeout） |
 | [SPEC-7/pr2-rewind-plan.md](./SPEC-7/pr2-rewind-plan.md) | SPEC-7 PR2 执行计划（design r3）：resume-only-for-rewind 桥、JSONL 锚点验证、wiki 写工具 fail-closed 门禁、延迟 fork 复用。 | merged（#291） |
 | [SPEC-7/pr2-rewind-investigation.md](./SPEC-7/pr2-rewind-investigation.md) | SPEC-7 PR2 前置调查 + E1/E2 实证（E1 跨进程 checkpoint PASS；E2 wiki 工具假成功 FAIL）。 | merged（#291） |
 | [SPEC-7/pr2-adversarial-matrix.md](./SPEC-7/pr2-adversarial-matrix.md) | SPEC-7 PR2 对抗矩阵（19 场景 + 裁定记录）。 | merged（#291） |
 | [spec-12-ui-ia-consolidation.md](./spec-12-ui-ia-consolidation.md) | UI 信息架构收敛：Work Runtime 生产转正、设置三组重组、模型配置合并页 + legacy 退役、Wiki 健康中心、主导航 8→5。 | completed（2026-07-05 closeout） |
-| [spec-13-model-access-redesign.md](./spec-13-model-access-redesign.md) | 模型接入一站式重设计：供应商模板库 + 三步向导 + capability probe + 调用点全迁移 + legacy 退役；吸收 SPEC-4 剩余与 #310/#312；借鉴 CC Switch/LiteLLM。 | draft / 待用户确认交互稿 |
+| [spec-13-model-access-redesign.md](./spec-13-model-access-redesign.md) | 模型接入一站式重设计：供应商模板库 + 三步向导，复用 SPEC-4 已交付的 probe/pool 基座做 UX 一站式；含 #310 调用点全迁移与 legacy 退役、#312；借鉴 CC Switch/LiteLLM。 | draft / 待用户确认交互稿 |
 | [spec-14-ui-ia-round2.md](./spec-14-ui-ia-round2.md) | UI IA 二轮：知识库/文件面板右移可折叠、深度研究归并探索（已裁决）、Wiki 健康中心 Dashboard 化、Agent 设置最终形态。 | charter draft / SPEC-13 之后 |
 | [SPEC-12/ui-audit-2026-07.md](./SPEC-12/ui-audit-2026-07.md) | 2026-07-04 生产 app 全页 UI 走查证据：三病根、问题清单 A/B/C、Notion AI 对照 N1-N8、用户裁定 D1-D5。SPEC-12 与 SPEC-7 修订的共同依据。 | evidence |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | in progress（PR10 先行） |
@@ -118,7 +118,7 @@
 | SPEC-1 | completed | #194-#199 |
 | SPEC-2 | completed | #202-#208 |
 | SPEC-3 | completed via PR1-PR6 | #210-#216 |
-| SPEC-4 | reviewed / ready for PR split | #217-#221 |
+| SPEC-4 | completed（PR1-PR5 merged；收口见 SPEC-4-FIX） | #217-#221 |
 | SPEC-4-FIX | completed via #228, #230, #232 | #228/#230/#232 |
 | SPEC-5 | completed by #236/#238/#240/#242/#244/#246 | #236/#238/#240/#242/#244/#246 |
 | SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
@@ -134,7 +134,7 @@
 
 当前优先级（2026-07-05 更新，基于用户实测反馈）：
 
-0. **主线 = SPEC-13 模型接入一站式**（吸收 SPEC-4 剩余 + #310/#312；SPEC-4 原文档剩余范围由其取代）→ 之后 **SPEC-14 UI IA 二轮**（含深研归并探索的已定裁决）。UI 快赢批（tabs 化/图谱前置/nav 改名/QA 栏合并）先行小 PR 不占轨。SPEC-8 剩余填缝；SPEC-9 维持 deferred 且移出 1.0 门槛（1.0 条件修订为 SPEC-13/14/8 完成）。其余 follow-up：#309、#286/#287/#289、#311/#313/#314（#310/#312 已并入 SPEC-13）。
+0. **主线 = SPEC-13 模型接入一站式**（SPEC-4 已 completed，probe/pool/agent-adapter 基座在位；SPEC-13 在其上做 UX 一站式重设计 + #310 调用点全迁移 + #312）→ 之后 **SPEC-14 UI IA 二轮**（含深研归并探索的已定裁决）。UI 快赢批（tabs 化/图谱前置/nav 改名/QA 栏合并）已交付（#320）。SPEC-8 剩余填缝；SPEC-9 维持 deferred 且移出 1.0 门槛（1.0 条件修订为 SPEC-13/14/8 完成）。其余 follow-up：#309、#286/#287/#289、#311/#313/#314（#310/#312 已并入 SPEC-13）。
 
 历史优先级记录：
 

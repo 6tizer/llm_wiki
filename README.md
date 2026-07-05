@@ -256,9 +256,9 @@ src/                        # Frontend (React + TypeScript)
 
 ## Roadmap & versioning
 
-Development runs as a sequence of SPECs (see the live index in [`docs/plans/`](docs/plans/)). SPEC-1 through SPEC-12 — architecture decomposition, the work runtime, model profiles, parallel knowledge pipelines, derived-knowledge rebuilds, unified agentic chat (SPEC-7), and the UI IA consolidation (SPEC-12) — are complete except three: SPEC-4 (model profile completion beyond the shipped baseline), SPEC-8 (maintainability tooling), and SPEC-9 (Swift shell, deferred).
+Development runs as a sequence of SPECs (see the live index in [`docs/plans/`](docs/plans/)). SPEC-1 through SPEC-12 — architecture decomposition, the work runtime, model profiles, parallel knowledge pipelines, derived-knowledge rebuilds, unified agentic chat (SPEC-7), and the UI IA consolidation (SPEC-12) — are complete except SPEC-8 (maintainability tooling, in progress) and SPEC-9 (Swift shell, deferred). Two new specs drive the road to stable: SPEC-13 (one-stop model access: provider templates, a three-step setup wizard, and full call-site migration to the profile pool) and SPEC-14 (a second information-architecture pass).
 
-This fork's version line restarted at **0.7.0-alpha**, independent of upstream's 0.5.x numbering. **1.0.0** lands when the remaining specs do; until then the app displays the `-alpha` channel suffix.
+This fork's version line restarted at **0.7.0-alpha**, independent of upstream's 0.5.x numbering. **1.0.0** lands when SPEC-13, SPEC-14, and SPEC-8 do; until then the app displays the `-alpha` channel suffix.
 
 ## Credits
 
