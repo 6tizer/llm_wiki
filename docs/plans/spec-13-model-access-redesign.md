@@ -1,10 +1,12 @@
 # SPEC-13: 模型接入一站式重设计（Model Access Redesign）
 
-> 类型：阶段 SPEC | 状态：draft / 待用户确认交互稿 | 依赖：SPEC-4-FIX（profile 基座）、SPEC-12（设置 IA） | 吸收：SPEC-4 剩余范围（PR3 capability probe / PR4 scheduler 全量接入）、#310（运行时任务族路由）、#312（迁移密钥 staleness）
+> 类型：阶段 SPEC | 状态：draft / 待用户确认交互稿 | 依赖：SPEC-4 + SPEC-4-FIX（probe/pool/agent-adapter 基座，全部已交付）、SPEC-12（设置 IA） | 吸收：#310（运行时任务族路由 + legacy 退役）、#312（迁移密钥 staleness）
 
 ## 背景与病根（2026-07-05 用户实测反馈）
 
-现状是三层叠加没有粘合层：「LLM 模型」（legacy 单模型配置，streamChat 十余消费方直读）→「Model Profiles」（新体系，仅 agent/ingest 消费）→「任务分配矩阵」（纯 UI）。用户体验：同一个 key 填两遍、概念对不上、配错无反馈、「填不好还用不了」，连测试路径都不清晰。这是 SPEC-4 计划的 PR3/PR4 未完成 + #310 未做在 UX 上的总暴露。
+现状是三层叠加没有粘合层：「LLM 模型」（legacy 单模型配置，streamChat 十余消费方直读）→「Model Profiles」（新体系，仅 agent/ingest 消费）→「任务分配矩阵」（纯 UI）。用户体验：同一个 key 填两遍、概念对不上、配错无反馈、「填不好还用不了」，连测试路径都不清晰。
+
+**机器基座并不缺**：SPEC-4 PR1-PR5 + SPEC-4-FIX 已交付 capability probe（cache/backoff/probe UI）、profile pool（claims/并发/熔断）、agent-run adapter。缺的是**用户层的粘合**——probe 埋在 Profiles 编辑深处而非「添加即测试」主动线；建 profile 要手填 endpoint/auth 而无模板；legacy 与 profile 双轨并存（#310 未做）导致概念翻倍。SPEC-13 是 UX 重设计 + 调用点收敛，不重造引擎。
 
 ## 借鉴来源（借设计不引依赖）
 
@@ -29,7 +31,7 @@
 ## 范围与 PR 拆分（设计确认后细化）
 
 1. **PR1 供应商模板库 + 「模型接入」合并页骨架**：模板数据（内置 JSON，含 endpoint/auth/常用模型/是否 agent-capable 先验）；三步向导 UI；连接=profile 的 1:1 自动生成；旧两页入口合并（legacy 页保留只读入口一个周期）。
-2. **PR2 capability probe**（SPEC-4 PR3 落地）：用户触发、缓存、退避节流（SPEC-4 已定原则照抄）；分项结果 UI（messages/streaming/tool-use/auth/agent headers）；probe 结果驱动 agent-capable 与矩阵可勾选性。
+2. **PR2 probe 产品化**：现有 capability probe（SPEC-4 PR3 已交付）接入三步向导第三步——「测试」按钮触发、分项结果卡（连通/模型/streaming/tool-use/agent 能力）、失败给修复建议；probe 结果驱动 agent-capable 与矩阵可勾选性。缓存/退避沿用现有实现。
 3. **PR3 调用点全量迁移**（#310）：chat 主流/synthesis/lint/dedup/deep-research/vision/embedding 等全部走 pool claim + legacy fallback；矩阵行全部「已接入」。
 4. **PR4 legacy 退役 + 迁移收尾**：legacy「LLM 模型」只读化→删除；迁移向导升级为「导入旧配置」一次性入口（吸收 #312 staleness 提示）；embedding/multimodal 页降为矩阵行（SPEC-12 deferred 项）。
 5. **Closeout**：e2e（三步向导真机）、深度 review、docs。

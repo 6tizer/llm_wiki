@@ -256,9 +256,9 @@ src/                        # 前端（React + TypeScript）
 
 ## 路线图与版本
 
-开发以一系列 SPEC 推进（实时索引见 [`docs/plans/`](docs/plans/)）。SPEC-1 至 SPEC-12——架构分解、Work Runtime、模型 Profiles、并行知识流水线、派生知识重建、统一 agentic 对话（SPEC-7）、UI 信息架构收敛（SPEC-12）——已全部完成，仅余三个：SPEC-4（模型 profile 在已交付基座之上的完整形态）、SPEC-8（可维护性工具链）、SPEC-9（Swift shell，暂缓）。
+开发以一系列 SPEC 推进（实时索引见 [`docs/plans/`](docs/plans/)）。SPEC-1 至 SPEC-12——架构分解、Work Runtime、模型 Profiles、并行知识流水线、派生知识重建、统一 agentic 对话（SPEC-7）、UI 信息架构收敛（SPEC-12）——已基本完成，仅余 SPEC-8（可维护性工具链，进行中）与 SPEC-9（Swift shell，暂缓）。通往正式版的两个新 SPEC：SPEC-13（模型接入一站式：供应商模板库、三步配置向导、调用点全量迁移到 profile 池）与 SPEC-14（信息架构二轮）。
 
-本 fork 的版本线自 **0.7.0-alpha** 重新起算，独立于上游的 0.5.x 编号。剩余 SPEC 完成后升 **1.0.0**；在此之前应用会显示 `-alpha` 渠道后缀。
+本 fork 的版本线自 **0.7.0-alpha** 重新起算，独立于上游的 0.5.x 编号。SPEC-13/14/8 完成后升 **1.0.0**；在此之前应用会显示 `-alpha` 渠道后缀。
 
 ## 致谢
 
