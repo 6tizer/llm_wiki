@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import i18n from "@/i18n"
 import { invoke } from "@tauri-apps/api/core"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import {
   saveApiConfig,
   saveEmbeddingConfig,
@@ -15,6 +16,7 @@ import {
   saveScheduledImportConfig,
   saveSourceWatchConfig,
 } from "@/lib/project-store"
+import { saveAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { startProjectFileSync, stopProjectFileSync } from "@/lib/project-file-sync"
 import { startScheduledImport, stopScheduledImport } from "@/lib/scheduled-import"
 
@@ -53,6 +55,22 @@ vi.mock("@/lib/project-store", () => ({
   saveTheme: vi.fn(async () => undefined),
   saveCloseBehavior: vi.fn(async () => undefined),
 }))
+
+vi.mock("@/lib/agent/agent-settings", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/agent/agent-settings")>(
+    "@/lib/agent/agent-settings",
+  )
+  return {
+    ...actual,
+    saveAgentResourceConfig: vi.fn(
+      async (
+        _projectPath: string,
+        config: Parameters<typeof actual.saveAgentResourceConfig>[1],
+      ) =>
+        actual.normalizeAgentResourceConfig(config),
+    ),
+  }
+})
 
 vi.mock("@/lib/project-file-sync", () => ({
   startProjectFileSync: vi.fn(async () => undefined),
@@ -131,6 +149,16 @@ beforeEach(() => {
   useWikiStore.setState({
     project: { id: "p1", name: "Project", path: "/project" },
   })
+  useAgentSettingsStore.setState({
+    resourceConfig: {
+      maxTurns: 25,
+      maxFilesChanged: 20,
+      maxFilesChangedEnabled: false,
+      maxWriteBytes: 256 * 1024,
+      defaultPermissionPolicy: "default",
+    },
+  })
+  vi.mocked(saveAgentResourceConfig).mockClear()
 })
 
 describe("settings platform categories", () => {
@@ -451,7 +479,35 @@ describe("settings MinerU polling draft", () => {
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("knowledge"))).toBe(false)
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("taxonomy"))).toBe(false)
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("synthesis"))).toBe(false)
-    expect(Object.keys(draft).some((key) => key.toLowerCase().includes("agent") && key !== "agentMaxTurns" && key !== "agentMaxFilesChanged" && key !== "agentMaxWriteKiB")).toBe(false)
+    const allowedAgentDraftKeys = new Set([
+      "agentMaxTurns",
+      "agentMaxFilesChanged",
+      "agentMaxWriteKiB",
+      "agentDefaultPermissionPolicy",
+    ])
+    expect(Object.keys(draft).some((key) => key.toLowerCase().includes("agent") && !allowedAgentDraftKeys.has(key))).toBe(false)
+  })
+
+  it("hydrates the Agent default permission policy from config", () => {
+    const draft = initialDraft(
+      llm as never,
+      embedding as never,
+      multimodal as never,
+      "auto" as never,
+      proxy,
+      scheduledImport,
+      sourceWatch,
+      { enabled: false, token: "", modelVersion: "vlm" },
+      apiConfig,
+      {
+        ...agent,
+        defaultPermissionPolicy: "restricted",
+      },
+      20,
+      "en",
+    )
+
+    expect(draft.agentDefaultPermissionPolicy).toBe("restricted")
   })
 
   it("hydrates MinerU polling fields from config and falls back for legacy configs", () => {
@@ -547,6 +603,50 @@ describe("SettingsView handleSave step isolation", () => {
     expect(setLlmConfigSpy).toHaveBeenCalledTimes(1)
 
     setLlmConfigSpy.mockRestore()
+    unmount(root)
+  })
+
+  it("saves the Agent default permission policy and preserves hidden file-count enforcement", async () => {
+    useAgentSettingsStore.setState({
+      resourceConfig: {
+        maxTurns: 25,
+        maxFilesChanged: 20,
+        maxFilesChangedEnabled: true,
+        maxWriteBytes: 256 * 1024,
+        defaultPermissionPolicy: "restricted",
+      },
+    })
+
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    const agentTab = container.querySelector("[data-testid='settings-category-agent']")
+    if (!agentTab) throw new Error("agent category button not found")
+    await click(agentTab)
+    await flush()
+
+    const bypass = container.querySelector("[data-testid='agent-policy-bypassPermissions']")
+    if (!bypass) throw new Error("bypass policy button not found")
+    await click(bypass)
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent === "Save",
+    )
+    if (!saveButton) throw new Error("Save button not found")
+    await click(saveButton)
+    await flush()
+
+    expect(saveAgentResourceConfig).toHaveBeenCalledWith(
+      "/project",
+      expect.objectContaining({
+        maxTurns: 25,
+        maxFilesChanged: 20,
+        maxWriteBytes: 256 * 1024,
+        defaultPermissionPolicy: "bypassPermissions",
+        maxFilesChangedEnabled: true,
+      }),
+    )
+
     unmount(root)
   })
 

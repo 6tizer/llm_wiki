@@ -266,6 +266,7 @@ export function initialDraft(
     agentMaxTurns: agentConfig.maxTurns,
     agentMaxFilesChanged: agentConfig.maxFilesChanged,
     agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
+    agentDefaultPermissionPolicy: agentConfig.defaultPermissionPolicy,
     uiLanguage,
     zoomLevel: zoomLevel ?? useZoomStore.getState().level,
     theme,
@@ -828,6 +829,7 @@ export function SettingsView() {
               maxTurns: draft.agentMaxTurns,
               maxFilesChanged: draft.agentMaxFilesChanged,
               maxWriteBytes: draft.agentMaxWriteKiB * 1024,
+              defaultPermissionPolicy: draft.agentDefaultPermissionPolicy,
               // The preflight toggle has no UI control yet (plumbing only, see
               // #119 P0-3). Preserve the current value so saving unrelated
               // settings doesn't silently reset a hand-edited flag to false.

@@ -970,6 +970,8 @@
         "title": "Agent 运行限额",
         "description": "当前项目的 Agent 运行资源限制。设置只作用于当前打开的项目。",
         "noProject": "请先打开一个项目再编辑 Agent 限制。",
+        "defaultPermissionPolicy": "默认权限策略",
+        "defaultPermissionPolicyHint": "对话内可临时覆盖。",
         "maxTurns": "最大轮数",
         "maxTurnsHint": "单次 Agent 运行允许的 SDK 最大轮数。调高后可完成更长的多步骤任务。",
         "maxFilesChanged": "最大改动文件数",
