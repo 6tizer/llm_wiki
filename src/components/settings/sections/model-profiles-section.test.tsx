@@ -3,7 +3,7 @@
 import { act } from "react"
 import type { ComponentProps } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
 import {
   createEmptyProfileDraft,
@@ -30,6 +30,9 @@ const secretMocks = vi.hoisted(() => ({
 
 vi.mock("@/commands/runtime-db", () => runtimeDbMocks)
 vi.mock("@/commands/profile-secrets", () => secretMocks)
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(async () => undefined),
+}))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -140,6 +143,16 @@ function unmount(root: Root): void {
     root.unmount()
   })
 }
+
+function bodyElement<T extends Element>(selector: string): T {
+  const element = document.body.querySelector<T>(selector)
+  if (!element) throw new Error(`missing body element: ${selector}`)
+  return element
+}
+
+afterEach(() => {
+  document.body.innerHTML = ""
+})
 
 describe("ModelProfilesSection helpers", () => {
   beforeEach(() => {
@@ -916,6 +929,236 @@ describe("ModelProfilesSection UI", () => {
       rawSecret: "draft-only-secret",
       force: true,
     })
+
+    unmount(root)
+  })
+
+  it("creates an agent-capable profile from the quick connect wizard after a passing draft probe", async () => {
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      profileId: "profile-deepseek",
+      displayName: "DeepSeek work",
+      providerId: "deepseek",
+      modelId: "deepseek-v4-pro",
+      kind: "agent-run",
+      apiMode: "anthropic-messages",
+      authStyle: "bearer",
+      taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy", "agent"],
+    }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-display-name']"), "DeepSeek work")
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+
+    expect(secretMocks.profileSecretWrite).toHaveBeenCalledWith({ secretValue: "sk-deepseek" })
+    expect(secretMocks.profileSecretWrite.mock.invocationCallOrder[0])
+      .toBeLessThan(runtimeDbMocks.runtimeProfileProbe.mock.invocationCallOrder[0])
+    expect(runtimeDbMocks.runtimeProfileProbe).toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        kind: "agent-run",
+        providerId: "deepseek",
+        modelId: "deepseek-v4-pro",
+        agentSdkModelId: "deepseek-v4-pro",
+        endpoint: "https://api.deepseek.com/anthropic",
+        apiMode: "anthropic-messages",
+        authStyle: "bearer",
+      }),
+      rawSecret: "sk-deepseek",
+      force: true,
+    })
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agent-run",
+        displayName: "DeepSeek work",
+        providerId: "deepseek",
+        modelId: "deepseek-v4-pro",
+        agentSdkModelId: "deepseek-v4-pro",
+        secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+        taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy", "agent"],
+      }),
+    )
+
+    unmount(root)
+  })
+
+  it("allows creating after a failed quick connect probe but omits the agent task family", async () => {
+    runtimeDbMocks.runtimeProfileProbe.mockRejectedValueOnce(new Error("bad key"))
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      profileId: "profile-kimi",
+      providerId: "kimi",
+      modelId: "kimi-k2.7-code",
+      apiMode: "anthropic-messages",
+      authStyle: "bearer",
+      taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy"],
+    }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-kimi']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-kimi")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    expect(document.body.textContent).toContain("bad key")
+
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "model-call",
+        providerId: "kimi",
+        modelId: "kimi-k2.7-code",
+        agentSdkModelId: null,
+        taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy"],
+      }),
+    )
+
+    unmount(root)
+  })
+
+  it("cleans up a quick connect secret when the wizard is cancelled before profile creation", async () => {
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-cancel']"))
+    await flush()
+
+    expect(secretMocks.profileSecretDelete).toHaveBeenCalledWith({
+      secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+    })
+    expect(runtimeDbMocks.runtimeProfileCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "anthropic" }),
+    )
+
+    unmount(root)
+  })
+
+  it("keeps a successful quick connect probe visible when retesting without re-entering the key", async () => {
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    expect(bodyElement("[data-testid='wizard-probe-success']")).toBeTruthy()
+
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+
+    expect(runtimeDbMocks.runtimeProfileProbe).toHaveBeenCalledTimes(1)
+    expect(bodyElement("[data-testid='wizard-probe-success']")).toBeTruthy()
+    expect(bodyElement("[data-testid='wizard-retest-message']").textContent)
+      .toContain("Re-enter the API Key")
+
+    unmount(root)
+  })
+
+  it("resets quick connect probe state when endpoint changes without dropping the stored secret", async () => {
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    expect(bodyElement("[data-testid='wizard-probe-success']")).toBeTruthy()
+
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-back']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-endpoint']"), "https://api.anthropic.com/v2")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+
+    expect(document.body.querySelector("[data-testid='wizard-probe-success']")).toBeNull()
+    expect(document.body.textContent).toContain("Testing writes the key")
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalledWith({
+      secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+    })
+
+    unmount(root)
+  })
+
+  it("guards quick connect finish against double create clicks", async () => {
+    const create = deferred<RuntimeProfileRecord>()
+    runtimeDbMocks.runtimeProfileCreate.mockReturnValueOnce(create.promise)
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+
+    const finish = bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']")
+    await click(finish)
+    await click(finish)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledTimes(1)
+    expect(finish.disabled).toBe(true)
+
+    create.resolve(runtimeProfile({ profileId: "profile-created" }))
+    await flush()
+
+    unmount(root)
+  })
+
+  it("uses edited quick connect model id for draft probe and profile create", async () => {
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      profileId: "profile-deepseek-custom",
+      displayName: "DeepSeek custom",
+      providerId: "deepseek",
+      modelId: "deepseek-custom",
+      kind: "agent-run",
+      agentSdkModelId: "deepseek-custom",
+      apiMode: "anthropic-messages",
+      authStyle: "bearer",
+      taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy", "agent"],
+    }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-model-id']"), "deepseek-custom")
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+
+    expect(runtimeDbMocks.runtimeProfileProbe).toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        modelId: "deepseek-custom",
+        agentSdkModelId: "deepseek-custom",
+      }),
+      rawSecret: "sk-deepseek",
+      force: true,
+    })
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "deepseek-custom",
+        agentSdkModelId: "deepseek-custom",
+      }),
+    )
 
     unmount(root)
   })
