@@ -13,6 +13,9 @@
  *   - When releasing a new version: prepend a new entry with the
  *     same shape, then bump package.json / tauri.conf.json /
  *     Cargo.toml / Cargo.lock as usual.
+ *
+ * Version scheme:
+ *   - 本 fork 版本线自 0.7.0-alpha 起独立于 upstream；0.7→1.0 的条件是剩余 SPEC（SPEC-4/8/9）完成；渠道后缀由 `__APP_CHANNEL__` 控制、不进 semver 清单。
  */
 
 export interface ChangelogEntry {
@@ -25,6 +28,34 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "0.7.0-alpha",
+    date: "2026-07-05",
+    highlights: {
+      en: [
+        "LLM Wiki Agent is now an independent product: this fork has diverged from upstream llm_wiki with its own version line (0.7.0-alpha; 1.0 when the remaining specs land). Update checks now point to this repository.",
+        "Unified chat: the Chat/Agent/Ingest mode switch is gone — one composer with attachments, source scoping, and automatic routing decides how each message runs.",
+        "Agent permission policies: per-step confirmation (default), read-only, or skip-confirmations — switchable per conversation, with every approval recorded in the timeline.",
+        "Activity timeline and reviewable writes: watch tool calls live, review every wiki page the agent wrote, and undo individual writes safely.",
+        "Conversation rewind with pre-write snapshots: roll a conversation back to an earlier point and restore wiki files exactly as they were, with fail-closed protection against overwriting later edits.",
+        "Wiki Health Center: derived-state dashboard (embeddings, tags, synthesis, index, overview) with rebuild actions plus the lint and review inboxes, in a five-section main navigation.",
+        "Model profiles: a profile pool with per-task-family assignment, capacity limits, automatic failover, and a migration wizard from the legacy single-model config.",
+        "Work runtime is now on by default: agent runs and ingest jobs are tracked in a SQLite job ledger with leases and crash recovery.",
+        "Settings reorganized into three groups; model configuration merged into a single page.",
+      ],
+      zh: [
+        "LLM Wiki Agent 正式成为独立产品：本 fork 已与上游 llm_wiki 分道演进，启用自有版本线（0.7.0-alpha；剩余 SPEC 完成后升 1.0）。更新检查已改指本仓库。",
+        "统一对话：Chat/Agent/Ingest 三模式切换已移除——一个输入框搞定附件、来源限定与自动路由，每条消息自动决定执行方式。",
+        "Agent 权限三档：逐步确认（默认）/ 只读 / 跳过确认，可按会话切换，每次审批都记录在时间线中。",
+        "活动时间线与可审阅写入：实时查看工具调用，逐条审阅 Agent 写入的 wiki 页面，并可安全撤销单次写入。",
+        "会话回滚与写前快照：把会话回退到更早的节点，wiki 文件精确还原到当时状态；对后续手动改动 fail-closed 保护，绝不盲写。",
+        "Wiki 健康中心：派生状态总览（向量、标签、综合、索引、总览）+ 重建操作 + lint/审阅收件箱，主导航收敛为五个带标签入口。",
+        "模型 Profiles：按任务族分配的 profile 池，支持容量上限、自动故障转移，以及从旧单模型配置一键迁移的向导。",
+        "Work Runtime 默认启用：Agent 运行与导入任务进入 SQLite 任务台账，带租约与崩溃恢复。",
+        "设置重组为三组；模型配置合并为单页。",
+      ],
+    },
+  },
   {
     version: "0.4.14",
     date: "2026-05-26",

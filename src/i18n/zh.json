@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "LLM Wiki Agent",
-    "subtitle": "用 LLM 构建和维护你的个人知识库"
+    "subtitle": "对话、委托 Agent，让知识库自我生长"
   },
   "nav": {
     "wiki": "Wiki",
@@ -1187,7 +1187,7 @@
         "openDownload": "打开下载页",
         "later": "稍后",
         "autoCheck": "应用启动时自动检查更新（每 6 小时最多一次）",
-        "appDescription": "一个由 LLM 驱动的个人知识库。源代码：",
+        "appDescription": "一个 agentic 知识工作台——统一对话、受控 Agent 运行与自维护的本地 wiki。源代码：",
         "saveFailed": "保存更新检查偏好失败：{{message}}"
       }
     }
