@@ -1438,7 +1438,40 @@ export function ChatPanel() {
 					</>
 				)}
 				<div className="border-t bg-muted/20 px-3 py-2">
-					<div className="flex items-center justify-end">
+					<div className="flex flex-wrap items-center justify-between gap-2">
+						<div className="flex flex-wrap items-center gap-2">
+							{activeConversationId && ingestSource === null && (
+								<>
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => void handleManualSaveQa()}
+										disabled={!project || manualQaBusy || isStreaming}
+										className="gap-2"
+									>
+										{manualQaBusy ? (
+											<Loader2 className="h-3.5 w-3.5 animate-spin" />
+										) : (
+											<BookOpen className="h-3.5 w-3.5" />
+										)}
+										{manualQaBusy ? t("chat.qaSave.saving") : t("chat.qaSave.button")}
+									</Button>
+									{manualQaStatus && (
+										<span
+											className={`text-xs ${
+												manualQaStatus.kind === "error"
+													? "text-destructive"
+													: manualQaStatus.kind === "success"
+														? "text-emerald-600"
+														: "text-muted-foreground"
+											}`}
+										>
+											{manualQaStatus.message}
+										</span>
+									)}
+								</>
+							)}
+						</div>
 						<div ref={agentRouteMenuRef} className="relative">
 							<button
 								type="button"
@@ -1538,39 +1571,6 @@ export function ChatPanel() {
 						<div className="flex items-center gap-2">
 							<Loader2 className="h-3.5 w-3.5 animate-spin" />
 							<span>{t(agentStatusKey)}</span>
-						</div>
-					</div>
-				)}
-				{activeConversationId && ingestSource === null && (
-					<div className="border-t bg-muted/10 px-3 py-2">
-						<div className="flex flex-wrap items-center gap-2">
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => void handleManualSaveQa()}
-								disabled={!project || manualQaBusy || isStreaming}
-								className="gap-2"
-							>
-								{manualQaBusy ? (
-									<Loader2 className="h-3.5 w-3.5 animate-spin" />
-								) : (
-									<BookOpen className="h-3.5 w-3.5" />
-								)}
-								{manualQaBusy ? t("chat.qaSave.saving") : t("chat.qaSave.button")}
-							</Button>
-							{manualQaStatus && (
-								<span
-									className={`text-xs ${
-										manualQaStatus.kind === "error"
-											? "text-destructive"
-											: manualQaStatus.kind === "success"
-												? "text-emerald-600"
-												: "text-muted-foreground"
-									}`}
-								>
-									{manualQaStatus.message}
-								</span>
-							)}
 						</div>
 					</div>
 				)}

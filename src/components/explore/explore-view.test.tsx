@@ -33,21 +33,21 @@ afterEach(() => {
 })
 
 describe("ExploreView", () => {
-  it("renders search by default and switches to graph with accessible tabs", async () => {
+  it("renders graph by default and switches to search with accessible tabs", async () => {
     const { container, root } = renderExploreView()
 
-    expect(container.querySelector("[data-testid='search-view']")).not.toBeNull()
-    expect(container.querySelector("[data-testid='graph-view']")).toBeNull()
-    expect(container.querySelector("button[aria-label='Search']")?.getAttribute("aria-current")).toBe("page")
+    expect(container.querySelector("[data-testid='graph-view']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='search-view']")).toBeNull()
+    expect(container.querySelector("button[aria-label='Graph']")?.getAttribute("aria-current")).toBe("page")
 
     await act(async () => {
-      container.querySelector("button[aria-label='Graph']")!.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      container.querySelector("button[aria-label='Search']")!.dispatchEvent(new MouseEvent("click", { bubbles: true }))
       await Promise.resolve()
     })
 
-    expect(container.querySelector("[data-testid='search-view']")).toBeNull()
-    expect(container.querySelector("[data-testid='graph-view']")).not.toBeNull()
-    expect(container.querySelector("button[aria-label='Graph']")?.getAttribute("aria-current")).toBe("page")
+    expect(container.querySelector("[data-testid='graph-view']")).toBeNull()
+    expect(container.querySelector("[data-testid='search-view']")).not.toBeNull()
+    expect(container.querySelector("button[aria-label='Search']")?.getAttribute("aria-current")).toBe("page")
 
     unmount(root)
   })

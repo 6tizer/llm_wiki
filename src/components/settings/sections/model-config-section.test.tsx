@@ -81,6 +81,12 @@ async function click(element: Element): Promise<void> {
   })
 }
 
+async function clickTab(container: HTMLElement, id: string): Promise<void> {
+  const tab = container.querySelector(`[data-testid='model-config-tab-${id}']`)
+  if (!tab) throw new Error(`model config tab not found: ${id}`)
+  await click(tab)
+}
+
 function unmount(root: Root): void {
   act(() => {
     root.unmount()
@@ -102,15 +108,21 @@ describe("ModelConfigSection", () => {
     })
   })
 
-  it("renders the three merged regions with real child components", async () => {
+  it("renders the four tabs with real child components", async () => {
     const { container, root } = renderSection()
     await flush()
 
     expect(container.querySelector("[data-testid='model-config-section']")).not.toBeNull()
-    expect(container.textContent).toContain("Connections")
     expect(container.textContent).toContain("LLM Models")
+    expect(container.querySelector("[data-testid='model-config-tab-llm']")?.getAttribute("aria-current")).toBe("page")
+
+    await clickTab(container, "sources")
     expect(container.textContent).toContain("External Information Sources")
+
+    await clickTab(container, "profiles")
     expect(container.textContent).toContain("Model profiles")
+
+    await clickTab(container, "taskMatrix")
     expect(container.textContent).toContain("Task assignment matrix")
 
     unmount(root)
@@ -121,15 +133,17 @@ describe("ModelConfigSection", () => {
     runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(updated)
     const { container, root } = renderSection()
     await flush()
+    await clickTab(container, "taskMatrix")
+    await flush()
 
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(1)
     const ingestToggle = container.querySelector("[data-testid='task-matrix-profile-1-ingest']")
     if (!ingestToggle) throw new Error("ingest toggle not found")
 
     await click(ingestToggle)
     await flush()
 
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(4)
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
 
     unmount(root)
   })
@@ -152,7 +166,7 @@ describe("ModelConfigSection", () => {
     const { container, root } = renderSection()
     await flush()
 
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(3)
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(1)
     const create = container.querySelector("[data-testid='provider-migration-create']")
     if (!create) throw new Error("migration create button not found")
 
@@ -165,7 +179,10 @@ describe("ModelConfigSection", () => {
         providerId: "anthropic",
       }),
     )
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(5)
+    await clickTab(container, "profiles")
+    await flush()
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
+    expect(container.querySelector("[data-testid='provider-migration-complete']")).not.toBeNull()
 
     unmount(root)
   })

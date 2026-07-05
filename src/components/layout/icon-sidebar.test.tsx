@@ -103,7 +103,7 @@ describe("IconSidebar", () => {
     const { container, root } = renderSidebar()
     await flush()
 
-    for (const label of ["Wiki", "Sources", "Explore", "Wiki Health", "Deep Research"]) {
+    for (const label of ["Chat", "Sources", "Explore", "Wiki Health", "Deep Research"]) {
       const button = container.querySelector(`button[aria-label='${label}']`)
       expect(button).not.toBeNull()
       expect(button?.textContent).toContain(label)
@@ -120,7 +120,7 @@ describe("IconSidebar", () => {
     const { container, root } = renderSidebar()
     await flush()
 
-    const wikiButton = container.querySelector("button[aria-label='Wiki']")!
+    const wikiButton = container.querySelector("button[aria-label='Chat']")!
     expect(wikiButton.getAttribute("aria-current")).toBe("page")
 
     await act(async () => {

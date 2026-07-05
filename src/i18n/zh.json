@@ -4,7 +4,7 @@
     "subtitle": "对话、委托 Agent，让知识库自我生长"
   },
   "nav": {
-    "wiki": "Wiki",
+    "wiki": "对话",
     "sources": "资料",
     "explore": "探索",
     "wikiHealth": "Wiki 健康",
@@ -566,6 +566,13 @@
         "connections": "连接",
         "profiles": "Profiles",
         "taskMatrixHeading": "任务分配矩阵",
+        "tabs": {
+          "navLabel": "模型配置分区",
+          "llm": "LLM 模型",
+          "sources": "外部信息源",
+          "profiles": "Model Profiles",
+          "taskMatrix": "任务分配矩阵"
+        },
         "migration": {
           "title": "从当前活跃 provider 创建 runtime Profile",
           "description": "基于 {{preset}} 生成 Model Profile，为未来统一路由做准备。当前聊天、提取、向量和视觉行为不会因此改变。",
@@ -794,7 +801,10 @@
         "title": "导入",
         "sourceWatch": "资料文件夹监控",
         "scheduledImport": "定时导入",
-        "mineru": "MinerU PDF"
+        "mineru": "MinerU PDF",
+        "tabs": {
+          "navLabel": "导入分区"
+        }
       },
       "webSearch": {
         "title": "外部信息源",

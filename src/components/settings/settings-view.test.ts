@@ -315,10 +315,22 @@ describe("SettingsView category rendering", () => {
     await click(importButton)
     await flush()
 
+    // Import sections now sit behind in-page tabs — only the active
+    // tab's content is mounted, so assert per tab.
     expect(container.textContent).toContain("Source Folder Auto Watch")
+
+    const scheduledTab = container.querySelector("[data-testid='import-tab-scheduledImport']")
+    if (!scheduledTab) throw new Error("scheduled import tab not found")
+    await click(scheduledTab)
+    await flush()
     // "Scan Now" is unique to ScheduledImportSection — the plain
     // "Scheduled Import" heading also exists on the import page shell.
     expect(container.textContent).toContain("Scan Now")
+
+    const mineruTab = container.querySelector("[data-testid='import-tab-mineru']")
+    if (!mineruTab) throw new Error("mineru tab not found")
+    await click(mineruTab)
+    await flush()
     expect(container.textContent).toContain("MinerU PDF Parser")
 
     unmount(root)

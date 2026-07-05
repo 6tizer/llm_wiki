@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import type { CategoryId } from "../settings-view"
 import { LlmProviderSection } from "./llm-provider-section"
 import { ModelProfilesSection } from "./model-profiles-section"
+import { ProviderMigrationBanner } from "./provider-migration-banner"
 import { TaskMatrixSection } from "./task-matrix-section"
 import { WebSearchSection } from "./web-search-section"
 
@@ -10,8 +11,18 @@ interface Props {
   onNavigateToCategory?: (category: CategoryId) => void
 }
 
+type ModelConfigTab = "llm" | "sources" | "profiles" | "taskMatrix"
+
+const MODEL_CONFIG_TABS: Array<{ id: ModelConfigTab; labelKey: string }> = [
+  { id: "llm", labelKey: "settings.sections.modelConfig.tabs.llm" },
+  { id: "sources", labelKey: "settings.sections.modelConfig.tabs.sources" },
+  { id: "profiles", labelKey: "settings.sections.modelConfig.tabs.profiles" },
+  { id: "taskMatrix", labelKey: "settings.sections.modelConfig.tabs.taskMatrix" },
+]
+
 export function ModelConfigSection({ onNavigateToCategory }: Props) {
   const { t } = useTranslation()
+  const [activeTab, setActiveTab] = useState<ModelConfigTab>("llm")
   const [profilesRefreshToken, setProfilesRefreshToken] = useState(0)
   const bumpProfilesRefreshToken = useCallback(() => {
     setProfilesRefreshToken((current) => current + 1)
@@ -26,38 +37,47 @@ export function ModelConfigSection({ onNavigateToCategory }: Props) {
         </p>
       </div>
 
-      <section className="space-y-4" aria-labelledby="settings-model-config-connections">
-        <h3 id="settings-model-config-connections" className="text-sm font-semibold text-muted-foreground">
-          {t("settings.sections.modelConfig.connections")}
-        </h3>
-        <LlmProviderSection onMigrated={bumpProfilesRefreshToken} />
-        <WebSearchSection />
-      </section>
+      <ProviderMigrationBanner onMigrated={bumpProfilesRefreshToken} />
 
-      <section className="space-y-4 border-t pt-8" aria-labelledby="settings-model-config-profiles">
-        <h3 id="settings-model-config-profiles" className="text-sm font-semibold text-muted-foreground">
-          {t("settings.sections.modelConfig.profiles")}
-        </h3>
-        <ModelProfilesSection
-          refreshToken={profilesRefreshToken}
-          onProfilesChanged={bumpProfilesRefreshToken}
-        />
-      </section>
+      <div className="space-y-6">
+        <nav aria-label={t("settings.sections.modelConfig.tabs.navLabel")} className="flex flex-wrap gap-1 border-b">
+          {MODEL_CONFIG_TABS.map(({ id, labelKey }) => (
+            <button
+              key={id}
+              type="button"
+              aria-current={activeTab === id ? "page" : undefined}
+              onClick={() => setActiveTab(id)}
+              className={`inline-flex h-9 items-center rounded-t-md px-3 text-sm transition-colors ${
+                activeTab === id
+                  ? "border-b-2 border-primary text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+              }`}
+              data-testid={`model-config-tab-${id}`}
+            >
+              {t(labelKey)}
+            </button>
+          ))}
+        </nav>
 
-      <section className="space-y-4 border-t pt-8" aria-labelledby="settings-model-config-task-matrix">
-        <h3 id="settings-model-config-task-matrix" className="text-sm font-semibold text-muted-foreground">
-          {t("settings.sections.modelConfig.taskMatrixHeading")}
-        </h3>
-        {/* Scope note: this matrix edits profile taskFamilies only. Runtime
-            task routing is handled here; permission-default UI lives in
-            AgentSection's application group. Dedicated embedding/multimodal
-            pages remain separate surfaces. */}
-        <TaskMatrixSection
-          onNavigateToCategory={onNavigateToCategory}
-          refreshToken={profilesRefreshToken}
-          onProfilesChanged={bumpProfilesRefreshToken}
-        />
-      </section>
+        {activeTab === "llm" && <LlmProviderSection />}
+
+        {activeTab === "sources" && <WebSearchSection />}
+
+        {activeTab === "profiles" && (
+          <ModelProfilesSection
+            refreshToken={profilesRefreshToken}
+            onProfilesChanged={bumpProfilesRefreshToken}
+          />
+        )}
+
+        {activeTab === "taskMatrix" && (
+          <TaskMatrixSection
+            onNavigateToCategory={onNavigateToCategory}
+            refreshToken={profilesRefreshToken}
+            onProfilesChanged={bumpProfilesRefreshToken}
+          />
+        )}
+      </div>
     </div>
   )
 }
