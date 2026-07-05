@@ -4,8 +4,8 @@ import type { FileNode } from "@/types/wiki"
 
 // Mock LLM + Tauri FS — the lint runner also touches the activity store
 // (we leave that real so we can assert status transitions).
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(),
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(),
 }))
 vi.mock("@/commands/fs", () => ({
   readFile: vi.fn(),
@@ -14,12 +14,12 @@ vi.mock("@/commands/fs", () => ({
 }))
 
 import { runSemanticLint, runStructuralLint } from "./lint"
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import { readFile, listDirectory } from "@/commands/fs"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 
-const mockStreamChat = vi.mocked(streamChat)
+const mockStreamChat = vi.mocked(streamChatRouted)
 const mockReadFile = vi.mocked(readFile)
 const mockListDirectory = vi.mocked(listDirectory)
 
@@ -65,7 +65,7 @@ describe("runSemanticLint — language directive", () => {
       const match = pages.find((p) => p.node.path === path)
       return match?.content ?? ""
     })
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onToken("")
       cb.onDone()
     })
@@ -73,7 +73,7 @@ describe("runSemanticLint — language directive", () => {
     useWikiStore.getState().setOutputLanguage("Korean")
     await runSemanticLint("/project", fakeLlmConfig())
 
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("MANDATORY OUTPUT LANGUAGE: Korean")
   })
 
@@ -88,7 +88,7 @@ describe("runSemanticLint — language directive", () => {
       const match = pages.find((p) => p.node.path === path)
       return match?.content ?? ""
     })
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onToken("")
       cb.onDone()
     })
@@ -96,7 +96,7 @@ describe("runSemanticLint — language directive", () => {
     useWikiStore.getState().setOutputLanguage("auto")
     await runSemanticLint("/project", fakeLlmConfig())
 
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })
 
@@ -104,7 +104,7 @@ describe("runSemanticLint — language directive", () => {
     const pages = [makeFileNode("x.md", "これは日本語の内容です")]
     mockListDirectory.mockResolvedValue(pages.map((p) => p.node))
     mockReadFile.mockResolvedValue(pages[0].content)
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onToken("")
       cb.onDone()
     })
@@ -112,7 +112,7 @@ describe("runSemanticLint — language directive", () => {
     useWikiStore.getState().setOutputLanguage("English")
     await runSemanticLint("/project", fakeLlmConfig())
 
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("MANDATORY OUTPUT LANGUAGE: English")
     expect(prompt).not.toContain("MANDATORY OUTPUT LANGUAGE: Japanese")
   })
@@ -122,7 +122,7 @@ describe("runSemanticLint — activity & early returns", () => {
   it("logs a running activity item and marks done", async () => {
     mockListDirectory.mockResolvedValue([makeFileNode("a.md", "content").node])
     mockReadFile.mockResolvedValue("content")
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onDone()
     })
 

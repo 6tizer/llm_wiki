@@ -1,6 +1,6 @@
 import { anyTxtSearchSmart, hasConfiguredAnyTxt } from "./anytxt-search"
 import { hasConfiguredSearchProvider, resolveSearchConfig, webSearch } from "./web-search"
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import { autoIngest } from "./ingest"
 import { writeFile, readFile, listDirectory } from "@/commands/fs"
 import { useWikiStore, type LlmConfig, type SearchApiConfig } from "@/stores/wiki-store"
@@ -245,7 +245,8 @@ async function executeResearch(
 
     let accumulated = ""
 
-    await streamChat(
+    await streamChatRouted(
+      "chat",
       llmConfig,
       [
         { role: "system", content: systemPrompt },
@@ -270,6 +271,8 @@ async function executeResearch(
         },
       },
       abortController.signal,
+      undefined,
+      `chat:research:${taskId}`,
     )
 
     // Check if errored during streaming

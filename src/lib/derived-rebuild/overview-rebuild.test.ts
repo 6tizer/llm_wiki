@@ -14,7 +14,7 @@ const hasUsableLlmMock = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/has-usable-llm", () => ({ hasUsableLlm: hasUsableLlmMock }))
 
 const streamChatMock = vi.hoisted(() => vi.fn())
-vi.mock("@/lib/llm-client", () => ({ streamChat: streamChatMock }))
+vi.mock("@/lib/pool-chat", () => ({ streamChatRouted: streamChatMock }))
 
 const indexExportMocks = vi.hoisted(() => ({
   scanIndexExportPages: vi.fn(),
@@ -50,7 +50,7 @@ function wireManualRebuildToRunExecuteDirectly(): void {
 }
 
 function mockAccumulatedTokens(text: string): void {
-  streamChatMock.mockImplementation(async (_config: unknown, _messages: unknown, callbacks: { onToken: (t: string) => void; onDone: () => void }) => {
+  streamChatMock.mockImplementation(async (_family: unknown, _config: unknown, _messages: unknown, callbacks: { onToken: (t: string) => void; onDone: () => void }) => {
     callbacks.onToken(text)
     callbacks.onDone()
   })
@@ -104,7 +104,7 @@ describe("rebuildOverview", () => {
 
     await rebuildOverview("/proj", llmConfig())
 
-    const [, messages] = streamChatMock.mock.calls[0]
+    const [, , messages] = streamChatMock.mock.calls[0]
     expect(messages[0].content).toContain("- [[concept/a]] — A")
   })
 
@@ -118,7 +118,7 @@ describe("rebuildOverview", () => {
     // maxContextSize 1000 -> pageBudget = floor(1000 * 0.5) = 500 chars.
     await rebuildOverview("/proj", llmConfig({ maxContextSize: 1000 }))
 
-    const [, messages] = streamChatMock.mock.calls[0]
+    const [, , messages] = streamChatMock.mock.calls[0]
     const promptContent = messages[0].content as string
     expect(promptContent).not.toContain(hugeListing)
     expect(promptContent).toContain("x".repeat(500))
@@ -128,7 +128,7 @@ describe("rebuildOverview", () => {
   it("fails the rebuild when the LLM stream reports an error", async () => {
     hasUsableLlmMock.mockReturnValue(true)
     wireManualRebuildToRunExecuteDirectly()
-    streamChatMock.mockImplementation(async (_config: unknown, _messages: unknown, callbacks: { onError: (err: unknown) => void }) => {
+    streamChatMock.mockImplementation(async (_family: unknown, _config: unknown, _messages: unknown, callbacks: { onError: (err: unknown) => void }) => {
       callbacks.onError(new Error("transport failed"))
     })
 

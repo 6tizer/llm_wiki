@@ -5,7 +5,7 @@
  * the algorithm core stays testable without mocks of all that.
  */
 import { listDirectory, readFile, writeFile, deleteFile } from "@/commands/fs"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import { normalizePath } from "@/lib/path-utils"
 import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
@@ -32,7 +32,8 @@ export function buildDedupLlmCall(llmConfig: LlmConfig): DedupLlmCall {
     let result = ""
     let streamError: Error | null = null
     await new Promise<void>((resolve) => {
-      streamChat(
+      streamChatRouted(
+        "review",
         llmConfig,
         [
           { role: "system", content: systemPrompt },
@@ -54,6 +55,7 @@ export function buildDedupLlmCall(llmConfig: LlmConfig): DedupLlmCall {
           reasoning: { mode: "off" },
           ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
         },
+        `review:dedup:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
       ).catch((err) => {
         streamError = err instanceof Error ? err : new Error(String(err))
         resolve()

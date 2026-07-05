@@ -4,7 +4,7 @@ import { isSafeIngestPath } from "@/lib/ingest";
 import { sanitizeIngestedFileContent } from "@/lib/ingest-sanitize";
 import { type LintResult, runStructuralLint, runSemanticLint, generateLintReport, lintReportToMarkdown, type LintReport } from "@/lib/lint";
 import { validateLlmPageOutput } from "@/lib/llm-output-validation";
-import { streamChat } from "@/lib/llm-client";
+import { streamChatRouted } from "@/lib/pool-chat";
 import { buildLanguageDirective } from "@/lib/output-language";
 import { getRelativePath, normalizePath } from "@/lib/path-utils";
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete";
@@ -207,7 +207,7 @@ async function fixBrokenLink(
 		let raw = "";
 		let hadError = false;
 
-		await streamChat(llmConfig, [{ role: "user", content: prompt }], {
+		await streamChatRouted("review", llmConfig, [{ role: "user", content: prompt }], {
 			onToken: (token) => {
 				raw += token;
 			},
@@ -219,7 +219,7 @@ async function fixBrokenLink(
 					detail: `LLM error: ${err.message}`,
 				});
 			},
-		});
+		}, undefined, undefined, `review:lint-fix:${result.page}`);
 
 		if (hadError) return false;
 
@@ -311,7 +311,7 @@ async function fixNoOutlinks(
 		let raw = "";
 		let hadError = false;
 
-		await streamChat(llmConfig, [{ role: "user", content: prompt }], {
+		await streamChatRouted("review", llmConfig, [{ role: "user", content: prompt }], {
 			onToken: (token) => {
 				raw += token;
 			},
@@ -323,7 +323,7 @@ async function fixNoOutlinks(
 					detail: `LLM error: ${err.message}`,
 				});
 			},
-		});
+		}, undefined, undefined, `review:lint-fix:${result.page}`);
 
 		if (hadError) return false;
 
@@ -693,7 +693,7 @@ async function applyLlmFix(
 	let raw = "";
 	let hadError = false;
 
-	await streamChat(llmConfig, [{ role: "user", content: prompt }], {
+	await streamChatRouted("review", llmConfig, [{ role: "user", content: prompt }], {
 		onToken: (token) => {
 			raw += token;
 		},
@@ -705,7 +705,7 @@ async function applyLlmFix(
 				detail: `LLM error: ${err.message}`,
 			});
 		},
-	});
+	}, undefined, undefined, `review:lint-fix:${result.page}`);
 
 	if (hadError || !raw.trim()) return false;
 

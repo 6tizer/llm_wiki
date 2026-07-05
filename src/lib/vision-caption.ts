@@ -38,7 +38,8 @@
  *   on chart-heavy decks.
  */
 import type { LlmConfig } from "@/stores/wiki-store"
-import { streamChat, type ChatMessage } from "./llm-client"
+import { type ChatMessage } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 
 /**
  * The "no surrounding text" prompt — same factual / verbatim /
@@ -184,7 +185,8 @@ export async function captionImage(
   const tokens: string[] = []
   let streamError: Error | null = null
 
-  await streamChat(
+  await streamChatRouted(
+    "vision",
     llmConfig,
     messages,
     {
@@ -199,6 +201,7 @@ export async function captionImage(
       temperature: options?.temperature ?? 0,
       max_tokens: options?.maxTokens ?? 4096,
     },
+    `vision:${mediaType}`,
   )
 
   if (streamError) {

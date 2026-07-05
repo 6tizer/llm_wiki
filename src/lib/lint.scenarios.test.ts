@@ -15,8 +15,8 @@ import type { LintScenario } from "@/test-helpers/scenarios/types"
 vi.mock("@/commands/fs", () => realFs)
 
 let currentLlmResponse: string | null = null
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(async (_cfg, _msgs, cb) => {
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(async (_family, _cfg, _msgs, cb) => {
     if (currentLlmResponse !== null) cb.onToken(currentLlmResponse)
     cb.onDone()
   }),

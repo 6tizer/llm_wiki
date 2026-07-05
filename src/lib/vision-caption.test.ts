@@ -11,11 +11,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 // hoists the declaration alongside the mock so the factory sees a
 // real fn.
 const { mockStreamChat } = vi.hoisted(() => ({ mockStreamChat: vi.fn() }))
-vi.mock("./llm-client", async () => {
-  const actual = await vi.importActual<typeof import("./llm-client")>("./llm-client")
+vi.mock("./pool-chat", () => {
   return {
-    ...actual,
-    streamChat: mockStreamChat,
+    streamChatRouted: mockStreamChat,
   }
 })
 
@@ -43,6 +41,7 @@ describe("captionImage", () => {
   it("sends one user message with text+image blocks and the pinned prompt", async () => {
     mockStreamChat.mockImplementation(
       async (
+        _family: string,
         _config: LlmConfig,
         _messages: ChatMessage[],
         callbacks: { onToken: (t: string) => void; onDone: () => void; onError: (e: Error) => void },
@@ -56,7 +55,7 @@ describe("captionImage", () => {
     expect(out).toBe("a red square")
 
     expect(mockStreamChat).toHaveBeenCalledTimes(1)
-    const messages = mockStreamChat.mock.calls[0][1] as ChatMessage[]
+    const messages = mockStreamChat.mock.calls[0][2] as ChatMessage[]
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe("user")
     const blocks = messages[0].content as Array<{ type: string }>
@@ -70,7 +69,7 @@ describe("captionImage", () => {
   })
 
   it("joins multiple streamed tokens into one trimmed string", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onToken("  Red ")
       cb.onToken("square ")
       cb.onToken("on white  ")
@@ -83,7 +82,7 @@ describe("captionImage", () => {
   })
 
   it("rethrows when streamChat reports an error (no silent empty caption)", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onError(new Error("HTTP 500: model unavailable"))
     })
 
@@ -93,7 +92,7 @@ describe("captionImage", () => {
   })
 
   it("passes through temperature and maxTokens overrides to streamChat", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onDone()
     })
 
@@ -102,30 +101,30 @@ describe("captionImage", () => {
       maxTokens: 256,
     })
 
-    const overrides = mockStreamChat.mock.calls[0][4]
+    const overrides = mockStreamChat.mock.calls[0][5]
     expect(overrides).toEqual({ temperature: 0.3, max_tokens: 256 })
   })
 
   it("uses defaults (temp=0, max_tokens=4096) when no options passed", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onDone()
     })
 
     await captionImage(TINY_B64, "image/png", cfg)
 
-    const overrides = mockStreamChat.mock.calls[0][4]
+    const overrides = mockStreamChat.mock.calls[0][5]
     expect(overrides).toEqual({ temperature: 0, max_tokens: 4096 })
   })
 
   it("forwards the AbortSignal to streamChat (lets callers cancel batch captioning)", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onDone()
     })
 
     const ctl = new AbortController()
     await captionImage(TINY_B64, "image/png", cfg, ctl.signal)
 
-    const passedSignal = mockStreamChat.mock.calls[0][3]
+    const passedSignal = mockStreamChat.mock.calls[0][4]
     expect(passedSignal).toBe(ctl.signal)
   })
 
@@ -139,7 +138,7 @@ describe("captionImage", () => {
   })
 
   it("uses the no-context prompt when context is empty / whitespace-only", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onDone()
     })
 
@@ -150,7 +149,7 @@ describe("captionImage", () => {
       contextBefore: "  \n  ",
       contextAfter: "",
     })
-    const messages = mockStreamChat.mock.calls[0][1] as Array<{
+    const messages = mockStreamChat.mock.calls[0][2] as Array<{
       content: Array<{ type: string; text?: string }>
     }>
     const promptText = messages[0].content[0].text ?? ""
@@ -158,7 +157,7 @@ describe("captionImage", () => {
   })
 
   it("switches to the context-aware prompt when EITHER side has content", async () => {
-    mockStreamChat.mockImplementation(async (_c, _m, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _c, _m, cb) => {
       cb.onDone()
     })
 
@@ -166,7 +165,7 @@ describe("captionImage", () => {
       contextBefore: "Figure 3: Q2 revenue chart",
       contextAfter: "",
     })
-    const messages = mockStreamChat.mock.calls[0][1] as Array<{
+    const messages = mockStreamChat.mock.calls[0][2] as Array<{
       content: Array<{ type: string; text?: string }>
     }>
     const promptText = messages[0].content[0].text ?? ""

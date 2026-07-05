@@ -14,7 +14,7 @@ import { parseLines, streamChat, type StreamCallbacks } from "@/lib/llm-client"
 import { countReasoningCharsInLine, extractReasoningTextFromLine } from "@/lib/reasoning-detector"
 import { syntheticLlmConfig } from "@/lib/profile-llm-config"
 
-export type ModelCallTaskFamily = "chat" | "ingest"
+export type ModelCallTaskFamily = "chat" | "ingest" | "synthesis" | "review" | "vision"
 
 const MODEL_CALL_PROFILE_CLAIM_TTL_MS = 1_200_000
 const PROFILE_CLAIM_INACTIVE_PREFIX = "claim-inactive:"

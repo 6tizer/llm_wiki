@@ -11,8 +11,8 @@ import {
 
 const streamChatMock = vi.hoisted(() => vi.fn())
 
-vi.mock("@/lib/llm-client", () => ({
-  streamChat: streamChatMock,
+vi.mock("@/lib/pool-chat", () => ({
+  streamChatRouted: streamChatMock,
 }))
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -374,7 +374,7 @@ describe("AnyTXT query rewrite", () => {
 
   it("prefers rewritten AnyTXT queries when original queries would fill the cap", async () => {
     streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const handlers = args[2] as { onToken?: (token: string) => void; onDone?: () => void }
+      const handlers = args[3] as { onToken?: (token: string) => void; onDone?: () => void }
       handlers.onToken?.('["kw1", "kw2", "kw3"]')
       handlers.onDone?.()
     })
@@ -398,7 +398,7 @@ describe("AnyTXT query rewrite", () => {
   it("passes AbortSignal to query rewrite streaming", async () => {
     const controller = new AbortController()
     streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const handlers = args[2] as { onToken?: (token: string) => void; onDone?: () => void }
+      const handlers = args[3] as { onToken?: (token: string) => void; onDone?: () => void }
       handlers.onToken?.('["local keywords"]')
       handlers.onDone?.()
     })
@@ -406,7 +406,7 @@ describe("AnyTXT query rewrite", () => {
     await rewriteAnyTxtQueries(["natural language question"], llmConfig, controller.signal)
 
     const lastCall = streamChatMock.mock.calls[streamChatMock.mock.calls.length - 1]
-    expect(lastCall[3]).toBe(controller.signal)
+    expect(lastCall[4]).toBe(controller.signal)
   })
 
   it("does not fall back to original queries when rewrite is aborted", async () => {
@@ -419,7 +419,7 @@ describe("AnyTXT query rewrite", () => {
   it("does not fall back when prepare sees streamChat finish after abort", async () => {
     const controller = new AbortController()
     streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const handlers = args[2] as { onDone?: () => void }
+      const handlers = args[3] as { onDone?: () => void }
       controller.abort(new Error("prepare cancelled"))
       handlers.onDone?.()
     })
@@ -431,7 +431,7 @@ describe("AnyTXT query rewrite", () => {
   it("does not return rewritten queries when rewrite sees streamChat finish after abort", async () => {
     const controller = new AbortController()
     streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const handlers = args[2] as { onToken?: (token: string) => void; onDone?: () => void }
+      const handlers = args[3] as { onToken?: (token: string) => void; onDone?: () => void }
       handlers.onToken?.('["local keywords"]')
       controller.abort(new Error("rewrite finished cancelled"))
       handlers.onDone?.()
@@ -445,7 +445,7 @@ describe("AnyTXT query rewrite", () => {
     fetchMock.mockReset()
     vi.stubGlobal("fetch", fetchMock)
     streamChatMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const handlers = args[2] as { onToken?: (token: string) => void; onDone?: () => void }
+      const handlers = args[3] as { onToken?: (token: string) => void; onDone?: () => void }
       handlers.onToken?.('["煤矿 安全"]')
       handlers.onDone?.()
     })

@@ -31,8 +31,8 @@ vi.mock("@/commands/fs", () => realFs)
 // The LLM client is mocked per-test so we can inject the scenario's
 // llm-response.txt verbatim (streamed as a single token chunk, then onDone).
 let currentLlmResponse: string | null = null
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(async (_cfg, _msgs, cb) => {
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(async (_family, _cfg, _msgs, cb) => {
     if (currentLlmResponse !== null) {
       cb.onToken(currentLlmResponse)
     }
