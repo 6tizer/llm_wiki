@@ -526,6 +526,8 @@ pub fn run() {
             commands::runtime_db::runtime_profile_probe,
             commands::runtime_db::runtime_profile_status,
             commands::runtime_db::runtime_profile_update,
+            commands::profile_secrets::profile_secret_backend_get,
+            commands::profile_secrets::profile_secret_backend_set,
             commands::profile_secrets::profile_secret_delete,
             commands::profile_secrets::profile_secret_write,
             commands::runtime_db::runtime_progress_append,

@@ -25,6 +25,8 @@ const runtimeDbMocks = vi.hoisted(() => ({
 }))
 
 const secretMocks = vi.hoisted(() => ({
+  profileSecretBackendGet: vi.fn(),
+  profileSecretBackendSet: vi.fn(),
   profileSecretWrite: vi.fn(),
   profileSecretDelete: vi.fn(),
 }))
@@ -125,6 +127,16 @@ async function input(element: HTMLInputElement, value: string): Promise<void> {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
     setter?.call(element, value)
     element.dispatchEvent(new Event("input", { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
+async function select(element: HTMLSelectElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set
+    setter?.call(element, value)
+    element.dispatchEvent(new Event("change", { bubbles: true }))
+    await Promise.resolve()
     await Promise.resolve()
   })
 }
@@ -376,6 +388,8 @@ describe("ModelProfilesSection UI", () => {
       secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
     })
     secretMocks.profileSecretDelete.mockResolvedValue({ ok: true })
+    secretMocks.profileSecretBackendGet.mockResolvedValue({ backend: "file" })
+    secretMocks.profileSecretBackendSet.mockResolvedValue({ backend: "keychain" })
   })
 
   it("loads profiles and keeps unknown task family values visible", async () => {
@@ -384,6 +398,53 @@ describe("ModelProfilesSection UI", () => {
 
     expect(container.textContent).toContain("Primary profile")
     expect(container.querySelector<HTMLInputElement>("[data-testid='profile-task-future-family']")?.checked).toBe(true)
+
+    unmount(root)
+  })
+
+  it("loads and updates the profile secret backend", async () => {
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const backend = container.querySelector<HTMLSelectElement>("[data-testid='profile-secret-backend']")
+    if (!backend) throw new Error("profile secret backend select not found")
+    expect(backend.value).toBe("file")
+
+    await select(backend, "keychain")
+
+    expect(secretMocks.profileSecretBackendGet).toHaveBeenCalledTimes(1)
+    expect(secretMocks.profileSecretBackendSet).toHaveBeenCalledWith({ backend: "keychain" })
+    expect(container.textContent).toContain("Secret storage updated.")
+
+    unmount(root)
+  })
+
+  it("shows a file fallback when loading the profile secret backend fails", async () => {
+    secretMocks.profileSecretBackendGet.mockRejectedValueOnce(new Error("backend unavailable"))
+
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const backend = container.querySelector<HTMLSelectElement>("[data-testid='profile-secret-backend']")
+    if (!backend) throw new Error("profile secret backend select not found")
+    expect(backend.value).toBe("file")
+    expect(container.textContent).toContain("Could not load secret storage: backend unavailable")
+
+    unmount(root)
+  })
+
+  it("rolls back the profile secret backend selection when saving fails", async () => {
+    secretMocks.profileSecretBackendSet.mockRejectedValueOnce(new Error("write rejected"))
+
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const backend = container.querySelector<HTMLSelectElement>("[data-testid='profile-secret-backend']")
+    if (!backend) throw new Error("profile secret backend select not found")
+    await select(backend, "keychain")
+
+    expect(backend.value).toBe("file")
+    expect(container.textContent).toContain("Could not update secret storage: write rejected")
 
     unmount(root)
   })
