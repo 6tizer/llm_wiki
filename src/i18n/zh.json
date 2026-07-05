@@ -5,11 +5,10 @@
   },
   "nav": {
     "wiki": "Wiki",
-    "sources": "原始资料",
-    "search": "搜索",
-    "graph": "关系图",
-    "lint": "检查",
-    "review": "待审阅",
+    "sources": "资料",
+    "explore": "探索",
+    "wikiHealth": "Wiki 健康",
+    "research": "深度研究",
     "settings": "设置",
     "switchProject": "切换项目",
     "updateAvailable": "有可用更新",
@@ -28,6 +27,24 @@
   "sidebar": {
     "knowledge": "知识库",
     "files": "文件"
+  },
+  "explore": {
+    "navLabel": "探索工具",
+    "tabs": {
+      "search": "搜索",
+      "graph": "图谱"
+    }
+  },
+  "wikiHealth": {
+    "sections": {
+      "overview": "总览",
+      "todo": "待办",
+      "actions": "操作"
+    },
+    "actions": {
+      "synthesis": "综合",
+      "index-overview": "索引 / 总览"
+    }
   },
   "research": {
     "title": "深度研究",
@@ -524,14 +541,10 @@
       "apiServer": "API + MCP",
       "agent": "Agent 运行限额",
       "knowledgeAgents": "流水线代理",
-      "taxonomy": "标签体系",
-      "synthesis": "综合",
-      "indexOverview": "索引 / 总览",
       "derivedStatus": "派生状态",
       "general": "通用",
       "output": "输出偏好",
       "interface": "界面",
-      "maintenance": "维护",
       "changelog": "更新日志",
       "about": "关于"
     },

@@ -150,7 +150,7 @@ describe("resetProjectState — Zustand stores", () => {
     expect(useActivityStore.getState().items).toEqual([])
   })
 
-  it("clears research store tasks and closes panel", async () => {
+  it("clears research store tasks", async () => {
     useResearchStore.setState({
       tasks: [
         {
@@ -162,12 +162,10 @@ describe("resetProjectState — Zustand stores", () => {
           createdAt: 0,
         } as unknown as ReturnType<typeof useResearchStore.getState>["tasks"][number],
       ],
-      panelOpen: true,
     })
 
     await resetProjectState()
     expect(useResearchStore.getState().tasks).toEqual([])
-    expect(useResearchStore.getState().panelOpen).toBe(false)
   })
 })
 

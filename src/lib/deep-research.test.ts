@@ -34,7 +34,7 @@ describe("collectResearchSources", () => {
 
   afterEach(() => {
     vi.useRealTimers()
-    useResearchStore.setState({ tasks: [], panelOpen: false })
+    useResearchStore.setState({ tasks: [] })
     useWikiStore.getState().setProject(null)
   })
 
@@ -157,7 +157,7 @@ describe("collectResearchSources", () => {
 
   it("does not start a queued task after the active project changes", async () => {
     vi.useFakeTimers()
-    useResearchStore.setState({ tasks: [], panelOpen: false })
+    useResearchStore.setState({ tasks: [] })
     useWikiStore.getState().setProject({ id: "a", name: "A", path: "/project-a" })
 
     const taskId = queueResearch(
@@ -184,7 +184,7 @@ describe("collectResearchSources", () => {
 
   it("does not let a new project consume another project's queued task", async () => {
     vi.useFakeTimers()
-    useResearchStore.setState({ tasks: [], panelOpen: false })
+    useResearchStore.setState({ tasks: [] })
     const llmConfig = {
       provider: "openai" as const,
       apiKey: "",

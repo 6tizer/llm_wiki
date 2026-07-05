@@ -9,14 +9,10 @@ import {
   Image as ImageIcon,
   Network,
   History,
-  Wrench,
   FolderSync,
   Server,
   SlidersHorizontal,
   BrainCircuit,
-  Tags,
-  GitMerge,
-  ListTree,
   Activity,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -45,12 +41,8 @@ import { ImportSection } from "./sections/import-section"
 import { ApiServerSection } from "./sections/api-server-section"
 import { AgentSection } from "./sections/agent-section"
 import { KnowledgeAgentsSection } from "./sections/knowledge-agents-section"
-import { TagTaxonomySection } from "./sections/tag-taxonomy-section"
-import { SynthesisSection } from "./sections/synthesis-section"
-import { IndexOverviewSection } from "./sections/index-overview-section"
 import { DerivedStatusSection } from "./sections/derived-status-section"
 import { ChangelogSection } from "./sections/changelog-section"
-import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
 import {
   clampMineruPollIntervalMs,
@@ -68,14 +60,10 @@ export type CategoryId =
   | "api-server"
   | "agent"
   | "knowledge-agents"
-  | "taxonomy"
-  | "synthesis"
-  | "index-overview"
   | "derived-status"
   | "general"
   | "output"
   | "interface"
-  | "maintenance"
   | "changelog"
   | "about"
 
@@ -108,11 +96,7 @@ const CATEGORIES: Category[] = [
   { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "import", labelKey: "settings.categories.import", icon: FolderSync },
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
-  { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
-  { id: "synthesis", labelKey: "settings.categories.synthesis", icon: GitMerge },
-  { id: "index-overview", labelKey: "settings.categories.indexOverview", icon: ListTree },
   { id: "derived-status", labelKey: "settings.categories.derivedStatus", icon: Activity },
-  { id: "maintenance", labelKey: "settings.categories.maintenance", icon: Wrench },
   { id: "agent", labelKey: "settings.categories.agent", icon: SlidersHorizontal },
   { id: "api-server", labelKey: "settings.categories.apiServer", icon: Server },
   { id: "network", labelKey: "settings.categories.network", icon: Network },
@@ -133,15 +117,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
     id: "pipeline",
     labelKey: "settings.groups.pipeline",
-    categoryIds: [
-      "import",
-      "knowledge-agents",
-      "taxonomy",
-      "synthesis",
-      "index-overview",
-      "derived-status",
-      "maintenance",
-    ],
+    categoryIds: ["import", "knowledge-agents", "derived-status"],
   },
   {
     id: "app",
@@ -155,9 +131,6 @@ const INLINE_PERSIST_SETTINGS_CATEGORIES = new Set<CategoryId>([
   "about",
   "model-config",
   "knowledge-agents",
-  "taxonomy",
-  "synthesis",
-  "index-overview",
   "derived-status",
 ])
 
@@ -188,7 +161,12 @@ export function coerceSettingsCategory(
     ? "import"
     : ["llm", "model-profiles", "web-search"].includes(active)
       ? "model-config"
-      : active
+      // Governance operations moved to Wiki Health. Settings has no deep-link
+      // path into that top-level view, so legacy settings ids land on the
+      // closest remaining status surface.
+      : ["taxonomy", "synthesis", "index-overview", "maintenance"].includes(active)
+        ? "derived-status"
+        : active
   if (categories.some((category) => category.id === migratedActive)) {
     return migratedActive as CategoryId
   }
@@ -932,22 +910,14 @@ export function SettingsView() {
         return <AgentSection draft={draft} setDraft={setDraft} projectReady={!!project} />
       case "knowledge-agents":
         return <KnowledgeAgentsSection project={project} />
-      case "taxonomy":
-        return <TagTaxonomySection project={project} />
-      case "synthesis":
-        return <SynthesisSection project={project} />
-      case "index-overview":
-        return <IndexOverviewSection project={project} />
       case "derived-status":
-        return <DerivedStatusSection project={project} onNavigateToCategory={setActive} />
+        return <DerivedStatusSection project={project} />
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":
         return <InterfaceSection draft={draft} setDraft={setDraft} />
-      case "maintenance":
-        return <MaintenanceSection />
       case "changelog":
         return <ChangelogSection />
       case "about":

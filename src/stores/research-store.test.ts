@@ -3,7 +3,7 @@ import { useResearchStore } from "./research-store"
 
 describe("research store project-scoped queue helpers", () => {
   beforeEach(() => {
-    useResearchStore.setState({ tasks: [], panelOpen: false, maxConcurrent: 3 })
+    useResearchStore.setState({ tasks: [], maxConcurrent: 3 })
   })
 
   it("counts running tasks only for the requested project", () => {

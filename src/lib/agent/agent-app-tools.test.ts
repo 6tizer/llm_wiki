@@ -302,7 +302,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     sweepReviewsMock.sweepResolvedReviews.mockReset()
     connectionTestsMock.testLlmConnection.mockReset()
     dedupRunnerMock.buildDedupLlmCall.mockReturnValue(vi.fn())
-    useResearchStore.setState({ tasks: [], panelOpen: false })
+    useResearchStore.setState({ tasks: [] })
     useReviewStore.setState({ items: [] })
     useWikiStore.setState({
       project: { id: "p1", name: "Project", path: "/project" },

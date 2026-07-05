@@ -8,12 +8,12 @@ import { useDerivedLayerStore } from "@/stores/derived-layer-store"
 import { mintManualRebuildForLayer } from "@/lib/derived-rebuild/manual-rebuild-marker"
 import { VISIBLE_DERIVED_LAYERS, type DerivedLayerBucket, type DerivedLayerBucketStatus } from "@/lib/derived-rebuild/status"
 import type { DerivedStaleMarkerLayer } from "@/core-runtime/contract"
-import type { CategoryId } from "../settings-view"
 import type { WikiProject } from "@/types/wiki"
 
 const POLL_INTERVAL_MS = 5_000
 const REBUILDABLE_LAYERS = new Set<DerivedStaleMarkerLayer>(["embedding", "taxonomy"])
-const NAVIGATE_TARGET: Partial<Record<DerivedStaleMarkerLayer, CategoryId>> = {
+type DerivedNavigateTarget = "synthesis" | "index-overview"
+const NAVIGATE_TARGET: Partial<Record<DerivedStaleMarkerLayer, DerivedNavigateTarget>> = {
   synthesis: "synthesis",
   index_export: "index-overview",
   overview: "index-overview",
@@ -21,7 +21,7 @@ const NAVIGATE_TARGET: Partial<Record<DerivedStaleMarkerLayer, CategoryId>> = {
 
 interface Props {
   project?: Pick<WikiProject, "id" | "path"> | null
-  onNavigateToCategory?: (category: CategoryId) => void
+  onNavigate?: (target: DerivedNavigateTarget) => void
 }
 
 function readyBucket(layer: DerivedStaleMarkerLayer): DerivedLayerBucket {
@@ -36,7 +36,7 @@ function readyBucket(layer: DerivedStaleMarkerLayer): DerivedLayerBucket {
  * existing section instead of duplicating a button (they already have one
  * there).
  */
-export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
+export function DerivedStatusSection({ project, onNavigate }: Props) {
   const { t } = useTranslation()
   const buckets = useDerivedLayerStore((state) => state.buckets)
   const error = useDerivedLayerStore((state) => state.error)
@@ -100,7 +100,7 @@ export function DerivedStatusSection({ project, onNavigateToCategory }: Props) {
             layer={layer}
             bucket={buckets?.[layer] ?? readyBucket(layer)}
             projectPath={project.path}
-            onNavigateToCategory={onNavigateToCategory}
+            onNavigate={onNavigate}
           />
         ))}
     </div>
@@ -111,12 +111,12 @@ function LayerCard({
   layer,
   bucket,
   projectPath,
-  onNavigateToCategory,
+  onNavigate,
 }: {
   layer: DerivedStaleMarkerLayer
   bucket: DerivedLayerBucket
   projectPath: string
-  onNavigateToCategory?: (category: CategoryId) => void
+  onNavigate?: (target: DerivedNavigateTarget) => void
 }) {
   const { t } = useTranslation()
   const [running, setRunning] = useState(false)
@@ -193,14 +193,14 @@ function LayerCard({
         </div>
       )}
 
-      {navigateTarget && onNavigateToCategory && (
+      {navigateTarget && onNavigate && (
         <button
           type="button"
-          onClick={() => onNavigateToCategory(navigateTarget)}
+          onClick={() => onNavigate(navigateTarget)}
           className="text-xs text-primary underline-offset-2 hover:underline"
           data-testid={`derived-status-navigate-${layer}`}
         >
-          {t("settings.sections.derivedStatus.manageIn", { section: t(`settings.categories.${navigateCategoryLabelKey(navigateTarget)}`) })}
+          {t("settings.sections.derivedStatus.manageIn", { section: t(`wikiHealth.actions.${navigateTarget}`) })}
         </button>
       )}
 
@@ -220,11 +220,6 @@ function LayerCard({
       )}
     </div>
   )
-}
-
-function navigateCategoryLabelKey(category: CategoryId): string {
-  if (category === "index-overview") return "indexOverview"
-  return category
 }
 
 function StatusBadge({ status, stale }: { status: DerivedLayerBucketStatus; stale: boolean }) {

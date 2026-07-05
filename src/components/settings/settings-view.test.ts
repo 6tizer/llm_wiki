@@ -65,11 +65,6 @@ vi.mock("@/lib/scheduled-import", () => ({
   stopScheduledImport: vi.fn(() => undefined),
 }))
 
-vi.mock("./sections/synthesis-section", () => ({
-  SynthesisSection: ({ project }: { project?: { path: string } | null }) =>
-    `Mock Synthesis Section:${project?.path ?? "no-project"}`,
-}))
-
 vi.mock("./sections/model-config-section", () => ({
   ModelConfigSection: () => "Mock Model Config Section",
 }))
@@ -176,7 +171,7 @@ describe("settings platform categories", () => {
     const nonMacCategories = getSettingsCategories(false)
     expect(coerceSettingsCategory("interface", nonMacCategories)).toBe("interface")
     expect(coerceSettingsCategory("general", nonMacCategories)).toBe("model-config")
-    for (const id of ["model-config", "knowledge-agents", "taxonomy", "synthesis"] as const) {
+    for (const id of ["model-config", "knowledge-agents", "derived-status"] as const) {
       expect(coerceSettingsCategory(id, nonMacCategories)).toBe(id)
       expect(nonMacCategories.some((category) => category.id === id)).toBe(true)
     }
@@ -204,6 +199,15 @@ describe("settings platform categories", () => {
 
     for (const legacyId of ["llm", "model-profiles", "web-search"]) {
       expect(coerceSettingsCategory(legacyId, categories)).toBe("model-config")
+      expect(categories.some((category) => (category.id as string) === legacyId)).toBe(false)
+    }
+  })
+
+  it("migrates removed governance category ids to Derived Status", () => {
+    const categories = getSettingsCategories(true)
+
+    for (const legacyId of ["taxonomy", "synthesis", "index-overview", "maintenance"]) {
+      expect(coerceSettingsCategory(legacyId, categories)).toBe("derived-status")
       expect(categories.some((category) => (category.id as string) === legacyId)).toBe(false)
     }
   })
@@ -276,17 +280,15 @@ describe("SettingsView category rendering", () => {
     unmount(root)
   })
 
-  it("renders SynthesisSection after clicking the synthesis sidebar category", async () => {
+  it("does not render removed governance categories in Settings navigation", async () => {
     const { container, root } = renderSettingsView()
     await flush()
 
-    const synthesisButton = container.querySelector("[data-testid='settings-category-synthesis']")
-    if (!synthesisButton) throw new Error("synthesis category button not found")
-
-    await click(synthesisButton)
-    await flush()
-
-    expect(container.textContent).toContain("Mock Synthesis Section:/project")
+    expect(container.querySelector("[data-testid='settings-category-taxonomy']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-synthesis']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-index-overview']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-maintenance']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-derived-status']")).not.toBeNull()
 
     unmount(root)
   })
@@ -343,12 +345,8 @@ describe("settings global Save bar visibility", () => {
     expect(shouldShowGlobalSettingsSaveBar("knowledge-agents")).toBe(false)
   })
 
-  it("hides for Tag Taxonomy because it persists inline", () => {
-    expect(shouldShowGlobalSettingsSaveBar("taxonomy")).toBe(false)
-  })
-
-  it("hides for Synthesis because generation persists inline", () => {
-    expect(shouldShowGlobalSettingsSaveBar("synthesis")).toBe(false)
+  it("hides for Derived Status because it persists inline", () => {
+    expect(shouldShowGlobalSettingsSaveBar("derived-status")).toBe(false)
   })
 
   it("shows for shared draft categories", () => {

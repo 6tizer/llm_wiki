@@ -6,10 +6,9 @@
   "nav": {
     "wiki": "Wiki",
     "sources": "Sources",
-    "search": "Search",
-    "graph": "Graph",
-    "lint": "Lint",
-    "review": "Review",
+    "explore": "Explore",
+    "wikiHealth": "Wiki Health",
+    "research": "Deep Research",
     "settings": "Settings",
     "switchProject": "Switch Project",
     "updateAvailable": "Update available",
@@ -28,6 +27,24 @@
   "sidebar": {
     "knowledge": "Knowledge",
     "files": "Files"
+  },
+  "explore": {
+    "navLabel": "Explore tools",
+    "tabs": {
+      "search": "Search",
+      "graph": "Graph"
+    }
+  },
+  "wikiHealth": {
+    "sections": {
+      "overview": "Overview",
+      "todo": "To-do",
+      "actions": "Actions"
+    },
+    "actions": {
+      "synthesis": "Synthesis",
+      "index-overview": "Index / Overview"
+    }
   },
   "research": {
     "title": "Deep Research",
@@ -524,14 +541,10 @@
       "apiServer": "API + MCP",
       "agent": "Agent Run Limits",
       "knowledgeAgents": "Pipeline Agents",
-      "taxonomy": "Tag Taxonomy",
-      "synthesis": "Synthesis",
-      "indexOverview": "Index / Overview",
       "derivedStatus": "Derived Status",
       "general": "General",
       "output": "Output",
       "interface": "Interface",
-      "maintenance": "Maintenance",
       "changelog": "Changelog",
       "about": "About"
     },

@@ -135,9 +135,9 @@ describe("DerivedStatusSection", () => {
     unmount(root)
   })
 
-  it("clicking a navigate link calls onNavigateToCategory with the right settings category", async () => {
+  it("clicking a navigate link calls onNavigate with the right health workbench target", async () => {
     const onNavigate = vi.fn()
-    const { container, root } = renderSection({ project, onNavigateToCategory: onNavigate })
+    const { container, root } = renderSection({ project, onNavigate })
     await flush()
 
     await click(container.querySelector("[data-testid='derived-status-navigate-synthesis']")!)

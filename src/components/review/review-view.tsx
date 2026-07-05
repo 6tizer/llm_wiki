@@ -39,6 +39,7 @@ export function ReviewView() {
   const clearResolved = useReviewStore((s) => s.clearResolved)
   const project = useWikiStore((s) => s.project)
   const setFileTree = useWikiStore((s) => s.setFileTree)
+  const setActiveView = useWikiStore((s) => s.setActiveView)
 
   const handleResolve = useCallback(async (id: string, action: string) => {
     const pp = project ? normalizePath(project.path) : ""
@@ -55,6 +56,7 @@ export function ReviewView() {
         // Use pre-generated search queries if available, otherwise fall back to title
         const topic = item.title.replace(/^(Save to Wiki|Create|Research)[:\s]*/i, "").trim() || item.description.split("\n")[0]
         queueResearch(pp, topic, llmConfig, searchConfig, item.searchQueries)
+        setActiveView("research")
         resolveItem(id, "Queued for research")
       } else {
         resolveItem(id, action)
@@ -129,6 +131,7 @@ export function ReviewView() {
         const llmConfig = useWikiStore.getState().llmConfig
         const topic = action.replace(/^research\s*/i, "").trim() || item.description.split("\n")[0]
         queueResearch(pp, topic, llmConfig, searchConfig)
+        setActiveView("research")
         resolveItem(id, "Queued for deep research")
       } else {
         resolveItem(id, action)
@@ -218,7 +221,7 @@ export function ReviewView() {
     } else {
       resolveItem(id, action)
     }
-  }, [project, items, resolveItem, setFileTree])
+  }, [project, items, resolveItem, setFileTree, setActiveView])
 
   const pending = items.filter((i) => !i.resolved)
   const resolved = items.filter((i) => i.resolved)

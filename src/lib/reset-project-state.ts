@@ -69,7 +69,6 @@ export async function resetProjectState(): Promise<void> {
 
   useResearchStore.setState({
     tasks: [],
-    panelOpen: false,
   })
 
   useLintStore.getState().clearItems()
