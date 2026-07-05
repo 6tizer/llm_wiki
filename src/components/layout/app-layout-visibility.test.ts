@@ -22,4 +22,19 @@ describe("getAppLayoutVisibility", () => {
       hasRightPanel: false,
     })
   })
+
+  it("keeps sidebar visibility as layout chrome state, independent from collapsed rendering", () => {
+    expect(getAppLayoutVisibility("wiki", null).showLeftPanel).toBe(true)
+    expect(getAppLayoutVisibility("settings", null).showLeftPanel).toBe(false)
+  })
+
+  it.each(["sources", "explore", "wiki-health"] as const)(
+    "keeps %s as workspace chrome without a selected file",
+    (activeView) => {
+      expect(getAppLayoutVisibility(activeView, null)).toEqual({
+        showLeftPanel: true,
+        hasRightPanel: false,
+      })
+    },
+  )
 })

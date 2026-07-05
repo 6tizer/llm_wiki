@@ -2,6 +2,25 @@ import { create } from "zustand";
 import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config";
 import type { FileNode, WikiProject } from "@/types/wiki";
 
+/** localStorage key for the right-side knowledge/files panel collapsed state. */
+export const SIDEBAR_COLLAPSED_STORAGE_KEY = "llmwiki.sidebarCollapsed";
+
+function readSidebarCollapsed(): boolean {
+	try {
+		return globalThis.localStorage?.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+	} catch {
+		return false;
+	}
+}
+
+function writeSidebarCollapsed(sidebarCollapsed: boolean): void {
+	try {
+		globalThis.localStorage?.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(sidebarCollapsed));
+	} catch {
+		// Local UI preference only; ignore unavailable storage.
+	}
+}
+
 /**
  * Wire protocol used when `provider === "custom"`. Other providers have a
  * fixed protocol (openai → OpenAI chat; anthropic → Anthropic messages;
@@ -336,6 +355,8 @@ interface WikiState {
    */
 	pendingScrollImageSrc: string | null
 	chatExpanded: boolean
+	/** Right-side knowledge/files panel collapsed UI preference. */
+	sidebarCollapsed: boolean
 	activeView: "wiki" | "sources" | "explore" | "wiki-health" | "research" | "settings"
 	llmConfig: LlmConfig
 	/** Per-provider-preset stored overrides (API key, model, endpoint, …). */
@@ -371,6 +392,7 @@ interface WikiState {
 	setExternalPreview: (preview: ExternalPreview | null) => void
 	setPendingScrollImageSrc: (src: string | null) => void
 	setChatExpanded: (expanded: boolean) => void
+	setSidebarCollapsed: (collapsed: boolean) => void
 	setActiveView: (view: WikiState["activeView"]) => void
 	setLlmConfig: (config: LlmConfig) => void
 	setProviderConfigs: (configs: ProviderConfigs) => void
@@ -397,6 +419,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	externalPreview: null,
 	pendingScrollImageSrc: null,
 	chatExpanded: false,
+	sidebarCollapsed: readSidebarCollapsed(),
 	activeView: "wiki",
 	llmConfig: {
 		provider: "openai",
@@ -423,6 +446,10 @@ export const useWikiStore = create<WikiState>((set) => ({
 	setExternalPreview: (externalPreview) => set({ externalPreview }),
 	setPendingScrollImageSrc: (pendingScrollImageSrc) => set({ pendingScrollImageSrc }),
 	setChatExpanded: (chatExpanded) => set({ chatExpanded }),
+	setSidebarCollapsed: (sidebarCollapsed) => {
+		writeSidebarCollapsed(sidebarCollapsed)
+		set({ sidebarCollapsed })
+	},
 	setActiveView: (activeView) => set({ activeView }),
 	searchApiConfig: {
 		provider: "none",
