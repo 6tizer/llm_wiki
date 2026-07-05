@@ -176,13 +176,8 @@
     "sourceCount_plural": "{{count}} 个资料"
   },
   "chat": {
-    "placeholder": "向你的 Wiki 提问...",
     "ingestPlaceholder": "讨论资料内容或继续追问...",
-    "saveToWiki": "保存到 Wiki",
-    "saving": "保存中...",
-    "saved": "已保存！",
     "writeToWiki": "写入 Wiki",
-    "emptyHint": "提问或开始提取资料。",
     "sources": "来源",
     "newChat": "新建对话",
     "newConversation": "新对话",
@@ -291,11 +286,6 @@
     }
   },
   "agent": {
-    "mode": {
-      "chat": "对话",
-      "agent": "Agent",
-      "ingest": "提取"
-    },
     "status": {
       "pending": "等待中",
       "running": "运行中",
@@ -314,6 +304,7 @@
       "error": "错误",
       "empty": "无工具调用",
       "progress": "进度更新",
+      "profileFallback": "所选 profile 不可用，本次使用了 {{profile}}。",
       "permission": {
         "allow_temporary": "已允许 {{toolName}}",
         "allow_permanent": "已允许 {{toolName}}",
@@ -343,13 +334,6 @@
       "turns": "轮次",
       "duration": "耗时"
     },
-    "config": {
-      "model": "模型",
-      "permissionPolicy": "权限",
-      "defaultPolicy": "默认",
-      "noProject": "打开项目后可使用 Agent"
-    },
-    "placeholder": "让 Agent 检查、编辑或操作这个 Wiki...",
     "loading": {
       "connecting": "正在连接 Agent...",
       "running": "Agent 正在运行..."
@@ -435,6 +419,9 @@
       "success": "文件已回滚",
       "failed": "回滚失败：{{error}}",
       "blockedWikiWrite": "回滚不可用：此回滚点之后的 wiki 改动未被安全覆盖，或原生文件写入与 wiki 快照写入发生混合。继续回滚可能导致文件状态错误但界面显示成功。",
+      "blockedWikiWriteUncovered": "回滚不可用：此回滚点之后存在未被安全快照覆盖的 wiki 写入。继续回滚可能导致文件状态错误但界面显示成功。",
+      "blockedWikiWriteAmbiguous": "回滚不可用：此回滚点之后的 wiki 写入记录存在歧义，应用无法确认应恢复哪些文件。",
+      "blockedWikiWriteMixed": "回滚不可用：此回滚点之后混合了原生文件写入和 wiki 快照写入，组合恢复顺序尚不安全。",
       "blockedCrossFork": "回滚不可用：此回滚点所属的会话已发生分支（fork），无法再安全回滚。",
       "blockedLocked": "当前无法回滚：该会话正忙（有发送或另一次回滚正在进行）。",
       "persistWarning": "文件已回滚，但保存更新后的会话失败：{{error}}。如果在此问题解决前应用退出，回滚状态可能在重启后丢失。",

@@ -165,6 +165,70 @@ describe("AgentRewindDialogHost", () => {
     container.remove()
   })
 
+  it("discloses uncovered wiki-write rewind blocks", () => {
+    useChatStore.setState({
+      messages: [
+        {
+          ...makeAssistantMessage(),
+          toolCalls: [
+            { toolName: "mcp__llm_wiki__update_page", phase: "post", ok: true },
+          ],
+        },
+      ],
+    })
+    const { container, root } = renderDialog()
+
+    expect(container.textContent).toContain(i18n.t("agent.rewind.blockedWikiWriteUncovered"))
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("discloses ambiguous wiki-write rewind blocks", () => {
+    useChatStore.setState({
+      messages: [
+        {
+          ...makeAssistantMessage(),
+          toolCalls: [
+            { toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true },
+          ],
+          wikiChanges: [
+            { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: false },
+          ],
+        },
+      ],
+    })
+    const { container, root } = renderDialog()
+
+    expect(container.textContent).toContain(i18n.t("agent.rewind.blockedWikiWriteAmbiguous"))
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("discloses mixed native/wiki rewind blocks", () => {
+    useChatStore.setState({
+      messages: [
+        {
+          ...makeAssistantMessage(),
+          toolCalls: [
+            { toolName: "Write", toolUseId: "native-1", phase: "post", ok: true },
+            { toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true },
+          ],
+          wikiChanges: [
+            { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true },
+          ],
+        },
+      ],
+    })
+    const { container, root } = renderDialog()
+
+    expect(container.textContent).toContain(i18n.t("agent.rewind.blockedWikiWriteMixed"))
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("discloses the stale-target half-state instead of silently closing (review-round P2)", async () => {
     // Files were reverted (payload.ok) but the orchestration could not
     // apply the in-memory truncation/fork — must be disclosed, not treated

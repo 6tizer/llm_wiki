@@ -14,7 +14,11 @@ const NATIVE_FILE_WRITE_TOOL_NAMES = new Set([
 
 export type AgentRewindGateDecision =
   | { allowed: true }
-  | { allowed: false; reason: "wiki_write_after_target" }
+  | {
+      allowed: false
+      reason: "wiki_write_after_target"
+      detail: "uncovered" | "ambiguous" | "mixed"
+    }
   | { allowed: false; reason: "cross_fork" }
   | { allowed: false; reason: "locked" }
 
@@ -80,6 +84,7 @@ export function computeAgentRewindGateDecision(args: {
   )
   const from = targetIndex === -1 ? 0 : targetIndex
   let hasUncoveredWikiWriteAfterTarget = false
+  let hasAmbiguousWikiWriteAfterTarget = false
   let hasNativeWriteAfterTarget = false
   let hasSnapshottedWikiWriteAfterTarget = false
   for (const message of conversationMessages.slice(from)) {
@@ -105,7 +110,11 @@ export function computeAgentRewindGateDecision(args: {
       if (covered) {
         hasSnapshottedWikiWriteAfterTarget = true
       } else {
-        hasUncoveredWikiWriteAfterTarget = true
+        if (matchingChanges.length > 0) {
+          hasAmbiguousWikiWriteAfterTarget = true
+        } else {
+          hasUncoveredWikiWriteAfterTarget = true
+        }
       }
     }
   }
@@ -113,11 +122,14 @@ export function computeAgentRewindGateDecision(args: {
   // cross-channel composition for the same file is undefined, and this gate
   // has no reliable path-level ordering knowledge, so mixed post-target writes
   // stay fail-closed until a later phase defines composite restore semantics.
-  if (
-    hasUncoveredWikiWriteAfterTarget ||
-    (hasNativeWriteAfterTarget && hasSnapshottedWikiWriteAfterTarget)
-  ) {
-    return { allowed: false, reason: "wiki_write_after_target" }
+  if (hasNativeWriteAfterTarget && hasSnapshottedWikiWriteAfterTarget) {
+    return { allowed: false, reason: "wiki_write_after_target", detail: "mixed" }
+  }
+  if (hasAmbiguousWikiWriteAfterTarget) {
+    return { allowed: false, reason: "wiki_write_after_target", detail: "ambiguous" }
+  }
+  if (hasUncoveredWikiWriteAfterTarget) {
+    return { allowed: false, reason: "wiki_write_after_target", detail: "uncovered" }
   }
 
   return { allowed: true }

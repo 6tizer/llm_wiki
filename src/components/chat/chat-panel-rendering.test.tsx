@@ -1236,6 +1236,80 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("renders a timeline status row when the requested runtime profile is replaced", async () => {
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord()],
+    })
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    const callbacks = streamAgentMock.mock.calls[0]?.[2] as {
+      onProfileResolved: (payload: Record<string, unknown>) => void
+    }
+
+    await act(async () => {
+      callbacks.onProfileResolved({
+        streamId: "stream-1",
+        requestedProfileId: "missing-profile",
+        profileId: "agent-profile",
+        claimId: "claim-agent",
+        agentSdkModelId: "claude-runtime",
+        authStyle: "x-api-key",
+      })
+      await Promise.resolve()
+    })
+
+    const timelineButton = findButtonByText(container, "Activity timeline")
+    await act(async () => {
+      timelineButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain(
+      "Selected profile is unavailable; using agent-profile for this run.",
+    )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("refreshes runtime profile candidates when the routing dropdown opens", async () => {
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord()],
+    })
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(runtimeProfileListMock).toHaveBeenCalledTimes(1)
+
+    const routeButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${i18n.t("chat.modelIndicator")}"]`,
+    )
+    if (!routeButton) throw new Error("route button not found")
+    await act(async () => {
+      routeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(runtimeProfileListMock).toHaveBeenCalledTimes(2)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("merges a batch tool event into existing toolCalls instead of overwriting them (SPEC-7 PR2 matrix A16)", async () => {
     setupActiveProjectConversation()
     const { container, root } = renderChatPanel()

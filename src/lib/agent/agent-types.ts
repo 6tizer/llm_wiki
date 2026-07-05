@@ -101,6 +101,7 @@ export interface AgentWikiChangedPayload {
 export interface AgentProfileResolvedPayload {
 	streamId?: string;
 	profileId: string;
+	requestedProfileId?: string;
 	claimId: string;
 	agentSdkModelId: string;
 	authStyle: string;

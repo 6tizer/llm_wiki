@@ -505,6 +505,8 @@ fn release_agent_profile_claim(owner: &AgentProfileClaimOwner, exit_code: i32, s
 #[serde(rename_all = "camelCase")]
 struct AgentProfileResolvedPayload {
     profile_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_profile_id: Option<String>,
     claim_id: String,
     agent_sdk_model_id: String,
     auth_style: String,
@@ -523,6 +525,7 @@ struct AgentProfileResolvedEvent {
 fn build_agent_profile_resolved_event(
     stream_id: &str,
     claim_id: &str,
+    requested_profile_id: Option<&str>,
     config: &runtime_db::AgentRunProfileConfig,
 ) -> AgentProfileResolvedEvent {
     AgentProfileResolvedEvent {
@@ -530,6 +533,7 @@ fn build_agent_profile_resolved_event(
         r#type: "profile_resolved",
         data: AgentProfileResolvedPayload {
             profile_id: config.profile_id.clone(),
+            requested_profile_id: requested_profile_id.map(str::to_string),
             claim_id: claim_id.to_string(),
             agent_sdk_model_id: config.agent_sdk_model_id.clone(),
             auth_style: config.auth_style.clone(),
@@ -542,9 +546,10 @@ fn emit_agent_profile_resolved(
     app: &AppHandle,
     stream_id: &str,
     claim_id: &str,
+    requested_profile_id: Option<&str>,
     config: &runtime_db::AgentRunProfileConfig,
 ) {
-    let event = build_agent_profile_resolved_event(stream_id, claim_id, config);
+    let event = build_agent_profile_resolved_event(stream_id, claim_id, requested_profile_id, config);
     match serde_json::to_string(&event) {
         Ok(payload) => {
             let _ = app.emit(&format!("agent:{stream_id}"), &payload);
@@ -571,7 +576,13 @@ pub async fn agent_spawn(
         args.agent_profile_claim_id.as_deref(),
     )? {
         Some((owner, config)) => {
-            emit_agent_profile_resolved(&app, &args.stream_id, &owner.claim_id, &config);
+            emit_agent_profile_resolved(
+                &app,
+                &args.stream_id,
+                &owner.claim_id,
+                args.agent_profile_id.as_deref(),
+                &config,
+            );
             args.model = Some(config.agent_sdk_model_id);
             args.base_url = config.endpoint;
             args.agent_profile_auth_style = Some(config.auth_style);
@@ -626,7 +637,13 @@ pub async fn agent_rewind_session(
         args.agent_profile_claim_id.as_deref(),
     )? {
         Some((owner, config)) => {
-            emit_agent_profile_resolved(&app, &args.stream_id, &owner.claim_id, &config);
+            emit_agent_profile_resolved(
+                &app,
+                &args.stream_id,
+                &owner.claim_id,
+                args.agent_profile_id.as_deref(),
+                &config,
+            );
             args.model = Some(config.agent_sdk_model_id);
             args.base_url = config.endpoint;
             args.agent_profile_auth_style = Some(config.auth_style);
@@ -1306,7 +1323,12 @@ mod tests {
             secret_value: Some("resolved-secret-never-emit".to_string()),
         };
 
-        let event = build_agent_profile_resolved_event("stream-1", "claim-agent", &config);
+        let event = build_agent_profile_resolved_event(
+            "stream-1",
+            "claim-agent",
+            Some("requested-agent"),
+            &config,
+        );
         let value: Value = serde_json::to_value(event).unwrap();
         let text = serde_json::to_string(&value).unwrap();
 
@@ -1322,6 +1344,10 @@ mod tests {
         assert_eq!(
             data.get("profileId").and_then(Value::as_str),
             Some("profile-agent")
+        );
+        assert_eq!(
+            data.get("requestedProfileId").and_then(Value::as_str),
+            Some("requested-agent")
         );
         assert_eq!(
             data.get("claimId").and_then(Value::as_str),

@@ -68,45 +68,50 @@ export function ReviewView() {
         window.alert(t("agent.writeReview.blockedRunning"))
         return
       }
-      const restored = await restoreSingleAgentWikiSnapshot({
-        projectPath: pp,
-        streamId: write.streamId,
-        path: write.path,
-        toolUseId: write.toolUseId,
-      })
-      if (!restored.ok) {
-        const message = restored.failures[0]?.error || "撤销失败"
-        window.alert(message)
-        return
-      }
+      useChatStore.getState().setAgentRewindLock(write.conversationId, true)
       try {
-        const tree = await listDirectory(pp)
-        setFileTree(tree)
-      } catch (err) {
-        console.warn("[agent-write-review] failed to refresh file tree after undo:", err)
-      }
-      useWikiStore.getState().bumpDataVersion()
-      enqueueAgentStructuralLint(pp, restored.restoredPaths, 0)
-      useChatStore.getState().markAgentWikiChangeReverted({
-        messageId: write.messageId,
-        path: write.path,
-        toolUseId: write.toolUseId,
-      })
-      const restoredPath = restored.restoredPaths[0]
-      if (restoredPath) {
-        const absolutePath = `${pp}/${restoredPath.replace(/^\/+/, "")}`
+        const restored = await restoreSingleAgentWikiSnapshot({
+          projectPath: pp,
+          streamId: write.streamId,
+          path: write.path,
+          toolUseId: write.toolUseId,
+        })
+        if (!restored.ok) {
+          const message = restored.failures[0]?.error || "撤销失败"
+          window.alert(message)
+          return
+        }
         try {
-          const content = await readFile(absolutePath)
-          useWikiStore.getState().setSelectedFile(absolutePath)
-          useWikiStore.getState().setFileContent(content)
-        } catch {
-          if (useWikiStore.getState().selectedFile === absolutePath) {
-            useWikiStore.getState().setSelectedFile(null)
-            useWikiStore.getState().setFileContent("")
+          const tree = await listDirectory(pp)
+          setFileTree(tree)
+        } catch (err) {
+          console.warn("[agent-write-review] failed to refresh file tree after undo:", err)
+        }
+        useWikiStore.getState().bumpDataVersion()
+        enqueueAgentStructuralLint(pp, restored.restoredPaths, 0)
+        useChatStore.getState().markAgentWikiChangeReverted({
+          messageId: write.messageId,
+          path: write.path,
+          toolUseId: write.toolUseId,
+        })
+        const restoredPath = restored.restoredPaths[0]
+        if (restoredPath) {
+          const absolutePath = `${pp}/${restoredPath.replace(/^\/+/, "")}`
+          try {
+            const content = await readFile(absolutePath)
+            useWikiStore.getState().setSelectedFile(absolutePath)
+            useWikiStore.getState().setFileContent(content)
+          } catch {
+            if (useWikiStore.getState().selectedFile === absolutePath) {
+              useWikiStore.getState().setSelectedFile(null)
+              useWikiStore.getState().setFileContent("")
+            }
           }
         }
+        resolveItem(id, "Reverted")
+      } finally {
+        useChatStore.getState().setAgentRewindLock(write.conversationId, false)
       }
-      resolveItem(id, "Reverted")
       return
     }
     // Deep Research — must be checked FIRST before any fuzzy matching
