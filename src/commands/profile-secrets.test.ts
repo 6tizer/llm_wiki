@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import * as profileSecrets from "./profile-secrets"
-import { profileSecretDelete, profileSecretWrite } from "./profile-secrets"
+import {
+  profileSecretBackendGet,
+  profileSecretBackendSet,
+  profileSecretDelete,
+  profileSecretWrite,
+} from "./profile-secrets"
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -15,6 +20,8 @@ describe("profile secret commands", () => {
 
   it("does not expose a frontend read command", () => {
     expect(Object.keys(profileSecrets).sort()).toEqual([
+      "profileSecretBackendGet",
+      "profileSecretBackendSet",
       "profileSecretDelete",
       "profileSecretWrite",
     ])
@@ -49,6 +56,22 @@ describe("profile secret commands", () => {
       request: {
         secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
       },
+    })
+  })
+
+  it("gets and sets the backend without secret values", async () => {
+    tauriMocks.invoke
+      .mockResolvedValueOnce({ backend: "file" })
+      .mockResolvedValueOnce({ backend: "keychain" })
+
+    await expect(profileSecretBackendGet()).resolves.toEqual({ backend: "file" })
+    await expect(profileSecretBackendSet({ backend: "keychain" })).resolves.toEqual({
+      backend: "keychain",
+    })
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "profile_secret_backend_get")
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "profile_secret_backend_set", {
+      request: { backend: "keychain" },
     })
   })
 })

@@ -2,10 +2,10 @@ use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
 use rusqlite::params;
 use std::path::Path;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::*;
-use crate::commands::profile_secrets::{read_profile_secret, OsSecretStore, SecretStore};
+use crate::commands::profile_secrets::{active_secret_store, read_profile_secret, SecretStore};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde::Deserialize;
@@ -15,6 +15,7 @@ use std::time::Duration;
 /// Probe stored or draft model profile capabilities without returning secrets.
 #[tauri::command]
 pub async fn runtime_profile_probe(
+    app: AppHandle,
     request: RuntimeProfileProbeRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfileProbeResult, String> {
@@ -29,12 +30,13 @@ pub async fn runtime_profile_probe(
         .timeout(Duration::from_secs(PROFILE_PROBE_TIMEOUT_SECS))
         .build()
         .map_err(|err| format!("profile-probe-client-failed: {err}"))?;
+    let store = active_secret_store(&app)?;
     runtime_profile_probe_for_project_with_store(
         project_root.as_deref(),
         runtime_enabled,
         request,
         now,
-        &OsSecretStore,
+        store.as_ref(),
         &client,
     )
     .await
@@ -43,6 +45,7 @@ pub async fn runtime_profile_probe(
 /// List available provider model ids without returning or logging secrets.
 #[tauri::command]
 pub async fn runtime_profile_models_list(
+    app: AppHandle,
     request: RuntimeProfileModelsListRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfileModelsListResult, String> {
@@ -56,11 +59,12 @@ pub async fn runtime_profile_models_list(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("profile-models-list-client-failed: {err}"))?;
+    let store = active_secret_store(&app)?;
     runtime_profile_models_list_for_project_with_store(
         project_root.as_deref(),
         runtime_enabled,
         request,
-        &OsSecretStore,
+        store.as_ref(),
         &client,
     )
     .await
@@ -93,6 +97,7 @@ pub struct RuntimeModelCallForwardRequest {
 /// anti-leak notes on `runtime_model_call_forward_for_project_with_store`.
 #[tauri::command]
 pub async fn runtime_model_call_forward(
+    app: AppHandle,
     request: RuntimeModelCallForwardRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<String, String> {
@@ -104,12 +109,13 @@ pub async fn runtime_model_call_forward(
     })?;
 
     let client = model_call_forward_client()?;
+    let store = active_secret_store(&app)?;
     runtime_model_call_forward_for_project_with_store(
         project_root.as_deref(),
         runtime_enabled,
         request,
         now,
-        &OsSecretStore,
+        store.as_ref(),
         &client,
     )
     .await
@@ -131,7 +137,7 @@ async fn runtime_profile_probe_for_project_with_store(
     enabled: bool,
     request: RuntimeProfileProbeRequest,
     now: i64,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
     client: &Client,
 ) -> Result<RuntimeProfileProbeResult, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
@@ -160,7 +166,7 @@ async fn runtime_profile_models_list_for_project_with_store(
     project_root: Option<&Path>,
     enabled: bool,
     request: RuntimeProfileModelsListRequest,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
     client: &Client,
 ) -> Result<RuntimeProfileModelsListResult, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
@@ -189,7 +195,7 @@ fn resolve_profile_probe_target(
     request: RuntimeProfileProbeRequest,
     now: i64,
     force: bool,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
 ) -> Result<
     (
         Option<RuntimeProfileProbeResult>,
@@ -245,7 +251,7 @@ fn resolve_profile_probe_target(
 fn resolve_profile_models_list_target(
     project_root: &Path,
     request: RuntimeProfileModelsListRequest,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
 ) -> Result<RuntimeProfileModelsListTarget, String> {
     let RuntimeProfileModelsListRequest {
         profile_id,
@@ -334,7 +340,7 @@ fn probe_target_from_draft(
 
 fn probe_target_from_profile(
     profile: RuntimeProfileRecord,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
 ) -> Result<RuntimeProfileProbeTarget, String> {
     let secret_value = match profile_secret_required(&profile.auth_style) {
         true => {
@@ -1162,7 +1168,7 @@ async fn runtime_model_call_forward_for_project_with_store(
     enabled: bool,
     request: RuntimeModelCallForwardRequest,
     now: i64,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
     client: &Client,
 ) -> Result<String, String> {
     let project_root = require_enabled_project(project_root, enabled)?;

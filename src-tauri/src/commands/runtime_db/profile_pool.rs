@@ -506,7 +506,7 @@ pub(crate) fn resolve_agent_run_profile_for_project_with_store(
     enabled: bool,
     profile_id: &str,
     claim_id: &str,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
 ) -> Result<AgentRunProfileConfig, String> {
     let now = now_ms()?;
     resolve_agent_run_profile_for_project_at_with_store(
@@ -525,7 +525,7 @@ fn resolve_agent_run_profile_for_project_at_with_store(
     profile_id: &str,
     claim_id: &str,
     now: i64,
-    store: &impl SecretStore,
+    store: &(impl SecretStore + ?Sized),
 ) -> Result<AgentRunProfileConfig, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
     let profile_id = normalize_profile_text(

@@ -20,8 +20,11 @@ import {
   type RuntimeProfileUpdateRequest,
 } from "@/commands/runtime-db"
 import {
+  profileSecretBackendGet,
+  profileSecretBackendSet,
   profileSecretDelete,
   profileSecretWrite,
+  type ProfileSecretBackend,
 } from "@/commands/profile-secrets"
 import { LLM_PRESETS } from "../llm-presets"
 import { ProviderAccessWizard } from "./provider-access-wizard"
@@ -86,6 +89,12 @@ type ProbeState =
   | { kind: "running" }
   | { kind: "done"; result: RuntimeProfileProbeResult }
   | { kind: "error"; message: string }
+
+type SecretBackendState =
+  | { kind: "loading"; backend: ProfileSecretBackend }
+  | { kind: "ready"; backend: ProfileSecretBackend; message?: string }
+  | { kind: "saving"; backend: ProfileSecretBackend }
+  | { kind: "error"; backend: ProfileSecretBackend; message: string }
 
 function presetForProviderId(providerId: string) {
   return LLM_PRESETS.find((preset) => preset.id === providerId)
@@ -379,9 +388,14 @@ export function ModelProfilesSection({
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null)
   const [probeState, setProbeState] = useState<ProbeState>({ kind: "idle" })
+  const [secretBackendState, setSecretBackendState] = useState<SecretBackendState>({
+    kind: "loading",
+    backend: "file",
+  })
   const [capabilityDetailProfileId, setCapabilityDetailProfileId] = useState<string | null>(null)
   const profilesRef = useRef<RuntimeProfileRecord[]>([])
   const loadedOnceRef = useRef(false)
+  const tRef = useRef(t)
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.profileId === draft.profileId),
@@ -423,6 +437,33 @@ export function ModelProfilesSection({
     }
   }, [refreshToken])
 
+  useEffect(() => {
+    tRef.current = t
+  }, [t])
+
+  useEffect(() => {
+    // Secret backend is a global app setting; load it once on mount.
+    let active = true
+    void profileSecretBackendGet()
+      .then((result) => {
+        if (active) setSecretBackendState({ kind: "ready", backend: result.backend })
+      })
+      .catch((error) => {
+        if (active) {
+          setSecretBackendState({
+            kind: "error",
+            backend: "file",
+            message: tRef.current("settings.sections.llm.profiles.secretBackendLoadFailed", {
+              message: errorMessage(error),
+            }),
+          })
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
   function updateDraft(patch: Partial<ModelProfileDraft>) {
     setDraft((current) => ({ ...current, ...patch }))
   }
@@ -438,6 +479,27 @@ export function ModelProfilesSection({
       authStyle: next.authStyle,
       displayName: draft.profileId ? draft.displayName : next.displayName,
     })
+  }
+
+  async function selectSecretBackend(backend: ProfileSecretBackend) {
+    const previous = secretBackendState.backend
+    setSecretBackendState({ kind: "saving", backend })
+    try {
+      const result = await profileSecretBackendSet({ backend })
+      setSecretBackendState({
+        kind: "ready",
+        backend: result.backend,
+        message: t("settings.sections.llm.profiles.secretBackendSaved"),
+      })
+    } catch (error) {
+      setSecretBackendState({
+        kind: "error",
+        backend: previous,
+        message: t("settings.sections.llm.profiles.secretBackendSaveFailed", {
+          message: errorMessage(error),
+        }),
+      })
+    }
   }
 
   async function saveDraft() {
@@ -610,6 +672,38 @@ export function ModelProfilesSection({
           {runtimeUnavailableMessage}
         </div>
       )}
+
+      <div className="space-y-2 rounded-md border p-3" data-testid="profile-secret-backend-section">
+        <div className="space-y-1">
+          <Label>{t("settings.sections.llm.profiles.secretBackendLabel")}</Label>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.sections.llm.profiles.secretBackendHint")}
+          </p>
+        </div>
+        <select
+          data-testid="profile-secret-backend"
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+          value={secretBackendState.backend}
+          disabled={secretBackendState.kind === "loading" || secretBackendState.kind === "saving"}
+          onChange={(event) => void selectSecretBackend(event.target.value as ProfileSecretBackend)}
+        >
+          <option value="file">{t("settings.sections.llm.profiles.secretBackendFile")}</option>
+          <option value="keychain">{t("settings.sections.llm.profiles.secretBackendKeychain")}</option>
+        </select>
+        {secretBackendState.kind === "saving" && (
+          <p className="text-xs text-muted-foreground">
+            {t("settings.sections.llm.profiles.secretBackendSaving")}
+          </p>
+        )}
+        {"message" in secretBackendState && secretBackendState.message && (
+          <p className={`text-xs ${
+            secretBackendState.kind === "error" ? "text-destructive" : "text-muted-foreground"
+          }`}
+          >
+            {secretBackendState.message}
+          </p>
+        )}
+      </div>
 
       {loadState.kind === "ready" && (
         <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">

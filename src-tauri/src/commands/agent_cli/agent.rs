@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 use super::cli_resolver::{apply_env_allowlist, child_path_env, kill_process_group, KillSignal};
 use crate::api_server;
 use crate::commands::file_sync::ProjectRootState;
-use crate::commands::profile_secrets::OsSecretStore;
+use crate::commands::profile_secrets::active_secret_store;
 use crate::commands::runtime_db;
 
 const SIDECAR_PLACEHOLDER_PREFIX: &[u8] = b"Placeholder for Tauri resource validation.";
@@ -423,6 +423,7 @@ fn sanitize_agent_stderr_for_frontend(stderr: &str) -> String {
 /// through the exact same mechanism as a normal streamed run (matrix A18),
 /// not a bespoke one, so both commands funnel through this one function.
 fn resolve_agent_profile_claim(
+    app: &AppHandle,
     project_root: Option<&Path>,
     runtime_enabled: bool,
     agent_profile_id: Option<&str>,
@@ -439,12 +440,13 @@ fn resolve_agent_profile_claim(
         );
     };
 
+    let store = active_secret_store(app)?;
     let config = runtime_db::resolve_agent_run_profile_for_project_with_store(
         project_root,
         runtime_enabled,
         profile_id,
         claim_id,
-        &OsSecretStore,
+        store.as_ref(),
     )?;
     let owner = AgentProfileClaimOwner {
         project_root: project_root.map(Path::to_path_buf),
@@ -570,6 +572,7 @@ pub async fn agent_spawn(
     let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
     let project_root = root_state.get();
     let profile_claim_owner = match resolve_agent_profile_claim(
+        &app,
         project_root.as_deref(),
         runtime_enabled,
         args.agent_profile_id.as_deref(),
@@ -631,6 +634,7 @@ pub async fn agent_rewind_session(
     let runtime_enabled = runtime_db::work_runtime_enabled_from_env();
     let project_root = root_state.get();
     let profile_claim_owner = match resolve_agent_profile_claim(
+        &app,
         project_root.as_deref(),
         runtime_enabled,
         args.agent_profile_id.as_deref(),

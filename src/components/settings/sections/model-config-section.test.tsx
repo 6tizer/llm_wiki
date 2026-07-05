@@ -17,6 +17,8 @@ const runtimeDbMocks = vi.hoisted(() => ({
 }))
 
 const secretMocks = vi.hoisted(() => ({
+  profileSecretBackendGet: vi.fn(),
+  profileSecretBackendSet: vi.fn(),
   profileSecretWrite: vi.fn(),
   profileSecretDelete: vi.fn(),
 }))
@@ -101,6 +103,8 @@ describe("ModelConfigSection", () => {
       secretRef: "llm-wiki-profile-secret:22222222-2222-4222-8222-222222222222",
     })
     secretMocks.profileSecretDelete.mockResolvedValue({ ok: true })
+    secretMocks.profileSecretBackendGet.mockResolvedValue({ backend: "file" })
+    secretMocks.profileSecretBackendSet.mockResolvedValue({ backend: "file" })
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
       status: "healthy",
