@@ -310,7 +310,7 @@ export function ProviderAccessWizard({
     }
     const rawSecret = form.apiKey.trim()
     if (!rawSecret) {
-      throw new Error(t("settings.sections.llm.profiles.wizard.keyRequired"))
+      throw new Error(t("settings.sections.modelConfig.profiles.wizard.keyRequired"))
     }
     const previousRef = secretRefRef.current
     const previousRefProtected = secretRefProtectedRef.current
@@ -339,11 +339,11 @@ export function ProviderAccessWizard({
       const { rawSecret } = await ensureSecretForCreate()
       if (authStyleRequiresSecret(selectedTemplate) && !rawSecret) {
         if (probeState.kind === "success") {
-          setRetestMessage(t("settings.sections.llm.profiles.wizard.retestNeedsKey"))
+          setRetestMessage(t("settings.sections.modelConfig.profiles.wizard.retestNeedsKey"))
           setProbeState(probeState)
           return
         }
-        throw new Error(t("settings.sections.llm.profiles.wizard.reenterKeyForRetest"))
+        throw new Error(t("settings.sections.modelConfig.profiles.wizard.reenterKeyForRetest"))
       }
       const result = await runtimeProfileProbe({
         draft: draftRequestForTemplate(selectedTemplate, form.endpoint, form.modelId),
@@ -393,7 +393,7 @@ export function ProviderAccessWizard({
     try {
       const { rawSecret } = await ensureSecretForCreate()
       if (authStyleRequiresSecret(selectedTemplate) && !rawSecret) {
-        throw new Error(t("settings.sections.llm.profiles.wizard.reenterKeyForModels"))
+        throw new Error(t("settings.sections.modelConfig.profiles.wizard.reenterKeyForModels"))
       }
       const result = await runtimeProfileModelsList({
         draft: {
@@ -474,11 +474,11 @@ export function ProviderAccessWizard({
         profileCreatedRef.current = true
       }
       const createdProfiles = created.length > 0
-        ? ` ${t("settings.sections.llm.profiles.wizard.createdBeforeFailure", {
+        ? ` ${t("settings.sections.modelConfig.profiles.wizard.createdBeforeFailure", {
             names: created.map((profile) => profile.displayName).join(", "),
           })}`
         : ""
-      setCreateMessage(t("settings.sections.llm.profiles.wizard.createFailed", {
+      setCreateMessage(t("settings.sections.modelConfig.profiles.wizard.createFailed", {
         message: `${errorMessage(error)}${createdProfiles}`,
       }))
     } finally {
@@ -504,7 +504,7 @@ export function ProviderAccessWizard({
         onClick={() => handleOpenChange(true)}
       >
         <KeyRound className="h-3.5 w-3.5" />
-        {triggerLabel ?? t("settings.sections.llm.profiles.wizard.open")}
+        {triggerLabel ?? t("settings.sections.modelConfig.profiles.wizard.open")}
       </button>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
@@ -512,9 +512,9 @@ export function ProviderAccessWizard({
           data-testid="provider-access-wizard"
         >
           <DialogHeader className="shrink-0">
-            <DialogTitle>{t("settings.sections.llm.profiles.wizard.title")}</DialogTitle>
+            <DialogTitle>{t("settings.sections.modelConfig.profiles.wizard.title")}</DialogTitle>
             <DialogDescription>
-              {t("settings.sections.llm.profiles.wizard.description")}
+              {t("settings.sections.modelConfig.profiles.wizard.description")}
             </DialogDescription>
           </DialogHeader>
 
@@ -527,7 +527,7 @@ export function ProviderAccessWizard({
                 }`}
                 data-testid={`wizard-step-${value}`}
               >
-                {t(`settings.sections.llm.profiles.wizard.steps.${value}`)}
+                {t(`settings.sections.modelConfig.profiles.wizard.steps.${value}`)}
               </span>
             ))}
           </div>
@@ -542,14 +542,14 @@ export function ProviderAccessWizard({
                     className="pl-7"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder={t("settings.sections.llm.profiles.wizard.searchPlaceholder")}
+                    placeholder={t("settings.sections.modelConfig.profiles.wizard.searchPlaceholder")}
                   />
                 </div>
                 <div className="space-y-4">
                   {groupedTemplates.map(({ group, templates }) => templates.length > 0 && (
                     <section key={group} className="space-y-2">
                       <h4 className="text-xs font-medium text-muted-foreground">
-                        {t(`settings.sections.llm.profiles.wizard.groups.${group}`)}
+                        {t(`settings.sections.modelConfig.profiles.wizard.groups.${group}`)}
                       </h4>
                       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {templates.map((template) => (
@@ -564,7 +564,7 @@ export function ProviderAccessWizard({
                           >
                             <span className="block truncate font-medium">{template.displayName}</span>
                             <span className="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                              {t(`settings.sections.llm.profiles.wizard.groups.${template.group}`)}
+                              {t(`settings.sections.modelConfig.profiles.wizard.groups.${template.group}`)}
                             </span>
                           </button>
                         ))}
@@ -578,7 +578,7 @@ export function ProviderAccessWizard({
             {step === 2 && (
               <div className="grid gap-3 md:grid-cols-2" data-testid="wizard-key-step">
                 <div className="space-y-1.5">
-                  <Label>{t("settings.sections.llm.profiles.displayName")}</Label>
+                  <Label>{t("settings.sections.modelConfig.profiles.displayName")}</Label>
                   <Input
                     data-testid="wizard-display-name"
                     value={form.displayName}
@@ -596,7 +596,7 @@ export function ProviderAccessWizard({
                       className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-accent disabled:opacity-60"
                     >
                       {modelListState.kind === "loading" && <Loader2 className="h-3 w-3 animate-spin" />}
-                      {t("settings.sections.llm.profiles.wizard.fetchModels")}
+                      {t("settings.sections.modelConfig.profiles.wizard.fetchModels")}
                     </button>
                   </div>
                   <Input
@@ -618,7 +618,7 @@ export function ProviderAccessWizard({
                   {modelListState.kind === "ready" && (
                     <div className="space-y-2 rounded-md border p-2" data-testid="wizard-model-list">
                       <div className="text-[10px] text-muted-foreground">
-                        {t("settings.sections.llm.profiles.wizard.modelsSource", {
+                        {t("settings.sections.modelConfig.profiles.wizard.modelsSource", {
                           url: modelListState.sourceUrl,
                         })}
                       </div>
@@ -645,7 +645,7 @@ export function ProviderAccessWizard({
                             )}
                           />
                           <span className="truncate">
-                            {t("settings.sections.llm.profiles.wizard.manualModel", {
+                            {t("settings.sections.modelConfig.profiles.wizard.manualModel", {
                               model: form.modelId.trim() || selectedTemplate.defaultModelId,
                             })}
                           </span>
@@ -658,14 +658,14 @@ export function ProviderAccessWizard({
                       className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300"
                       data-testid="wizard-model-list-error"
                     >
-                      {t("settings.sections.llm.profiles.wizard.modelsFallback", {
+                      {t("settings.sections.modelConfig.profiles.wizard.modelsFallback", {
                         message: modelListState.message,
                       })}
                     </p>
                   )}
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
-                  <Label>{t("settings.sections.llm.endpoint")}</Label>
+                  <Label>{t("settings.sections.modelConfig.profileFields.endpoint")}</Label>
                   {selectedTemplate.endpointCandidates && selectedTemplate.endpointCandidates.length > 1 ? (
                     <select
                       data-testid="wizard-endpoint"
@@ -707,7 +707,7 @@ export function ProviderAccessWizard({
                         data-testid="wizard-api-key-url"
                         onClick={openKeyUrl}
                       >
-                        {t("settings.sections.llm.profiles.wizard.getApiKey")}
+                        {t("settings.sections.modelConfig.profiles.wizard.getApiKey")}
                         <ExternalLink className="h-3 w-3" />
                       </button>
                     </div>
@@ -725,11 +725,11 @@ export function ProviderAccessWizard({
                         setSelectedModelIds([form.modelId.trim() || selectedTemplate.defaultModelId])
                         setRetestMessage(null)
                       }}
-                      placeholder={t("settings.sections.llm.profiles.wizard.keyPlaceholder")}
+                      placeholder={t("settings.sections.modelConfig.profiles.wizard.keyPlaceholder")}
                     />
                     {secretRef && (
                       <p className="text-xs text-muted-foreground">
-                        {t("settings.sections.llm.profiles.wizard.secretStored")}
+                        {t("settings.sections.modelConfig.profiles.wizard.secretStored")}
                       </p>
                     )}
                   </div>
@@ -738,7 +738,7 @@ export function ProviderAccessWizard({
                     className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground md:col-span-2"
                     data-testid="wizard-no-key-note"
                   >
-                    {selectedTemplate.notes ?? t("settings.sections.llm.profiles.wizard.noKeyRequired")}
+                    {selectedTemplate.notes ?? t("settings.sections.modelConfig.profiles.wizard.noKeyRequired")}
                   </p>
                 )}
                 {selectedTemplate.notes && authStyleRequiresSecret(selectedTemplate) && (
@@ -776,11 +776,11 @@ export function ProviderAccessWizard({
                   className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
                 >
                   {probeState.kind === "running" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  {t("settings.sections.llm.profiles.wizard.test")}
+                  {t("settings.sections.modelConfig.profiles.wizard.test")}
                 </button>
                 {probeState.kind === "idle" && (
                   <p className="text-xs text-muted-foreground">
-                    {t("settings.sections.llm.profiles.wizard.testHint")}
+                    {t("settings.sections.modelConfig.profiles.wizard.testHint")}
                   </p>
                 )}
                 {retestMessage && (
@@ -797,7 +797,7 @@ export function ProviderAccessWizard({
                   >
                     <CheckCircle2 className="mt-0.5 h-3.5 w-3.5" />
                     <span>
-                      {t("settings.sections.llm.profiles.wizard.testSuccess", {
+                      {t("settings.sections.modelConfig.profiles.wizard.testSuccess", {
                         latency: probeState.latencyMs,
                       })}
                       {probeState.result.message ? ` ${probeState.result.message}` : ""}
@@ -815,12 +815,12 @@ export function ProviderAccessWizard({
                 )}
                 {selectedTemplate.agentSupport === "none" && (
                   <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    {t("settings.sections.llm.profiles.wizard.noAgentSupport")}
+                    {t("settings.sections.modelConfig.profiles.wizard.noAgentSupport")}
                   </p>
                 )}
                 {selectedTemplate.agentSupport === "anthropic-compat" && !probePassed(probeState) && (
                   <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    {t("settings.sections.llm.profiles.wizard.agentRequiresPassedTest")}
+                    {t("settings.sections.modelConfig.profiles.wizard.agentRequiresPassedTest")}
                   </p>
                 )}
                 {createMessage && (
@@ -870,8 +870,8 @@ export function ProviderAccessWizard({
               >
                 {creating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {probeState.kind === "error"
-                  ? t("settings.sections.llm.profiles.wizard.createAnyway")
-                  : t("settings.sections.llm.profiles.wizard.finish")}
+                  ? t("settings.sections.modelConfig.profiles.wizard.createAnyway")
+                  : t("settings.sections.modelConfig.profiles.wizard.finish")}
               </button>
             ) : null}
           </DialogFooter>

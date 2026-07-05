@@ -581,11 +581,7 @@
       "app": "Application"
     },
     "categories": {
-      "llm": "LLM Models",
       "modelConfig": "Model Configuration",
-      "modelProfiles": "Model Profiles",
-      "embedding": "Embeddings",
-      "multimodal": "Image Captioning",
       "webSearch": "External Information Sources",
       "import": "Import",
       "network": "Network",
@@ -605,110 +601,8 @@
     "sections": {
       "modelConfig": {
         "title": "Model Configuration",
-        "description": "Manage legacy provider connections, runtime model profiles, and the task-family assignment matrix in one place.",
+        "description": "Manage external information sources, runtime model profiles, task assignments, and one-time imports from legacy provider settings.",
         "connections": "Connections",
-        "profiles": "Profiles",
-        "taskMatrixHeading": "Task assignment matrix",
-        "tabs": {
-          "navLabel": "Model configuration sections",
-          "llm": "LLM Models",
-          "sources": "External Information Sources",
-          "profiles": "Model Profiles",
-          "taskMatrix": "Task assignment matrix",
-          "fallback": "Fallback queue"
-        },
-        "migration": {
-          "title": "Create a runtime Profile from the active provider",
-          "description": "Generate a Model Profile from {{preset}} for future unified routing. This does not change current chat, ingest, embedding, or vision behavior.",
-          "templateCorrected": "Endpoint corrected from the provider template library: {{from}} → {{to}}.",
-          "keepResolvedEndpoint": "Keep original endpoint",
-          "create": "Create Profile",
-          "created": "Profile created.",
-          "complete": "Migrated profile exists: {{name}}. Edit it in Profiles when needed.",
-          "failed": "Migration failed: {{message}}"
-        },
-        "taskMatrix": {
-          "title": "Task assignment matrix",
-          "description": "Toggle which task families each runtime profile advertises. Only taskFamilies are updated; capability freshness follows the existing Profile probe rules.",
-          "loading": "Loading task assignments…",
-          "empty": "No profiles yet. Create a Profile above before assigning task families.",
-          "taskFamily": "Task family",
-          "effective": "Effective",
-          "notWired": "Not wired to runtime selection yet — currently has no effect",
-          "configure": "Go to configuration",
-          "toggle": "Toggle {{family}} for {{profile}}",
-          "saved": "Task assignments saved.",
-          "saveFailed": "Save failed: {{message}}",
-          "families": {
-            "chat": "Chat",
-            "ingest": "Ingest",
-            "review": "Review",
-            "synthesis": "Synthesis",
-            "taxonomy": "Taxonomy",
-            "agent": "Agent",
-            "vision": "Vision",
-            "embedding": "Embedding"
-          }
-        }
-      },
-      "llm": {
-        "title": "LLM Models",
-        "description": "Legacy/default provider configuration. Only one provider is active here at a time for older fallback paths; runtime Model Profiles can hold multiple schedulable model records.",
-        "expand": "Expand config",
-        "collapse": "Collapse",
-        "toggleOff": "Click to deactivate",
-        "toggleOn": "Click to activate (turns off other providers)",
-        "deactivate": "Deactivate",
-        "activate": "Activate",
-        "apiMode": "API Mode",
-        "endpoint": "Endpoint",
-        "contextWindow": "Context window",
-        "wireOpenAi": "OpenAI-compat",
-        "wireAnthropic": "Anthropic-compat",
-        "apiKeyPlaceholderCustom": "Leave empty if no key (local models)",
-        "apiKeyPlaceholder": "Enter your API key",
-        "savedBadge": "saved",
-        "saveFailedBadge": "save failed",
-        "saveFailedTitle": "Save failed: {{message}}",
-        "configuredBadge": "configured",
-        "activeBadge": "● active",
-        "useModel": "Use {{model}}",
-        "typeCustomModel": "Type a custom model id",
-        "customModel": "Custom…",
-        "customModelBadge": "Custom: {{model}}",
-        "endpointPreviewWillUse": "Will resolve to",
-        "endpointPreviewAutoApply": "(applied automatically when you leave the input)",
-        "providerTests": "Provider tests",
-        "providerTestsHint": "Connection test verifies the endpoint can respond. Functional test asks the model to follow a tiny instruction.",
-        "testConnection": "Test connection",
-        "testFunction": "Test function",
-        "testingConnection": "Testing connection…",
-        "testingFunction": "Testing function…",
-        "localCliIsolation": "Isolate local CLI config",
-        "localCliIsolationHint": "Run provider tests and chat without user-level CLI rules, MCP config, tools, slash commands, or sessions.",
-        "claudeCliTimeout": "Claude Code CLI timeout (minutes)",
-        "claudeCliTimeoutHint": "Optional. Empty disables the Rust-side timeout. Range is 1-240 minutes.",
-        "codexCliTimeout": "Codex CLI timeout (minutes)",
-        "codexCliTimeoutHint": "Clamp range is 1-240 minutes. Default is 10.",
-        "deploymentName": "Deployment name",
-        "azureApiVersion": "Azure API version",
-        "azureApiVersionHint": "Sent as the Azure OpenAI api-version query parameter.",
-        "azureModelFamily": "Azure model family",
-        "azureModelFamilyAuto": "Auto-detect from deployment name",
-        "azureModelFamilyGpt5": "GPT-5 / o-series strict parameters",
-        "azureModelFamilyHint": "Azure deployment names are arbitrary. Choose GPT-5 / o-series if this deployment rejects max_tokens or non-default temperature.",
-        "reasoning": {
-          "title": "Reasoning / thinking",
-          "auto": "Auto",
-          "off": "Off",
-          "low": "Low",
-          "medium": "Medium",
-          "high": "High",
-          "max": "Max",
-          "custom": "Custom",
-          "budgetTokens": "thinking budget tokens",
-          "hint": "Structured tasks such as ingest may override this to Off to avoid reasoning-only responses."
-        },
         "profiles": {
           "title": "Model profiles",
           "description": "Profiles are runtime records for model-call and agent-run routing. Secrets are stored by reference.",
@@ -801,6 +695,54 @@
               "gateway": "Gateway"
             }
           }
+        },
+        "taskMatrixHeading": "Task assignment matrix",
+        "tabs": {
+          "navLabel": "Model configuration sections",
+          "sources": "External Information Sources",
+          "profiles": "Model Profiles",
+          "taskMatrix": "Task assignment matrix",
+          "fallback": "Fallback queue"
+        },
+        "migration": {
+          "title": "Import legacy provider settings",
+          "description": "Create {{count}} runtime Model Profile(s) from legacy provider settings: {{presets}}. This does not change current fallback behavior.",
+          "templateCorrected": "Some endpoints, API modes, or auth styles will be corrected from the provider template library.",
+          "keepResolvedEndpoint": "Keep original endpoint when a template suggests a correction",
+          "create": "Import legacy settings",
+          "created": "Imported {{count}} profile(s).",
+          "partialFailed": "Imported {{count}} of {{total}} profile(s). Failed: {{message}}",
+          "stale": "Legacy provider key changed for {{presets}}. Update the matching Profile in Profiles."
+        },
+        "taskMatrix": {
+          "title": "Task assignment matrix",
+          "description": "Toggle which task families each runtime profile advertises. Embedding and Vision keep their task-specific settings inline below the matrix.",
+          "loading": "Loading task assignments…",
+          "empty": "No profiles yet. Create a Profile above before assigning task families.",
+          "taskFamily": "Task family",
+          "effective": "Effective",
+          "notWired": "Not wired to runtime selection yet — currently has no effect",
+          "configure": "Configure inline",
+          "toggle": "Toggle {{family}} for {{profile}}",
+          "saved": "Task assignments saved.",
+          "saveFailed": "Save failed: {{message}}",
+          "families": {
+            "chat": "Chat",
+            "ingest": "Ingest",
+            "review": "Review",
+            "synthesis": "Synthesis",
+            "taxonomy": "Taxonomy",
+            "agent": "Agent",
+            "vision": "Vision",
+            "embedding": "Embedding"
+          },
+          "hideConfig": "Hide configuration",
+          "inlineSaved": "Configuration saved.",
+          "inlineSaveFailed": "Configuration save failed: {{message}}"
+        },
+        "profileFields": {
+          "endpoint": "Endpoint",
+          "apiMode": "API Mode"
         }
       },
       "embedding": {

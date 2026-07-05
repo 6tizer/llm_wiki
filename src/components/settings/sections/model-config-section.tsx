@@ -1,30 +1,23 @@
 import { useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
-import type { CategoryId } from "../settings-view"
-import { LlmProviderSection } from "./llm-provider-section"
 import { ModelProfilesSection } from "./model-profiles-section"
 import { FallbackPolicySection } from "./fallback-policy-section"
 import { ProviderMigrationBanner } from "./provider-migration-banner"
 import { TaskMatrixSection } from "./task-matrix-section"
 import { WebSearchSection } from "./web-search-section"
 
-interface Props {
-  onNavigateToCategory?: (category: CategoryId) => void
-}
-
-type ModelConfigTab = "llm" | "sources" | "profiles" | "taskMatrix" | "fallback"
+type ModelConfigTab = "sources" | "profiles" | "taskMatrix" | "fallback"
 
 const MODEL_CONFIG_TABS: Array<{ id: ModelConfigTab; labelKey: string }> = [
-  { id: "llm", labelKey: "settings.sections.modelConfig.tabs.llm" },
   { id: "sources", labelKey: "settings.sections.modelConfig.tabs.sources" },
   { id: "profiles", labelKey: "settings.sections.modelConfig.tabs.profiles" },
   { id: "taskMatrix", labelKey: "settings.sections.modelConfig.tabs.taskMatrix" },
   { id: "fallback", labelKey: "settings.sections.modelConfig.tabs.fallback" },
 ]
 
-export function ModelConfigSection({ onNavigateToCategory }: Props) {
+export function ModelConfigSection() {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState<ModelConfigTab>("llm")
+  const [activeTab, setActiveTab] = useState<ModelConfigTab>("sources")
   const [profilesRefreshToken, setProfilesRefreshToken] = useState(0)
   const bumpProfilesRefreshToken = useCallback(() => {
     setProfilesRefreshToken((current) => current + 1)
@@ -61,8 +54,6 @@ export function ModelConfigSection({ onNavigateToCategory }: Props) {
           ))}
         </nav>
 
-        {activeTab === "llm" && <LlmProviderSection />}
-
         {activeTab === "sources" && <WebSearchSection />}
 
         {activeTab === "profiles" && (
@@ -74,7 +65,6 @@ export function ModelConfigSection({ onNavigateToCategory }: Props) {
 
         {activeTab === "taskMatrix" && (
           <TaskMatrixSection
-            onNavigateToCategory={onNavigateToCategory}
             refreshToken={profilesRefreshToken}
             onProfilesChanged={bumpProfilesRefreshToken}
           />

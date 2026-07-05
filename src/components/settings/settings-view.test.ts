@@ -9,8 +9,6 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import {
   saveApiConfig,
-  saveEmbeddingConfig,
-  saveLlmConfig,
   saveMineruConfig,
   saveProxyConfig,
   saveScheduledImportConfig,
@@ -42,9 +40,6 @@ vi.mock("@/lib/project-store", () => ({
   loadSourceWatchConfig: vi.fn(async () => undefined),
   loadTheme: vi.fn(async () => "system"),
   saveLanguage: vi.fn(async () => undefined),
-  saveLlmConfig: vi.fn(async () => undefined),
-  saveEmbeddingConfig: vi.fn(async () => undefined),
-  saveMultimodalConfig: vi.fn(async () => undefined),
   saveOutputLanguage: vi.fn(async () => undefined),
   saveProxyConfig: vi.fn(async () => undefined),
   saveScheduledImportConfig: vi.fn(async () => undefined),
@@ -192,10 +187,8 @@ describe("settings platform categories", () => {
   })
 
   it("places Model Configuration first in AI and Models", () => {
-    expect(getSettingsCategories(true).map((category) => category.id).slice(0, 3)).toEqual([
+    expect(getSettingsCategories(true).map((category) => category.id).slice(0, 1)).toEqual([
       "model-config",
-      "embedding",
-      "multimodal",
     ])
   })
 
@@ -241,7 +234,7 @@ describe("settings platform categories", () => {
   it("migrates removed model category ids to Model Configuration", () => {
     const categories = getSettingsCategories(true)
 
-    for (const legacyId of ["llm", "model-profiles", "web-search"]) {
+    for (const legacyId of ["llm", "model-profiles", "web-search", "embedding", "multimodal"]) {
       expect(coerceSettingsCategory(legacyId, categories)).toBe("model-config")
       expect(categories.some((category) => (category.id as string) === legacyId)).toBe(false)
     }
@@ -265,6 +258,8 @@ describe("settings platform categories", () => {
     expect(coerceSettingsCategory("llm", nonMacCategories)).toBe("model-config")
     expect(coerceSettingsCategory("model-profiles", nonMacCategories)).toBe("model-config")
     expect(coerceSettingsCategory("web-search", nonMacCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("embedding", nonMacCategories)).toBe("model-config")
+    expect(coerceSettingsCategory("multimodal", nonMacCategories)).toBe("model-config")
     expect(coerceSettingsCategory("MODEL-CONFIG", macCategories)).toBe("model-config")
     expect(coerceSettingsCategory("no-such-category", nonMacCategories)).toBe("model-config")
   })
@@ -300,6 +295,8 @@ describe("SettingsView category rendering", () => {
     expect(container.querySelector("[data-testid='settings-category-llm']")).toBeNull()
     expect(container.querySelector("[data-testid='settings-category-model-profiles']")).toBeNull()
     expect(container.querySelector("[data-testid='settings-category-web-search']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-embedding']")).toBeNull()
+    expect(container.querySelector("[data-testid='settings-category-multimodal']")).toBeNull()
     expect(container.textContent).toContain("Mock Model Config Section")
 
     unmount(root)
@@ -430,33 +427,6 @@ describe("settings global Save bar visibility", () => {
   })
 })
 
-const llm = {
-  provider: "openai",
-  apiKey: "",
-  model: "",
-  ollamaUrl: "http://localhost:11434",
-  customEndpoint: "",
-  maxContextSize: 204800,
-}
-
-const embedding = {
-  enabled: false,
-  endpoint: "",
-  apiKey: "",
-  model: "",
-}
-
-const multimodal = {
-  enabled: false,
-  useMainLlm: true,
-  provider: "custom",
-  apiKey: "",
-  model: "",
-  ollamaUrl: "http://localhost:11434",
-  customEndpoint: "",
-  concurrency: 4,
-}
-
 const proxy = {
   enabled: false,
   url: "",
@@ -504,9 +474,6 @@ function draftWithMineru(mineru: {
   pollTimeoutMs?: number
 }) {
   return initialDraft(
-    llm as never,
-    embedding as never,
-    multimodal as never,
     "auto" as never,
     proxy,
     scheduledImport,
@@ -537,9 +504,6 @@ describe("settings MinerU polling draft", () => {
 
   it("hydrates the Agent default permission policy from config", () => {
     const draft = initialDraft(
-      llm as never,
-      embedding as never,
-      multimodal as never,
       "auto" as never,
       proxy,
       scheduledImport,
@@ -605,8 +569,8 @@ describe("settings MinerU polling draft", () => {
 
 describe("describeFailedSettingsKeys", () => {
   it("labels each failed step with its settings category and flags Rust-locked keys", () => {
-    const description = describeFailedSettingsKeys(["embedding", "proxy"], i18n.t.bind(i18n))
-    expect(description).toContain("Embeddings")
+    const description = describeFailedSettingsKeys(["mineru", "proxy"], i18n.t.bind(i18n))
+    expect(description).toContain("MinerU PDF")
     expect(description).toContain("Network")
     expect(description).toContain("may not take effect until the next launch")
   })
@@ -614,42 +578,40 @@ describe("describeFailedSettingsKeys", () => {
 
 describe("SettingsView handleSave step isolation", () => {
   beforeEach(() => {
-    vi.mocked(saveEmbeddingConfig).mockReset()
     vi.mocked(saveMineruConfig).mockReset().mockResolvedValue(undefined)
-    vi.mocked(saveLlmConfig).mockReset().mockResolvedValue(undefined)
     vi.mocked(saveProxyConfig).mockReset().mockResolvedValue(undefined)
   })
 
   it("keeps running later save steps and reports a partial-error status when one step fails", async () => {
-    vi.mocked(saveEmbeddingConfig).mockRejectedValueOnce(new Error("disk full"))
+    vi.mocked(saveMineruConfig).mockRejectedValueOnce(new Error("disk full"))
 
     const { container, root } = renderSettingsView()
     await flush()
     await clickCategoryAndSave(container, "network")
 
-    // The embedding step failed, but MinerU (a later step in handleSave)
+    // MinerU failed, but proxy (a later step in handleSave)
     // must still have run — proving the failure didn't abort the rest.
-    expect(saveMineruConfig).toHaveBeenCalled()
-    expect(container.textContent).toContain("Embeddings")
+    expect(saveProxyConfig).toHaveBeenCalled()
+    expect(container.textContent).toContain("MinerU PDF")
 
     unmount(root)
   })
 
   it("does not roll back an earlier successful step when a later step fails", async () => {
-    vi.mocked(saveEmbeddingConfig).mockRejectedValueOnce(new Error("disk full"))
+    vi.mocked(saveProxyConfig).mockRejectedValueOnce(new Error("disk full"))
     // persistSetting only calls its `set` a second time (the revert) when
-    // ITS OWN persist rejects. The llm step's own save (saveLlmConfig)
-    // never rejects here, so setLlmConfig must be invoked exactly once —
-    // the optimistic apply — regardless of the embedding step's failure.
-    const setLlmConfigSpy = vi.spyOn(useWikiStore.getState(), "setLlmConfig")
+    // ITS OWN persist rejects. The output-language step's own save never
+    // rejects here, so setOutputLanguage must be invoked exactly once —
+    // the optimistic apply — regardless of the later proxy failure.
+    const setOutputLanguageSpy = vi.spyOn(useWikiStore.getState(), "setOutputLanguage")
 
     const { container, root } = renderSettingsView()
     await flush()
     await clickCategoryAndSave(container, "network")
 
-    expect(setLlmConfigSpy).toHaveBeenCalledTimes(1)
+    expect(setOutputLanguageSpy).toHaveBeenCalledTimes(1)
 
-    setLlmConfigSpy.mockRestore()
+    setOutputLanguageSpy.mockRestore()
     unmount(root)
   })
 

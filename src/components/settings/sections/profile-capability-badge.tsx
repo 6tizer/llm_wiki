@@ -21,7 +21,7 @@ export function capabilityBadgeMeta(
 ): CapabilityBadgeMeta {
   return {
     className: STATUS_CLASS[status] ?? STATUS_CLASS.unknown,
-    label: t(`settings.sections.llm.profiles.capabilityStatus.${status}`),
+    label: t(`settings.sections.modelConfig.profiles.capabilityStatus.${status}`),
   }
 }
 

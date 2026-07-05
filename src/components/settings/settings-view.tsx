@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Bot,
-  Binary,
   Languages,
   Palette,
   Settings,
   Info,
-  Image as ImageIcon,
   Network,
   History,
   FolderSync,
@@ -30,8 +28,6 @@ import { activateThemePreference, readThemeMirror, type AppTheme } from "@/lib/t
 import { persistSetting } from "@/lib/store-helpers"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
-import { EmbeddingSection } from "./sections/embedding-section"
-import { MultimodalSection } from "./sections/multimodal-section"
 import { ModelConfigSection } from "./sections/model-config-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
@@ -53,8 +49,6 @@ import {
 
 export type CategoryId =
   | "model-config"
-  | "embedding"
-  | "multimodal"
   | "import"
   | "network"
   | "api-server"
@@ -92,8 +86,6 @@ interface SettingsGroup {
 
 const CATEGORIES: Category[] = [
   { id: "model-config", labelKey: "settings.categories.modelConfig", icon: Bot },
-  { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
-  { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
   { id: "import", labelKey: "settings.categories.import", icon: FolderSync },
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
   { id: "derived-status", labelKey: "settings.categories.derivedStatus", icon: Activity },
@@ -112,7 +104,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
     id: "aiModels",
     labelKey: "settings.groups.aiModels",
-    categoryIds: ["model-config", "embedding", "multimodal"],
+    categoryIds: ["model-config"],
   },
   {
     id: "pipeline",
@@ -159,7 +151,7 @@ export function coerceSettingsCategory(
   }
   const migratedActive = ["source-watch", "scheduled-import", "mineru"].includes(active)
     ? "import"
-    : ["llm", "model-profiles", "web-search"].includes(active)
+    : ["llm", "model-profiles", "web-search", "embedding", "multimodal"].includes(active)
       ? "model-config"
       // Governance operations moved to Wiki Health. Settings has no deep-link
       // path into that top-level view, so legacy settings ids land on the
@@ -179,9 +171,6 @@ export function shouldShowGlobalSettingsSaveBar(activeCategory: CategoryId): boo
 }
 
 export function initialDraft(
-  llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
-  embed: ReturnType<typeof useWikiStore.getState>["embeddingConfig"],
-  multimodal: ReturnType<typeof useWikiStore.getState>["multimodalConfig"],
   outputLanguage: ReturnType<typeof useWikiStore.getState>["outputLanguage"],
   proxy: ReturnType<typeof useWikiStore.getState>["proxyConfig"],
   scheduledImport: ReturnType<typeof useWikiStore.getState>["scheduledImportConfig"],
@@ -208,38 +197,6 @@ export function initialDraft(
   }
 
   return {
-    provider: llm.provider,
-    apiKey: llm.apiKey,
-    model: llm.model,
-    ollamaUrl: llm.ollamaUrl,
-    customEndpoint: llm.customEndpoint,
-    azureApiVersion: llm.azureApiVersion ?? "2024-10-21",
-    azureModelFamily: llm.azureModelFamily ?? "auto",
-    maxContextSize: llm.maxContextSize ?? 204800,
-    apiMode: llm.apiMode,
-    reasoning: llm.reasoning,
-    localCliIsolation: llm.localCliIsolation ?? false,
-    claudeCliTimeoutMinutes: llm.claudeCliTimeoutMinutes,
-    codexCliTimeoutMinutes: llm.codexCliTimeoutMinutes ?? 10,
-    embeddingEnabled: embed.enabled,
-    embeddingEndpoint: embed.endpoint,
-    embeddingApiKey: embed.apiKey,
-    embeddingModel: embed.model,
-    embeddingOutputDimensionality: embed.outputDimensionality,
-    embeddingMaxChunkChars: embed.maxChunkChars,
-    embeddingOverlapChunkChars: embed.overlapChunkChars,
-    embeddingExtraHeaders: embed.extraHeaders,
-    multimodalEnabled: multimodal.enabled,
-    multimodalUseMainLlm: multimodal.useMainLlm,
-    multimodalProvider: multimodal.provider,
-    multimodalApiKey: multimodal.apiKey,
-    multimodalModel: multimodal.model,
-    multimodalOllamaUrl: multimodal.ollamaUrl,
-    multimodalCustomEndpoint: multimodal.customEndpoint,
-    multimodalAzureApiVersion: multimodal.azureApiVersion ?? "2024-10-21",
-    multimodalAzureModelFamily: multimodal.azureModelFamily ?? "auto",
-    multimodalApiMode: multimodal.apiMode,
-    multimodalConcurrency: multimodal.concurrency,
     outputLanguage,
     maxHistoryMessages,
     proxyEnabled: proxy.enabled,
@@ -336,9 +293,6 @@ export type SaveStatus =
 // describes it, so the partial-error message reads as "LLM Models,
 // Network" instead of raw internal step identifiers.
 const SETTINGS_SAVE_STEP_LABEL_KEYS: Record<string, string> = {
-  llm: "settings.categories.llm",
-  embedding: "settings.categories.embedding",
-  multimodal: "settings.categories.multimodal",
   mineru: "settings.categories.mineru",
   outputLanguage: "settings.categories.output",
   proxy: "settings.categories.network",
@@ -376,12 +330,6 @@ export function SettingsView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const setActiveView = useWikiStore((s) => s.setActiveView)
-  const llmConfig = useWikiStore((s) => s.llmConfig)
-  const setLlmConfig = useWikiStore((s) => s.setLlmConfig)
-  const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
-  const setEmbeddingConfig = useWikiStore((s) => s.setEmbeddingConfig)
-  const multimodalConfig = useWikiStore((s) => s.multimodalConfig)
-  const setMultimodalConfig = useWikiStore((s) => s.setMultimodalConfig)
   const outputLanguage = useWikiStore((s) => s.outputLanguage)
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
   const proxyConfig = useWikiStore((s) => s.proxyConfig)
@@ -415,9 +363,6 @@ export function SettingsView() {
   const [savedCloseBehavior, setSavedCloseBehavior] = useState<CloseBehavior>("hide")
   const [draft, setDraftState] = useState<SettingsDraft>(() =>
     initialDraft(
-      llmConfig,
-      embeddingConfig,
-      multimodalConfig,
       outputLanguage,
       proxyConfig,
       scheduledImportConfig,
@@ -489,9 +434,6 @@ export function SettingsView() {
   useEffect(() => {
     setDraftState((prev) =>
       initialDraft(
-        llmConfig,
-        embeddingConfig,
-        multimodalConfig,
         outputLanguage,
         proxyConfig,
         scheduledImportConfig,
@@ -508,9 +450,6 @@ export function SettingsView() {
       ),
     )
   }, [
-    llmConfig,
-    embeddingConfig,
-    multimodalConfig,
     outputLanguage,
     proxyConfig,
     scheduledImportConfig,
@@ -549,9 +488,6 @@ export function SettingsView() {
 
   const handleSave = useCallback(async () => {
     const {
-      saveLlmConfig,
-      saveEmbeddingConfig,
-      saveMultimodalConfig,
       saveOutputLanguage,
       saveProxyConfig,
       saveScheduledImportConfig,
@@ -562,51 +498,6 @@ export function SettingsView() {
       saveTheme,
       saveCloseBehavior,
     } = await import("@/lib/project-store")
-
-    const newLlm = {
-      provider: draft.provider,
-      apiKey: draft.apiKey,
-      model: draft.model,
-      ollamaUrl: draft.ollamaUrl,
-      customEndpoint: draft.customEndpoint,
-      azureApiVersion: draft.provider === "azure" ? draft.azureApiVersion.trim() : undefined,
-      azureModelFamily: draft.provider === "azure" ? draft.azureModelFamily : undefined,
-      maxContextSize: draft.maxContextSize,
-      apiMode: draft.provider === "custom" ? draft.apiMode : undefined,
-      reasoning: draft.reasoning,
-      localCliIsolation: draft.localCliIsolation,
-      claudeCliTimeoutMinutes: draft.claudeCliTimeoutMinutes,
-      codexCliTimeoutMinutes: draft.codexCliTimeoutMinutes,
-    }
-    const newEmbed = {
-      enabled: draft.embeddingEnabled,
-      endpoint: draft.embeddingEndpoint,
-      apiKey: draft.embeddingApiKey,
-      model: draft.embeddingModel,
-      outputDimensionality: draft.embeddingOutputDimensionality,
-      maxChunkChars: draft.embeddingMaxChunkChars,
-      overlapChunkChars: draft.embeddingOverlapChunkChars,
-      extraHeaders: draft.embeddingExtraHeaders,
-    }
-    const newMultimodal = {
-      enabled: draft.multimodalEnabled,
-      useMainLlm: draft.multimodalUseMainLlm,
-      provider: draft.multimodalProvider,
-      apiKey: draft.multimodalApiKey,
-      model: draft.multimodalModel,
-      ollamaUrl: draft.multimodalOllamaUrl,
-      customEndpoint: draft.multimodalCustomEndpoint,
-      azureApiVersion: draft.multimodalProvider === "azure" ? draft.multimodalAzureApiVersion.trim() : undefined,
-      azureModelFamily: draft.multimodalProvider === "azure" ? draft.multimodalAzureModelFamily : undefined,
-      apiMode: draft.multimodalProvider === "custom" ? draft.multimodalApiMode : undefined,
-      // Clamp at save time so a hand-edited persisted store with a
-      // ridiculous concurrency value (e.g. someone setting 1000 in
-      // the JSON) doesn't blow up the captioning pipeline. Caption
-      // calls already share the LLM endpoint with everything else;
-      // going wider than ~16 just queues behind the server's batch
-      // slot.
-      concurrency: Math.max(1, Math.min(16, draft.multimodalConcurrency || 4)),
-    }
 
     const newProxy = {
       enabled: draft.proxyEnabled,
@@ -627,36 +518,9 @@ export function SettingsView() {
     // Each step persists independently: a failure here only rolls back
     // and records that one step (via persistSetting's optimistic-set +
     // revert-on-error), it never aborts the steps that follow. That way
-    // one bad write (e.g. disk full on the LLM config) doesn't also
-    // silently drop the user's embedding/proxy/theme edits.
+    // one bad write (e.g. disk full on proxy config) doesn't also
+    // silently drop the user's MinerU/source/theme edits.
     const steps: Array<{ key: string; run: () => Promise<boolean> }> = [
-      {
-        key: "llm",
-        run: () =>
-          persistSetting(llmConfig, newLlm, setLlmConfig, saveLlmConfig, () => useWikiStore.getState().llmConfig),
-      },
-      {
-        key: "embedding",
-        run: () =>
-          persistSetting(
-            embeddingConfig,
-            newEmbed,
-            setEmbeddingConfig,
-            saveEmbeddingConfig,
-            () => useWikiStore.getState().embeddingConfig,
-          ),
-      },
-      {
-        key: "multimodal",
-        run: () =>
-          persistSetting(
-            multimodalConfig,
-            newMultimodal,
-            setMultimodalConfig,
-            saveMultimodalConfig,
-            () => useWikiStore.getState().multimodalConfig,
-          ),
-      },
       {
         key: "mineru",
         run: () =>
@@ -871,12 +735,6 @@ export function SettingsView() {
   }, [
     draft,
     project,
-    llmConfig,
-    setLlmConfig,
-    embeddingConfig,
-    setEmbeddingConfig,
-    multimodalConfig,
-    setMultimodalConfig,
     mineruConfig,
     setMineruConfig,
     outputLanguage,
@@ -898,11 +756,7 @@ export function SettingsView() {
   const body = useMemo(() => {
     switch (activeCategory) {
       case "model-config":
-        return <ModelConfigSection onNavigateToCategory={setActive} />
-      case "embedding":
-        return <EmbeddingSection draft={draft} setDraft={setDraft} />
-      case "multimodal":
-        return <MultimodalSection draft={draft} setDraft={setDraft} />
+        return <ModelConfigSection />
       case "network":
         return <NetworkSection draft={draft} setDraft={setDraft} />
       case "import":
@@ -931,7 +785,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [activeCategory, draft, project, setDraft, setActive, setActiveView])
+  }, [activeCategory, draft, project, setDraft, setActiveView])
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">

@@ -3,33 +3,6 @@ import { describe, expect, it } from "vitest"
 import { apiConfigFromDraft, initialDraft } from "../settings-view"
 import { API_ENDPOINTS, MCP_TOOL_CATALOG, buildMcpClientConfig, hasUnsavedApiConfig } from "./api-server-section"
 
-const llm = {
-  provider: "openai",
-  apiKey: "",
-  model: "",
-  ollamaUrl: "http://localhost:11434",
-  customEndpoint: "",
-  maxContextSize: 204800,
-}
-
-const embedding = {
-  enabled: false,
-  endpoint: "",
-  apiKey: "",
-  model: "",
-}
-
-const multimodal = {
-  enabled: false,
-  useMainLlm: true,
-  provider: "custom",
-  apiKey: "",
-  model: "",
-  ollamaUrl: "http://localhost:11434",
-  customEndpoint: "",
-  concurrency: 4,
-}
-
 const proxy = {
   enabled: false,
   url: "",
@@ -75,9 +48,6 @@ function draftFor(apiConfig: {
   token: string
 }) {
   return initialDraft(
-    llm as never,
-    embedding as never,
-    multimodal as never,
     "auto" as never,
     proxy,
     scheduledImport,

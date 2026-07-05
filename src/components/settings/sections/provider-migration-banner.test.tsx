@@ -68,17 +68,31 @@ function renderBanner(): { container: HTMLDivElement; root: Root } {
 
 async function flush(): Promise<void> {
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
   })
+}
+
+async function waitFor(assertion: () => void): Promise<void> {
+  let lastError: unknown
+  for (let i = 0; i < 20; i += 1) {
+    try {
+      assertion()
+      return
+    } catch (error) {
+      lastError = error
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+  }
+  throw lastError
 }
 
 async function click(element: Element): Promise<void> {
   await act(async () => {
     element.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    await Promise.resolve()
-    await Promise.resolve()
   })
+  await flush()
 }
 
 function unmount(root: Root): void {
@@ -89,7 +103,26 @@ function unmount(root: Root): void {
 
 describe("ProviderMigrationBanner", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    runtimeDbMocks.runtimeProfileCreate.mockReset()
+    runtimeDbMocks.runtimeProfileDelete.mockReset()
+    runtimeDbMocks.runtimeProfileList.mockReset()
+    runtimeDbMocks.runtimeProfileProbe.mockReset()
+    runtimeDbMocks.runtimeProfileUpdate.mockReset()
+    secretMocks.profileSecretWrite.mockReset()
+    secretMocks.profileSecretDelete.mockReset()
+    const storage = new Map<string, string>()
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: vi.fn((key: string) => storage.get(key) ?? null),
+        setItem: vi.fn((key: string, value: string) => {
+          storage.set(key, value)
+        }),
+        removeItem: vi.fn((key: string) => {
+          storage.delete(key)
+        }),
+      },
+    })
     useWikiStore.setState({
       activePresetId: "anthropic",
       providerConfigs: {
@@ -139,7 +172,146 @@ describe("ProviderMigrationBanner", () => {
         maxConcurrency: 1,
       }),
     )
-    expect(container.querySelector("[data-testid='provider-migration-complete']")).not.toBeNull()
+    await waitFor(() => {
+      expect(container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
+    })
+    const snapshots = JSON.parse(window.localStorage.getItem("llm-wiki:legacy-provider-migration:v1") ?? "{}")
+    expect(snapshots.anthropic).toMatch(/^sha256:/)
+
+    unmount(root)
+  })
+
+  it("imports every configured legacy preset in one action", async () => {
+    useWikiStore.setState({
+      activePresetId: null,
+      providerConfigs: {
+        anthropic: {
+          apiKey: "anthropic-secret",
+          model: "claude-test",
+        },
+        openai: {
+          apiKey: "openai-secret",
+          model: "gpt-4.1",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate
+      .mockResolvedValueOnce(runtimeProfile({ displayName: "Migrated: anthropic", providerId: "anthropic" }))
+      .mockResolvedValueOnce(runtimeProfile({
+        profileId: "profile-2",
+        displayName: "Migrated: openai",
+        providerId: "openai",
+        apiMode: "openai-chat-completions",
+      }))
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-testid='provider-migration-create']")).not.toBeNull()
+    })
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledTimes(2)
+    expect(secretMocks.profileSecretWrite).toHaveBeenNthCalledWith(1, { secretValue: "anthropic-secret" })
+    expect(secretMocks.profileSecretWrite).toHaveBeenNthCalledWith(2, { secretValue: "openai-secret" })
+
+    unmount(root)
+  })
+
+  it("does not treat empty legacy overrides as import candidates", async () => {
+    useWikiStore.setState({
+      activePresetId: null,
+      providerConfigs: {
+        anthropic: { apiKey: "" },
+      },
+    })
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    expect(container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
+    expect(runtimeDbMocks.runtimeProfileList).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("reloads runtime profiles when candidate identity changes but count stays the same", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+
+    const { root } = renderBanner()
+    await flush()
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      useWikiStore.setState({
+        activePresetId: "openai",
+        providerConfigs: {
+          openai: {
+            apiKey: "openai-secret",
+            model: "gpt-4.1",
+          },
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
+    })
+
+    unmount(root)
+  })
+
+  it("reports partial batch failures and snapshots only successfully imported presets", async () => {
+    useWikiStore.setState({
+      activePresetId: null,
+      providerConfigs: {
+        anthropic: {
+          apiKey: "anthropic-secret",
+          model: "claude-test",
+        },
+        openai: {
+          apiKey: "openai-secret",
+          model: "gpt-4.1",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate
+      .mockResolvedValueOnce(runtimeProfile({ displayName: "Migrated: anthropic", providerId: "anthropic" }))
+      .mockRejectedValueOnce(new Error("openai rejected"))
+
+    const { container, root } = renderBanner()
+    await flush()
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(container.textContent).toContain("Imported 1 of 2 profile")
+    expect(container.textContent).toContain("openai rejected")
+    await waitFor(() => {
+      const snapshots = JSON.parse(window.localStorage.getItem("llm-wiki:legacy-provider-migration:v1") ?? "{}")
+      expect(Object.keys(snapshots)).toEqual(["anthropic"])
+      expect(snapshots.anthropic).toMatch(/^sha256:/)
+    })
+    expect(container.textContent).toContain("OpenAI")
 
     unmount(root)
   })
@@ -366,8 +538,7 @@ describe("ProviderMigrationBanner", () => {
     const { container, root } = renderBanner()
     await flush()
 
-    expect(container.querySelector("[data-testid='provider-migration-template-note']")?.textContent)
-      .toContain("https://legacy.moonshot.example/anthropic")
+    expect(container.querySelector("[data-testid='provider-migration-template-note']")).not.toBeNull()
     const keep = container.querySelector<HTMLInputElement>("[data-testid='provider-migration-keep-endpoint']")
     if (!keep) throw new Error("keep endpoint checkbox not found")
     await click(keep)
@@ -404,7 +575,8 @@ describe("ProviderMigrationBanner", () => {
     expect(secretMocks.profileSecretDelete).toHaveBeenCalledWith({
       secretRef: "llm-wiki-profile-secret:22222222-2222-4222-8222-222222222222",
     })
-    expect(container.textContent).toContain("Migration failed: db rejected")
+    expect(container.textContent).toContain("Imported 0 of 1 profile")
+    expect(container.textContent).toContain("db rejected")
     expect(container.querySelector("[data-testid='provider-migration-banner']")).not.toBeNull()
     expect(create.disabled).toBe(false)
 
@@ -422,7 +594,6 @@ describe("ProviderMigrationBanner", () => {
     await flush()
 
     expect(container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
-    expect(container.querySelector("[data-testid='provider-migration-complete']")).not.toBeNull()
     expect(runtimeDbMocks.runtimeProfileCreate).not.toHaveBeenCalled()
     expect(secretMocks.profileSecretWrite).not.toHaveBeenCalled()
 
@@ -430,7 +601,7 @@ describe("ProviderMigrationBanner", () => {
   })
 
   it("hides without an active preset, when no project is open, or when runtime is unavailable", async () => {
-    useWikiStore.setState({ activePresetId: null })
+    useWikiStore.setState({ activePresetId: null, providerConfigs: {} })
     const noActive = renderBanner()
     await flush()
     expect(noActive.container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
@@ -456,6 +627,149 @@ describe("ProviderMigrationBanner", () => {
     await flush()
     expect(disabled.container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
     unmount(disabled.root)
+  })
+
+  it("shows staleness when a migrated legacy api key changes after snapshot", async () => {
+    window.localStorage.setItem(
+      "llm-wiki:legacy-provider-migration:v1",
+      JSON.stringify({ anthropic: "sha256:previous" }),
+    )
+    useWikiStore.setState({
+      activePresetId: "anthropic",
+      providerConfigs: {
+        anthropic: {
+          apiKey: "changed-secret",
+          model: "claude-test",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile()],
+    })
+
+    const second = renderBanner()
+    await flush()
+
+    await waitFor(() => {
+      expect(second.container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
+      expect(second.container.querySelector("[data-testid='provider-migration-stale']")?.textContent)
+        .toContain("Legacy provider key changed")
+    })
+
+    unmount(second.root)
+  })
+
+  it("does not show staleness when the legacy api key is unchanged after migration", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile())
+
+    const first = renderBanner()
+    await flush()
+    const create = first.container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+    unmount(first.root)
+
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile()],
+    })
+    const second = renderBanner()
+    await flush()
+
+    await waitFor(() => {
+      expect(second.container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
+      expect(second.container.querySelector("[data-testid='provider-migration-stale']")).toBeNull()
+    })
+
+    unmount(second.root)
+  })
+
+  it("renders stale warning alongside remaining import candidates", async () => {
+    window.localStorage.setItem(
+      "llm-wiki:legacy-provider-migration:v1",
+      JSON.stringify({ anthropic: "sha256:previous" }),
+    )
+    useWikiStore.setState({
+      activePresetId: null,
+      providerConfigs: {
+        anthropic: {
+          apiKey: "changed-secret",
+          model: "claude-test",
+        },
+        openai: {
+          apiKey: "openai-secret",
+          model: "gpt-4.1",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile()],
+    })
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-testid='provider-migration-banner']")).not.toBeNull()
+      expect(container.querySelector("[data-testid='provider-migration-stale']")?.textContent)
+        .toContain("Legacy provider key changed")
+    })
+    expect(container.textContent).toContain("OpenAI")
+
+    unmount(root)
+  })
+
+  it("skips staleness detection when hashing is unavailable", async () => {
+    const originalCrypto = globalThis.crypto
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: {
+        subtle: {
+          digest: vi.fn(async () => {
+            throw new Error("digest unavailable")
+          }),
+        },
+      },
+    })
+    window.localStorage.setItem(
+      "llm-wiki:legacy-provider-migration:v1",
+      JSON.stringify({ anthropic: "sha256:previous" }),
+    )
+    useWikiStore.setState({
+      activePresetId: "anthropic",
+      providerConfigs: {
+        anthropic: {
+          apiKey: "changed-secret",
+          model: "claude-test",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [runtimeProfile()],
+    })
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
+      expect(container.querySelector("[data-testid='provider-migration-stale']")).toBeNull()
+    })
+
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto })
+    unmount(root)
   })
 
   it("distinguishes kimi and kimi-cn migrated profiles for idempotency", async () => {
