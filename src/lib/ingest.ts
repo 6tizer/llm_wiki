@@ -1,5 +1,5 @@
 import { readFile, writeFile, fileExists, deleteFile, listDirectory, getFileMd5 } from "@/commands/fs"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import type { LlmConfig, EmbeddingConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
@@ -1186,7 +1186,8 @@ async function autoIngestImpl(
   let analysis = precomputedAnalysis
 
   if (!analysis) {
-    await streamChat(
+    await streamChatRouted(
+      "ingest",
       llmConfig,
       [
         { role: "system", content: buildAnalysisPrompt(purpose, "", sourceContext) },
@@ -1201,6 +1202,7 @@ async function autoIngestImpl(
       },
       signal,
       { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 4096 },
+      `ingest:${sourceIdentity}`,
     )
   }
 
@@ -1218,7 +1220,8 @@ async function autoIngestImpl(
 
   let generation = ""
 
-  await streamChat(
+  await streamChatRouted(
+    "ingest",
     llmConfig,
     [
       { role: "system", content: buildGenerationPrompt(schema, purpose, "", sourceIdentity, "", sourceContext, sourceSummaryPath) },
@@ -1260,6 +1263,7 @@ async function autoIngestImpl(
       reasoning: { mode: "off" },
       max_tokens: computeIngestGenerationMaxTokens(llmConfig.maxContextSize),
     },
+    `ingest:${sourceIdentity}`,
   )
 
   const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
@@ -1271,7 +1275,8 @@ async function autoIngestImpl(
   if (!signal?.aborted && shouldRunDedicatedReviewStage(generation)) {
     let reviewStageHadError = false
     try {
-      await streamChat(
+      await streamChatRouted(
+        "ingest",
         llmConfig,
         [
           {
@@ -1305,6 +1310,7 @@ async function autoIngestImpl(
           reasoning: { mode: "off" },
           max_tokens: computeIngestReviewMaxTokens(llmConfig.maxContextSize),
         },
+        `ingest:${sourceIdentity}:review`,
       )
     } catch (err) {
       if (signal?.aborted) throw err
@@ -2107,7 +2113,8 @@ export async function startIngest(
 
   let accumulated = ""
 
-  await streamChat(
+  await streamChatRouted(
+    "ingest",
     llmConfig,
     [
       { role: "system", content: systemPrompt },
@@ -2126,6 +2133,8 @@ export async function startIngest(
       },
     },
     signal,
+    undefined,
+    `ingest:${sourceIdentity}`,
   )
 }
 
@@ -2211,7 +2220,8 @@ export async function executeIngestWrites(
     .filter(Boolean)
     .join("\n\n")
 
-  await streamChat(
+  await streamChatRouted(
+    "ingest",
     llmConfig,
     [{ role: "system", content: systemPrompt }, ...conversationHistory],
     {
@@ -2227,6 +2237,8 @@ export async function executeIngestWrites(
       },
     },
     signal,
+    undefined,
+    `ingest:${activeSourceIdentity ?? "writes"}`,
   )
 
   // Delegate to writeFileBlocks — the same parse/sanitize/schema-route/

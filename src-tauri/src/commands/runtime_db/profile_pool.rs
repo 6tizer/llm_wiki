@@ -769,7 +769,7 @@ fn redact_profile_pool_text(value: &str) -> String {
     redact_secrets_preserving_format(&collapsed)
 }
 
-fn truncate_profile_pool_text(value: &str) -> String {
+pub(crate) fn truncate_profile_pool_text(value: &str) -> String {
     if value.len() <= MAX_PROFILE_POOL_REASON_BYTES {
         return value.to_string();
     }

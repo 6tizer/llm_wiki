@@ -40,7 +40,7 @@ async function streamViaCodexCli(
 
 const DECODER = new TextDecoder()
 
-function parseLines(chunk: Uint8Array, buffer: string): [string[], string] {
+export function parseLines(chunk: Uint8Array, buffer: string): [string[], string] {
   const text = buffer + DECODER.decode(chunk, { stream: true })
   const lines = text.split("\n")
   const remaining = lines.pop() ?? ""

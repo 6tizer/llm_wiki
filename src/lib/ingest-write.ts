@@ -9,7 +9,7 @@
 import { readFile, writeFile } from "@/commands/fs"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import { loadCaptionCache } from "@/lib/image-caption-pipeline"
 import { buildImageMarkdownSection } from "@/lib/extract-source-images"
 import type { MergeFn } from "@/lib/page-merge"
@@ -64,7 +64,8 @@ export function buildPageMerger(llmConfig: LlmConfig): MergeFn {
     let result = ""
     let streamError: Error | null = null
     await new Promise<void>((resolve) => {
-      streamChat(
+      streamChatRouted(
+        "ingest",
         llmConfig,
         [
           { role: "system", content: systemPrompt },
@@ -82,6 +83,7 @@ export function buildPageMerger(llmConfig: LlmConfig): MergeFn {
         },
         signal,
         { temperature: 0.1 },
+        `ingest:${sourceFileName}:merge`,
       ).catch((err) => {
         // Defensive: streamChat returns a Promise<void>; if it rejects
         // (instead of going through onError), surface that too.

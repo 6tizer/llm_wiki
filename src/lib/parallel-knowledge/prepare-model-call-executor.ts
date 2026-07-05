@@ -19,11 +19,10 @@ import {
 } from "@/core-runtime/parallel-knowledge"
 import {
   getProviderConfig,
-  OPENAI_COMPATIBLE_NATIVE_PROVIDER_IDS,
   type ChatMessage,
   type RequestOverrides,
 } from "@/lib/llm-providers"
-import type { LlmConfig } from "@/stores/wiki-store"
+import { syntheticLlmConfig } from "@/lib/profile-llm-config"
 import type {
   PrepareModelCallExecutor,
   PrepareModelCallOutcome,
@@ -223,7 +222,7 @@ async function callModel(
   messages: ChatMessage[],
   overrides: RequestOverrides,
 ): Promise<string> {
-  const config = syntheticLlmConfig(profile)
+  const config = syntheticLlmConfig(profile, SOURCE_SINGLE_SHOT_BUDGET_CHARS)
   const providerConfig = getProviderConfig(config)
   const body = providerConfig.buildBody(messages, overrides)
 
@@ -275,47 +274,6 @@ function buildChunkUserPrompt(chunk: SourceChunk): string {
     : ""
   const heading = chunk.headingPath ? ` (heading: ${chunk.headingPath})` : ""
   return `${context}Chunk ${chunk.index}/${chunk.total}${heading}:\n\n${chunk.main}`
-}
-
-/**
- * Builds a minimal synthetic `LlmConfig` purely to reuse
- * `getProviderConfig(config).buildBody()`/`.parseStream()`. `apiKey` is
- * always empty: `buildBody` never reads it, and `.url`/`.headers` (which
- * would need it) are never used here — Rust builds the real destination
- * and injects the real secret from the claimed profile.
- *
- * The profile's own `apiMode` (which Rust also validates against the
- * profile) picks the wire protocol, not `providerId` — `providerId` is
- * free-form user text and is only used to preserve provider-native quirk
- * handling (see `OPENAI_COMPATIBLE_NATIVE_PROVIDER_IDS`) when it happens to
- * match a value `llm-providers.ts` recognizes.
- */
-function syntheticLlmConfig(profile: RuntimeProfileRecord): LlmConfig {
-  const baseConfig = {
-    apiKey: "",
-    model: profile.modelId,
-    ollamaUrl: "",
-    customEndpoint: profile.endpoint ?? "",
-    maxContextSize: SOURCE_SINGLE_SHOT_BUDGET_CHARS,
-    reasoning: { mode: "auto" as const },
-  }
-
-  if (profile.apiMode === "anthropic-messages") {
-    return { ...baseConfig, provider: "custom", apiMode: "anthropic_messages" }
-  }
-  if (profile.apiMode === "google-generate-content") {
-    return { ...baseConfig, provider: "google" }
-  }
-  if (profile.apiMode === "openai-chat-completions") {
-    const provider = OPENAI_COMPATIBLE_NATIVE_PROVIDER_IDS.has(profile.providerId)
-      ? (profile.providerId as LlmConfig["provider"])
-      : "custom"
-    return { ...baseConfig, provider, apiMode: "chat_completions" }
-  }
-
-  throw new Error(
-    "model-call-api-mode-unsupported: profile api mode has no HTTP model-call transport",
-  )
 }
 
 function buildArtifactCandidate(

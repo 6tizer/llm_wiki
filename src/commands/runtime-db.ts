@@ -577,6 +577,10 @@ export interface RuntimeModelCallForwardRequest {
   body: unknown
 }
 
+export interface RuntimeModelCallStreamRequest extends RuntimeModelCallForwardRequest {
+  streamId: string
+}
+
 export interface RuntimeProfileProbeResult {
   profile?: RuntimeProfileRecord | null
   status: RuntimeProfileCapabilityStatus
@@ -809,6 +813,17 @@ export function runtimeModelCallForward(
   request: RuntimeModelCallForwardRequest,
 ): Promise<string> {
   return invoke<string>("runtime_model_call_forward", { request })
+}
+
+export function runtimeModelCallStream(
+  request: RuntimeModelCallStreamRequest,
+  onEvent: unknown,
+): Promise<void> {
+  return invoke<void>("runtime_model_call_stream", { request, onEvent })
+}
+
+export function runtimeModelCallStreamCancel(streamId: string): Promise<void> {
+  return invoke<void>("runtime_model_call_stream_cancel", { streamId })
 }
 
 export function runtimeProfilePoolClaim(

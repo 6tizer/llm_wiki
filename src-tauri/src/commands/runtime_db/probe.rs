@@ -6,11 +6,50 @@ use tauri::{AppHandle, State};
 
 use super::*;
 use crate::commands::profile_secrets::{active_secret_store, read_profile_secret, SecretStore};
+use futures::future::{AbortHandle, Abortable};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
+use tauri::ipc::Channel;
+
+#[derive(Default)]
+pub struct RuntimeModelCallStreamState {
+    aborts: Mutex<HashMap<String, AbortHandle>>,
+}
+
+impl RuntimeModelCallStreamState {
+    fn register(&self, stream_id: String, abort: AbortHandle) -> Result<(), String> {
+        let mut aborts = self
+            .aborts
+            .lock()
+            .map_err(|_| "model-call-stream-state-poisoned".to_string())?;
+        aborts.insert(stream_id, abort);
+        Ok(())
+    }
+
+    fn remove(&self, stream_id: &str) -> Result<Option<AbortHandle>, String> {
+        let mut aborts = self
+            .aborts
+            .lock()
+            .map_err(|_| "model-call-stream-state-poisoned".to_string())?;
+        Ok(aborts.remove(stream_id))
+    }
+
+    fn cancel(&self, stream_id: &str) -> Result<(), String> {
+        if let Some(abort) = self.remove(stream_id)? {
+            abort.abort();
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn registered_count(&self) -> usize {
+        self.aborts.lock().expect("lock aborts").len()
+    }
+}
 
 /// Probe stored or draft model profile capabilities without returning secrets.
 #[tauri::command]
@@ -73,10 +112,10 @@ pub async fn runtime_profile_models_list(
 /// Secretless model-call plan forwarded from JS. `provider`/`apiMode`/
 /// `model` are cross-checked against the claimed profile for a clearer
 /// error message but are NEVER used to pick the request destination —
-/// `runtime_model_call_forward_for_project_with_store` re-derives the URL
-/// and auth header entirely from the server-stored profile so a buggy or
-/// compromised caller cannot redirect the request or exfiltrate the
-/// secret. `body` is the already-built provider request body (see
+/// `resolve_model_call_forward_target` re-derives the URL and auth header
+/// entirely from the server-stored profile so a buggy or compromised caller
+/// cannot redirect the request or exfiltrate the secret. `body` is the
+/// already-built provider request body (see
 /// `src/lib/llm-providers.ts`); it never contains the secret or a final
 /// destination URL.
 #[derive(Debug, Clone, Deserialize)]
@@ -87,6 +126,14 @@ pub struct RuntimeModelCallForwardRequest {
     api_mode: String,
     model: String,
     body: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeModelCallStreamRequest {
+    stream_id: String,
+    #[serde(flatten)]
+    forward: RuntimeModelCallForwardRequest,
 }
 
 /// Forward one bulk-knowledge-prepare model-call through the profile pool.
@@ -121,6 +168,74 @@ pub async fn runtime_model_call_forward(
     .await
 }
 
+#[tauri::command]
+pub async fn runtime_model_call_stream(
+    app: AppHandle,
+    request: RuntimeModelCallStreamRequest,
+    on_event: Channel<serde_json::Value>,
+    root_state: State<'_, ProjectRootState>,
+    stream_state: State<'_, RuntimeModelCallStreamState>,
+) -> Result<(), String> {
+    let stream_id = normalize_profile_text(
+        "invalid-stream-id",
+        "streamId",
+        &request.stream_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+    stream_state.register(stream_id.clone(), abort_handle)?;
+
+    let result = async {
+        let (project_root, runtime_enabled, now) =
+            run_guarded("runtime_model_call_stream", || {
+                let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+                let project_root = root_state.get();
+                let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+                Ok((project_root, runtime_enabled, now))
+            })?;
+
+        let client = model_call_stream_client()?;
+        let store = active_secret_store(&app)?;
+        let stream = runtime_model_call_stream_for_project_with_store(
+            project_root.as_deref(),
+            runtime_enabled,
+            request.forward,
+            now,
+            store.as_ref(),
+            &client,
+            &on_event,
+        );
+        match Abortable::new(stream, abort_registration).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => {
+                send_model_call_stream_error(&on_event, &err, None);
+                Ok(())
+            }
+            Err(_) => {
+                send_model_call_stream_done(&on_event);
+                Ok(())
+            }
+        }
+    }
+    .await;
+    stream_state.remove(&stream_id)?;
+    result
+}
+
+#[tauri::command]
+pub fn runtime_model_call_stream_cancel(
+    stream_id: String,
+    stream_state: State<'_, RuntimeModelCallStreamState>,
+) -> Result<(), String> {
+    let stream_id = normalize_profile_text(
+        "invalid-stream-id",
+        "streamId",
+        &stream_id,
+        MAX_PROFILE_ID_BYTES,
+    )?;
+    stream_state.cancel(&stream_id)
+}
+
 fn model_call_forward_client() -> Result<Client, String> {
     Client::builder()
         .timeout(Duration::from_secs(MODEL_CALL_FORWARD_TIMEOUT_SECS))
@@ -130,6 +245,14 @@ fn model_call_forward_client() -> Result<Client, String> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("model-call-forward-client-failed: {err}"))
+}
+
+fn model_call_stream_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(MODEL_CALL_STREAM_CONNECT_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| format!("model-call-stream-client-failed: {err}"))
 }
 
 async fn runtime_profile_probe_for_project_with_store(
@@ -1142,35 +1265,39 @@ fn bounded_profile_probe_error(message: &str) -> String {
     message[..end].to_string()
 }
 
-/// Core B+hybrid model-call forwarder. Re-reads the claimed profile
-/// server-side (never trusting `request.provider`/`apiMode`/`model` as a
-/// destination — those are only cross-checked for a clearer error),
-/// builds the destination URL and auth header from the STORED profile,
-/// injects the secret, and returns the raw provider response body.
+struct ModelCallForwardTarget {
+    url: String,
+    headers: HeaderMap,
+    body: serde_json::Value,
+}
+
+/// Re-reads the claimed profile server-side (never trusting
+/// `request.provider`/`apiMode`/`model` as a destination — those are only
+/// cross-checked for a clearer error), builds the destination URL and auth
+/// header from the STORED profile, and injects the secret.
 ///
-/// Anti-leak constraints (verified in tests):
+/// Anti-leak constraints shared by forward and stream paths:
 /// 1. No error path here ever interpolates request headers, a full
 ///    destination URL, raw reqwest Debug output, or a substring that could
 ///    contain `Authorization`/`x-api-key`/`api-key` — every error is a
 ///    fixed, static message or a fixed prefix + safe fields (status code,
 ///    clamped retry-after ms).
-/// 2. Redirects are disabled entirely (`model_call_forward_client`), so no
-///    redirect can ever carry the injected auth header anywhere.
-/// 3. Non-2xx provider response bodies are never read into the returned
-///    error — only the HTTP status is surfaced.
+/// 2. Redirects are disabled entirely by the caller's model-call client, so
+///    no redirect can ever carry the injected auth header anywhere.
+/// 3. Non-2xx provider response bodies are never read into returned or
+///    streamed errors — only the HTTP status is surfaced.
 /// 4. The sanitized errors returned here are already safe before they ever
 ///    reach `runtime_profile_pool_release`'s breaker-error redactor; this
 ///    function does not rely on that redactor as a backstop.
-/// 5. On success, only the raw provider response body is returned — no
-///    envelope, no headers.
-async fn runtime_model_call_forward_for_project_with_store(
+/// 5. Forward-only: on success, `runtime_model_call_forward_for_project_with_store`
+///    returns the raw provider response body — no envelope, no headers.
+fn resolve_model_call_forward_target(
     project_root: Option<&Path>,
     enabled: bool,
     request: RuntimeModelCallForwardRequest,
     now: i64,
     store: &(impl SecretStore + ?Sized),
-    client: &Client,
-) -> Result<String, String> {
+) -> Result<ModelCallForwardTarget, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
     let claim_id = normalize_profile_text(
         "invalid-claim-id",
@@ -1185,9 +1312,10 @@ async fn runtime_model_call_forward_for_project_with_store(
         expire_profile_claims_tx(&tx, now)?;
         let claim = read_active_profile_claim_by_id_tx(&tx, &claim_id, now)?
             .ok_or_else(|| PROFILE_CLAIM_INACTIVE_ERROR.to_string())?;
-        if claim.kind != "model-call" || claim.task_family != PREPARE_PROFILE_TASK_FAMILY {
+        if claim.kind != "model-call" || !model_call_task_family_supported(&claim.task_family) {
             return Err(
-                "model-call-claim-unsupported: claim is not an ingest model-call claim".to_string(),
+                "model-call-claim-unsupported: claim is not a supported model-call claim"
+                    .to_string(),
             );
         }
         let profile = read_visible_profile_tx(&tx, &claim.profile_id)?;
@@ -1195,7 +1323,7 @@ async fn runtime_model_call_forward_for_project_with_store(
             &tx,
             &profile,
             "model-call",
-            PREPARE_PROFILE_TASK_FAMILY,
+            &claim.task_family,
             now,
         )? {
             return Err(
@@ -1239,14 +1367,30 @@ async fn runtime_model_call_forward_for_project_with_store(
         }
     };
     let headers = probe_headers(&profile.api_mode, &profile.auth_style, &secret_value);
+    Ok(ModelCallForwardTarget {
+        url,
+        headers,
+        body: request.body,
+    })
+}
+
+async fn runtime_model_call_forward_for_project_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeModelCallForwardRequest,
+    now: i64,
+    store: &(impl SecretStore + ?Sized),
+    client: &Client,
+) -> Result<String, String> {
+    let target = resolve_model_call_forward_target(project_root, enabled, request, now, store)?;
 
     // Anti-leak constraint #1: on network failure, do not interpolate the
     // underlying reqwest::Error (its Display can include the destination
     // URL). Mirrors `post_probe_json`'s existing pattern.
     let response = client
-        .post(&url)
-        .headers(headers)
-        .json(&request.body)
+        .post(&target.url)
+        .headers(target.headers)
+        .json(&target.body)
         .send()
         .await
         .map_err(|_| "model-call-network-failed: request failed".to_string())?;
@@ -1270,6 +1414,151 @@ async fn runtime_model_call_forward_for_project_with_store(
         .text()
         .await
         .map_err(|_| "model-call-response-read-failed: response stream failed".to_string())
+}
+
+fn model_call_task_family_supported(task_family: &str) -> bool {
+    task_family == PREPARE_PROFILE_TASK_FAMILY || task_family == "chat"
+}
+
+async fn runtime_model_call_stream_for_project_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeModelCallForwardRequest,
+    now: i64,
+    store: &(impl SecretStore + ?Sized),
+    client: &Client,
+    on_event: &Channel<serde_json::Value>,
+) -> Result<(), String> {
+    // Shares anti-leak constraints #1-#4 with forward; #5 is forward-only because streams emit structured chunk/done/error events.
+    let target = resolve_model_call_forward_target(project_root, enabled, request, now, store)?;
+    let mut response = client
+        .post(&target.url)
+        .headers(target.headers)
+        .json(&target.body)
+        .send()
+        .await
+        .map_err(|_| "model-call-network-failed: request failed".to_string())?;
+
+    let status = response.status();
+    if status.as_u16() == 429 {
+        let retry_after_ms = model_call_retry_after_ms(response.headers());
+        send_model_call_stream_error(
+            on_event,
+            &format!(
+                "model-call-rate-limited: retryAfterMs={retry_after_ms} provider returned {status}"
+            ),
+            Some(429),
+        );
+        return Ok(());
+    }
+    if !status.is_success() {
+        send_model_call_stream_error(
+            on_event,
+            &format!("model-call-http-failed: provider returned {status}"),
+            Some(status.as_u16()),
+        );
+        return Ok(());
+    }
+
+    let mut utf8_buffer = Vec::new();
+    loop {
+        match tokio::time::timeout(
+            Duration::from_secs(MODEL_CALL_STREAM_CHUNK_TIMEOUT_SECS),
+            response.chunk(),
+        )
+        .await
+        {
+            Ok(Ok(Some(chunk))) => {
+                if let Some(text) = drain_complete_utf8_text(&mut utf8_buffer, &chunk) {
+                    send_model_call_stream_chunk(on_event, text);
+                }
+            }
+            Ok(Ok(None)) => {
+                if !utf8_buffer.is_empty() {
+                    let tail = String::from_utf8_lossy(&utf8_buffer).to_string();
+                    utf8_buffer.clear();
+                    send_model_call_stream_chunk(on_event, tail);
+                }
+                send_model_call_stream_done(on_event);
+                return Ok(());
+            }
+            Ok(Err(_)) => {
+                send_model_call_stream_error(
+                    on_event,
+                    "model-call-response-read-failed: response stream failed",
+                    None,
+                );
+                return Ok(());
+            }
+            Err(_) => {
+                send_model_call_stream_error(
+                    on_event,
+                    "model-call-stream-timeout: no response chunk received within 120s",
+                    None,
+                );
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn drain_complete_utf8_text(buffer: &mut Vec<u8>, chunk: &[u8]) -> Option<String> {
+    buffer.extend_from_slice(chunk);
+    match std::str::from_utf8(buffer) {
+        Ok(_) => {
+            let text = String::from_utf8_lossy(buffer).to_string();
+            buffer.clear();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        }
+        Err(err) => {
+            let valid_up_to = err.valid_up_to();
+            if valid_up_to == 0 {
+                if let Some(error_len) = err.error_len() {
+                    let drained: Vec<u8> = buffer.drain(..error_len).collect();
+                    return Some(String::from_utf8_lossy(&drained).to_string());
+                }
+                return None;
+            }
+            let drain_to = match err.error_len() {
+                Some(error_len) => valid_up_to + error_len,
+                None => valid_up_to,
+            };
+            let drained: Vec<u8> = buffer.drain(..drain_to).collect();
+            Some(String::from_utf8_lossy(&drained).to_string())
+        }
+    }
+}
+
+fn send_model_call_stream_chunk(on_event: &Channel<serde_json::Value>, data: String) {
+    let _ = on_event.send(serde_json::json!({
+        "type": "chunk",
+        "data": data,
+    }));
+}
+
+fn send_model_call_stream_done(on_event: &Channel<serde_json::Value>) {
+    let _ = on_event.send(serde_json::json!({
+        "type": "done",
+    }));
+}
+
+fn send_model_call_stream_error(
+    on_event: &Channel<serde_json::Value>,
+    message: &str,
+    status: Option<u16>,
+) {
+    let mut event = serde_json::json!({
+        "type": "error",
+        "message": truncate_profile_pool_text(message),
+    });
+    if let Some(status) = status {
+        event["status"] = serde_json::json!(status);
+    }
+    let _ = on_event.send(event);
 }
 
 /// Checks one plan field against the claimed profile's value. `field_name`
@@ -1306,10 +1595,11 @@ fn google_stream_generate_content_url(endpoint: Option<&str>, model_id: &str) ->
     )
 }
 
-/// Reads a provider's `Retry-After` header (seconds) and clamps it to a
-/// sane range. Missing/unparseable headers fall back to a fixed default —
-/// never `now` or another request-derived value, so a malicious/broken
-/// provider cannot use this to smuggle unbounded delays.
+/// Reads a provider's `Retry-After` header as integer seconds only and
+/// clamps it to a sane range. HTTP-date, missing, or unparseable headers
+/// fall back to the fixed 30s default — never `now` or another
+/// request-derived value, so a malicious/broken provider cannot use this to
+/// smuggle unbounded delays.
 fn model_call_retry_after_ms(headers: &HeaderMap) -> i64 {
     let parsed = headers
         .get(reqwest::header::RETRY_AFTER)
@@ -1328,6 +1618,7 @@ mod tests {
     use super::*;
 
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
     use std::fs;
 
@@ -1341,6 +1632,27 @@ mod tests {
             raw_secret: None,
             force: Some(force),
         }
+    }
+
+    fn captured_stream_channel() -> (
+        Channel<serde_json::Value>,
+        Arc<Mutex<Vec<serde_json::Value>>>,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let channel = Channel::new(move |body| {
+            match body {
+                tauri::ipc::InvokeResponseBody::Json(json) => {
+                    let event = serde_json::from_str(&json).expect("channel event should be json");
+                    captured.lock().expect("lock events").push(event);
+                }
+                tauri::ipc::InvokeResponseBody::Raw(_) => {
+                    panic!("model-call stream should send json channel events");
+                }
+            }
+            Ok(())
+        });
+        (channel, events)
     }
 
     fn setup_anthropic_probe_profile(
@@ -1484,10 +1796,7 @@ mod tests {
         );
         assert_eq!(
             parse_profile_models_body(r#"[{"id":"bare-a/"},"bare-a","bare-a/",{}]"#),
-            Some(vec![
-                "bare-a/".to_string(),
-                "bare-a".to_string()
-            ])
+            Some(vec!["bare-a/".to_string(), "bare-a".to_string()])
         );
         assert_eq!(parse_profile_models_body(r#"{"data":[]}"#), None);
     }
@@ -1919,6 +2228,60 @@ mod tests {
         (project, store, client, claim.claim_id, claim.profile_id)
     }
 
+    fn setup_model_call_forward_profile_for_family(
+        label: &str,
+        task_family: &str,
+        endpoint: &str,
+    ) -> (PathBuf, TestSecretStore, String) {
+        let project = temp_project(label);
+        fs::create_dir_all(&project).expect("create temp project");
+        let mut create = model_call_forward_profile_create_request(
+            "profile-1",
+            "anthropic",
+            "claude-test",
+            endpoint,
+            "anthropic-messages",
+            "x-api-key",
+        );
+        create.task_families = vec![task_family.to_string()];
+        let created = runtime_profile_create_for_project(Some(&project), true, create, 100)
+            .expect("create model-call profile");
+
+        let mut update = profile_update_request("profile-1");
+        update.capability_status = Some("supported".to_string());
+        update.capability_json = Some(profile_pool_capability_json(
+            serde_json::json!(true),
+            serde_json::json!(false),
+        ));
+        update.capability_version = Some(PROFILE_PROBE_CAPABILITY_VERSION.to_string());
+        update.capability_checked_at_ms = Some(150);
+        runtime_profile_update_for_project(Some(&project), true, update, 150)
+            .expect("mark model-call profile capable");
+
+        let store = TestSecretStore::default();
+        if let Some(secret_ref) = created.secret_ref.clone() {
+            store.insert(secret_ref, "sk-test000-stored-secret");
+        }
+
+        let claim = runtime_profile_pool_claim_for_project(
+            Some(&project),
+            true,
+            RuntimeProfilePoolClaimRequest {
+                claim_id: Some("claim-1".to_string()),
+                kind: "model-call".to_string(),
+                task_family: task_family.to_string(),
+                holder: format!("{task_family}:1"),
+                job_id: None,
+                ttl_ms: Some(10_000),
+                preferred_profile_ids: None,
+            },
+            200,
+        )
+        .expect("claim model-call profile");
+
+        (project, store, claim.claim_id)
+    }
+
     fn model_call_forward_request(
         claim_id: &str,
         provider: &str,
@@ -1933,6 +2296,264 @@ mod tests {
             model: model.to_string(),
             body,
         }
+    }
+
+    #[test]
+    fn model_call_forward_target_accepts_chat_claim_and_reuses_secretless_resolution() {
+        let (project, store, claim_id) = setup_model_call_forward_profile_for_family(
+            "forward-target-chat",
+            "chat",
+            "https://example.invalid",
+        );
+
+        let target = resolve_model_call_forward_target(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({ "messages": [] }),
+            ),
+            250,
+            &store,
+        )
+        .expect("resolve chat model-call target");
+
+        assert_eq!(target.url, "https://example.invalid/v1/messages");
+        assert_eq!(
+            target
+                .headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("sk-test000-stored-secret")
+        );
+        assert_eq!(target.body, serde_json::json!({ "messages": [] }));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn model_call_stream_utf8_buffer_preserves_cross_chunk_boundaries() {
+        let mut buffer = Vec::new();
+        let bytes = "A🙂B".as_bytes();
+        assert_eq!(
+            drain_complete_utf8_text(&mut buffer, &bytes[..2]),
+            Some("A".to_string())
+        );
+        assert_eq!(
+            drain_complete_utf8_text(&mut buffer, &bytes[2..5]),
+            Some("🙂".to_string())
+        );
+        assert_eq!(
+            drain_complete_utf8_text(&mut buffer, &bytes[5..]),
+            Some("B".to_string())
+        );
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn model_call_stream_cancel_removes_registered_abort_handle() {
+        let state = RuntimeModelCallStreamState::default();
+        let (abort, _registration) = AbortHandle::new_pair();
+        state
+            .register("stream-1".to_string(), abort)
+            .expect("register abort");
+
+        state.cancel("stream-1").expect("cancel stream");
+
+        assert_eq!(state.registered_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn model_call_stream_sends_chunk_events_and_done() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "sk-test000-stored-secret"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Transfer-Encoding", "chunked")
+                    .set_body_string(
+                        "event: content_block_delta\ndata: {\"delta\":{\"text\":\"hel\"}}\n\n\
+                         event: content_block_delta\ndata: {\"delta\":{\"text\":\"lo\"}}\n\n",
+                    ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (project, store, _forward_client, claim_id, _profile_id) =
+            setup_model_call_forward_profile(
+                "stream-success",
+                "anthropic",
+                "claude-test",
+                &server.uri(),
+                "anthropic-messages",
+                "x-api-key",
+            );
+        let client = model_call_stream_client().expect("build stream client");
+        let (channel, events) = captured_stream_channel();
+
+        runtime_model_call_stream_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({ "messages": [], "stream": true }),
+            ),
+            250,
+            &store,
+            &client,
+            &channel,
+        )
+        .await
+        .expect("stream model call");
+
+        let events = events.lock().expect("lock events");
+        assert!(events.iter().any(|event| event["type"] == "chunk"));
+        assert_eq!(
+            events.last().and_then(|event| event["type"].as_str()),
+            Some("done")
+        );
+        let chunk_text = events
+            .iter()
+            .filter(|event| event["type"] == "chunk")
+            .filter_map(|event| event["data"].as_str())
+            .collect::<String>();
+        assert!(chunk_text.contains("content_block_delta"));
+        assert!(chunk_text.contains("hel"));
+        assert!(chunk_text.contains("lo"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[tokio::test]
+    async fn model_call_stream_errors_include_status_without_provider_body_or_headers() {
+        for (status, label) in [(429, "stream-rate-limit"), (500, "stream-http-error")] {
+            let server = MockServer::start().await;
+            let mut response = ResponseTemplate::new(status).set_body_string(
+                "Authorization: Bearer sk-test000-stored-secret\nprivate-upstream-body",
+            );
+            if status == 429 {
+                response = response.insert_header("Retry-After", "12");
+            }
+            Mock::given(method("POST"))
+                .and(path("/v1/messages"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (project, store, _forward_client, claim_id, _profile_id) =
+                setup_model_call_forward_profile(
+                    label,
+                    "anthropic",
+                    "claude-test",
+                    &server.uri(),
+                    "anthropic-messages",
+                    "x-api-key",
+                );
+            let client = model_call_stream_client().expect("build stream client");
+            let (channel, events) = captured_stream_channel();
+
+            runtime_model_call_stream_for_project_with_store(
+                Some(&project),
+                true,
+                model_call_forward_request(
+                    &claim_id,
+                    "anthropic",
+                    "anthropic-messages",
+                    "claude-test",
+                    serde_json::json!({ "messages": [], "stream": true }),
+                ),
+                250,
+                &store,
+                &client,
+                &channel,
+            )
+            .await
+            .expect("stream model call returns structured error");
+
+            let events = events.lock().expect("lock events");
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["type"], "error");
+            assert_eq!(events[0]["status"], serde_json::json!(status));
+            let event_text = serde_json::to_string(&events[0]).expect("serialize event");
+            assert!(!event_text.contains("sk-test000-stored-secret"));
+            assert!(!event_text.contains("Authorization"));
+            assert!(!event_text.contains("private-upstream-body"));
+            let _ = fs::remove_dir_all(project);
+        }
+    }
+
+    #[tokio::test]
+    async fn model_call_stream_abort_sends_done_and_cleans_registry() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(5))
+                    .set_body_string("data: {\"late\":true}\n"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (project, store, _forward_client, claim_id, _profile_id) =
+            setup_model_call_forward_profile(
+                "stream-abort",
+                "anthropic",
+                "claude-test",
+                &server.uri(),
+                "anthropic-messages",
+                "x-api-key",
+            );
+        let client = model_call_stream_client().expect("build stream client");
+        let (channel, events) = captured_stream_channel();
+        let state = RuntimeModelCallStreamState::default();
+        let (abort, registration) = AbortHandle::new_pair();
+        state
+            .register("stream-abort".to_string(), abort)
+            .expect("register stream");
+
+        let stream = runtime_model_call_stream_for_project_with_store(
+            Some(&project),
+            true,
+            model_call_forward_request(
+                &claim_id,
+                "anthropic",
+                "anthropic-messages",
+                "claude-test",
+                serde_json::json!({ "messages": [], "stream": true }),
+            ),
+            250,
+            &store,
+            &client,
+            &channel,
+        );
+        let mut abortable = Box::pin(Abortable::new(stream, registration));
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                state.cancel("stream-abort").expect("cancel stream");
+            }
+            result = &mut abortable => {
+                panic!("stream finished before cancel: {result:?}");
+            }
+        }
+        let result = abortable.await;
+        state.remove("stream-abort").expect("cleanup stream");
+        if result.is_err() {
+            send_model_call_stream_done(&channel);
+        }
+
+        assert_eq!(state.registered_count(), 0);
+        let events = events.lock().expect("lock events");
+        assert_eq!(
+            events.last().and_then(|event| event["type"].as_str()),
+            Some("done")
+        );
+        let _ = fs::remove_dir_all(project);
     }
 
     #[tokio::test]
