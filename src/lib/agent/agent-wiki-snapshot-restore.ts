@@ -96,6 +96,37 @@ async function sha256Text(content: string): Promise<string> {
   ).join("")
 }
 
+function isMissingFileError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /\bENOENT\b|not found|no such file|does not exist/i.test(message)
+}
+
+function changedAfterSnapshotFailure(path: string): WikiSnapshotRestoreFailure {
+  return {
+    path,
+    error: "文件已被后续修改，请用 rewind 或手动处理",
+  }
+}
+
+function restoredEarlierEntryForPath(args: {
+  currentSha256: string
+  entry: SnapshotManifestEntry
+  entriesByPath: Map<string, SnapshotManifestEntry[]>
+}): boolean {
+  return (args.entriesByPath.get(args.entry.path) ?? []).some((candidate) =>
+    candidate.seq <= args.entry.seq && candidate.beforeSha256 === args.currentSha256
+  )
+}
+
+function pathRestoredByPriorCreate(args: {
+  entry: SnapshotManifestEntry
+  entriesByPath: Map<string, SnapshotManifestEntry[]>
+}): boolean {
+  return (args.entriesByPath.get(args.entry.path) ?? []).some((candidate) =>
+    candidate.seq < args.entry.seq && !candidate.existedBefore
+  )
+}
+
 function manifestEntryMatches(entry: SnapshotManifestEntry, args: {
   path: string
   toolUseId: string
@@ -271,7 +302,7 @@ export async function restoreAgentWikiSnapshots(args: {
   }
 
   const unmatched = new Map(expectedToolUseIds)
-  const firstByPath = new Map<string, SnapshotManifestEntry>()
+  const entriesBySeq = new Map<number, SnapshotManifestEntry>()
   const failures: WikiSnapshotRestoreFailure[] = []
 
   try {
@@ -280,10 +311,7 @@ export async function restoreAgentWikiSnapshots(args: {
       const entry = parseManifestEntry(line)
       if (!entry.toolUseId || !expectedToolUseIds.has(entry.toolUseId)) continue
       unmatched.delete(entry.toolUseId)
-      const existing = firstByPath.get(entry.path)
-      if (!existing || entry.seq < existing.seq) {
-        firstByPath.set(entry.path, entry)
-      }
+      entriesBySeq.set(entry.seq, entry)
     }
   } catch (err) {
     return {
@@ -301,16 +329,50 @@ export async function restoreAgentWikiSnapshots(args: {
   }
 
   const restoredPaths: string[] = []
-  const entries = Array.from(firstByPath.values()).sort((a, b) => a.seq - b.seq)
+  const restoredSet = new Set<string>()
+  const entries = Array.from(entriesBySeq.values()).sort((a, b) => b.seq - a.seq)
+  const entriesByPath = new Map<string, SnapshotManifestEntry[]>()
   for (const entry of entries) {
+    entriesByPath.set(entry.path, [...(entriesByPath.get(entry.path) ?? []), entry])
+  }
+  for (const entry of entries) {
+    const destination = fullPath(projectPath, entry.path)
     try {
       if (!entry.existedBefore) {
-        await deleteFile(fullPath(projectPath, entry.path))
+        let current: string
+        try {
+          current = await readFile(destination)
+        } catch (err) {
+          if (isMissingFileError(err)) continue
+          throw err
+        }
+        const currentSha256 = await sha256Text(current)
+        if (currentSha256 !== entry.afterSha256) {
+          failures.push(changedAfterSnapshotFailure(entry.path))
+          continue
+        }
+        await deleteFile(destination)
+        restoredSet.add(entry.path)
       } else {
+        let current: string
+        try {
+          current = await readFile(destination)
+        } catch (err) {
+          if (isMissingFileError(err) && pathRestoredByPriorCreate({ entry, entriesByPath })) {
+            continue
+          }
+          throw err
+        }
+        const currentSha256 = await sha256Text(current)
+        if (restoredEarlierEntryForPath({ currentSha256, entry, entriesByPath })) continue
+        if (currentSha256 !== entry.afterSha256) {
+          failures.push(changedAfterSnapshotFailure(entry.path))
+          continue
+        }
         const before = await readFile(`${dir}/${entry.snapshotFile}`)
-        await writeFile(fullPath(projectPath, entry.path), before)
+        await writeFile(destination, before)
+        restoredSet.add(entry.path)
       }
-      restoredPaths.push(entry.path)
     } catch (err) {
       failures.push({
         path: entry.path,
@@ -318,6 +380,7 @@ export async function restoreAgentWikiSnapshots(args: {
       })
     }
   }
+  restoredPaths.push(...Array.from(restoredSet).sort())
 
   return {
     ok: failures.length === 0,

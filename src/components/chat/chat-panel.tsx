@@ -545,6 +545,38 @@ export function ChatPanel() {
 			abortRef.current?.abort();
 		};
 	}, []);
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
+	const bottomRef = useRef<HTMLDivElement>(null);
+	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle");
+	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
+	const [manualQaBusy, setManualQaBusy] = useState(false);
+	const [hasAgentRunCandidate, setHasAgentRunCandidate] = useState(false);
+	const [agentRunProfileCandidates, setAgentRunProfileCandidates] = useState<
+		RuntimeProfileRecord[]
+	>([]);
+	const [agentRunCandidateResolved, setAgentRunCandidateResolved] =
+		useState(false);
+	const [agentRouteMenuOpen, setAgentRouteMenuOpen] = useState(false);
+	const agentRouteMenuRef = useRef<HTMLDivElement>(null);
+	const [manualQaStatus, setManualQaStatus] = useState<{
+		kind: "success" | "error" | "skipped";
+		message: string;
+	} | null>(null);
+	const refreshAgentRunProfileCandidates = useCallback(async () => {
+		try {
+			const result = await runtimeProfileList();
+			const candidates = agentRunCandidatesInList(result);
+			setAgentRunProfileCandidates(candidates);
+			setHasAgentRunCandidate(candidates.length > 0);
+			setAgentRunCandidateResolved(true);
+			return candidates;
+		} catch {
+			setAgentRunProfileCandidates([]);
+			setHasAgentRunCandidate(false);
+			setAgentRunCandidateResolved(true);
+			return [];
+		}
+	}, []);
 	useEffect(() => {
 		let cancelled = false;
 		runtimeProfileList()
@@ -566,23 +598,6 @@ export function ChatPanel() {
 			cancelled = true;
 		};
 	}, []);
-	const scrollContainerRef = useRef<HTMLDivElement>(null);
-	const bottomRef = useRef<HTMLDivElement>(null);
-	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle");
-	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
-	const [manualQaBusy, setManualQaBusy] = useState(false);
-	const [hasAgentRunCandidate, setHasAgentRunCandidate] = useState(false);
-	const [agentRunProfileCandidates, setAgentRunProfileCandidates] = useState<
-		RuntimeProfileRecord[]
-	>([]);
-	const [agentRunCandidateResolved, setAgentRunCandidateResolved] =
-		useState(false);
-	const [agentRouteMenuOpen, setAgentRouteMenuOpen] = useState(false);
-	const agentRouteMenuRef = useRef<HTMLDivElement>(null);
-	const [manualQaStatus, setManualQaStatus] = useState<{
-		kind: "success" | "error" | "skipped";
-		message: string;
-	} | null>(null);
 	useEffect(() => {
 		if (!agentRouteMenuOpen) return;
 		const close = (event: MouseEvent | KeyboardEvent) => {
@@ -789,6 +804,17 @@ export function ChatPanel() {
 							onProfileResolved: (payload) => {
 								markAgentRunning();
 								setActiveRunProfile(convId, payload);
+								if (
+									payload.requestedProfileId &&
+									payload.requestedProfileId !== payload.profileId
+								) {
+									appendAgentProgressSummary(messageId, {
+										text: t("agent.timeline.profileFallback", {
+											profile: payload.profileId,
+										}),
+										timestamp: Date.now(),
+									});
+								}
 							},
 							onDone: (result) => {
 								markAgentRunning();
@@ -1025,19 +1051,8 @@ export function ChatPanel() {
 				agentProviderNeedsApiKey(llmConfig.provider) &&
 				!llmConfig.apiKey.trim()
 			) {
-				try {
-					const result = await runtimeProfileList();
-					const candidates = agentRunCandidatesInList(result);
-					canDeferApiKeyCheck = candidates.length > 0;
-					setAgentRunProfileCandidates(candidates);
-					setHasAgentRunCandidate(canDeferApiKeyCheck);
-					setAgentRunCandidateResolved(true);
-				} catch {
-					setAgentRunProfileCandidates([]);
-					canDeferApiKeyCheck = false;
-					setHasAgentRunCandidate(false);
-					setAgentRunCandidateResolved(true);
-				}
+				const candidates = await refreshAgentRunProfileCandidates();
+				canDeferApiKeyCheck = candidates.length > 0;
 			}
 			const preflightError = getAgentPreflightError(project, llmConfig, {
 				deferApiKeyCheck: canDeferApiKeyCheck,
@@ -1161,6 +1176,7 @@ export function ChatPanel() {
 			hasAgentRunCandidate,
 			handleAgentSend,
 			handleManualSaveQa,
+			refreshAgentRunProfileCandidates,
 			ingestSource,
 			llmConfig,
 			searchApiConfig,
@@ -1429,7 +1445,11 @@ export function ChatPanel() {
 								disabled={!activeConversationId || isActiveAgentStream}
 								onClick={(event) => {
 									event.stopPropagation();
-									setAgentRouteMenuOpen((open) => !open);
+									setAgentRouteMenuOpen((open) => {
+										const nextOpen = !open;
+										if (nextOpen) void refreshAgentRunProfileCandidates();
+										return nextOpen;
+									});
 								}}
 								className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
 								title={t("chat.modelIndicator")}

@@ -40,9 +40,13 @@ function buildRewindTransportOptions() {
   })
 }
 
-function gateBlockedI18nKey(reason: Exclude<AgentRewindGateDecision, { allowed: true }>["reason"]): string {
-  if (reason === "wiki_write_after_target") return "agent.rewind.blockedWikiWrite"
-  if (reason === "cross_fork") return "agent.rewind.blockedCrossFork"
+function gateBlockedI18nKey(gate: Exclude<AgentRewindGateDecision, { allowed: true }>): string {
+  if (gate.reason === "wiki_write_after_target") {
+    if (gate.detail === "mixed") return "agent.rewind.blockedWikiWriteMixed"
+    if (gate.detail === "ambiguous") return "agent.rewind.blockedWikiWriteAmbiguous"
+    return "agent.rewind.blockedWikiWriteUncovered"
+  }
+  if (gate.reason === "cross_fork") return "agent.rewind.blockedCrossFork"
   return "agent.rewind.blockedLocked"
 }
 
@@ -101,7 +105,7 @@ export function AgentRewindDialogHost() {
         }
         if (outcome.status === "gate_blocked") {
           if (outcome.gate && !outcome.gate.allowed) {
-            setError(t(gateBlockedI18nKey(outcome.gate.reason)))
+            setError(t(gateBlockedI18nKey(outcome.gate)))
           }
           return
         }
@@ -203,7 +207,7 @@ export function AgentRewindDialogHost() {
           </DialogTitle>
           <DialogDescription>
             {blocked && gate && !gate.allowed
-              ? t(gateBlockedI18nKey(gate.reason))
+              ? t(gateBlockedI18nKey(gate))
               : t("agent.rewind.description")}
           </DialogDescription>
         </DialogHeader>

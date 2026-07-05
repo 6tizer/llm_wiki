@@ -318,7 +318,11 @@ describe("runAgentRewind", () => {
     })
 
     expect(result.status).toBe("gate_blocked")
-    expect(result.gate).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    expect(result.gate).toEqual({
+      allowed: false,
+      reason: "wiki_write_after_target",
+      detail: "uncovered",
+    })
     expect(transportMocks.rewindAgentFiles).not.toHaveBeenCalled()
   })
 

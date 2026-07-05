@@ -7,6 +7,7 @@ interface CompactOnlyAgentMessage {
   agentBlocks?: readonly unknown[]
   agentSessionId?: string
   toolCalls?: readonly unknown[]
+  progressSummaries?: readonly unknown[]
   agentErrorKind?: unknown
   agentResourceLimit?: unknown
   wikiChanges?: readonly unknown[]
@@ -37,6 +38,7 @@ export function isAgentAssistantMessage(message: CompactOnlyAgentMessage): boole
       || Boolean(message.agentSessionId)
       || Boolean(message.agentBlocks?.length)
       || Boolean(message.toolCalls?.length)
+      || Boolean(message.progressSummaries?.length)
       || Boolean(message.agentErrorKind)
       || Boolean(message.agentResourceLimit)
       || Boolean(message.wikiChanges?.length)

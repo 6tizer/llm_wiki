@@ -122,7 +122,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "mixed" })
   })
 
   it("allows snapshotted wiki writes after the target when native writes are only before the target", () => {
@@ -161,7 +161,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
   it("blocks when snapshot coverage is mixed after the target", () => {
@@ -187,7 +187,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "ambiguous" })
   })
 
   it("allows rewind when the matching wiki write was already reverted individually", () => {
@@ -250,7 +250,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "ambiguous" })
   })
 
   it("blocks appTool writes that have no snapshotted wikiChanged record", () => {
@@ -267,7 +267,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
   it("blocks when a wiki write tool call lands on a LATER message (A2)", () => {
@@ -285,7 +285,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
   it("allows rewind when the only wiki tool calls are read-only", () => {
@@ -327,7 +327,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
   it("ignores wiki writes BEFORE the target message", () => {

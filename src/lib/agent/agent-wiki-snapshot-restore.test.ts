@@ -7,6 +7,8 @@ const fsMocks = vi.hoisted(() => ({
   deleteFile: vi.fn<(path: string) => Promise<void>>(),
 }))
 
+const AFTER_SHA256 = "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8"
+
 vi.mock("@/commands/fs", () => ({
   readFile: fsMocks.readFile,
   writeFile: fsMocks.writeFile,
@@ -51,7 +53,7 @@ function line(entry: Record<string, unknown>): string {
   return JSON.stringify({
     operation: "update",
     existedBefore: true,
-    afterSha256: "after",
+    afterSha256: AFTER_SHA256,
     timestamp: 1,
     ...entry,
   })
@@ -72,17 +74,39 @@ describe("restoreAgentWikiSnapshots", () => {
     fsMocks.deleteFile.mockReset().mockResolvedValue(undefined)
   })
 
-  it("restores the earliest before snapshot when the same file was written twice after the target", async () => {
+  it("restores same-file entries in reverse order so each sha guard matches", async () => {
+    let current = "after second write"
+    const afterFirstSha256 = await sha256Text("after first write")
+    const afterSecondSha256 = await sha256Text("after second write")
+    const beforeFirstSha256 = await sha256Text("before first write")
     fsMocks.readFile.mockImplementation(async (path) => {
       if (path.endsWith("manifest.jsonl")) {
         return [
-          line({ seq: 1, path: "wiki/a.md", toolUseId: "tool-1", snapshotFile: "000001-a.md" }),
-          line({ seq: 2, path: "wiki/a.md", toolUseId: "tool-2", snapshotFile: "000002-a.md" }),
+          line({
+            seq: 1,
+            path: "wiki/a.md",
+            toolUseId: "tool-1",
+            snapshotFile: "000001-a.md",
+            beforeSha256: beforeFirstSha256,
+            afterSha256: afterFirstSha256,
+          }),
+          line({
+            seq: 2,
+            path: "wiki/a.md",
+            toolUseId: "tool-2",
+            snapshotFile: "000002-a.md",
+            beforeSha256: afterFirstSha256,
+            afterSha256: afterSecondSha256,
+          }),
         ].join("\n")
       }
+      if (path === "/proj/wiki/a.md") return current
       if (path.endsWith("000001-a.md")) return "before first write"
-      if (path.endsWith("000002-a.md")) return "before second write"
+      if (path.endsWith("000002-a.md")) return "after first write"
       throw new Error(`unexpected read ${path}`)
+    })
+    fsMocks.writeFile.mockImplementation(async (_path, contents) => {
+      current = contents
     })
 
     const result = await restoreAgentWikiSnapshots({
@@ -95,21 +119,39 @@ describe("restoreAgentWikiSnapshots", () => {
     })
 
     expect(result).toEqual({ ok: true, restoredPaths: ["wiki/a.md"], failures: [] })
-    expect(fsMocks.writeFile).toHaveBeenCalledTimes(1)
-    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/a.md", "before first write")
+    expect(fsMocks.writeFile).toHaveBeenCalledTimes(2)
+    expect(fsMocks.writeFile).toHaveBeenNthCalledWith(1, "/proj/wiki/a.md", "after first write")
+    expect(fsMocks.writeFile).toHaveBeenNthCalledWith(2, "/proj/wiki/a.md", "before first write")
+
+    fsMocks.writeFile.mockClear()
+    const retry = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [{ path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true }]),
+        msg("m2", 2, [{ path: "wiki/a.md", operation: "update", timestamp: 2, toolUseId: "tool-2", snapshotted: true }]),
+      ],
+    })
+
+    expect(retry).toEqual({ ok: true, restoredPaths: [], failures: [] })
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
   })
 
   it("deletes files created after the target", async () => {
-    fsMocks.readFile.mockResolvedValue(
-      line({
-        seq: 1,
-        path: "wiki/entities/new.md",
-        operation: "create",
-        existedBefore: false,
-        toolUseId: "tool-1",
-        snapshotFile: "000001-new.md",
-      }),
-    )
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return line({
+          seq: 1,
+          path: "wiki/entities/new.md",
+          operation: "create",
+          existedBefore: false,
+          toolUseId: "tool-1",
+          snapshotFile: "000001-new.md",
+        })
+      }
+      if (path === "/proj/wiki/entities/new.md") return "after"
+      throw new Error(`unexpected read ${path}`)
+    })
 
     const result = await restoreAgentWikiSnapshots({
       projectPath: "/proj",
@@ -129,6 +171,7 @@ describe("restoreAgentWikiSnapshots", () => {
       if (path.endsWith("manifest.jsonl")) {
         return line({ seq: 1, path: "wiki/a.md", toolUseId: "tool-1", snapshotFile: "000001-a.md" })
       }
+      if (path === "/proj/wiki/a.md") return "after"
       return "before"
     })
     fsMocks.writeFile.mockRejectedValue(new Error("disk full"))
@@ -153,6 +196,7 @@ describe("restoreAgentWikiSnapshots", () => {
           line({ seq: 2, path: "wiki/after.md", toolUseId: "tool-after", snapshotFile: "000002-after.md" }),
         ].join("\n")
       }
+      if (path === "/proj/wiki/after.md") return "after"
       if (path.endsWith("000002-after.md")) return "after target before"
       throw new Error(`over-restore read ${path}`)
     })
@@ -180,6 +224,7 @@ describe("restoreAgentWikiSnapshots", () => {
           line({ seq: 2, path: "wiki/keep.md", toolUseId: "tool-keep", snapshotFile: "000002-keep.md" }),
         ].join("\n")
       }
+      if (path === "/proj/wiki/keep.md") return "after"
       if (path.endsWith("000002-keep.md")) return "before keep"
       throw new Error(`unexpected read ${path}`)
     })
@@ -319,5 +364,119 @@ describe("restoreAgentWikiSnapshots", () => {
 
     expect(result).toEqual({ ok: true, restoredPaths: [], failures: [] })
     expect(fsMocks.readFile).not.toHaveBeenCalled()
+  })
+
+  it("is idempotent when retrying after a partial batch restore", async () => {
+    const beforeSha256 = await sha256Text("before")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return [
+          line({
+            seq: 1,
+            path: "wiki/already.md",
+            toolUseId: "tool-1",
+            snapshotFile: "000001-already.md",
+            beforeSha256,
+          }),
+          line({
+            seq: 2,
+            path: "wiki/pending.md",
+            toolUseId: "tool-2",
+            snapshotFile: "000002-pending.md",
+            beforeSha256,
+          }),
+        ].join("\n")
+      }
+      if (path === "/proj/wiki/already.md") return "before"
+      if (path === "/proj/wiki/pending.md") return "after"
+      if (path.endsWith("000002-pending.md")) return "before"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [
+          { path: "wiki/already.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true },
+          { path: "wiki/pending.md", operation: "update", timestamp: 2, toolUseId: "tool-2", snapshotted: true },
+        ]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: ["wiki/pending.md"], failures: [] })
+    expect(fsMocks.writeFile).toHaveBeenCalledTimes(1)
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/pending.md", "before")
+  })
+
+  it("refuses an entry when current content is neither after nor before sha", async () => {
+    const beforeSha256 = await sha256Text("before")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return line({
+          seq: 1,
+          path: "wiki/user.md",
+          toolUseId: "tool-1",
+          snapshotFile: "000001-user.md",
+          beforeSha256,
+        })
+      }
+      if (path === "/proj/wiki/user.md") return "user changed"
+      if (path.endsWith("000001-user.md")) return "before"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [{ path: "wiki/user.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true }]),
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.failures).toEqual([{ path: "wiki/user.md", error: "文件已被后续修改，请用 rewind 或手动处理" }])
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
+  })
+
+  it("handles a mixed batch with restored, already-restored, missing-created, and refused entries", async () => {
+    const beforeSha256 = await sha256Text("before")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return [
+          line({ seq: 1, path: "wiki/restore.md", toolUseId: "tool-1", snapshotFile: "000001-restore.md", beforeSha256 }),
+          line({ seq: 2, path: "wiki/already.md", toolUseId: "tool-2", snapshotFile: "000002-already.md", beforeSha256 }),
+          line({ seq: 3, path: "wiki/new.md", operation: "create", existedBefore: false, toolUseId: "tool-3", snapshotFile: "000003-new.md" }),
+          line({ seq: 4, path: "wiki/refuse.md", toolUseId: "tool-4", snapshotFile: "000004-refuse.md", beforeSha256 }),
+        ].join("\n")
+      }
+      if (path === "/proj/wiki/restore.md") return "after"
+      if (path === "/proj/wiki/already.md") return "before"
+      if (path === "/proj/wiki/new.md") throw new Error("ENOENT: no such file")
+      if (path === "/proj/wiki/refuse.md") return "user changed"
+      if (path.endsWith("000001-restore.md")) return "before"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [
+          { path: "wiki/restore.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true },
+          { path: "wiki/already.md", operation: "update", timestamp: 2, toolUseId: "tool-2", snapshotted: true },
+          { path: "wiki/new.md", operation: "create", timestamp: 3, toolUseId: "tool-3", snapshotted: true },
+          { path: "wiki/refuse.md", operation: "update", timestamp: 4, toolUseId: "tool-4", snapshotted: true },
+        ]),
+      ],
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      restoredPaths: ["wiki/restore.md"],
+      failures: [{ path: "wiki/refuse.md", error: "文件已被后续修改，请用 rewind 或手动处理" }],
+    })
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/restore.md", "before")
+    expect(fsMocks.deleteFile).not.toHaveBeenCalledWith("/proj/wiki/new.md")
   })
 })

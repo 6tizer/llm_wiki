@@ -52,6 +52,17 @@ function unmount(root: Root): void {
   })
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve: (value: T) => void = () => undefined
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   window.alert = vi.fn()
@@ -233,6 +244,42 @@ describe("ReviewView agent write action", () => {
     expect(snapshotMocks.restoreSingleAgentWikiSnapshot).not.toHaveBeenCalled()
     expect(window.alert).toHaveBeenCalledWith("该对话正在 rewind，暂不能撤销此写入。")
     expect(useReviewStore.getState().items[0]?.resolved).toBe(false)
+
+    unmount(root)
+  })
+
+  it("holds the rewind lock while a single-write undo is in progress", async () => {
+    setAgentWriteReviewItem()
+    const pendingRestore = deferred<{
+      ok: true
+      restoredPaths: string[]
+      failures: []
+    }>()
+    snapshotMocks.restoreSingleAgentWikiSnapshot.mockReturnValue(pendingRestore.promise)
+    const { container, root } = renderReviewView()
+    const undoButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("撤销此写入"),
+    )
+    if (!undoButton) throw new Error("undo button not found")
+
+    await act(async () => {
+      undoButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(useChatStore.getState().agentRewindLocks["conv-1"]).toBe(true)
+
+    await act(async () => {
+      pendingRestore.resolve({ ok: true, restoredPaths: ["wiki/page.md"], failures: [] })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useChatStore.getState().agentRewindLocks["conv-1"]).toBeUndefined()
+    expect(useReviewStore.getState().items[0]).toMatchObject({
+      resolved: true,
+      resolvedAction: "Reverted",
+    })
 
     unmount(root)
   })
