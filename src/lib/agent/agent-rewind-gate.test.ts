@@ -190,6 +190,69 @@ describe("computeAgentRewindGateDecision", () => {
     ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
   })
 
+  it("allows rewind when the matching wiki write was already reverted individually", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true }],
+        [{
+          path: "wiki/a.md",
+          operation: "update",
+          timestamp: 1,
+          toolUseId: "tool-1",
+          snapshotted: true,
+          reverted: true,
+        }],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("does not skip a tool call when only some matching wiki changes were reverted", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__run_pipeline", toolUseId: "tool-1", phase: "post", ok: true }],
+        [
+          {
+            path: "wiki/a.md",
+            operation: "update",
+            timestamp: 1,
+            toolUseId: "tool-1",
+            snapshotted: true,
+            reverted: true,
+          },
+          {
+            path: "wiki/b.md",
+            operation: "update",
+            timestamp: 2,
+            toolUseId: "tool-1",
+            snapshotted: false,
+          },
+        ],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+  })
+
   it("blocks appTool writes that have no snapshotted wikiChanged record", () => {
     const messages = [
       msg("m1", 1, [

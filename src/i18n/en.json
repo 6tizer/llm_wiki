@@ -443,6 +443,9 @@
       "wikiRestoreFailed": "Files were rewound, but restoring wiki snapshots failed. The conversation was not truncated.",
       "wikiRestoreFailureFiles": "Wiki snapshot restore failed for:"
     },
+    "writeReview": {
+      "blockedRunning": "This conversation is running; undo is temporarily unavailable."
+    },
     "lint": {
       "queued": "Agent lint queued",
       "running": "Agent lint running",

@@ -720,6 +720,45 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().messages[1].wikiChanges).toBeUndefined()
   })
 
+  it("marks one agent wiki change as reverted by message, path, and toolUseId", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        {
+          ...makeAssistantMessage("m1", convId),
+          wikiChanges: [
+            {
+              path: "wiki/page.md",
+              operation: "update",
+              timestamp: 1,
+              toolUseId: "tool-1",
+              snapshotted: true,
+            },
+            {
+              path: "wiki/page.md",
+              operation: "update",
+              timestamp: 2,
+              toolUseId: "tool-2",
+              snapshotted: true,
+            },
+          ],
+        },
+      ],
+    })
+
+    useChatStore.getState().markAgentWikiChangeReverted({
+      messageId: "m1",
+      path: "wiki/page.md",
+      toolUseId: "tool-2",
+    })
+
+    const changes = useChatStore.getState().messages[0].wikiChanges
+    expect(changes?.[0]?.toolUseId).toBe("tool-1")
+    expect(changes?.[0]?.reverted).toBeUndefined()
+    expect(changes?.[1]?.toolUseId).toBe("tool-2")
+    expect(changes?.[1]?.reverted).toBe(true)
+  })
+
   it("marks an agent message rewindable with runtime-only stream data", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({

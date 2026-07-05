@@ -8,12 +8,22 @@ export interface ReviewOption {
 
 export interface ReviewItem {
   id: string
-  type: "contradiction" | "duplicate" | "missing-page" | "confirm" | "suggestion"
+  type: "contradiction" | "duplicate" | "missing-page" | "confirm" | "suggestion" | "agent-write"
   title: string
   description: string
   sourcePath?: string
   affectedPages?: string[]
   searchQueries?: string[]
+  agentWrite?: {
+    path: string
+    operation: "update" | "create" | "delete"
+    conversationId: string
+    messageId: string
+    streamId: string
+    toolUseId?: string
+    snapshotted: boolean
+    timestamp: number
+  }
   options: ReviewOption[]
   resolved: boolean
   resolvedAction?: string

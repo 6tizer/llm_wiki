@@ -13,7 +13,10 @@ vi.mock("@/commands/fs", () => ({
   deleteFile: fsMocks.deleteFile,
 }))
 
-import { restoreAgentWikiSnapshots } from "./agent-wiki-snapshot-restore"
+import {
+  restoreAgentWikiSnapshots,
+  restoreSingleAgentWikiSnapshot,
+} from "./agent-wiki-snapshot-restore"
 
 function target(overrides: Partial<AgentRewindRequestRecord> = {}): AgentRewindRequestRecord {
   return {
@@ -52,6 +55,14 @@ function line(entry: Record<string, unknown>): string {
     timestamp: 1,
     ...entry,
   })
+}
+
+async function sha256Text(content: string): Promise<string> {
+  const bytes = new TextEncoder().encode(content)
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes)
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("")
 }
 
 describe("restoreAgentWikiSnapshots", () => {
@@ -159,5 +170,154 @@ describe("restoreAgentWikiSnapshots", () => {
     expect(result).toEqual({ ok: true, restoredPaths: ["wiki/after.md"], failures: [] })
     expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/after.md", "after target before")
     expect(fsMocks.writeFile).not.toHaveBeenCalledWith("/proj/wiki/before.md", expect.any(String))
+  })
+
+  it("restores only non-reverted wiki changes from a mixed manifest", async () => {
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return [
+          line({ seq: 1, path: "wiki/reverted.md", toolUseId: "tool-reverted", snapshotFile: "000001-reverted.md" }),
+          line({ seq: 2, path: "wiki/keep.md", toolUseId: "tool-keep", snapshotFile: "000002-keep.md" }),
+        ].join("\n")
+      }
+      if (path.endsWith("000002-keep.md")) return "before keep"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [
+          {
+            path: "wiki/reverted.md",
+            operation: "update",
+            timestamp: 1,
+            toolUseId: "tool-reverted",
+            snapshotted: true,
+            reverted: true,
+          },
+          {
+            path: "wiki/keep.md",
+            operation: "update",
+            timestamp: 2,
+            toolUseId: "tool-keep",
+            snapshotted: true,
+          },
+        ]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: ["wiki/keep.md"], failures: [] })
+    expect(fsMocks.writeFile).toHaveBeenCalledTimes(1)
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/keep.md", "before keep")
+    expect(fsMocks.writeFile).not.toHaveBeenCalledWith("/proj/wiki/reverted.md", expect.any(String))
+  })
+
+  it("restores one snapshotted agent write only when current content matches afterSha256", async () => {
+    const afterSha256 = await sha256Text("after")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return line({
+          seq: 1,
+          path: "wiki/a.md",
+          toolUseId: "tool-1",
+          snapshotFile: "000001-a.md",
+          afterSha256,
+        })
+      }
+      if (path === "/proj/wiki/a.md") return "after"
+      if (path.endsWith("000001-a.md")) return "before"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreSingleAgentWikiSnapshot({
+      projectPath: "/proj",
+      streamId: "stream-1",
+      path: "wiki/a.md",
+      toolUseId: "tool-1",
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: ["wiki/a.md"], failures: [] })
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/a.md", "before")
+  })
+
+  it("refuses one-write restore when the file changed after the agent write", async () => {
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return line({
+          seq: 1,
+          path: "wiki/a.md",
+          toolUseId: "tool-1",
+          snapshotFile: "000001-a.md",
+          afterSha256: await sha256Text("after"),
+        })
+      }
+      if (path === "/proj/wiki/a.md") return "changed later"
+      if (path.endsWith("000001-a.md")) return "before"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreSingleAgentWikiSnapshot({
+      projectPath: "/proj",
+      streamId: "stream-1",
+      path: "wiki/a.md",
+      toolUseId: "tool-1",
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.failures[0]?.error).toBe("文件已被后续修改，请用 rewind 或手动处理")
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
+    expect(fsMocks.deleteFile).not.toHaveBeenCalled()
+  })
+
+  it("rejects unsafe manifest paths before restoring", async () => {
+    fsMocks.readFile.mockResolvedValue(
+      line({
+        seq: 1,
+        path: "../outside.md",
+        toolUseId: "tool-1",
+        snapshotFile: "000001-a.md",
+      }),
+    )
+
+    const result = await restoreSingleAgentWikiSnapshot({
+      projectPath: "/proj",
+      streamId: "stream-1",
+      path: "../outside.md",
+      toolUseId: "tool-1",
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.failures[0]?.error).toBe("manifest entry has unsafe path")
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
+    expect(fsMocks.deleteFile).not.toHaveBeenCalled()
+  })
+
+  it("skips reverted wiki changes during rewind snapshot restore", async () => {
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return line({ seq: 1, path: "wiki/a.md", toolUseId: "tool-1", snapshotFile: "000001-a.md" })
+      }
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [{
+          path: "wiki/a.md",
+          operation: "update",
+          timestamp: 1,
+          toolUseId: "tool-1",
+          snapshotted: true,
+          reverted: true,
+        }]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: [], failures: [] })
+    expect(fsMocks.readFile).not.toHaveBeenCalled()
   })
 })

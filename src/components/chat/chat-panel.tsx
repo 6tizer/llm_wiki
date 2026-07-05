@@ -56,6 +56,7 @@ import type {
 	AgentActionRequiredPayload,
 	AgentPermissionPolicy,
 	AgentRewindFilesPayload,
+	AgentWikiChangedPayload,
 } from "@/lib/agent/agent-types";
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
 import { executeIngestWrites, startIngest } from "@/lib/ingest";
@@ -70,6 +71,7 @@ import {
 	type MessageReference,
 	useChatStore,
 } from "@/stores/chat-store";
+import { useReviewStore } from "@/stores/review-store";
 import { useAgentSettingsStore } from "@/stores/agent-settings-store";
 import { useWikiStore } from "@/stores/wiki-store";
 import { AgentPermissionDialogHost } from "./agent-permission-dialog";
@@ -150,6 +152,53 @@ function enqueueAgentLintFromPaths(
 
 function changedPathsFromAction(payload: AgentActionRequiredPayload): string[] {
 	return payload.kind === "lint_recommended" ? payload.paths : [];
+}
+
+function agentWikiOperationLabel(operation: AgentWikiChangedPayload["operation"]): string {
+	if (operation === "create") return "创建";
+	if (operation === "delete") return "删除";
+	return "更新";
+}
+
+function addAgentWriteReviewItem(args: {
+	payload: AgentWikiChangedPayload;
+	conversationId: string;
+	messageId: string;
+	streamId: string;
+}): void {
+	const { payload, conversationId, messageId, streamId } = args;
+	const label = agentWikiOperationLabel(payload.operation);
+	const canUndo = payload.snapshotted === true;
+	const reason = canUndo
+		? "已保存写前快照，可查看、撤销或接受此写入。"
+		: "未保存写前快照，撤销不可用；可查看页面后接受。";
+	useReviewStore.getState().addItem({
+		type: "agent-write",
+		title: `${label} ${payload.path}`,
+		description: `Agent ${label}了 ${payload.path}。${reason}`,
+		sourcePath: payload.path,
+		affectedPages: [payload.path],
+		agentWrite: {
+			path: payload.path,
+			operation: payload.operation,
+			conversationId,
+			messageId,
+			streamId,
+			toolUseId: payload.toolUseId,
+			snapshotted: canUndo,
+			timestamp: Date.now(),
+		},
+		options: canUndo
+			? [
+					{ label: "查看页面", action: `open:${payload.path}` },
+					{ label: "撤销此写入", action: "__agent_write_undo__" },
+					{ label: "接受", action: "__agent_write_accept__" },
+				]
+			: [
+					{ label: "查看页面", action: `open:${payload.path}` },
+					{ label: "接受", action: "__agent_write_accept__" },
+				],
+	});
 }
 
 const AGENT_NETWORK_TOOLS = ["WebSearch", "WebFetch"] as const;
@@ -837,6 +886,12 @@ export function ChatPanel() {
 						onWikiChanged: (payload) => {
 							markAgentRunning();
 							appendAgentWikiChange(messageId, payload);
+							addAgentWriteReviewItem({
+								payload,
+								conversationId: convId,
+								messageId,
+								streamId: streamId ?? "",
+							});
 							const projectPath =
 								transportOptions.projectPath ?? transportOptions.cwd ?? project?.path;
 							refreshAgentFileTree(projectPath).catch((err) => {
