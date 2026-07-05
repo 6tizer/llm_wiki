@@ -212,9 +212,28 @@ fn process_request(app: AppHandle, mut request: tiny_http::Request) {
     respond_json(request, response.status, response.body, &headers);
 }
 
+#[derive(Debug)]
 struct ApiResponse {
     status: u16,
     body: Value,
+}
+
+enum PreDispatch {
+    Health,
+    Continue,
+    Response(ApiResponse),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ApiRoute<'a> {
+    Projects,
+    Files { project_id: &'a str },
+    FileContent { project_id: &'a str },
+    Reviews { project_id: &'a str },
+    Search { project_id: &'a str },
+    Graph { project_id: &'a str },
+    Rescan { project_id: &'a str },
+    Chat { project_id: &'a str },
 }
 
 enum CorsShortCircuit {
@@ -241,26 +260,27 @@ fn handle_request(
     headers: &[(String, String)],
 ) -> ApiResponse {
     let (path, query) = split_url(url);
-    if path == "/health" || path == format!("{API_PREFIX}/health") {
-        // /health stays reachable even when the user has disabled the
-        // API in Settings — the desktop UI uses it to render the
-        // "Enabled / disabled / port_conflict" line, and curl-from-
-        // terminal users need a way to confirm the server is alive
-        // before they go hunting for why other endpoints 503.
-        return ok(json!({
-            "ok": true,
-            "status": get_api_status(),
-            "version": env!("CARGO_PKG_VERSION"),
-            "authRequired": api_auth_required(app),
-            "authConfigured": api_token(app).is_some(),
-            "tokenSource": api_token_source(app),
-            "enabled": api_enabled(app),
-            "mcpEnabled": api_mcp_enabled(app),
-            "allowUnauthenticated": api_allow_unauthenticated(app),
-        }));
-    }
-    if !path.starts_with(API_PREFIX) {
-        return err(404, "Not found");
+    match pre_auth_dispatch_response(&path) {
+        PreDispatch::Health => {
+            // /health stays reachable even when the user has disabled the
+            // API in Settings — the desktop UI uses it to render the
+            // "Enabled / disabled / port_conflict" line, and curl-from-
+            // terminal users need a way to confirm the server is alive
+            // before they go hunting for why other endpoints 503.
+            return ok(json!({
+                "ok": true,
+                "status": get_api_status(),
+                "version": env!("CARGO_PKG_VERSION"),
+                "authRequired": api_auth_required(app),
+                "authConfigured": api_token(app).is_some(),
+                "tokenSource": api_token_source(app),
+                "enabled": api_enabled(app),
+                "mcpEnabled": api_mcp_enabled(app),
+                "allowUnauthenticated": api_allow_unauthenticated(app),
+            }));
+        }
+        PreDispatch::Response(response) => return response,
+        PreDispatch::Continue => {}
     }
     let internal_agent_authorized = is_internal_agent_authorized(headers);
     if let Some((status, message)) = request_access_denial(
@@ -270,8 +290,36 @@ fn handle_request(
     ) {
         return err(status, message);
     }
+
+    match route_request(method, &path) {
+        Ok(ApiRoute::Projects) => handle_projects(app),
+        Ok(ApiRoute::Files { project_id }) => handle_files(app, project_id, query),
+        Ok(ApiRoute::FileContent { project_id }) => handle_file_content(app, project_id, query),
+        Ok(ApiRoute::Reviews { project_id }) => handle_reviews(app, project_id, query),
+        Ok(ApiRoute::Search { project_id }) => handle_search(app, project_id, body),
+        Ok(ApiRoute::Graph { project_id }) => handle_graph(app, project_id, query),
+        Ok(ApiRoute::Rescan { project_id }) => handle_rescan(app, project_id),
+        Ok(ApiRoute::Chat { project_id }) => {
+            let _ = project_id;
+            err(501, "Chat API is not implemented in the local Rust API server yet. The existing chat/RAG pipeline currently lives in the WebView; expose it after moving the shared chat pipeline behind a backend command.")
+        }
+        Err(response) => response,
+    }
+}
+
+fn pre_auth_dispatch_response(path: &str) -> PreDispatch {
+    if path == "/health" || path == format!("{API_PREFIX}/health") {
+        return PreDispatch::Health;
+    }
+    if !path.starts_with(API_PREFIX) {
+        return PreDispatch::Response(err(404, "Not found"));
+    }
+    PreDispatch::Continue
+}
+
+fn route_request<'a>(method: &Method, path: &'a str) -> Result<ApiRoute<'a>, ApiResponse> {
     if !matches!(method, &Method::Get | &Method::Post) {
-        return err(405, "Method not allowed");
+        return Err(err(405, "Method not allowed"));
     }
 
     let parts: Vec<&str> = path
@@ -282,24 +330,19 @@ fn handle_request(
         .collect();
 
     match (method, parts.as_slice()) {
-        (&Method::Get, ["projects"]) => handle_projects(app),
-        (&Method::Get, ["projects", project_id, "files"]) => handle_files(app, project_id, query),
+        (&Method::Get, ["projects"]) => Ok(ApiRoute::Projects),
+        (&Method::Get, ["projects", project_id, "files"]) => Ok(ApiRoute::Files { project_id }),
         (&Method::Get, ["projects", project_id, "files", "content"]) => {
-            handle_file_content(app, project_id, query)
+            Ok(ApiRoute::FileContent { project_id })
         }
-        (&Method::Get, ["projects", project_id, "reviews"]) => {
-            handle_reviews(app, project_id, query)
-        }
-        (&Method::Post, ["projects", project_id, "search"]) => handle_search(app, project_id, body),
-        (&Method::Get, ["projects", project_id, "graph"]) => handle_graph(app, project_id, query),
+        (&Method::Get, ["projects", project_id, "reviews"]) => Ok(ApiRoute::Reviews { project_id }),
+        (&Method::Post, ["projects", project_id, "search"]) => Ok(ApiRoute::Search { project_id }),
+        (&Method::Get, ["projects", project_id, "graph"]) => Ok(ApiRoute::Graph { project_id }),
         (&Method::Post, ["projects", project_id, "sources", "rescan"]) => {
-            handle_rescan(app, project_id)
+            Ok(ApiRoute::Rescan { project_id })
         }
-        (&Method::Post, ["projects", project_id, "chat"]) => {
-            let _ = project_id;
-            err(501, "Chat API is not implemented in the local Rust API server yet. The existing chat/RAG pipeline currently lives in the WebView; expose it after moving the shared chat pipeline behind a backend command.")
-        }
-        _ => err(404, "Not found"),
+        (&Method::Post, ["projects", project_id, "chat"]) => Ok(ApiRoute::Chat { project_id }),
+        _ => Err(err(404, "Not found")),
     }
 }
 
@@ -1798,6 +1841,152 @@ mod tests {
         fs::create_dir(&path).unwrap();
         fs::create_dir(path.join("wiki")).unwrap();
         TestProjectDir { path }
+    }
+
+    #[test]
+    fn route_request_routes_get_projects() {
+        assert_eq!(
+            route_request(&Method::Get, "/api/v1/projects").unwrap(),
+            ApiRoute::Projects
+        );
+    }
+
+    #[test]
+    fn route_request_routes_get_project_files() {
+        assert_eq!(
+            route_request(&Method::Get, "/api/v1/projects/route-project/files").unwrap(),
+            ApiRoute::Files {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_routes_get_project_file_content() {
+        assert_eq!(
+            route_request(&Method::Get, "/api/v1/projects/route-project/files/content").unwrap(),
+            ApiRoute::FileContent {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_routes_get_project_reviews() {
+        assert_eq!(
+            route_request(&Method::Get, "/api/v1/projects/route-project/reviews").unwrap(),
+            ApiRoute::Reviews {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_routes_post_project_search() {
+        assert_eq!(
+            route_request(&Method::Post, "/api/v1/projects/route-project/search").unwrap(),
+            ApiRoute::Search {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_routes_get_project_graph() {
+        assert_eq!(
+            route_request(&Method::Get, "/api/v1/projects/route-project/graph").unwrap(),
+            ApiRoute::Graph {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_routes_post_project_sources_rescan() {
+        assert_eq!(
+            route_request(
+                &Method::Post,
+                "/api/v1/projects/route-project/sources/rescan"
+            )
+            .unwrap(),
+            ApiRoute::Rescan {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_routes_post_project_chat_stub() {
+        assert_eq!(
+            route_request(&Method::Post, "/api/v1/projects/route-project/chat").unwrap(),
+            ApiRoute::Chat {
+                project_id: "route-project"
+            }
+        );
+    }
+
+    #[test]
+    fn route_request_returns_404_for_unknown_route() {
+        let response = route_request(&Method::Get, "/api/v1/unknown").unwrap_err();
+
+        assert_eq!(response.status, 404);
+        assert_eq!(response.body["error"], "Not found");
+    }
+
+    #[test]
+    fn route_request_returns_404_when_method_valid_but_not_matching_any_route() {
+        let response = route_request(&Method::Post, "/api/v1/projects").unwrap_err();
+
+        assert_eq!(response.status, 404);
+        assert_eq!(response.body["error"], "Not found");
+    }
+
+    #[test]
+    fn route_request_returns_405_for_unsupported_method_before_route_match() {
+        let response = route_request(&Method::Put, "/api/v1/projects").unwrap_err();
+
+        assert_eq!(response.status, 405);
+        assert_eq!(response.body["error"], "Method not allowed");
+    }
+
+    #[test]
+    fn pre_auth_dispatch_maps_health_paths_to_health() {
+        assert!(matches!(
+            pre_auth_dispatch_response("/api/v1/health"),
+            PreDispatch::Health
+        ));
+        assert!(matches!(
+            pre_auth_dispatch_response("/health"),
+            PreDispatch::Health
+        ));
+    }
+
+    #[test]
+    fn pre_auth_dispatch_maps_api_routes_to_continue() {
+        assert!(matches!(
+            pre_auth_dispatch_response("/api/v1/projects"),
+            PreDispatch::Continue
+        ));
+    }
+
+    #[test]
+    fn pre_auth_dispatch_maps_health_before_method_check() {
+        let method = Method::Put;
+        assert!(matches!(
+            pre_auth_dispatch_response("/health"),
+            PreDispatch::Health,
+        ), "{method:?} should not be consulted before health dispatch");
+    }
+
+    #[test]
+    fn pre_auth_dispatch_returns_404_for_non_api_prefix_before_method_check() {
+        let method = Method::Put;
+        let PreDispatch::Response(response) = pre_auth_dispatch_response("/random") else {
+            panic!("expected non-API path to return a pre-dispatch response before {method:?}");
+        };
+
+        assert_eq!(response.status, 404);
+        assert_eq!(response.body["error"], "Not found");
     }
 
     #[test]
