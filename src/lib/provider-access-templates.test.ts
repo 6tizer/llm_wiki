@@ -76,7 +76,7 @@ describe("provider access templates", () => {
       endpoint: "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/{ENDPOINT_ID}/claude-code-proxy",
       defaultModelId: "KAT-Coder-Pro V1",
     })
-    expect(providerAccessTemplateById("longcat")?.defaultModelId).toBe("LongCat-2.0")
+    expect(providerAccessTemplateById("longcat")?.defaultModelId).toBe("LongCat-Flash-Chat")
     expect(providerAccessTemplateById("volcengine-ark")?.defaultModelId).toBe("doubao-seed-2-1-pro-260628")
     expect(providerAccessTemplateById("openrouter")?.defaultModelId).toBe("anthropic/claude-sonnet-5")
     expect(providerAccessTemplateById("aws-bedrock")?.notes).toContain("SigV4")
