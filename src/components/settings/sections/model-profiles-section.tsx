@@ -24,6 +24,7 @@ import {
   profileSecretWrite,
 } from "@/commands/profile-secrets"
 import { LLM_PRESETS } from "../llm-presets"
+import { ProviderAccessWizard } from "./provider-access-wizard"
 
 const MAX_PROFILE_CONCURRENCY = 128
 // Keep these version strings aligned with src-tauri/src/commands/runtime_db.rs.
@@ -460,6 +461,19 @@ export function ModelProfilesSection({
     }
   }
 
+  function applyCreatedProfile(saved: RuntimeProfileRecord) {
+    const nextProfiles = [
+      ...profilesRef.current.filter((profile) => profile.profileId !== saved.profileId),
+      saved,
+    ].sort((a, b) => a.displayName.localeCompare(b.displayName))
+    profilesRef.current = nextProfiles
+    setProfiles(nextProfiles)
+    setDraft(draftFromProfile(saved))
+    setSaveMessage(t("settings.sections.llm.profiles.wizard.created"))
+    setProbeState({ kind: "idle" })
+    onProfilesChanged?.()
+  }
+
   async function deleteSelectedProfile() {
     setDeleteMessage(null)
     setSaveMessage(null)
@@ -559,11 +573,20 @@ export function ModelProfilesSection({
 
   return (
     <div className="space-y-3" data-testid="model-profiles-section">
-      <div>
-        <h3 className="text-base font-semibold">{t("settings.sections.llm.profiles.title")}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("settings.sections.llm.profiles.description")}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold">{t("settings.sections.llm.profiles.title")}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("settings.sections.llm.profiles.description")}
+          </p>
+        </div>
+        {loadState.kind === "ready" && (
+          <ProviderAccessWizard
+            disabled={Boolean(runtimeUnavailableMessage)}
+            runtimeUnavailableMessage={runtimeUnavailableMessage}
+            onProfileCreated={applyCreatedProfile}
+          />
+        )}
       </div>
 
       {loadState.kind === "loading" && (

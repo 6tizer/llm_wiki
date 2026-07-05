@@ -3,6 +3,11 @@
     "title": "LLM Wiki Agent",
     "subtitle": "Chat, delegate, and grow a knowledge base that maintains itself"
   },
+  "common": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "next": "Next"
+  },
   "nav": {
     "wiki": "Chat",
     "sources": "Sources",
@@ -697,7 +702,41 @@
           "runtimeUnavailableNoProject": "Profiles require an open project before saving or probing.",
           "agentKindWarning": "Agent Chat only uses profiles whose kind is agent-run. This profile is {{kind}}, so it will not satisfy Agent-run selection.",
           "agentRunApiModeWarning": "Agent-run currently requires an Anthropic Messages-compatible endpoint. Other endpoint modes can be saved for their supported tasks, but Agent Chat will not select them.",
-          "agentRunCapabilityWarning": "This profile probe did not confirm Agent-run support. Agent Chat only selects profiles whose probe reports agentRunSupported=true."
+          "agentRunCapabilityWarning": "This profile probe did not confirm Agent-run support. Agent Chat only selects profiles whose probe reports agentRunSupported=true.",
+          "wizard": {
+            "open": "Quick connect",
+            "title": "Quick connect provider",
+            "description": "Choose a provider template, store the key in the OS credential store, test the draft, then create a runtime profile.",
+            "created": "Profile created.",
+            "searchPlaceholder": "Search providers or models",
+            "getApiKey": "Get API Key",
+            "keyPlaceholder": "Paste API Key",
+            "keyRequired": "API Key is required for this provider.",
+            "noKeyRequired": "No API Key required",
+            "secretStored": "Key stored. The input was cleared.",
+            "reenterKeyForRetest": "Re-enter the API Key to run another draft test.",
+            "retestNeedsKey": "Re-enter the API Key to run another test.",
+            "test": "Test connection",
+            "testHint": "Testing writes the key to the credential store first, then probes this unsaved draft.",
+            "testSuccess": "Connection succeeded in {{latency}} ms.",
+            "finish": "Finish",
+            "createAnyway": "Create anyway",
+            "createFailed": "Create failed: {{message}}",
+            "noAgentSupport": "This template only creates model-call profiles; Agent task family is not enabled.",
+            "agentRequiresPassedTest": "Agent task family will be omitted until this template passes the connection test. You can also enable the Agent task family later in Profiles editing.",
+            "steps": {
+              "1": "1. Provider",
+              "2": "2. Key",
+              "3": "3. Test"
+            },
+            "groups": {
+              "intl-official": "International official",
+              "cn-official": "China official",
+              "cloud": "Cloud",
+              "local": "Local",
+              "gateway": "Gateway"
+            }
+          }
         }
       },
       "embedding": {

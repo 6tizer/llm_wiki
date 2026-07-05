@@ -3,6 +3,11 @@
     "title": "LLM Wiki Agent",
     "subtitle": "对话、委托 Agent，让知识库自我生长"
   },
+  "common": {
+    "back": "上一步",
+    "cancel": "取消",
+    "next": "下一步"
+  },
   "nav": {
     "wiki": "对话",
     "sources": "资料",
@@ -697,7 +702,41 @@
           "runtimeUnavailableNoProject": "保存或探测 profile 前需要先打开项目。",
           "agentKindWarning": "Agent Chat 只会使用 Profile 类型为 agent-run 的 profile。当前 profile 是 {{kind}}，不会被 Agent-run 选择。",
           "agentRunApiModeWarning": "Agent-run 当前需要 Anthropic Messages 兼容 endpoint。其他 endpoint 模式可以保存给其支持的任务使用，但 Agent Chat 不会选择它。",
-          "agentRunCapabilityWarning": "这个 profile 的探测结果没有确认 Agent-run 支持。Agent Chat 只会选择 agentRunSupported=true 的 profile。"
+          "agentRunCapabilityWarning": "这个 profile 的探测结果没有确认 Agent-run 支持。Agent Chat 只会选择 agentRunSupported=true 的 profile。",
+          "wizard": {
+            "open": "快速接入",
+            "title": "快速接入供应商",
+            "description": "选择供应商模板，将 Key 写入系统凭据存储，测试草稿后创建 runtime profile。",
+            "created": "Profile 已创建。",
+            "searchPlaceholder": "搜索供应商或模型",
+            "getApiKey": "去获取 API Key",
+            "keyPlaceholder": "粘贴 API Key",
+            "keyRequired": "此供应商需要 API Key。",
+            "noKeyRequired": "无需 API Key",
+            "secretStored": "Key 已写入凭据存储，输入框已清空。",
+            "reenterKeyForRetest": "如需重新测试草稿，请重新输入 API Key。",
+            "retestNeedsKey": "如需重新测试，请重新输入 API Key。",
+            "test": "测试连接",
+            "testHint": "测试会先把 Key 写入系统凭据存储，再探测这条未落库草稿。",
+            "testSuccess": "连接成功，耗时 {{latency}} ms。",
+            "finish": "完成",
+            "createAnyway": "仍然创建",
+            "createFailed": "创建失败：{{message}}",
+            "noAgentSupport": "此模板只创建 model-call profile，不启用 Agent 任务族。",
+            "agentRequiresPassedTest": "连接测试通过前，创建请求不会包含 Agent 任务族。创建后也可在 Profiles 编辑中补开 agent 用途。",
+            "steps": {
+              "1": "1. 供应商",
+              "2": "2. Key",
+              "3": "3. 测试"
+            },
+            "groups": {
+              "intl-official": "国际官方",
+              "cn-official": "国产官方",
+              "cloud": "云厂商",
+              "local": "本地",
+              "gateway": "网关"
+            }
+          }
         }
       },
       "embedding": {
