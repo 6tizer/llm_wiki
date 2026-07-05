@@ -949,7 +949,6 @@ describe("ModelProfilesSection UI", () => {
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-display-name']"), "DeepSeek work")
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
@@ -1003,7 +1002,6 @@ describe("ModelProfilesSection UI", () => {
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-kimi']"))
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-kimi")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
@@ -1025,12 +1023,74 @@ describe("ModelProfilesSection UI", () => {
     unmount(root)
   })
 
+  it("creates an oauth local CLI quick connect profile without an API key", async () => {
+    runtimeDbMocks.runtimeProfileProbe.mockResolvedValueOnce({
+      status: "limited",
+      message: "uses local claude login",
+      capabilities: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      profileId: "profile-claude-code-cli",
+      displayName: "Claude Code CLI (local)",
+      providerId: "claude-code-cli",
+      modelId: "claude-sonnet-4-6",
+      kind: "model-call",
+      apiMode: "local-cli",
+      authStyle: "oauth-local-cli",
+      secretRef: null,
+      taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy"],
+    }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-claude-code-cli']"))
+
+    expect(document.body.querySelector("[data-testid='wizard-api-key']")).toBeNull()
+    expect(bodyElement("[data-testid='wizard-no-key-note']").textContent)
+      .toContain("claude")
+
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
+    await flush()
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+
+    expect(secretMocks.profileSecretWrite).not.toHaveBeenCalled()
+    expect(runtimeDbMocks.runtimeProfileProbe).toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        kind: "model-call",
+        providerId: "claude-code-cli",
+        modelId: "claude-sonnet-4-6",
+        agentSdkModelId: null,
+        endpoint: null,
+        apiMode: "local-cli",
+        authStyle: "oauth-local-cli",
+      }),
+      force: true,
+    })
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "model-call",
+        providerId: "claude-code-cli",
+        modelId: "claude-sonnet-4-6",
+        endpoint: null,
+        apiMode: "local-cli",
+        authStyle: "oauth-local-cli",
+        secretRef: null,
+        taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy"],
+      }),
+    )
+
+    unmount(root)
+  })
+
   it("cleans up a quick connect secret when the wizard is cancelled before profile creation", async () => {
     const { container, root } = renderProfiles()
     await flush()
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    expect(document.body.querySelector("[data-testid='wizard-next']")).toBeNull()
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-anthropic']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
@@ -1053,7 +1113,7 @@ describe("ModelProfilesSection UI", () => {
     await flush()
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-anthropic']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
@@ -1076,7 +1136,7 @@ describe("ModelProfilesSection UI", () => {
     await flush()
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-anthropic']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-test-connection']"))
@@ -1103,7 +1163,7 @@ describe("ModelProfilesSection UI", () => {
     await flush()
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-anthropic']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-anthropic")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
 
@@ -1112,7 +1172,7 @@ describe("ModelProfilesSection UI", () => {
     await click(finish)
 
     expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledTimes(1)
-    expect(finish.disabled).toBe(true)
+    expect(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']").disabled).toBe(true)
 
     create.resolve(runtimeProfile({ profileId: "profile-created" }))
     await flush()
@@ -1137,7 +1197,6 @@ describe("ModelProfilesSection UI", () => {
 
     await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
-    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-model-id']"), "deepseek-custom")
     await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
     await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))

@@ -245,6 +245,7 @@ export function ProviderAccessWizard({
     setProbeState({ kind: "idle" })
     setRetestMessage(null)
     setCreateMessage(null)
+    setStep(2)
   }
 
   async function ensureSecretForCreate(): Promise<{ ref: string | null; rawSecret: string | null }> {
@@ -358,15 +359,18 @@ export function ProviderAccessWizard({
         {t("settings.sections.llm.profiles.wizard.open")}
       </button>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-3xl" data-testid="provider-access-wizard">
-          <DialogHeader>
+        <DialogContent
+          className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-3xl"
+          data-testid="provider-access-wizard"
+        >
+          <DialogHeader className="shrink-0">
             <DialogTitle>{t("settings.sections.llm.profiles.wizard.title")}</DialogTitle>
             <DialogDescription>
               {t("settings.sections.llm.profiles.wizard.description")}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-wrap gap-2 text-xs">
+          <div className="flex shrink-0 flex-wrap gap-2 text-xs">
             {[1, 2, 3].map((value) => (
               <span
                 key={value}
@@ -380,7 +384,7 @@ export function ProviderAccessWizard({
             ))}
           </div>
 
-          <div className="min-h-[380px] overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             {step === 1 && (
               <div className="space-y-3" data-testid="wizard-provider-step">
                 <div className="relative">
@@ -474,45 +478,49 @@ export function ProviderAccessWizard({
                     />
                   )}
                 </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Label>{t("settings.apiKey")}</Label>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                      data-testid="wizard-api-key-url"
-                      onClick={openKeyUrl}
-                    >
-                      {t("settings.sections.llm.profiles.wizard.getApiKey")}
-                      <ExternalLink className="h-3 w-3" />
-                    </button>
+                {authStyleRequiresSecret(selectedTemplate) ? (
+                  <div className="space-y-1.5 md:col-span-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label>{t("settings.apiKey")}</Label>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        data-testid="wizard-api-key-url"
+                        onClick={openKeyUrl}
+                      >
+                        {t("settings.sections.llm.profiles.wizard.getApiKey")}
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <Input
+                      data-testid="wizard-api-key"
+                      type="password"
+                      value={form.apiKey}
+                      onChange={(event) => {
+                        if (secretRefRef.current) {
+                          void cleanupDraftSecret()
+                        }
+                        setForm((current) => ({ ...current, apiKey: event.target.value }))
+                        setProbeState({ kind: "idle" })
+                        setRetestMessage(null)
+                      }}
+                      placeholder={t("settings.sections.llm.profiles.wizard.keyPlaceholder")}
+                    />
+                    {secretRef && (
+                      <p className="text-xs text-muted-foreground">
+                        {t("settings.sections.llm.profiles.wizard.secretStored")}
+                      </p>
+                    )}
                   </div>
-                  <Input
-                    data-testid="wizard-api-key"
-                    type="password"
-                    value={form.apiKey}
-                    disabled={!authStyleRequiresSecret(selectedTemplate)}
-                    onChange={(event) => {
-                      if (secretRefRef.current) {
-                        void cleanupDraftSecret()
-                      }
-                      setForm((current) => ({ ...current, apiKey: event.target.value }))
-                      setProbeState({ kind: "idle" })
-                      setRetestMessage(null)
-                    }}
-                    placeholder={
-                      authStyleRequiresSecret(selectedTemplate)
-                        ? t("settings.sections.llm.profiles.wizard.keyPlaceholder")
-                        : t("settings.sections.llm.profiles.wizard.noKeyRequired")
-                    }
-                  />
-                  {secretRef && (
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.sections.llm.profiles.wizard.secretStored")}
-                    </p>
-                  )}
-                </div>
-                {selectedTemplate.notes && (
+                ) : (
+                  <p
+                    className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground md:col-span-2"
+                    data-testid="wizard-no-key-note"
+                  >
+                    {selectedTemplate.notes ?? t("settings.sections.llm.profiles.wizard.noKeyRequired")}
+                  </p>
+                )}
+                {selectedTemplate.notes && authStyleRequiresSecret(selectedTemplate) && (
                   <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground md:col-span-2">
                     {selectedTemplate.notes}
                   </p>
@@ -596,7 +604,7 @@ export function ProviderAccessWizard({
             )}
           </div>
 
-          <DialogFooter className="items-center">
+          <DialogFooter className="shrink-0 items-center">
             <button
               type="button"
               className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
@@ -615,16 +623,16 @@ export function ProviderAccessWizard({
                 {t("common.back")}
               </button>
             )}
-            {step < 3 ? (
+            {step === 2 ? (
               <button
                 type="button"
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
                 data-testid="wizard-next"
-                onClick={() => setStep((current) => (current === 1 ? 2 : 3))}
+                onClick={() => setStep(3)}
               >
                 {t("common.next")}
               </button>
-            ) : (
+            ) : step === 3 ? (
               <button
                 type="button"
                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
@@ -637,7 +645,7 @@ export function ProviderAccessWizard({
                   ? t("settings.sections.llm.profiles.wizard.createAnyway")
                   : t("settings.sections.llm.profiles.wizard.finish")}
               </button>
-            )}
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>
