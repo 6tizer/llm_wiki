@@ -1,6 +1,6 @@
 # SPEC-7: Unified Agentic Chat / Claude Agent SDK 产品化
 
-> 类型：阶段 SPEC | 状态：PR1/PR2 completed（#277/#291），PR3-PR7 ready | 覆盖：#190、#60、#66、#67、#68、#84、#86 | 依赖：SPEC-1 shell/core boundary、SPEC-2 job creation API、SPEC-4 Agent-run Profile preflight、**SPEC-10（权限绕过/密钥泄露修复）**、**SPEC-12（精确前置关系：SPEC-12 PR1 前置于本 SPEC PR4/PR6；SPEC-12 PR2 仅前置于 PR6）**
+> 类型：阶段 SPEC | 状态：**completed（2026-07-05 closeout）** | 覆盖：#190、#60、#66、#67、#68、#84、#86 | 依赖：SPEC-1 shell/core boundary、SPEC-2 job creation API、SPEC-4 Agent-run Profile preflight、**SPEC-10（权限绕过/密钥泄露修复）**、**SPEC-12（精确前置关系：SPEC-12 PR1 前置于本 SPEC PR4/PR6；SPEC-12 PR2 仅前置于 PR6）**
 
 ## 2026-07-04 UI 走查修订（必读，约束 PR3-PR6 范围）
 
@@ -25,6 +25,24 @@
 - **PR3 范围应扩大到 per-run 状态隔离**：`chat-store.ts` 的权限请求队列（`163-164`，全局单例不按 streamId）和 rewind target 都是"本该按 run 隔离却放全局槽位"，与 compact/resume 是同类问题，应显式并入 PR3，不要拖到 PR6 才发现耦合。compact/resume 检测当前是脆弱纯英文正则（`agent-summary.ts`），SDK 对齐后换结构化字段而非继续打补丁。
 - **PR6 一项成功标准当前完全没打通**：footer/timeline 显示真实 selected/claimed profile —— resolved model 目前只打到 `agent.rs:404-408` 的 Rust stderr，从未经事件回传前端。PR6 需新增一条 profile 事件，不只是 UI 改动。
 - **权限绕过与密钥泄露先由 SPEC-10 修**：wiki 写工具绕过审批（S4）、SDK 异常经 stdout 泄露密钥（S3）是当前就存在的安全问题，SPEC-10 先收口；SPEC-7 的 permission UI 在其上做产品化，复用同一 permission bridge，不新造第二套。
+
+## 2026-07-05 Closeout
+
+全部 PR 已合并（双轨 GOAL session，Codex 主力 Coder 工作流）：
+
+| 计划项 | 实际交付 | PR |
+|--------|----------|----|
+| PR3 会话状态隔离 | 权限/rewind 按 conversation 分桶、compact 结构化检测（正则删除）、错误产品化卡片 | #296 |
+| PR4 unified input shell | 拆 4a（模式统一+composer ＋/来源▾/自动▾+空态卡+disallowedTools 链路）/ 4b（提取双入口+拖入+job 薄接入+外部文档身份多段化+讨论流新建对话） | #298 / #300 |
+| PR5 activity timeline | 拆 5a（progress 接线+权限留痕+运行状态行）/ 5b（agent-write 审阅动线+单写撤销+reverted×rewind 协同） | #301 / #306 |
+| PR2b（#292） | 第一阶段：sidecar 直写 3 工具快照+门禁三态+恢复编排（wiki_restore_failed）；appTool 通道→#309 | #303 |
+| PR6 permission UI + profile 事件 | profile_resolved 事件（endpoint 脱敏、requestedProfileId）、会话级 profile/policy 选择器、bypass 写实披露+footer 常显徽标、defaultPermissionPolicy 契约 | #304 |
+| PR7 QA fixture | store-injection dev helper（八场景、生产 bundle 零泄漏、boundary 登记）；壳 owner=SPEC-8 | #307 |
+| closeout hotfix | 深度 review 分流：批量恢复 sha 守卫、override 替换披露、撤销持锁、门禁披露三分、死 key 清理 | 见 closeout PR 记录 |
+
+Closeout Gate：双维度多代理深度 review 已执行（会话/权限/timeline 全路径 + rewind/快照/撤销协同），P1 全部闭环于 closeout hotfix；分流 issue：#309（appTool 快照阶段二）、#311（abortRef 隔离）、#313（rewind×job ledger）、#314（快照生命周期）。e2e 验收路径 = PR7 fixture 八场景 + 各 PR 生产构建实机 smoke（记录于各 PR body）。
+
+范围裁定记录：「写前预览」（Notion N8 完整形态）受 previewToolInput sha256 摘要化设计（SPEC-10 边界）有意阻断，交付「写后审阅+单写撤销」；local_first 隐私语义移交 profile 属性（#310 运行时路由）。
 
 ## 目标与成功标准
 
