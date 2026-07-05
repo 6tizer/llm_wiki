@@ -571,6 +571,54 @@ describe("chat store agent data model", () => {
     ])
   })
 
+  it("appends agent progress summaries to one message only", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        makeAssistantMessage("m1", convId),
+        makeAssistantMessage("m2", convId),
+      ],
+    })
+
+    useChatStore.getState().appendAgentProgressSummary("m1", {
+      text: "Analyzing authentication module",
+      timestamp: 123,
+    })
+
+    expect(useChatStore.getState().messages[0].progressSummaries).toEqual([
+      {
+        text: "Analyzing authentication module",
+        timestamp: 123,
+      },
+    ])
+    expect(useChatStore.getState().messages[1].progressSummaries).toBeUndefined()
+  })
+
+  it("appends redacted agent permission events to one message only", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      messages: [
+        makeAssistantMessage("m1", convId),
+        makeAssistantMessage("m2", convId),
+      ],
+    })
+
+    useChatStore.getState().appendAgentPermissionEvent("m1", {
+      toolName: "wiki_write",
+      decision: "deny_interrupt",
+      timestamp: 456,
+    })
+
+    expect(useChatStore.getState().messages[0].permissionEvents).toEqual([
+      {
+        toolName: "wiki_write",
+        decision: "deny_interrupt",
+        timestamp: 456,
+      },
+    ])
+    expect(useChatStore.getState().messages[1].permissionEvents).toBeUndefined()
+  })
+
   it("appends wiki changes to one agent message only", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({

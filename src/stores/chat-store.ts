@@ -6,6 +6,7 @@ import type {
   AgentWikiChangedPayload,
   AgentPermissionDecision,
   AgentPermissionRequestPayload,
+  AgentRewindFilesPayload,
   SDKContentBlock,
 } from "@/lib/agent/agent-types"
 import i18n from "@/i18n"
@@ -69,8 +70,11 @@ export interface DisplayMessage {
   agentErrorKind?: AgentErrorKind
   agentErrorDetail?: string
   agentResourceLimit?: AgentResourceLimitPayload
+  agentRewindUnavailableReason?: AgentRewindFilesPayload["unavailableReason"]
   wikiChanges?: AgentWikiChangeRecord[]
   toolCalls?: AgentToolCallRecord[]
+  progressSummaries?: AgentProgressSummaryRecord[]
+  permissionEvents?: AgentPermissionEventRecord[]
   costUsd?: number
   inputTokens?: number
   outputTokens?: number
@@ -87,6 +91,26 @@ export interface AgentToolCallRecord {
   durationMs?: number
   inputPreview?: Record<string, unknown>
   error?: string
+}
+
+/** Lightweight Agent progress text persisted on an assistant message. */
+export interface AgentProgressSummaryRecord {
+  text: string
+  timestamp: number
+}
+
+export type AgentPermissionEventDecision =
+  | "allow_temporary"
+  | "allow_permanent"
+  | "deny"
+  | "deny_interrupt"
+  | "timeout"
+
+/** Redacted Agent permission decision persisted on an assistant message. */
+export interface AgentPermissionEventRecord {
+  toolName: string
+  decision: AgentPermissionEventDecision
+  timestamp: number
 }
 
 /** Final per-message Agent run statistics emitted by the sidecar result event. */
@@ -147,6 +171,7 @@ interface AgentStreamMessagePatch {
   agentBlocks?: SDKContentBlock[]
   agentErrorKind?: AgentErrorKind
   agentResourceLimit?: AgentResourceLimitPayload
+  agentRewindUnavailableReason?: AgentRewindFilesPayload["unavailableReason"]
   toolCalls?: AgentToolCallRecord[]
   agentUserMessageId?: string
   agentAssistantMessageId?: string
@@ -222,6 +247,14 @@ interface ChatState {
     options?: FinishAgentStreamMessageOptions
   ) => void
   updateAgentProgress: (messageId: string, event: AgentToolCallRecord) => void
+  appendAgentProgressSummary: (
+    messageId: string,
+    summary: AgentProgressSummaryRecord
+  ) => void
+  appendAgentPermissionEvent: (
+    messageId: string,
+    record: AgentPermissionEventRecord
+  ) => void
   appendAgentWikiChange: (messageId: string, payload: AgentWikiChangedPayload) => void
   markAgentMessageRewindable: (messageId: string, payload: AgentRewindablePatch) => void
   clearAgentMessageRewindable: (
@@ -764,6 +797,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nextToolCalls[idx] = { ...nextToolCalls[idx], ...normalizedEvent }
         return { ...m, toolCalls: nextToolCalls }
       }),
+    })),
+
+  appendAgentProgressSummary: (messageId, summary) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              progressSummaries: [...(m.progressSummaries ?? []), summary],
+            }
+          : m
+      ),
+    })),
+
+  appendAgentPermissionEvent: (messageId, record) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              permissionEvents: [...(m.permissionEvents ?? []), record],
+            }
+          : m
+      ),
     })),
 
   appendAgentWikiChange: (messageId, payload) =>

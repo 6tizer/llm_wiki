@@ -162,17 +162,22 @@ function ChatMessageImpl({
             )}
           </div>
         )}
-        {isAgent && message.agentResourceLimit && (
-          <AgentResourceLimitNotice limit={message.agentResourceLimit} />
-        )}
         {shouldRenderReferences && (
           <CitedReferencesPanel content={actionContent} savedReferences={message.references} />
         )}
         {!isAgent && message.agentSteps && message.agentSteps.length > 0 && (
           <ChatAgentSteps steps={message.agentSteps} />
         )}
-        {!isSessionCompactOnly && isAgent && message.toolCalls && message.toolCalls.length > 0 && (
-          <AgentToolTimeline toolCalls={message.toolCalls} />
+        {!isSessionCompactOnly && isAgent && (
+          <AgentToolTimeline
+            toolCalls={message.toolCalls ?? []}
+            progressSummaries={message.progressSummaries}
+            permissionEvents={message.permissionEvents}
+            rewindUnavailableReason={message.agentRewindUnavailableReason}
+          />
+        )}
+        {isAgent && message.agentResourceLimit && (
+          <AgentResourceLimitNotice limit={message.agentResourceLimit} />
         )}
         {!isSessionCompactOnly && isAgent && message.wikiChanges && message.wikiChanges.length > 0 && (
           <AgentWikiChangeList changes={message.wikiChanges} />

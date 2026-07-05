@@ -51,6 +51,7 @@ export function AgentRewindDialogHost() {
   const request = useChatStore((s) => s.activeAgentRewindRequest)
   const clearAgentRewindRequest = useChatStore((s) => s.clearAgentRewindRequest)
   const clearAgentMessageRewindable = useChatStore((s) => s.clearAgentMessageRewindable)
+  const updateAgentStreamMessage = useChatStore((s) => s.updateAgentStreamMessage)
   const conversations = useChatStore((s) => s.conversations)
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore((s) => s.isStreaming)
@@ -102,6 +103,11 @@ export function AgentRewindDialogHost() {
           return
         }
         if (outcome.status === "persist_failed") {
+          if (outcome.payload?.unavailableReason) {
+            updateAgentStreamMessage(request.chatMessageId, {
+              agentRewindUnavailableReason: outcome.payload.unavailableReason,
+            })
+          }
           setPersistError(outcome.persistError ?? "Unknown save error")
           return
         }
@@ -111,6 +117,11 @@ export function AgentRewindDialogHost() {
           // nothing left to truncate/fork from — this must never be
           // silently reported as a plain success (review-round P2).
           console.warn("[agent] rewind state mismatch:", outcome.payload)
+          if (outcome.payload?.unavailableReason) {
+            updateAgentStreamMessage(request.chatMessageId, {
+              agentRewindUnavailableReason: outcome.payload.unavailableReason,
+            })
+          }
           clearAgentMessageRewindable(request.chatMessageId, {
             keepActiveRequest: true,
           })
@@ -121,6 +132,9 @@ export function AgentRewindDialogHost() {
         const message = outcome.payload?.error ?? "Unknown rewind error"
         console.warn("[agent] rewind failed:", message)
         if (outcome.payload?.unavailableReason) {
+          updateAgentStreamMessage(request.chatMessageId, {
+            agentRewindUnavailableReason: outcome.payload.unavailableReason,
+          })
           clearAgentMessageRewindable(request.chatMessageId, {
             keepActiveRequest: true,
           })
@@ -140,7 +154,15 @@ export function AgentRewindDialogHost() {
       .finally(() => {
         setPending(false)
       })
-  }, [clearAgentMessageRewindable, clearAgentRewindRequest, pending, project?.path, request])
+  }, [
+    clearAgentMessageRewindable,
+    clearAgentRewindRequest,
+    pending,
+    project?.path,
+    request,
+    t,
+    updateAgentStreamMessage,
+  ])
 
   const retryPersist = useCallback(() => {
     if (!project?.path || retrying) return

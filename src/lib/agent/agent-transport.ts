@@ -28,6 +28,7 @@ import type {
 	AgentPermissionDecision,
 	AgentPermissionPolicy,
 	AgentPermissionRequestPayload,
+	AgentProgressSummaryPayload,
 	AgentRewindFilesPayload,
 	AgentSummaryPayload,
 	AgentTaskEventPayload,
@@ -635,7 +636,7 @@ export async function streamAgent(
 					return;
 				}
 				if (wrapper.type === "agent_progress_summary") {
-					callbacks.onAgentProgressSummary?.(msg);
+					callbacks.onAgentProgressSummary?.(msg as AgentProgressSummaryPayload);
 					return;
 				}
 

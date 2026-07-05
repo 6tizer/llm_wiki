@@ -1,18 +1,31 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
+  Activity,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Info,
   Loader2,
+  ShieldCheck,
+  ShieldX,
   Wrench,
   XCircle,
 } from "lucide-react"
-import type { AgentToolCallRecord } from "@/stores/chat-store"
+import type {
+  AgentPermissionEventDecision,
+  AgentPermissionEventRecord,
+  AgentProgressSummaryRecord,
+  AgentToolCallRecord,
+  DisplayMessage,
+} from "@/stores/chat-store"
 import { formatDurationMs, getAgentToolStatus, safeStringify, type AgentToolStatus } from "./agent-format"
 
 interface AgentToolTimelineProps {
   toolCalls: AgentToolCallRecord[]
+  progressSummaries?: AgentProgressSummaryRecord[]
+  permissionEvents?: AgentPermissionEventRecord[]
+  rewindUnavailableReason?: DisplayMessage["agentRewindUnavailableReason"]
   defaultCollapsed?: boolean
 }
 
@@ -30,13 +43,33 @@ function StatusIcon({ status }: { status: AgentToolStatus }) {
   return <Wrench className="h-3.5 w-3.5" />
 }
 
-export function AgentToolTimeline({ toolCalls, defaultCollapsed = true }: AgentToolTimelineProps) {
+function formatTimelineTime(timestamp?: number): string {
+  if (timestamp === undefined) return ""
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
+
+function isAllowDecision(decision: AgentPermissionEventDecision): boolean {
+  return decision === "allow_temporary" || decision === "allow_permanent"
+}
+
+export function AgentToolTimeline({
+  toolCalls,
+  progressSummaries = [],
+  permissionEvents = [],
+  rewindUnavailableReason,
+  defaultCollapsed = true,
+}: AgentToolTimelineProps) {
   const { t } = useTranslation()
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
-  if (toolCalls.length === 0) return null
+  const hasStatusRows =
+    progressSummaries.length > 0 ||
+    permissionEvents.length > 0 ||
+    Boolean(rewindUnavailableReason)
+  if (toolCalls.length === 0 && !hasStatusRows) return null
 
   const failed = toolCalls.filter((call) => getAgentToolStatus(call) === "failed").length
   const running = toolCalls.filter((call) => getAgentToolStatus(call) === "running").length
+  const totalEvents = toolCalls.length + progressSummaries.length + permissionEvents.length + (rewindUnavailableReason ? 1 : 0)
 
   return (
     <div className="rounded-md border border-border/60 bg-background/70 text-xs">
@@ -51,7 +84,7 @@ export function AgentToolTimeline({ toolCalls, defaultCollapsed = true }: AgentT
         <Wrench className="h-3.5 w-3.5" />
         <span className="min-w-0 font-medium">{t("agent.timeline.title")}</span>
         <span className="ml-auto min-w-0 text-right text-[10px]">
-          {toolCalls.length}
+          {totalEvents}
           {running > 0 ? ` / ${t("agent.status.running")}: ${running}` : ""}
           {failed > 0 ? ` / ${t("agent.status.failed")}: ${failed}` : ""}
         </span>
@@ -91,6 +124,37 @@ export function AgentToolTimeline({ toolCalls, defaultCollapsed = true }: AgentT
               </div>
             )
           })}
+          {progressSummaries.map((summary, index) => (
+            <div key={`progress-${summary.timestamp}-${index}`} className="flex min-w-0 items-start gap-2 rounded border border-border/40 bg-muted/10 p-2 text-muted-foreground">
+              <Activity className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400" />
+              <div className="min-w-0 flex-1">
+                <div className="break-words text-foreground">{summary.text}</div>
+                <div className="mt-0.5 text-[10px]">{t("agent.timeline.progress")}</div>
+              </div>
+              <span className="shrink-0 text-[10px]">{formatTimelineTime(summary.timestamp)}</span>
+            </div>
+          ))}
+          {permissionEvents.map((event, index) => {
+            const allowed = isAllowDecision(event.decision)
+            const Icon = allowed ? ShieldCheck : ShieldX
+            return (
+              <div key={`permission-${event.timestamp}-${event.toolName}-${index}`} className="flex min-w-0 items-center gap-2 rounded border border-border/40 bg-muted/10 p-2 text-muted-foreground">
+                <Icon className={`h-3.5 w-3.5 shrink-0 ${allowed ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`} />
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  {t(`agent.timeline.permission.${event.decision}`, { toolName: event.toolName })}
+                </span>
+                <span className="shrink-0 text-[10px]">{formatTimelineTime(event.timestamp)}</span>
+              </div>
+            )
+          })}
+          {rewindUnavailableReason && (
+            <div className="flex min-w-0 items-start gap-2 rounded border border-border/40 bg-muted/10 p-2 text-muted-foreground">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 break-words text-foreground">
+                {t(`agent.timeline.rewindUnavailable.${rewindUnavailableReason}`)}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>

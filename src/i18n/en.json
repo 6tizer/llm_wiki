@@ -273,10 +273,27 @@
       "contextSummarizedDetail": "Agent compacted the earlier session context. Internal summary details are hidden from the chat."
     },
     "timeline": {
-      "title": "Tool calls",
+      "title": "Activity timeline",
       "input": "Input",
       "error": "Error",
-      "empty": "No tool calls"
+      "empty": "No tool calls",
+      "progress": "Progress update",
+      "permission": {
+        "allow_temporary": "Allowed {{toolName}}",
+        "allow_permanent": "Allowed {{toolName}}",
+        "deny": "Denied {{toolName}}",
+        "deny_interrupt": "Denied and interrupted {{toolName}}",
+        "timeout": "Denied {{toolName}} after timeout"
+      },
+      "rewindUnavailable": {
+        "inactive_stream": "Rewind is unavailable because this Agent stream is no longer active.",
+        "unsupported": "Rewind is unavailable in this Agent runtime.",
+        "missing_message_id": "Rewind is unavailable because this checkpoint is missing a message id.",
+        "transport_closed": "Rewind is unavailable because the Agent transport closed.",
+        "transport_not_ready": "Rewind is unavailable because the Agent transport is not ready.",
+        "session_mismatch": "Rewind is unavailable because this checkpoint belongs to a different session.",
+        "spawn_failed": "Rewind is unavailable because Agent could not start the rewind runtime."
+      }
     },
     "blocks": {
       "toolUse": "Tool use",

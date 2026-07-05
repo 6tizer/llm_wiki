@@ -69,6 +69,10 @@ import { useWikiStore } from "@/stores/wiki-store";
 import { AgentPermissionDialogHost } from "./agent-permission-dialog";
 import { AgentRewindDialogHost } from "./agent-rewind-dialog";
 import { buildAgentResumeIntentOverrideForConversation } from "./agent-resume-intent";
+import {
+	classifyAgentPermissionDecision,
+	parseAgentProgressSummaryPayload,
+} from "./agent-timeline-events";
 import { buildAgentTransportOptionsFromState } from "./agent-transport-options";
 import {
 	agentResultToStats,
@@ -468,6 +472,12 @@ export function ChatPanel() {
 		(s) => s.finishAgentStreamMessage,
 	);
 	const updateAgentProgress = useChatStore((s) => s.updateAgentProgress);
+	const appendAgentProgressSummary = useChatStore(
+		(s) => s.appendAgentProgressSummary,
+	);
+	const appendAgentPermissionEvent = useChatStore(
+		(s) => s.appendAgentPermissionEvent,
+	);
 	const appendAgentWikiChange = useChatStore((s) => s.appendAgentWikiChange);
 	const markAgentMessageRewindable = useChatStore(
 		(s) => s.markAgentMessageRewindable,
@@ -753,7 +763,23 @@ export function ChatPanel() {
 								...payload,
 								streamId,
 								conversationId: convId,
+							}).then((decision) => {
+								appendAgentPermissionEvent(messageId, {
+									toolName: payload.toolName,
+									decision: classifyAgentPermissionDecision(
+										decision,
+										t("agent.permission.timeoutDenied"),
+									),
+									timestamp: Date.now(),
+								});
+								return decision;
 							});
+						},
+						onAgentProgressSummary: (payload) => {
+							markAgentRunning();
+							for (const summary of parseAgentProgressSummaryPayload(payload)) {
+								appendAgentProgressSummary(messageId, summary);
+							}
 						},
 						onWikiChanged: (payload) => {
 							markAgentRunning();
@@ -820,6 +846,8 @@ export function ChatPanel() {
 		},
 		[
 			addMessage,
+			appendAgentPermissionEvent,
+			appendAgentProgressSummary,
 			appendAgentWikiChange,
 			clearAgentMessageRewindable,
 			createConversation,

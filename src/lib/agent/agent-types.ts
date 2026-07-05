@@ -353,5 +353,17 @@ export interface AgentCallbacks {
 	onPartialMessage?: (payload: unknown) => void;
 	onHookEvent?: (payload: unknown) => void;
 	onSubagentEvent?: (payload: unknown) => void;
-	onAgentProgressSummary?: (payload: unknown) => void;
+	onAgentProgressSummary?: (payload: AgentProgressSummaryPayload) => void;
 }
+
+export type AgentProgressSummaryItem =
+	| string
+	| {
+			text?: unknown;
+			summary?: unknown;
+			timestamp?: unknown;
+	  };
+
+export type AgentProgressSummaryPayload =
+	| AgentProgressSummaryItem
+	| AgentProgressSummaryItem[];
