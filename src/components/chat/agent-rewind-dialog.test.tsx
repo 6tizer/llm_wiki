@@ -243,6 +243,29 @@ describe("AgentRewindDialogHost", () => {
     container.remove()
   })
 
+  it("discloses wiki_restore_failed with failed file details instead of closing", async () => {
+    runAgentRewindMock.mockResolvedValue({
+      status: "wiki_restore_failed",
+      payload: { ok: true, result: { canRewind: true } },
+      wikiRestoreFailures: [{ path: "wiki/a.md", error: "disk full" }],
+    })
+    const { container, root } = renderDialog()
+
+    const confirmButton = findButtonByText(container, i18n.t("agent.rewind.confirm"))
+    await act(async () => {
+      confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+    await flushMicrotasks()
+
+    expect(container.textContent).toContain(i18n.t("agent.rewind.wikiRestoreFailed"))
+    expect(container.textContent).toContain("wiki/a.md")
+    expect(container.textContent).toContain("disk full")
+    expect(useChatStore.getState().activeAgentRewindRequest).not.toBeNull()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("closes the dialog on a plain success", async () => {
     runAgentRewindMock.mockResolvedValue({
       status: "success",

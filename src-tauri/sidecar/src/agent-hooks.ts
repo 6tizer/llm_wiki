@@ -20,7 +20,42 @@ interface LlmWikiHookContext {
 	enableWriteTools: boolean;
 	permissionPolicy: AgentPermissionPolicy;
 	changedPaths: Set<string>;
+	wikiToolUseIds?: Map<string, string[]>;
+	ambiguousWikiToolNames?: Set<string>;
 	send: (msg: AgentMessage) => void;
+}
+
+function queueToolUseId(
+	queue: Map<string, string[]> | undefined,
+	ambiguous: Set<string> | undefined,
+	toolName: string,
+	toolUseId: string | undefined,
+): void {
+	if (!queue || !toolUseId) return;
+	const ids = queue.get(toolName) ?? [];
+	ids.push(toolUseId);
+	queue.set(toolName, ids);
+	if (ids.length > 1) {
+		ambiguous?.add(toolName);
+	}
+}
+
+function removeQueuedToolUseId(
+	queue: Map<string, string[]> | undefined,
+	ambiguous: Set<string> | undefined,
+	toolName: string,
+	toolUseId: string | undefined,
+): void {
+	if (!queue || !toolUseId) return;
+	const ids = queue.get(toolName);
+	if (!ids) return;
+	const next = ids.filter((id) => id !== toolUseId);
+	if (next.length === 0) {
+		queue.delete(toolName);
+		ambiguous?.delete(toolName);
+		return;
+	}
+	queue.set(toolName, next);
 }
 
 export function createLlmWikiHooks(
@@ -50,6 +85,12 @@ export function createLlmWikiHooks(
 							enableWriteTools: context.enableWriteTools,
 							permissionPolicy: context.permissionPolicy,
 						});
+						queueToolUseId(
+							context.wikiToolUseIds,
+							context.ambiguousWikiToolNames,
+							event.tool_name,
+							event.tool_use_id,
+						);
 						send("tool_event", {
 							phase: "pre",
 							toolName: event.tool_name,
@@ -91,6 +132,12 @@ export function createLlmWikiHooks(
 					async (input) => {
 						const event = input as PostToolUseHookInput;
 						if (!isWikiToolName(event.tool_name)) return {};
+						removeQueuedToolUseId(
+							context.wikiToolUseIds,
+							context.ambiguousWikiToolNames,
+							event.tool_name,
+							event.tool_use_id,
+						);
 						send("tool_event", {
 							phase: "post",
 							toolName: event.tool_name,
@@ -110,6 +157,12 @@ export function createLlmWikiHooks(
 					async (input) => {
 						const event = input as PostToolUseFailureHookInput;
 						if (!isWikiToolName(event.tool_name)) return {};
+						removeQueuedToolUseId(
+							context.wikiToolUseIds,
+							context.ambiguousWikiToolNames,
+							event.tool_name,
+							event.tool_use_id,
+						);
 						failedToolCalls += 1;
 						send("tool_event", {
 							phase: "failure",

@@ -14,7 +14,12 @@ const conversation: Conversation = {
   agentSessionId: "session-1",
 }
 
-function msg(id: string, timestamp: number, toolCalls?: DisplayMessage["toolCalls"]): DisplayMessage {
+function msg(
+  id: string,
+  timestamp: number,
+  toolCalls?: DisplayMessage["toolCalls"],
+  wikiChanges?: DisplayMessage["wikiChanges"],
+): DisplayMessage {
   return {
     id,
     role: "assistant",
@@ -23,6 +28,7 @@ function msg(id: string, timestamp: number, toolCalls?: DisplayMessage["toolCall
     conversationId: "c1",
     mode: "agent",
     toolCalls,
+    wikiChanges,
   }
 }
 
@@ -53,10 +59,141 @@ describe("computeAgentRewindGateDecision", () => {
     ).toEqual({ allowed: true })
   })
 
-  it("blocks when a wiki write tool call lands on the target message itself (A2/A17)", () => {
+  it("allows rewind when every wiki write after the target has snapshot coverage", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true }],
+        [{ path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true }],
+      ),
+      msg(
+        "m2",
+        2,
+        [{ toolName: "mcp__llm_wiki__create_entity", toolUseId: "tool-2", phase: "post", ok: true }],
+        [{ path: "wiki/entities/b.md", operation: "create", timestamp: 2, toolUseId: "tool-2", snapshotted: true }],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("allows rewind when only native SDK file-write tools appear after the target", () => {
+    const messages = [
+      msg("m1", 1, [
+        { toolName: "Write", toolUseId: "native-1", phase: "post", ok: true },
+        { toolName: "Edit", toolUseId: "native-2", phase: "post", ok: true },
+        { toolName: "MultiEdit", toolUseId: "native-3", phase: "post", ok: true },
+        { toolName: "NotebookEdit", toolUseId: "native-4", phase: "post", ok: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("blocks when native file writes and snapshotted wiki writes are both after the target", () => {
+    const messages = [
+      msg("m1", 1, [
+        { toolName: "Write", toolUseId: "native-1", phase: "post", ok: true },
+        { toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true },
+      ], [
+        { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+  })
+
+  it("allows snapshotted wiki writes after the target when native writes are only before the target", () => {
+    const messages = [
+      msg("m0", 0, [
+        { toolName: "Write", toolUseId: "native-1", phase: "post", ok: true },
+      ]),
+      msg("m1", 1, [
+        { toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true },
+      ], [
+        { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("blocks when a wiki write tool call lands on the target message itself without snapshot coverage (A2/A17)", () => {
     const messages = [
       msg("m1", 1, [
         { toolName: "mcp__llm_wiki__update_page", phase: "post", ok: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+  })
+
+  it("blocks when snapshot coverage is mixed after the target", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-1", phase: "post", ok: true }],
+        [{ path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-1", snapshotted: true }],
+      ),
+      msg(
+        "m2",
+        2,
+        [{ toolName: "mcp__llm_wiki__create_concept", toolUseId: "tool-2", phase: "post", ok: true }],
+        [{ path: "wiki/concepts/b.md", operation: "create", timestamp: 2, toolUseId: "tool-2", snapshotted: false }],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target" })
+  })
+
+  it("blocks appTool writes that have no snapshotted wikiChanged record", () => {
+    const messages = [
+      msg("m1", 1, [
+        { toolName: "mcp__llm_wiki__run_pipeline", toolUseId: "tool-1", phase: "post", ok: true },
       ]),
     ]
     expect(

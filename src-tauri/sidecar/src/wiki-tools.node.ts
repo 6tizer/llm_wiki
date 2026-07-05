@@ -51,6 +51,14 @@ async function tempProject(): Promise<string> {
 	return dir;
 }
 
+async function readSnapshotManifest(projectPath: string, streamId: string): Promise<Array<Record<string, unknown>>> {
+	const raw = await fs.readFile(
+		path.join(projectPath, ".llm-wiki", "rewind-snapshots", streamId, "manifest.jsonl"),
+		"utf8",
+	);
+	return raw.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 test("wiki markdown paths decode URI encoding before validation", () => {
 	assert.equal(
 		assertWikiMarkdownPath("wiki/entities%2Fencoded.md"),
@@ -148,6 +156,134 @@ test("update_page writes wiki markdown and emits changed payload", async () => {
 	assert.equal(changed[0]?.path, "wiki/index.md");
 	assert.equal(changed[0]?.operation, "update");
 	assert.match(resultText(result), /newSha256/);
+});
+
+test("update_page writes rewind snapshot manifest before each real write", async () => {
+	const projectPath = await tempProject();
+	const changed: WikiChangedPayload[] = [];
+	let currentToolUseId = "tool-1";
+	const update = toolByName("update_page", {
+		projectPath,
+		streamId: "stream-1",
+		getCurrentToolUseId: () => currentToolUseId,
+		onWikiChanged: (payload) => changed.push(payload),
+	});
+
+	const first = await update.handler(
+		{ path: "wiki/index.md", contents: "# Index\n\nFirst write.\n" },
+		{},
+	);
+	currentToolUseId = "tool-2";
+	const second = await update.handler(
+		{ path: "wiki/index.md", contents: "# Index\n\nSecond write.\n" },
+		{},
+	);
+
+	assert.equal(first.isError, undefined);
+	assert.equal(second.isError, undefined);
+	assert.equal(changed[0]?.snapshotted, true);
+	assert.equal(changed[0]?.toolUseId, "tool-1");
+	assert.equal(changed[1]?.snapshotted, true);
+	assert.equal(changed[1]?.toolUseId, "tool-2");
+
+	const manifest = await readSnapshotManifest(projectPath, "stream-1");
+	assert.equal(manifest.length, 2);
+	assert.deepEqual(
+		manifest.map((entry) => ({
+			seq: entry.seq,
+			path: entry.path,
+			operation: entry.operation,
+			existedBefore: entry.existedBefore,
+			toolUseId: entry.toolUseId,
+			afterSha256: typeof entry.afterSha256,
+			snapshotFile: typeof entry.snapshotFile,
+		})),
+		[
+			{
+				seq: 1,
+				path: "wiki/index.md",
+				operation: "update",
+				existedBefore: true,
+				toolUseId: "tool-1",
+				afterSha256: "string",
+				snapshotFile: "string",
+			},
+			{
+				seq: 2,
+				path: "wiki/index.md",
+				operation: "update",
+				existedBefore: true,
+				toolUseId: "tool-2",
+				afterSha256: "string",
+				snapshotFile: "string",
+			},
+		],
+	);
+	const firstSnapshot = await fs.readFile(
+		path.join(projectPath, ".llm-wiki", "rewind-snapshots", "stream-1", String(manifest[0]?.snapshotFile)),
+		"utf8",
+	);
+	const secondSnapshot = await fs.readFile(
+		path.join(projectPath, ".llm-wiki", "rewind-snapshots", "stream-1", String(manifest[1]?.snapshotFile)),
+		"utf8",
+	);
+	assert.match(firstSnapshot, /This is a useful page/);
+	assert.match(secondSnapshot, /First write/);
+});
+
+test("create_entity records create snapshot as existedBefore false", async () => {
+	const projectPath = await tempProject();
+	const changed: WikiChangedPayload[] = [];
+	const createEntity = toolByName("create_entity", {
+		projectPath,
+		streamId: "stream-create",
+		getCurrentToolUseId: () => "tool-create",
+		onWikiChanged: (payload) => changed.push(payload),
+	});
+
+	const result = await createEntity.handler(
+		{ name: "New Entity", summary: "Created by Agent." },
+		{},
+	);
+
+	assert.equal(result.isError, undefined);
+	assert.equal(changed[0]?.snapshotted, true);
+	assert.equal(changed[0]?.toolUseId, "tool-create");
+	const manifest = await readSnapshotManifest(projectPath, "stream-create");
+	assert.equal(manifest.length, 1);
+	assert.equal(manifest[0]?.operation, "create");
+	assert.equal(manifest[0]?.existedBefore, false);
+	assert.equal(manifest[0]?.beforeSha256, undefined);
+	assert.equal(manifest[0]?.toolUseId, "tool-create");
+	const snapshot = await fs.readFile(
+		path.join(projectPath, ".llm-wiki", "rewind-snapshots", "stream-create", String(manifest[0]?.snapshotFile)),
+		"utf8",
+	);
+	assert.equal(snapshot, "");
+});
+
+test("snapshot failure does not block update_page write and marks snapshotted false", async () => {
+	const projectPath = await tempProject();
+	await fs.writeFile(path.join(projectPath, ".llm-wiki"), "not a directory", "utf8");
+	const changed: WikiChangedPayload[] = [];
+	const update = toolByName("update_page", {
+		projectPath,
+		streamId: "stream-fail",
+		getCurrentToolUseId: () => "tool-fail",
+		onWikiChanged: (payload) => changed.push(payload),
+	});
+
+	const result = await update.handler(
+		{ path: "wiki/index.md", contents: "# Index\n\nWrite should still happen.\n" },
+		{},
+	);
+
+	const written = await fs.readFile(path.join(projectPath, "wiki", "index.md"), "utf8");
+	assert.equal(result.isError, undefined);
+	assert.match(written, /Write should still happen/);
+	assert.equal(changed[0]?.snapshotted, false);
+	assert.equal(changed[0]?.toolUseId, "tool-fail");
+	assert.match(resultText(result), /"snapshotted": false/);
 });
 
 test("update_page dryRun does not write", async () => {

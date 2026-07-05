@@ -60,12 +60,14 @@ export function AgentRewindDialogHost() {
   const project = useWikiStore((s) => s.project)
   const [error, setError] = useState<string | null>(null)
   const [persistError, setPersistError] = useState<string | null>(null)
+  const [wikiRestoreFailures, setWikiRestoreFailures] = useState<Array<{ path: string; error: string }>>([])
   const [pending, setPending] = useState(false)
   const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     setError(null)
     setPersistError(null)
+    setWikiRestoreFailures([])
     setPending(false)
     setRetrying(false)
   }, [request])
@@ -86,6 +88,7 @@ export function AgentRewindDialogHost() {
     setPending(true)
     setError(null)
     setPersistError(null)
+    setWikiRestoreFailures([])
     void runAgentRewind({
       target: request,
       projectPath: project?.path,
@@ -109,6 +112,11 @@ export function AgentRewindDialogHost() {
             })
           }
           setPersistError(outcome.persistError ?? "Unknown save error")
+          return
+        }
+        if (outcome.status === "wiki_restore_failed") {
+          setWikiRestoreFailures(outcome.wikiRestoreFailures ?? [])
+          setError(t("agent.rewind.wikiRestoreFailed"))
           return
         }
         if (outcome.status === "state_mismatch") {
@@ -218,6 +226,18 @@ export function AgentRewindDialogHost() {
             </Button>
           </div>
         ) : null}
+        {wikiRestoreFailures.length > 0 ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <div className="font-medium">{t("agent.rewind.wikiRestoreFailureFiles")}</div>
+            <ul className="mt-1 list-disc pl-5">
+              {wikiRestoreFailures.map((failure, index) => (
+                <li key={`${failure.path}-${index}`}>
+                  <span className="font-mono">{failure.path}</span>: {failure.error}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={clearAgentRewindRequest} disabled={pending}>
             {t("agent.rewind.cancel")}
@@ -225,7 +245,7 @@ export function AgentRewindDialogHost() {
           <Button
             variant="destructive"
             onClick={confirm}
-            disabled={pending || blocked || Boolean(persistError)}
+            disabled={pending || blocked || Boolean(persistError) || wikiRestoreFailures.length > 0}
           >
             {t("agent.rewind.confirm")}
           </Button>

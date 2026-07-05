@@ -17,9 +17,21 @@ const persistMocks = vi.hoisted(() => ({
   saveChatHistory: vi.fn(async () => {}),
 }))
 
+const restoreMocks = vi.hoisted(() => ({
+  restoreAgentWikiSnapshots: vi.fn<() => Promise<{
+    ok: boolean
+    restoredPaths: string[]
+    failures: Array<{ path: string; error: string }>
+  }>>(async () => ({ ok: true, restoredPaths: [], failures: [] })),
+}))
+
 vi.mock("./agent-transport", () => ({
   rewindAgentFiles: transportMocks.rewindAgentFiles,
   rewindAgentSession: transportMocks.rewindAgentSession,
+}))
+
+vi.mock("./agent-wiki-snapshot-restore", () => ({
+  restoreAgentWikiSnapshots: restoreMocks.restoreAgentWikiSnapshots,
 }))
 
 vi.mock("@/lib/persist", () => ({
@@ -75,6 +87,11 @@ describe("runAgentRewind", () => {
     transportMocks.rewindAgentFiles.mockReset()
     transportMocks.rewindAgentSession.mockReset()
     persistMocks.saveChatHistory.mockReset().mockResolvedValue(undefined)
+    restoreMocks.restoreAgentWikiSnapshots.mockReset().mockResolvedValue({
+      ok: true,
+      restoredPaths: [],
+      failures: [],
+    })
   })
 
   it("uses the fast path when the stream is still active, truncates the timeline, and force-flushes (A3/A4)", async () => {
@@ -93,6 +110,11 @@ describe("runAgentRewind", () => {
     expect(result.status).toBe("success")
     expect(transportMocks.rewindAgentFiles).toHaveBeenCalledWith("stream-1", "user-uuid-1")
     expect(transportMocks.rewindAgentSession).not.toHaveBeenCalled()
+    expect(restoreMocks.restoreAgentWikiSnapshots).toHaveBeenCalledWith({
+      projectPath: "/wiki",
+      target: target(),
+      messages: expect.any(Array),
+    })
     expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["m1"])
     const conversation = useChatStore.getState().conversations[0]
     expect(conversation.agentForkSessionPending).toBe(true)
@@ -104,6 +126,31 @@ describe("runAgentRewind", () => {
     )
     // Lock must be released after a successful run.
     expect(useChatStore.getState().agentRewindLocks["conv-1"]).toBeUndefined()
+  })
+
+  it("reports wiki_restore_failed and does not apply success when SDK rewind succeeds but wiki restore fails", async () => {
+    useChatStore.setState({
+      conversations: [{ id: "conv-1", title: "Agent", createdAt: 1, updatedAt: 1, agentSessionId: "session-1" }],
+      messages: [msg("m1", "conv-1", 1), msg("m2", "conv-1", 2)],
+    })
+    transportMocks.rewindAgentFiles.mockResolvedValue(okPayload)
+    restoreMocks.restoreAgentWikiSnapshots.mockResolvedValue({
+      ok: false,
+      restoredPaths: [],
+      failures: [{ path: "wiki/a.md", error: "disk full" }],
+    })
+
+    const result = await runAgentRewind({
+      target: target(),
+      projectPath: "/wiki",
+      buildOptions: () => ({ apiKey: "k" }),
+    })
+
+    expect(result.status).toBe("wiki_restore_failed")
+    expect(result.wikiRestoreFailures).toEqual([{ path: "wiki/a.md", error: "disk full" }])
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(["m1", "m2"])
+    expect(useChatStore.getState().conversations[0].agentForkSessionPending).toBeUndefined()
+    expect(persistMocks.saveChatHistory).not.toHaveBeenCalled()
   })
 
   it("falls back to the resume-only slow path when the fast path throws (turn already ended, fixes #60)", async () => {

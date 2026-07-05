@@ -5,6 +5,13 @@ import type {
 } from "@/stores/chat-store"
 import { isWikiWriteToolCall } from "./wiki-tool-write-gate"
 
+const NATIVE_FILE_WRITE_TOOL_NAMES = new Set([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+])
+
 export type AgentRewindGateDecision =
   | { allowed: true }
   | { allowed: false; reason: "wiki_write_after_target" }
@@ -21,9 +28,12 @@ export type AgentRewindGateDecision =
  *   - `wiki_write_after_target`: a wiki-write tool call landed on or after
  *     the target message — the SDK's native checkpoint does not cover wiki
  *     MCP tool writes (E2 probe), so rewinding here would silently leave
- *     those writes in place while reporting success (A2/A17). The A16 batch
- *     tool-event merge fix (chat-panel.tsx) is what makes this scan see
- *     every recorded tool call, not just the latest batch.
+ *     those writes in place while reporting success (A2/A17). SPEC-7 PR2b
+ *     narrows this: sidecar direct writes with explicit `wikiChanges`
+ *     snapshot coverage may proceed; missing/false snapshot coverage still
+ *     blocks. The A16 batch tool-event merge fix (chat-panel.tsx) is what
+ *     makes this scan see every recorded tool call, not just the latest
+ *     batch.
  */
 export function computeAgentRewindGateDecision(args: {
   target: AgentRewindRequestRecord
@@ -69,12 +79,34 @@ export function computeAgentRewindGateDecision(args: {
     (m) => m.id === target.chatMessageId
   )
   const from = targetIndex === -1 ? 0 : targetIndex
-  const hasWikiWriteAfterTarget = conversationMessages
-    .slice(from)
-    .some((m) =>
-      (m.toolCalls ?? []).some((call) => isWikiWriteToolCall(call.toolName))
-    )
-  if (hasWikiWriteAfterTarget) {
+  let hasUncoveredWikiWriteAfterTarget = false
+  let hasNativeWriteAfterTarget = false
+  let hasSnapshottedWikiWriteAfterTarget = false
+  for (const message of conversationMessages.slice(from)) {
+    for (const call of message.toolCalls ?? []) {
+      if (NATIVE_FILE_WRITE_TOOL_NAMES.has(call.toolName)) {
+        hasNativeWriteAfterTarget = true
+        continue
+      }
+      if (!isWikiWriteToolCall(call.toolName)) continue
+      const covered = Boolean(call.toolUseId) && (message.wikiChanges ?? []).some((change) =>
+        change.toolUseId === call.toolUseId && change.snapshotted === true
+      )
+      if (covered) {
+        hasSnapshottedWikiWriteAfterTarget = true
+      } else {
+        hasUncoveredWikiWriteAfterTarget = true
+      }
+    }
+  }
+  // Native SDK checkpoints and sidecar wiki snapshots each work alone. Their
+  // cross-channel composition for the same file is undefined, and this gate
+  // has no reliable path-level ordering knowledge, so mixed post-target writes
+  // stay fail-closed until a later phase defines composite restore semantics.
+  if (
+    hasUncoveredWikiWriteAfterTarget ||
+    (hasNativeWriteAfterTarget && hasSnapshottedWikiWriteAfterTarget)
+  ) {
     return { allowed: false, reason: "wiki_write_after_target" }
   }
 

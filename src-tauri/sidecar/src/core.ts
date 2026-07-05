@@ -151,6 +151,24 @@ export function createRequestHandler({
 			const permissionPolicy: AgentPermissionPolicy =
 				req.options.permissionPolicy ?? "default";
 			const changedPaths = new Set<string>();
+			const wikiToolUseIds = new Map<string, string[]>();
+			const ambiguousWikiToolNames = new Set<string>();
+			const takeWikiToolUseId = (toolName: string): string | undefined => {
+				// Sequential SDK tool execution keeps one pending id per tool name,
+				// which is precise enough for writePage. More than one same-name
+				// call in flight is ambiguous, so we return undefined and let the
+				// rewind gate fail closed on snapshotted:false.
+				if (ambiguousWikiToolNames.has(toolName)) return undefined;
+				const ids = wikiToolUseIds.get(toolName);
+				if (!ids || ids.length === 0) return undefined;
+				const [toolUseId, ...rest] = ids;
+				if (rest.length > 0) {
+					wikiToolUseIds.set(toolName, rest);
+				} else {
+					wikiToolUseIds.delete(toolName);
+				}
+				return toolUseId;
+			};
 			const allowedTools = getAllowedWikiTools({ wikiToolsEnabled });
 			const mcpServers = wikiToolsEnabled
 				? {
@@ -165,6 +183,7 @@ export function createRequestHandler({
 							maxFilesChangedEnabled: req.options.maxFilesChangedEnabled,
 							changedPaths,
 							streamId: req.streamId,
+							getCurrentToolUseId: takeWikiToolUseId,
 							appToolBridge,
 							emitAgentEvent: (type, data) => {
 								send({ streamId: req.streamId, type: type as AgentMessage["type"], data });
@@ -194,6 +213,8 @@ export function createRequestHandler({
 				enableWriteTools,
 				permissionPolicy,
 				changedPaths,
+				wikiToolUseIds,
+				ambiguousWikiToolNames,
 				send,
 			});
 
