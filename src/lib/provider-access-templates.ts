@@ -209,7 +209,7 @@ export const PROVIDER_ACCESS_TEMPLATES: ProviderAccessTemplate[] = [
     apiKeyUrl: "https://longcat.chat",
     endpoint: "https://api.longcat.chat/anthropic",
     authStyle: "bearer",
-    defaultModelId: "LongCat-2.0",
+    defaultModelId: "LongCat-Flash-Chat",
   }),
   anthropicCompat({
     id: "ant-ling",
