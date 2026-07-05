@@ -9,6 +9,7 @@ import { ChatPanel, shouldPromptForQaBeforeConversationDelete } from "./chat-pan
 import { ChatMessage, StreamingMessage } from "./chat-message"
 import { type DisplayMessage, useChatStore } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { getChatAgentTools } from "@/lib/chat-agent"
 
 const saveQaForConversationMock = vi.hoisted(() => vi.fn())
@@ -186,8 +187,8 @@ function mockModelCallSuccess(content = "model answer"): void {
 
 function agentRunProfileRecord(): Record<string, unknown> {
   return {
-    id: "agent-profile",
-    label: "Agent",
+    profileId: "agent-profile",
+    displayName: "Agent",
     enabled: true,
     kind: "agent-run",
     taskFamilies: ["agent"],
@@ -273,6 +274,14 @@ function findButtonByText(root: ParentNode, text: string): HTMLButtonElement {
   return button
 }
 
+function findElementByText(root: ParentNode, text: string): HTMLElement {
+  const element = [...root.querySelectorAll<HTMLElement>("*")].find(
+    (candidate) => candidate.textContent === text,
+  )
+  if (!element) throw new Error(`element not found: ${text}`)
+  return element
+}
+
 async function openDeleteQaDialog(container: HTMLElement): Promise<void> {
   const title = [...container.querySelectorAll<HTMLElement>("span")].find(
     (candidate) => candidate.textContent === "Research chat",
@@ -346,6 +355,7 @@ describe("ChatPanel agent mode rendering", () => {
       streamingContent: "",
       ingestSource: null,
       activeRunModelByConversation: {},
+      activeRunProfileByConversation: {},
       activeAgentPermissionRequest: null,
       queuedAgentPermissionRequests: [],
       agentPermissionRequestsByConversation: {},
@@ -354,6 +364,7 @@ describe("ChatPanel agent mode rendering", () => {
       agentRewindRequestsByConversation: {},
       agentRewindLocks: {},
     })
+    useAgentSettingsStore.getState().resetResourceConfig()
     useWikiStore.setState((state) => ({
       project: null,
       llmConfig: {
@@ -375,15 +386,15 @@ describe("ChatPanel agent mode rendering", () => {
     expect(html).toContain("Model routing")
   })
 
-  it("shows the legacy model when no Agent-run profile candidate exists", async () => {
+  it("shows Auto in the footer when no resolved Agent profile or SDK model exists", async () => {
     const { container, root } = renderChatPanel()
 
     await act(async () => {
       await Promise.resolve()
     })
 
-    expect(container.textContent).toContain("test-model")
-    expect(container.textContent).not.toContain("Auto")
+    expect(container.textContent).toContain("Auto")
+    expect(container.textContent).not.toContain("test-model")
 
     act(() => root.unmount())
     container.remove()
@@ -405,6 +416,79 @@ describe("ChatPanel agent mode rendering", () => {
 
     act(() => root.unmount())
     container.remove()
+  })
+
+  it("does not show a collapsed policy badge for the default policy", async () => {
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).not.toContain("Restricted")
+    expect(container.textContent).not.toContain("Skip confirmation")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("shows a neutral collapsed policy badge for restricted policy", async () => {
+    setupActiveProjectConversation()
+    useChatStore
+      .getState()
+      .setConversationAgentPermissionPolicyOverride("conv-1", "restricted")
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const badge = findElementByText(container, "Restricted")
+    expect(badge.className).toContain("bg-muted")
+    expect(badge.className).not.toContain("text-destructive")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("shows a warning collapsed policy badge for bypass policy", async () => {
+    setupActiveProjectConversation()
+    useChatStore
+      .getState()
+      .setConversationAgentPermissionPolicyOverride("conv-1", "bypassPermissions")
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const badge = findElementByText(container, "Skip confirmation")
+    expect(badge.className).toContain("text-destructive")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("keeps permission policy copy explicit about restricted and bypass scope", () => {
+    expect(
+      i18n.t("chat.agentRouting.policyOptions.restricted.description", { lng: "en" }),
+    ).toBe("Disables built-in tools, including Bash and file reads.")
+    expect(
+      i18n.t("chat.agentRouting.policyOptions.bypassPermissions.description", {
+        lng: "en",
+      }),
+    ).toBe(
+      "Runs commands and edits files without asking — including shell commands.",
+    )
+    expect(
+      i18n.t("chat.agentRouting.policyOptions.restricted.description", { lng: "zh" }),
+    ).toBe("禁用全部内置工具，包括 Bash 和读取文件。")
+    expect(
+      i18n.t("chat.agentRouting.policyOptions.bypassPermissions.description", {
+        lng: "zh",
+      }),
+    ).toBe("不再询问直接执行——包括 shell 命令与任意文件修改。")
   })
 
   it("renders explicit Save QA when a project conversation is active", () => {
@@ -1055,6 +1139,45 @@ describe("ChatPanel agent mode rendering", () => {
       })
     })
     expect(useChatStore.getState().activeRunModelByConversation["conv-1"]).toBe("claude-runtime")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("records the resolved runtime profile and shows the cached display name in the footer", async () => {
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord()],
+    })
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    const callbacks = streamAgentMock.mock.calls[0]?.[2] as {
+      onProfileResolved: (payload: Record<string, unknown>) => void
+    }
+
+    act(() => {
+      callbacks.onProfileResolved({
+        streamId: "stream-1",
+        profileId: "agent-profile",
+        claimId: "claim-agent",
+        agentSdkModelId: "claude-runtime",
+        authStyle: "x-api-key",
+      })
+    })
+
+    expect(useChatStore.getState().activeRunProfileByConversation["conv-1"]).toMatchObject({
+      profileId: "agent-profile",
+      agentSdkModelId: "claude-runtime",
+    })
+    expect(container.textContent).toContain("Agent")
 
     act(() => root.unmount())
     container.remove()

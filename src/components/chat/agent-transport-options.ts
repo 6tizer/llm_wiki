@@ -15,6 +15,8 @@ function agentApiServerBaseUrl(): string {
   return `http://127.0.0.1:${API_SERVER_PORT}`
 }
 
+const FALLBACK_AGENT_PERMISSION_POLICY = "default"
+
 export function buildAgentTransportOptionsFromState({
   project,
   llmConfig,
@@ -51,6 +53,10 @@ export function buildAgentTransportOptionsFromState({
       "[agent-transport-options] agentResumeSessionAt set without a pending fork — ignoring",
     )
   }
+  const permissionPolicy =
+    activeConversation?.agentPermissionPolicyOverride ??
+    resourceConfig.defaultPermissionPolicy ??
+    FALLBACK_AGENT_PERMISSION_POLICY
 
   return {
     cwd: project.path,
@@ -63,7 +69,10 @@ export function buildAgentTransportOptionsFromState({
     forkSession,
     resumeSessionAt,
     persistSession: true,
-    permissionPolicy: "default",
+    permissionPolicy,
+    ...(activeConversation?.agentProfileIdOverride
+      ? { agentProfileId: activeConversation.agentProfileIdOverride }
+      : {}),
     agentProgressSummaries: true,
     ...(disallowedTools ? { disallowedTools } : {}),
     enableWikiTools: true,

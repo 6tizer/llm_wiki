@@ -1128,6 +1128,60 @@ describe("streamAgent", () => {
 		expect(callbacks.onError).not.toHaveBeenCalled();
 	});
 
+	it("forwards profile_resolved events without treating them as SDK messages", async () => {
+		const callbacks = {
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+			onProfileResolved: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
+		});
+
+		const payload = latestAgentSpawnPayload();
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "profile_resolved",
+				data: {
+					profileId: "profile-agent",
+					claimId: "claim-agent",
+					agentSdkModelId: "claude-runtime",
+					authStyle: "x-api-key",
+					endpoint: "https://agent.example/v1",
+				},
+			}),
+		);
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+
+		await stream;
+
+		expect(callbacks.onProfileResolved).toHaveBeenCalledWith({
+			streamId: payload.args.streamId,
+			profileId: "profile-agent",
+			claimId: "claim-agent",
+			agentSdkModelId: "claude-runtime",
+			authStyle: "x-api-key",
+			endpoint: "https://agent.example/v1",
+		});
+		expect(callbacks.onMessage).not.toHaveBeenCalled();
+		expect(callbacks.onToken).not.toHaveBeenCalled();
+		expect(callbacks.onDone).toHaveBeenCalledWith(null);
+		expect(callbacks.onError).not.toHaveBeenCalled();
+	});
+
 	it("filters SDK compact boundary system messages out of normal output", async () => {
 		const callbacks = {
 			onMessage: vi.fn(),
@@ -1676,6 +1730,62 @@ describe("rewindAgentSession", () => {
 		await expect(promise).resolves.toMatchObject({
 			ok: true,
 			result: { canRewind: true, filesChanged: ["wiki/page.md"] },
+		});
+	});
+
+	it("forwards profile_resolved events from rewindAgentSession", async () => {
+		const onProfileResolved = vi.fn();
+		const promise = rewindAgentSession(
+			{ apiKey: "test-key", resume: "session-abc", cwd: "/tmp/wiki" },
+			"user-uuid-1",
+			undefined,
+			onProfileResolved,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_rewind_session",
+				expect.anything(),
+			);
+		});
+		const call = tauriMocks.invoke.mock.calls.find(
+			([command]) => command === "agent_rewind_session",
+		);
+		const payload = call?.[1] as { args: Record<string, unknown> };
+		const streamId = payload.args.streamId as string;
+
+		tauriMocks.emitString(
+			`agent:${streamId}`,
+			JSON.stringify({
+				streamId,
+				type: "profile_resolved",
+				data: {
+					profileId: "profile-rewind",
+					claimId: "claim-rewind",
+					agentSdkModelId: "claude-runtime",
+					authStyle: "bearer",
+				},
+			}),
+		);
+		tauriMocks.emitString(
+			`agent:${streamId}`,
+			JSON.stringify({
+				streamId,
+				type: "rewind_session",
+				data: { ok: true, result: { canRewind: true } },
+			}),
+		);
+
+		await expect(promise).resolves.toMatchObject({
+			ok: true,
+			result: { canRewind: true },
+		});
+		expect(onProfileResolved).toHaveBeenCalledWith({
+			streamId,
+			profileId: "profile-rewind",
+			claimId: "claim-rewind",
+			agentSdkModelId: "claude-runtime",
+			authStyle: "bearer",
 		});
 	});
 

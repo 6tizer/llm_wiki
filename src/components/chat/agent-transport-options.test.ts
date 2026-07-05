@@ -59,6 +59,7 @@ describe("buildAgentTransportOptionsFromState", () => {
         maxFilesChanged: 15,
         maxFilesChangedEnabled: false,
         maxWriteBytes: 512 * 1024,
+        defaultPermissionPolicy: "default",
       },
     })
 
@@ -84,10 +85,54 @@ describe("buildAgentTransportOptionsFromState", () => {
         maxFilesChanged: 10,
         maxFilesChangedEnabled: true,
         maxWriteBytes: 256 * 1024,
+        defaultPermissionPolicy: "default",
       },
     })
 
     expect(options?.maxFilesChangedEnabled).toBe(true)
+  })
+
+  it("uses conversation-level profile and permission policy overrides before project defaults", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [
+        {
+          id: "c1",
+          title: "Agent",
+          createdAt: 1,
+          updatedAt: 1,
+          agentProfileIdOverride: "profile-conversation",
+          agentPermissionPolicyOverride: "restricted",
+        },
+      ],
+      activeConversationId: "c1",
+      resourceConfig: {
+        ...DEFAULT_AGENT_RESOURCE_CONFIG,
+        defaultPermissionPolicy: "bypassPermissions",
+      },
+    })
+
+    expect(options?.agentProfileId).toBe("profile-conversation")
+    expect(options?.permissionPolicy).toBe("restricted")
+  })
+
+  it("falls back to the project default permission policy when no conversation override is set", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [{ id: "c1", title: "Agent", createdAt: 1, updatedAt: 1 }],
+      activeConversationId: "c1",
+      resourceConfig: {
+        ...DEFAULT_AGENT_RESOURCE_CONFIG,
+        defaultPermissionPolicy: "bypassPermissions",
+      },
+    })
+
+    expect(options?.permissionPolicy).toBe("bypassPermissions")
+    expect(options?.agentProfileId).toBeUndefined()
   })
 
   it("threads disallowed tools through to transport options", () => {

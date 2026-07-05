@@ -48,6 +48,7 @@ export async function resetProjectState(): Promise<void> {
     activeConversationId: null,
     ingestSource: null,
     activeRunModelByConversation: {},
+    activeRunProfileByConversation: {},
     isStreaming: false,
     streamingConversationId: null,
     streamingAgentMessageId: null,

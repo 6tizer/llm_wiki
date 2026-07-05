@@ -28,6 +28,7 @@ import type {
 	AgentPermissionDecision,
 	AgentPermissionPolicy,
 	AgentPermissionRequestPayload,
+	AgentProfileResolvedPayload,
 	AgentProgressSummaryPayload,
 	AgentRewindFilesPayload,
 	AgentSummaryPayload,
@@ -333,6 +334,7 @@ export async function rewindAgentSession(
 	options: AgentTransportOptions,
 	rewindUserMessageId: string,
 	fallbackAssistantMessageId?: string,
+	onProfileResolved?: (payload: AgentProfileResolvedPayload) => void,
 ): Promise<AgentRewindFilesPayload> {
 	const agentSessionId = options.resume;
 	if (!agentSessionId) {
@@ -393,6 +395,13 @@ export async function rewindAgentSession(
 					type: string;
 					data: unknown;
 				};
+				if (wrapper.type === "profile_resolved") {
+					onProfileResolved?.({
+						...(wrapper.data as AgentProfileResolvedPayload),
+						streamId: wrapper.streamId,
+					} as AgentProfileResolvedPayload);
+					return;
+				}
 				if (wrapper.type === "rewind_session") {
 					resolveResult({
 						...(wrapper.data as AgentRewindFilesPayload),
@@ -596,6 +605,14 @@ export async function streamAgent(
 
 				if (wrapper.type === "wiki_changed") {
 					callbacks.onWikiChanged?.(msg as unknown as AgentWikiChangedPayload);
+					return;
+				}
+
+				if (wrapper.type === "profile_resolved") {
+					callbacks.onProfileResolved?.({
+						...(msg as AgentProfileResolvedPayload),
+						streamId: wrapper.streamId,
+					} as AgentProfileResolvedPayload);
 					return;
 				}
 

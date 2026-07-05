@@ -31,6 +31,45 @@ test("bypass permission policy requires explicit dangerous flag", () => {
 	});
 });
 
+test("UI-exposed permission policies map to default, restricted, and skip-confirmation behavior", () => {
+	assert.deepEqual(buildPermissionOptions("default"), {
+		permissionMode: "default",
+	});
+	assert.deepEqual(buildPermissionOptions("restricted"), {
+		tools: [],
+		permissionMode: "dontAsk",
+	});
+	assert.deepEqual(buildPermissionOptions("bypassPermissions"), {
+		permissionMode: "bypassPermissions",
+		allowDangerouslySkipPermissions: true,
+	});
+
+	assert.deepEqual(
+		resolveWikiToolDecision({
+			toolName: "mcp__llm_wiki__update_page",
+			enableWriteTools: true,
+			permissionPolicy: "default",
+		}),
+		{ decision: "ask" },
+	);
+	assert.deepEqual(
+		resolveWikiToolDecision({
+			toolName: "mcp__llm_wiki__update_page",
+			enableWriteTools: true,
+			permissionPolicy: "restricted",
+		}),
+		{ decision: "deny", reason: "Wiki write tools are restricted" },
+	);
+	assert.deepEqual(
+		resolveWikiToolDecision({
+			toolName: "mcp__llm_wiki__update_page",
+			enableWriteTools: true,
+			permissionPolicy: "bypassPermissions",
+		}),
+		{ decision: "allow" },
+	);
+});
+
 test("SDK-native permission policies pass through", () => {
 	assert.deepEqual(buildPermissionOptions("acceptEdits"), {
 		permissionMode: "acceptEdits",

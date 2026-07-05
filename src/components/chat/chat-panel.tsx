@@ -1,6 +1,7 @@
 import {
 	BookOpen,
 	Bot,
+	Check,
 	ChevronDown,
 	GitFork,
 	Loader2,
@@ -46,9 +47,14 @@ import {
 	getAgentPreflightError,
 } from "@/lib/agent/agent-run-state";
 import { hasAgentRunProfileCandidate, streamAgent } from "@/lib/agent/agent-transport";
-import { runtimeProfileList, type RuntimeProfileList } from "@/commands/runtime-db";
+import {
+	runtimeProfileList,
+	type RuntimeProfileList,
+	type RuntimeProfileRecord,
+} from "@/commands/runtime-db";
 import type {
 	AgentActionRequiredPayload,
+	AgentPermissionPolicy,
 	AgentRewindFilesPayload,
 } from "@/lib/agent/agent-types";
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
@@ -164,12 +170,13 @@ function buildAgentTransportOptions(useWebSearch: boolean) {
 	});
 }
 
-function hasAgentRunCandidateInList(result: RuntimeProfileList): boolean {
-	return (
-		result.enabled &&
-		result.status === "healthy" &&
-		result.profiles.some(hasAgentRunProfileCandidate)
-	);
+function agentRunCandidatesInList(result: RuntimeProfileList): RuntimeProfileRecord[] {
+	if (!result.enabled || result.status !== "healthy") return [];
+	return result.profiles.filter(hasAgentRunProfileCandidate);
+}
+
+function shortProfileId(profileId: string): string {
+	return profileId.length <= 10 ? profileId : `${profileId.slice(0, 8)}...`;
 }
 
 function ConversationSidebar() {
@@ -452,11 +459,22 @@ export function ChatPanel() {
 	const activeRunModelByConversation = useChatStore(
 		(s) => s.activeRunModelByConversation,
 	);
+	const activeRunProfileByConversation = useChatStore(
+		(s) => s.activeRunProfileByConversation,
+	);
+	const conversations = useChatStore((s) => s.conversations);
 	const addMessage = useChatStore((s) => s.addMessage);
 	const setStreaming = useChatStore((s) => s.setStreaming);
 	const appendStreamToken = useChatStore((s) => s.appendStreamToken);
 	const finalizeStream = useChatStore((s) => s.finalizeStream);
 	const setActiveRunModel = useChatStore((s) => s.setActiveRunModel);
+	const setActiveRunProfile = useChatStore((s) => s.setActiveRunProfile);
+	const setConversationAgentProfileOverride = useChatStore(
+		(s) => s.setConversationAgentProfileOverride,
+	);
+	const setConversationAgentPermissionPolicyOverride = useChatStore(
+		(s) => s.setConversationAgentPermissionPolicyOverride,
+	);
 	const createConversation = useChatStore((s) => s.createConversation);
 	const removeLastAssistantMessage = useChatStore(
 		(s) => s.removeLastAssistantMessage,
@@ -491,6 +509,7 @@ export function ChatPanel() {
 		(s) => s.clearAgentPermissionRequestsForConversation,
 	);
 	const agentRewindTargets = useChatStore((s) => s.agentRewindTargets);
+	const agentResourceConfig = useAgentSettingsStore((s) => s.resourceConfig);
 	// Derive active messages via selector to re-render on message changes
 	const allMessages = useChatStore((s) => s.messages);
 	const activeMessages = activeConversationId
@@ -517,11 +536,14 @@ export function ChatPanel() {
 		runtimeProfileList()
 			.then((result) => {
 				if (cancelled) return;
-				setHasAgentRunCandidate(hasAgentRunCandidateInList(result));
+				const candidates = agentRunCandidatesInList(result);
+				setAgentRunProfileCandidates(candidates);
+				setHasAgentRunCandidate(candidates.length > 0);
 				setAgentRunCandidateResolved(true);
 			})
 			.catch(() => {
 				if (!cancelled) {
+					setAgentRunProfileCandidates([]);
 					setHasAgentRunCandidate(false);
 					setAgentRunCandidateResolved(true);
 				}
@@ -536,11 +558,35 @@ export function ChatPanel() {
 	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
 	const [manualQaBusy, setManualQaBusy] = useState(false);
 	const [hasAgentRunCandidate, setHasAgentRunCandidate] = useState(false);
-	const [agentRunCandidateResolved, setAgentRunCandidateResolved] = useState(false);
+	const [agentRunProfileCandidates, setAgentRunProfileCandidates] = useState<
+		RuntimeProfileRecord[]
+	>([]);
+	const [agentRunCandidateResolved, setAgentRunCandidateResolved] =
+		useState(false);
+	const [agentRouteMenuOpen, setAgentRouteMenuOpen] = useState(false);
+	const agentRouteMenuRef = useRef<HTMLDivElement>(null);
 	const [manualQaStatus, setManualQaStatus] = useState<{
 		kind: "success" | "error" | "skipped";
 		message: string;
 	} | null>(null);
+	useEffect(() => {
+		if (!agentRouteMenuOpen) return;
+		const close = (event: MouseEvent | KeyboardEvent) => {
+			if (
+				event instanceof MouseEvent &&
+				agentRouteMenuRef.current?.contains(event.target as Node)
+			) {
+				return;
+			}
+			setAgentRouteMenuOpen(false);
+		};
+		window.addEventListener("click", close);
+		window.addEventListener("keydown", close);
+		return () => {
+			window.removeEventListener("click", close);
+			window.removeEventListener("keydown", close);
+		};
+	}, [agentRouteMenuOpen]);
 	// Auto-scroll to bottom when messages change or streaming content updates
 	useEffect(() => {
 		const container = scrollContainerRef.current;
@@ -726,6 +772,10 @@ export function ChatPanel() {
 								assistantMessageId: message.uuid,
 							});
 							},
+							onProfileResolved: (payload) => {
+								markAgentRunning();
+								setActiveRunProfile(convId, payload);
+							},
 							onDone: (result) => {
 								markAgentRunning();
 								completeRunJob();
@@ -771,6 +821,9 @@ export function ChatPanel() {
 										t("agent.permission.timeoutDenied"),
 									),
 									timestamp: Date.now(),
+									...(transportOptions.permissionPolicy
+										? { permissionPolicy: transportOptions.permissionPolicy }
+										: {}),
 								});
 								return decision;
 							});
@@ -856,6 +909,7 @@ export function ChatPanel() {
 			markAgentMessageRewindable,
 			project,
 			requestAgentPermission,
+			setActiveRunProfile,
 			setActiveRunModel,
 			startAgentStreamMessage,
 			t,
@@ -953,10 +1007,13 @@ export function ChatPanel() {
 			) {
 				try {
 					const result = await runtimeProfileList();
-					canDeferApiKeyCheck = hasAgentRunCandidateInList(result);
+					const candidates = agentRunCandidatesInList(result);
+					canDeferApiKeyCheck = candidates.length > 0;
+					setAgentRunProfileCandidates(candidates);
 					setHasAgentRunCandidate(canDeferApiKeyCheck);
 					setAgentRunCandidateResolved(true);
 				} catch {
+					setAgentRunProfileCandidates([]);
 					canDeferApiKeyCheck = false;
 					setHasAgentRunCandidate(false);
 					setAgentRunCandidateResolved(true);
@@ -1211,12 +1268,43 @@ export function ChatPanel() {
 	);
 	const showWriteButton =
 		ingestSource !== null && !isStreaming && hasAssistantMessages;
-	const modelIndicator =
-		isActiveAgentStream && activeConversationId
-			? activeRunModelByConversation[activeConversationId] ?? t("chat.modelAuto")
-			: hasAgentRunCandidate
-				? t("chat.modelAuto")
-				: llmConfig.model || "-";
+	const activeConversation = conversations.find(
+		(conversation) => conversation.id === activeConversationId,
+	);
+	const activeRunProfile = activeConversationId
+		? activeRunProfileByConversation[activeConversationId] ?? null
+		: null;
+	const resolvedProfileRecord = activeRunProfile
+		? agentRunProfileCandidates.find(
+				(profile) => profile.profileId === activeRunProfile.profileId,
+			)
+		: undefined;
+	const activeRunModel = activeConversationId
+		? activeRunModelByConversation[activeConversationId]
+		: null;
+	const modelIndicator = activeRunProfile
+		? (resolvedProfileRecord?.displayName ?? shortProfileId(activeRunProfile.profileId))
+		: (activeRunModel ?? t("chat.modelAuto"));
+	const selectedProfileId = activeConversation?.agentProfileIdOverride;
+	const selectedPermissionPolicy =
+		activeConversation?.agentPermissionPolicyOverride ??
+		agentResourceConfig.defaultPermissionPolicy ??
+		"default";
+	const showPermissionPolicyBadge = selectedPermissionPolicy !== "default";
+	const permissionPolicyBadgeClass =
+		selectedPermissionPolicy === "bypassPermissions"
+			? "bg-destructive/10 text-destructive ring-destructive/20"
+			: "bg-muted text-muted-foreground ring-border";
+	const setProfileOverride = (profileId: string | undefined) => {
+		if (!activeConversationId || isActiveAgentStream) return;
+		setConversationAgentProfileOverride(activeConversationId, profileId);
+		setAgentRouteMenuOpen(false);
+	};
+	const setPolicyOverride = (policy: AgentPermissionPolicy | undefined) => {
+		if (!activeConversationId || isActiveAgentStream) return;
+		setConversationAgentPermissionPolicyOverride(activeConversationId, policy);
+		setAgentRouteMenuOpen(false);
+	};
 	const emptySuggestionKeys = [
 		"chat.emptySuggestions.brokenLinks",
 		"chat.emptySuggestions.recentSources",
@@ -1315,13 +1403,93 @@ export function ChatPanel() {
 				)}
 				<div className="border-t bg-muted/20 px-3 py-2">
 					<div className="flex items-center justify-end">
-						<div
-							className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground"
-							title={t("chat.modelIndicator")}
-						>
-							<Bot className="h-3.5 w-3.5" />
-							<span className="truncate">{modelIndicator}</span>
-							<ChevronDown className="h-3.5 w-3.5" />
+						<div ref={agentRouteMenuRef} className="relative">
+							<button
+								type="button"
+								disabled={!activeConversationId || isActiveAgentStream}
+								onClick={(event) => {
+									event.stopPropagation();
+									setAgentRouteMenuOpen((open) => !open);
+								}}
+								className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-70"
+								title={t("chat.modelIndicator")}
+							>
+								<Bot className="h-3.5 w-3.5" />
+								<span className="truncate">{modelIndicator}</span>
+								{showPermissionPolicyBadge && (
+									<span
+										className={`inline-flex max-w-32 items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${permissionPolicyBadgeClass}`}
+									>
+										{t(
+											`chat.agentRouting.policyOptions.${selectedPermissionPolicy}.label`,
+										)}
+									</span>
+								)}
+								<ChevronDown className="h-3.5 w-3.5" />
+							</button>
+							{agentRouteMenuOpen && !isActiveAgentStream && (
+								<div className="absolute bottom-9 right-0 z-50 w-80 rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-lg">
+									<div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase text-muted-foreground">
+										{t("chat.agentRouting.profile")}
+									</div>
+									<button
+										type="button"
+										onClick={() => setProfileOverride(undefined)}
+										className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left hover:bg-accent ${
+											!selectedProfileId ? "bg-accent text-accent-foreground" : ""
+										}`}
+									>
+										<span>{t("chat.agentRouting.profileAuto")}</span>
+										{!selectedProfileId && <Check className="h-3 w-3" />}
+									</button>
+									{agentRunProfileCandidates.map((profile) => (
+										<button
+											key={profile.profileId}
+											type="button"
+											onClick={() => setProfileOverride(profile.profileId)}
+											className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent ${
+												selectedProfileId === profile.profileId
+													? "bg-accent text-accent-foreground"
+													: ""
+											}`}
+										>
+											<span className="min-w-0 truncate">{profile.displayName}</span>
+											{selectedProfileId === profile.profileId && (
+												<Check className="h-3 w-3 shrink-0" />
+											)}
+										</button>
+									))}
+									<div className="mt-2 border-t border-border pt-2">
+										<div className="px-2 pb-1 text-[10px] font-semibold uppercase text-muted-foreground">
+											{t("chat.agentRouting.policy")}
+										</div>
+										{(["default", "restricted", "bypassPermissions"] as const).map((policy) => (
+											<button
+												key={policy}
+												type="button"
+												onClick={() => setPolicyOverride(policy)}
+												className={`flex w-full items-start justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent ${
+													selectedPermissionPolicy === policy
+														? "bg-accent text-accent-foreground"
+														: ""
+												}`}
+											>
+												<span className="min-w-0">
+													<span className="block font-medium">
+														{t(`chat.agentRouting.policyOptions.${policy}.label`)}
+													</span>
+													<span className="block text-[10px] text-muted-foreground">
+														{t(`chat.agentRouting.policyOptions.${policy}.description`)}
+													</span>
+												</span>
+												{selectedPermissionPolicy === policy && (
+													<Check className="h-3 w-3 shrink-0" />
+												)}
+											</button>
+										))}
+									</div>
+								</div>
+							)}
 						</div>
 					</div>
 				</div>
