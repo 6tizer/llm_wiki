@@ -2,6 +2,7 @@ import type { CustomApiMode } from "./llm-presets"
 import type { AzureModelFamily, MineruModelVersion, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import type { AppTheme } from "@/lib/theme"
 import type { CloseBehavior } from "@/lib/project-store"
+import type { AgentPermissionPolicy } from "@/lib/agent/agent-types"
 
 /**
  * Shape of the draft state each section reads from and writes into.
@@ -97,6 +98,7 @@ export interface SettingsDraft {
   agentMaxTurns: number
   agentMaxFilesChanged: number
   agentMaxWriteKiB: number
+  agentDefaultPermissionPolicy: AgentPermissionPolicy
 }
 
 export type DraftSetter = <K extends keyof SettingsDraft>(

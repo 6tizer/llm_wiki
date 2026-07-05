@@ -1,8 +1,10 @@
-import { Bot } from "lucide-react"
+import { Bot, Check } from "lucide-react"
 import { useTranslation } from "react-i18next"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import type { AgentPermissionPolicy } from "@/lib/agent/agent-types"
 
 interface Props {
   draft: SettingsDraft
@@ -13,6 +15,11 @@ interface Props {
 const MAX_TURNS = 200
 const MAX_FILES_CHANGED = 200
 const MAX_WRITE_KIB = 10240
+const AGENT_PERMISSION_POLICIES: AgentPermissionPolicy[] = [
+  "default",
+  "restricted",
+  "bypassPermissions",
+]
 
 function parseBoundedInteger(
   value: string,
@@ -48,6 +55,45 @@ export function AgentSection({ draft, setDraft, projectReady }: Props) {
       )}
 
       <div className="grid gap-4">
+        <div className="space-y-2">
+          <Label>{t("settings.sections.agent.defaultPermissionPolicy")}</Label>
+          <div
+            role="radiogroup"
+            aria-label={t("settings.sections.agent.defaultPermissionPolicy")}
+            className="grid gap-2 sm:grid-cols-3"
+          >
+            {AGENT_PERMISSION_POLICIES.map((policy) => {
+              const selected = draft.agentDefaultPermissionPolicy === policy
+              return (
+                <Button
+                  key={policy}
+                  type="button"
+                  variant={selected ? "default" : "outline"}
+                  role="radio"
+                  aria-checked={selected}
+                  data-testid={`agent-policy-${policy}`}
+                  className="h-auto min-h-20 items-start justify-between whitespace-normal px-3 py-2 text-left"
+                  onClick={() => setDraft("agentDefaultPermissionPolicy", policy)}
+                  disabled={disabled}
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">
+                      {t(`chat.agentRouting.policyOptions.${policy}.label`)}
+                    </span>
+                    <span className="mt-1 block text-xs font-normal leading-5 opacity-80">
+                      {t(`chat.agentRouting.policyOptions.${policy}.description`)}
+                    </span>
+                  </span>
+                  {selected && <Check className="mt-0.5 h-4 w-4 shrink-0" />}
+                </Button>
+              )
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t("settings.sections.agent.defaultPermissionPolicyHint")}
+          </p>
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="agent-max-turns">
             {t("settings.sections.agent.maxTurns")}

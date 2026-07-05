@@ -211,7 +211,7 @@
         },
         "bypassPermissions": {
           "label": "Skip confirmation",
-          "description": "Runs commands and edits files without asking — including shell commands."
+          "description": "Runs commands and edits any files without asking — including shell commands."
         }
       }
     },
@@ -970,6 +970,8 @@
         "title": "Agent Run Limits",
         "description": "Per-project resource limits for Agent runs. These settings apply only to the currently open project.",
         "noProject": "Open a project first to edit Agent limits.",
+        "defaultPermissionPolicy": "Default permission policy",
+        "defaultPermissionPolicyHint": "Conversations can temporarily override this.",
         "maxTurns": "Max turns",
         "maxTurnsHint": "Maximum SDK turns per Agent run. Higher values allow longer multi-step tasks.",
         "maxFilesChanged": "Max files changed",
