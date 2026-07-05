@@ -80,6 +80,15 @@ function imageFile(name: string, type: string, size = 4): File {
   return new File([new Uint8Array(size)], name, { type })
 }
 
+function documentFile(name = "notes.md", path = "/tmp/notes.md"): File {
+  const file = new File(["# Notes"], name, { type: "text/markdown" })
+  Object.defineProperty(file, "path", {
+    value: path,
+    configurable: true,
+  })
+  return file
+}
+
 async function chooseFiles(container: HTMLElement, files: File[]): Promise<void> {
   const input = container.querySelector<HTMLInputElement>('input[type="file"]')
   if (!input) throw new Error("file input not found")
@@ -117,6 +126,24 @@ async function pasteFiles(
   })
   await act(async () => {
     textarea.dispatchEvent(event)
+    await Promise.resolve()
+  })
+}
+
+async function dropFiles(container: HTMLElement, files: File[]): Promise<void> {
+  const textarea = container.querySelector("textarea")
+  const dropZone = textarea?.parentElement
+  if (!dropZone) throw new Error("drop zone not found")
+  const event = new Event("drop", { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      files,
+      types: ["Files"],
+      dropEffect: "copy",
+    },
+  })
+  await act(async () => {
+    dropZone.dispatchEvent(event)
     await Promise.resolve()
   })
 }
@@ -206,6 +233,71 @@ describe("ChatInput image attachments", () => {
       { useWebSearch: false, useAnyTxtSearch: false },
     )
     expect(container.querySelector("img")).toBeNull()
+
+    act(() => root.unmount())
+  })
+
+  it("opens the attachment menu and delegates document picking", async () => {
+    const onPickDocument = vi.fn()
+    const { container, root } = renderChatInput({ onPickDocument })
+
+    await clickButton(buttonByTitle(container, "Add attachment"))
+    await clickButton(findButtonByText(container, "Document"))
+
+    expect(onPickDocument).toHaveBeenCalledTimes(1)
+
+    act(() => root.unmount())
+  })
+
+  it("accepts dropped images through the same image attachment pipeline", async () => {
+    const { container, root } = renderChatInput()
+
+    await dropFiles(container, [pngFile()])
+
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      `data:image/png;base64,${PNG_BASE64}`,
+    )
+
+    act(() => root.unmount())
+  })
+
+  it("routes dropped documents by filesystem path", async () => {
+    const onDropDocuments = vi.fn()
+    const { container, root } = renderChatInput({ onDropDocuments })
+
+    await dropFiles(container, [documentFile("notes.md", "/project/raw/sources/notes.md")])
+
+    expect(onDropDocuments).toHaveBeenCalledWith(["/project/raw/sources/notes.md"])
+
+    act(() => root.unmount())
+  })
+
+  it("keeps images but does not start document handling for mixed drops", async () => {
+    const onDropDocuments = vi.fn()
+    const { container, root } = renderChatInput({ onDropDocuments })
+
+    await dropFiles(container, [
+      pngFile(),
+      documentFile("notes.md", "/project/raw/sources/notes.md"),
+    ])
+
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      `data:image/png;base64,${PNG_BASE64}`,
+    )
+    expect(onDropDocuments).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Drop documents separately")
+
+    act(() => root.unmount())
+  })
+
+  it("shows an error when a dropped document has no filesystem path", async () => {
+    const onDropDocuments = vi.fn()
+    const { container, root } = renderChatInput({ onDropDocuments })
+
+    await dropFiles(container, [new File(["# Notes"], "notes.md", { type: "text/markdown" })])
+
+    expect(onDropDocuments).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("This document cannot be dropped here")
 
     act(() => root.unmount())
   })
@@ -368,7 +460,8 @@ describe("ChatInput image attachments", () => {
       imageInputAvailable: false,
     })
 
-    expect(buttonByTitle(container, "Images are available in Chat mode only.").disabled).toBe(true)
+    await clickButton(buttonByTitle(container, "Add attachment"))
+    expect(findButtonByText(container, "Attach image").disabled).toBe(true)
 
     await chooseFile(container)
     expect(container.querySelector("img")).toBeNull()

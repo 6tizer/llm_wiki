@@ -35,6 +35,10 @@ import {
   BULK_KNOWLEDGE_PREPARE_JOB_KIND,
   type BulkKnowledgePrepareJobPayload,
 } from "@/core-runtime/parallel-knowledge"
+import {
+  AGENT_CHAT_RUN_JOB_KIND,
+  parseAgentChatRunJobPayload,
+} from "@/lib/agent/agent-chat-run-job"
 import { useWikiStore } from "@/stores/wiki-store"
 import { usePolling } from "@/lib/hooks/use-polling"
 
@@ -461,16 +465,21 @@ function RuntimeJobRow({
 }) {
   const { t } = useTranslation()
   const isBusy = actionJobId === job.jobId
-  const canPause = job.state === "queued" || job.state === "running"
-  const canResume = job.state === "paused"
+  const isAgentChatRun = job.kind === AGENT_CHAT_RUN_JOB_KIND
+  const canPause = !isAgentChatRun && (job.state === "queued" || job.state === "running")
+  const canResume = !isAgentChatRun && job.state === "paused"
   // Anchor jobs (closeout hotfix P1 #3) complete inline the same tick
   // they're created — this panel showing a Cancel button for one at all
   // would be a UI ghost, not a real action.
   const canCancel =
-    !ANCHOR_JOB_KINDS.has(job.kind) && ["queued", "running", "paused", "retry-wait"].includes(job.state)
+    !isAgentChatRun &&
+    !ANCHOR_JOB_KINDS.has(job.kind) &&
+    ["queued", "running", "paused", "retry-wait"].includes(job.state)
   const isSuspectedStuck = job.state === "running" && leaseHealth === "suspected-stuck"
   const suspectedStuckLabel = isSuspectedStuck ? t("runtimeJobs.state.suspectedStuck") : null
   const Icon = isSuspectedStuck ? AlertTriangle : iconForJobState(job.state)
+  const agentPayload = isAgentChatRun ? parseAgentChatRunJobPayload(job.payload) : null
+  const title = agentPayload?.title ?? job.kind
 
   return (
     <div className="py-1.5 text-xs" data-testid={`runtime-job-row-${job.jobId}`}>
@@ -484,7 +493,7 @@ function RuntimeJobRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate font-medium">
-            {job.kind} <span className="font-mono text-[10px] text-muted-foreground">{shortJobId(job.jobId)}</span>
+            {title} <span className="font-mono text-[10px] text-muted-foreground">{shortJobId(job.jobId)}</span>
           </div>
           <div className="truncate text-[10px] text-muted-foreground/70">
             {t(`runtimeJobs.state.${job.state}`)}

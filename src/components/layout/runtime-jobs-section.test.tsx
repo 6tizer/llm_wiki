@@ -273,6 +273,31 @@ describe("RuntimeJobsSection", () => {
     unmount(root)
   })
 
+  it("renders agent chat run jobs read-only with their title", async () => {
+    const agentJob: RuntimeJobRecord = {
+      ...job("agent-job-1", "running"),
+      kind: "agent-chat-run",
+      payload: JSON.stringify({
+        kind: "agent-chat-run",
+        conversationId: "conv-1",
+        streamId: "stream-1",
+        title: "Summarize the source document",
+      }),
+    }
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([agentJob]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    const row = container.querySelector("[data-testid='runtime-job-row-agent-job-1']")
+    expect(row?.textContent).toContain("Summarize the source document")
+    expect(row?.querySelector("button[aria-label='Pause']")).toBeNull()
+    expect(row?.querySelector("button[aria-label='Resume']")).toBeNull()
+    expect(row?.querySelector("button[aria-label='Cancel']")).toBeNull()
+
+    unmount(root)
+  })
+
   it("releases a cancelled derived-rebuild job's claimed markers as cancelled (closeout hotfix P1 #3)", async () => {
     const derivedRebuildJob: RuntimeJobRecord = {
       ...job("rebuild-1", "running"),

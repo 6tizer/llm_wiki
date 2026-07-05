@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
 import { SourcesView } from "./sources-view"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useChatStore } from "@/stores/chat-store"
 import type { FileNode } from "@/types/wiki"
 
 const fsMocks = vi.hoisted(() => ({
@@ -38,12 +39,17 @@ const commitIntegrationMocks = vi.hoisted(() => ({
   commitPendingStagingArtifacts: vi.fn(),
 }))
 
+const ingestMocks = vi.hoisted(() => ({
+  startIngest: vi.fn(),
+}))
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }))
 vi.mock("@/commands/fs", () => fsMocks)
 vi.mock("@/lib/source-lifecycle", () => sourceLifecycleMocks)
 vi.mock("@/lib/project-file-sync", () => projectFileSyncMocks)
 vi.mock("@/lib/parallel-knowledge/bulk-runtime-entry", () => bulkRuntimeEntryMocks)
 vi.mock("@/lib/parallel-knowledge/commit-integration", () => commitIntegrationMocks)
+vi.mock("@/lib/ingest", () => ingestMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -74,6 +80,13 @@ describe("SourcesView bulk prepare entry", () => {
       progressEvents: 0,
       errors: [],
     })
+    ingestMocks.startIngest.mockImplementation(async (_projectPath, sourcePath) => {
+      const store = useChatStore.getState()
+      const id = store.createConversation()
+      store.addMessage("user", `discussion:${sourcePath}`)
+      store.finalizeStream("analysis", undefined, id)
+      store.renameConversation(id, String(sourcePath).split("/").pop() || "source")
+    })
     act(() => {
       useWikiStore.getState().setProject({
         id: "p1",
@@ -86,6 +99,14 @@ describe("SourcesView bulk prepare entry", () => {
   afterEach(() => {
     act(() => {
       useWikiStore.getState().setProject(null)
+      useChatStore.setState({
+        conversations: [],
+        activeConversationId: null,
+        messages: [],
+        ingestSource: null,
+        isStreaming: false,
+        streamingContent: "",
+      })
     })
     document.body.innerHTML = ""
   })
@@ -144,6 +165,42 @@ describe("SourcesView bulk prepare entry", () => {
     await flush()
 
     expect(bulkRuntimeEntryMocks.enqueueBulkKnowledgePrepareJobs).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("starts an interactive source discussion without enqueueing automatic ingest", async () => {
+    useChatStore.setState({
+      conversations: [{ id: "old", title: "Old", createdAt: 1, updatedAt: 1 }],
+      activeConversationId: "old",
+      messages: [
+        { id: "old-u", role: "user", content: "keep", timestamp: 1, conversationId: "old" },
+      ],
+      ingestSource: null,
+      isStreaming: false,
+      streamingContent: "",
+    })
+    const { container, root } = renderSourcesView()
+    await flush()
+
+    await click(container.querySelector("button[title='Discuss']")!)
+    await flush()
+
+    expect(ingestMocks.startIngest).toHaveBeenCalledWith(
+      "/project",
+      "/project/raw/sources/nested/b.md",
+      expect.any(Object),
+    )
+    expect(useWikiStore.getState().activeView).toBe("wiki")
+    expect(sourceLifecycleMocks.enqueueSourceIngest).not.toHaveBeenCalled()
+    const chatState = useChatStore.getState()
+    const activeConversationId = chatState.activeConversationId
+    expect(chatState.messages.filter((message) => message.conversationId === "old")).toHaveLength(1)
+    expect(activeConversationId).not.toBe("old")
+    expect(chatState.messages.some((message) => (
+      message.conversationId === activeConversationId &&
+      message.content === "analysis"
+    ))).toBe(true)
 
     unmount(root)
   })

@@ -20,6 +20,9 @@ export function sourceIdentityForPath(projectPath: string, sourcePath: string): 
   if (markerIndex >= 0) {
     return sp.slice(markerIndex + RAW_SOURCES_MARKER.length)
   }
+  if (isExternalAbsolutePath(pp, sp)) {
+    return `external/${externalSourcePathHash(sp)}/${getFileName(sp)}`
+  }
   return getFileName(sp)
 }
 
@@ -130,6 +133,22 @@ function readableSlugPart(part: string): { readable: string; structuralLength: n
     readable,
     structuralLength: Math.max(1, Array.from(structural || FALLBACK_SOURCE_PART).length),
   }
+}
+
+function isExternalAbsolutePath(projectPath: string, sourcePath: string): boolean {
+  if (!isAbsoluteLikePath(sourcePath)) return false
+  if (!projectPath) return true
+  const projectKey = `${projectPath.toLowerCase()}/`
+  const sourceKey = sourcePath.toLowerCase()
+  return sourceKey !== projectPath.toLowerCase() && !sourceKey.startsWith(projectKey)
+}
+
+function isAbsoluteLikePath(path: string): boolean {
+  return path.startsWith("/") || /^[a-z]:\//i.test(path)
+}
+
+function externalSourcePathHash(path: string): string {
+  return stableSlugHash(path).padStart(8, "0").slice(0, 8)
 }
 
 function stableSlugHash(value: string): string {

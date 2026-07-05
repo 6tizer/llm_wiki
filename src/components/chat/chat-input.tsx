@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
-import { ChevronDown, FileSearch, Globe2, Loader2, Plus, Send, Square, X } from "lucide-react"
+import { ChevronDown, FileSearch, FileText, Globe2, Image, Loader2, Plus, Send, Square, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -13,9 +13,13 @@ import {
   messageImageToDataUrl,
 } from "@/lib/chat-image-utils"
 import { isImeComposing } from "@/lib/keyboard-utils"
+import { SOURCE_WATCH_FILE_TYPE_GROUPS } from "@/lib/source-watch-config"
 import type { MessageImage } from "@/stores/chat-store"
 
 const ACCEPTED_IMAGE_ACCEPT = ACCEPTED_CHAT_IMAGE_TYPES.join(",")
+const ACCEPTED_DOCUMENT_EXTENSIONS = [
+  ...new Set(SOURCE_WATCH_FILE_TYPE_GROUPS.flatMap((group) => group.extensions)),
+]
 
 export interface ChatSendOptions {
   useWebSearch: boolean
@@ -29,6 +33,8 @@ interface ChatInputProps {
   anyTxtAvailable?: boolean
   imageInputAvailable?: boolean
   placeholder?: string
+  onPickDocument?: () => void
+  onDropDocuments?: (paths: string[]) => void
 }
 
 interface ImageAttachment {
@@ -44,6 +50,8 @@ export function ChatInput({
   anyTxtAvailable = true,
   imageInputAvailable = true,
   placeholder,
+  onPickDocument,
+  onDropDocuments,
 }: ChatInputProps) {
   const { t } = useTranslation()
   const [value, setValue] = useState("")
@@ -51,9 +59,12 @@ export function ChatInput({
   const [imageError, setImageError] = useState<string | null>(null)
   const [useWebSearch, setUseWebSearch] = useState(false)
   const [useAnyTxtSearch, setUseAnyTxtSearch] = useState(false)
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false)
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false)
+  const [isDragActive, setIsDragActive] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const attachmentMenuRef = useRef<HTMLDivElement>(null)
   const sourceMenuRef = useRef<HTMLDivElement>(null)
   const pendingImageIdsRef = useRef(new Set<string>())
   const imageIdRef = useRef(0)
@@ -85,19 +96,40 @@ export function ChatInput({
   }, [clearImageAttachments, imageAttachments.length, imageInputAvailable])
 
   useEffect(() => {
-    if (!sourceMenuOpen) return
+    if (!sourceMenuOpen && !attachmentMenuOpen) return
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
+      if (target instanceof Node && attachmentMenuRef.current?.contains(target)) return
       if (target instanceof Node && sourceMenuRef.current?.contains(target)) return
+      setAttachmentMenuOpen(false)
       setSourceMenuOpen(false)
     }
     document.addEventListener("pointerdown", handlePointerDown)
     return () => document.removeEventListener("pointerdown", handlePointerDown)
-  }, [sourceMenuOpen])
+  }, [attachmentMenuOpen, sourceMenuOpen])
 
   useEffect(() => {
-    if (isStreaming) setSourceMenuOpen(false)
+    if (!isStreaming) return
+    setAttachmentMenuOpen(false)
+    setSourceMenuOpen(false)
+    setIsDragActive(false)
   }, [isStreaming])
+
+  const documentExtensionForName = useCallback((name: string) => {
+    const cleanName = name.trim().toLowerCase()
+    if (!cleanName.includes(".")) return ""
+    return cleanName.split(".").pop() ?? ""
+  }, [])
+
+  const isAcceptedDocumentFile = useCallback(
+    (file: File) => ACCEPTED_DOCUMENT_EXTENSIONS.includes(documentExtensionForName(file.name)),
+    [documentExtensionForName],
+  )
+
+  const pathForDroppedDocument = useCallback((file: File): string | null => {
+    const maybePath = (file as File & { path?: unknown }).path
+    return typeof maybePath === "string" && maybePath.trim() ? maybePath : null
+  }, [])
 
   const addFiles = useCallback(
     (files: File[]) => {
@@ -158,6 +190,60 @@ export function ChatInput({
     [imageAttachments.length, imageInputAvailable, t],
   )
 
+  const handleDocumentFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return false
+      if (!onDropDocuments) {
+        setImageError(t("chat.documentInputUnavailable", "Documents cannot be attached here."))
+        return false
+      }
+      if (files.length > 1) {
+        setImageError(t("chat.oneDocumentAtATime", "Attach one document at a time."))
+        return false
+      }
+      const [file] = files
+      if (!isAcceptedDocumentFile(file)) {
+        setImageError(t("chat.unsupportedDocumentType", "Unsupported document type: {{name}}", {
+          name: file.name || "?",
+        }))
+        return false
+      }
+      const path = pathForDroppedDocument(file)
+      if (!path) {
+        setImageError(t("chat.documentPathUnavailable", "This document cannot be dropped here. Use + > Document."))
+        return false
+      }
+      setImageError(null)
+      onDropDocuments([path])
+      return true
+    },
+    [isAcceptedDocumentFile, onDropDocuments, pathForDroppedDocument, t],
+  )
+
+  const addDroppedOrPastedFiles = useCallback(
+    (files: File[]) => {
+      const imageFiles = files.filter((file) => file.type.startsWith("image/"))
+      const documentFiles = files.filter((file) => !file.type.startsWith("image/") && isAcceptedDocumentFile(file))
+      const unsupportedFiles = files.filter(
+        (file) => !file.type.startsWith("image/") && !isAcceptedDocumentFile(file),
+      )
+
+      if (imageFiles.length > 0 && documentFiles.length > 0) {
+        addFiles(imageFiles)
+        setImageError(t("chat.documentMixedDrop", "Drop documents separately or use + > Document."))
+        return
+      }
+      if (imageFiles.length > 0) addFiles(imageFiles)
+      if (documentFiles.length > 0) handleDocumentFiles(documentFiles)
+      if (unsupportedFiles.length > 0) {
+        setImageError(t("chat.unsupportedAttachmentType", "Unsupported attachment type: {{name}}", {
+          name: unsupportedFiles[0]?.name || "?",
+        }))
+      }
+    },
+    [addFiles, handleDocumentFiles, isAcceptedDocumentFile, t],
+  )
+
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       if (isStreaming) return
@@ -165,7 +251,7 @@ export function ChatInput({
       if (!items) return
       const files: File[] = []
       for (const item of items) {
-        if (item.kind !== "file" || !item.type.startsWith("image/")) continue
+        if (item.kind !== "file") continue
         const file = item.getAsFile()
         if (file) files.push(file)
       }
@@ -186,19 +272,46 @@ export function ChatInput({
           textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`
         })
       }
-      void addFiles(files)
+      addDroppedOrPastedFiles(files)
     },
-    [addFiles, isStreaming],
+    [addDroppedOrPastedFiles, isStreaming],
   )
 
   const handleFilePick = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files ? Array.from(e.target.files) : []
-      void addFiles(files)
+      addFiles(files)
       e.target.value = ""
     },
     [addFiles],
   )
+
+  const handleDocumentPick = useCallback(() => {
+    setAttachmentMenuOpen(false)
+    onPickDocument?.()
+  }, [onPickDocument])
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (isStreaming || !event.dataTransfer.types.includes("Files")) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+    setIsDragActive(true)
+  }, [isStreaming])
+
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return
+    setIsDragActive(false)
+  }, [])
+
+  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (isStreaming) return
+    event.preventDefault()
+    setIsDragActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    addDroppedOrPastedFiles(files)
+  }, [addDroppedOrPastedFiles, isStreaming])
 
   const removeImageAttachment = useCallback((id: string) => {
     pendingImageIdsRef.current.delete(id)
@@ -269,7 +382,14 @@ export function ChatInput({
 
   return (
     <div className="border-t bg-background/95 p-3">
-      <div className="rounded-lg border border-border/80 bg-card/80 p-2 shadow-sm ring-1 ring-black/5 focus-within:border-ring/60 focus-within:ring-ring/20 dark:ring-white/5">
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`rounded-lg border bg-card/80 p-2 shadow-sm ring-1 ring-black/5 transition-colors focus-within:border-ring/60 focus-within:ring-ring/20 dark:ring-white/5 ${
+          isDragActive ? "border-ring ring-ring/30" : "border-border/80"
+        }`}
+      >
         {imageAttachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">
             {imageAttachments.map((attachment) =>
@@ -344,24 +464,48 @@ export function ChatInput({
         />
         <div className="mt-1 flex items-center justify-between gap-3 border-t border-border/50 pt-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={
-                isStreaming ||
-                !imageInputAvailable ||
-                imageAttachments.length >= MAX_CHAT_IMAGES_PER_MESSAGE
-              }
-              className={searchToggleClass(false)}
-              title={
-                imageInputAvailable
-                  ? t("chat.attachImage", "Attach image")
-                  : t("chat.imageInputUnavailable", "Images are available in Chat mode only.")
-              }
-              aria-label={t("chat.attachImage", "Attach image")}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
+            <div ref={attachmentMenuRef} className="relative">
+              <button
+                type="button"
+                aria-expanded={attachmentMenuOpen}
+                onClick={() => setAttachmentMenuOpen((open) => !open)}
+                disabled={isStreaming}
+                className={searchToggleClass(false)}
+                title={t("chat.addAttachment", "Add attachment")}
+                aria-label={t("chat.addAttachment", "Add attachment")}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+              {attachmentMenuOpen && (
+                <div className="absolute bottom-full left-0 z-20 mb-2 w-40 rounded-md border bg-popover p-1.5 shadow-md">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAttachmentMenuOpen(false)
+                      fileInputRef.current?.click()
+                    }}
+                    disabled={!imageInputAvailable || imageAttachments.length >= MAX_CHAT_IMAGES_PER_MESSAGE}
+                    className={sourceToggleClass(false)}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Image className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t("chat.attachImage", "Image")}</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDocumentPick}
+                    disabled={!onPickDocument}
+                    className={sourceToggleClass(false)}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <FileText className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t("chat.attachDocument", "Document")}</span>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
             <div ref={sourceMenuRef} className="relative">
               <button
                 type="button"

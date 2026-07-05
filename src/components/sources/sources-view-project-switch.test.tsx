@@ -49,12 +49,17 @@ const commitIntegrationMocks = vi.hoisted(() => ({
   commitPendingStagingArtifacts: vi.fn(),
 }))
 
+const ingestMocks = vi.hoisted(() => ({
+  startIngest: vi.fn(),
+}))
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }))
 vi.mock("@/commands/fs", () => fsMocks)
 vi.mock("@/lib/source-lifecycle", () => sourceLifecycleMocks)
 vi.mock("@/lib/project-file-sync", () => projectFileSyncMocks)
 vi.mock("@/lib/parallel-knowledge/bulk-runtime-entry", () => bulkRuntimeEntryMocks)
 vi.mock("@/lib/parallel-knowledge/commit-integration", () => commitIntegrationMocks)
+vi.mock("@/lib/ingest", () => ingestMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
