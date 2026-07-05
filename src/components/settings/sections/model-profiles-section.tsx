@@ -25,6 +25,7 @@ import {
 } from "@/commands/profile-secrets"
 import { LLM_PRESETS } from "../llm-presets"
 import { ProviderAccessWizard } from "./provider-access-wizard"
+import { ProfileCapabilityBadge } from "./profile-capability-badge"
 
 const MAX_PROFILE_CONCURRENCY = 128
 // Keep these version strings aligned with src-tauri/src/commands/runtime_db.rs.
@@ -378,6 +379,7 @@ export function ModelProfilesSection({
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null)
   const [probeState, setProbeState] = useState<ProbeState>({ kind: "idle" })
+  const [capabilityDetailProfileId, setCapabilityDetailProfileId] = useState<string | null>(null)
   const profilesRef = useRef<RuntimeProfileRecord[]>([])
   const loadedOnceRef = useRef(false)
 
@@ -551,7 +553,7 @@ export function ModelProfilesSection({
       && !profileProbeInputsChanged(draft, selectedProfile),
   )
   const capabilityStatus = selectedCapabilityIsFresh
-    ? selectedProfile?.capabilityStatus
+    ? selectedProfile?.capabilityStatus ?? "unknown"
     : "unknown"
   const runtimeUnavailableMessage = loadState.kind === "ready" && loadState.status === "no-project"
     ? t("settings.sections.llm.profiles.runtimeUnavailableNoProject")
@@ -620,22 +622,53 @@ export function ModelProfilesSection({
             >
               {t("settings.sections.llm.profiles.newProfile")}
             </button>
-            {profiles.map((profile) => (
-              <button
-                key={profile.profileId}
-                type="button"
-                data-testid={`profile-select-${profile.profileId}`}
-                onClick={() => setDraft(draftFromProfile(profile))}
-                className={`w-full rounded-md border px-3 py-2 text-left text-xs hover:bg-accent ${
-                  draft.profileId === profile.profileId ? "border-primary bg-primary/5" : "border-border"
-                }`}
-              >
-                <span className="block truncate font-medium">{profile.displayName}</span>
-                <span className="block truncate text-muted-foreground">
-                  {profile.providerId} / {profile.modelId}
-                </span>
-              </button>
-            ))}
+            {profiles.map((profile) => {
+              const detailOpen = capabilityDetailProfileId === profile.profileId
+              const checkedAt = profile.capabilityCheckedAtMs
+                ? new Date(profile.capabilityCheckedAtMs).toLocaleString()
+                : t("settings.sections.llm.profiles.capabilityNeverChecked")
+              const message = profile.lastCapabilityError
+                || (hasFreshCapability(profile)
+                  ? t("settings.sections.llm.profiles.capabilityMessageOk")
+                  : t("settings.sections.llm.profiles.capabilityStale"))
+              return (
+                <div
+                  key={profile.profileId}
+                  className={`rounded-md border ${
+                    draft.profileId === profile.profileId ? "border-primary bg-primary/5" : "border-border"
+                  }`}
+                >
+                  <div className="flex items-start gap-2 px-3 py-2">
+                    <button
+                      type="button"
+                      data-testid={`profile-select-${profile.profileId}`}
+                      onClick={() => setDraft(draftFromProfile(profile))}
+                      className="min-w-0 flex-1 text-left text-xs hover:text-primary"
+                    >
+                      <span className="block truncate font-medium">{profile.displayName}</span>
+                      <span className="block truncate text-muted-foreground">
+                        {profile.providerId} / {profile.modelId}
+                      </span>
+                    </button>
+                    <ProfileCapabilityBadge
+                      status={profile.capabilityStatus}
+                      t={t}
+                      as="button"
+                      onClick={() => setCapabilityDetailProfileId(detailOpen ? null : profile.profileId)}
+                    />
+                  </div>
+                  {detailOpen && (
+                    <div
+                      className="border-t px-3 py-2 text-[11px] text-muted-foreground"
+                      data-testid={`profile-capability-detail-${profile.profileId}`}
+                    >
+                      <div>{message}</div>
+                      <div>{t("settings.sections.llm.profiles.capabilityChecked", { time: checkedAt })}</div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
 
           <div className="space-y-4 rounded-md border p-3">
@@ -829,9 +862,7 @@ export function ModelProfilesSection({
             <div className="space-y-1 rounded-md border px-3 py-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{t("settings.sections.llm.profiles.capability")}</span>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                  {capabilityStatus}
-                </span>
+                <ProfileCapabilityBadge status={capabilityStatus} t={t} />
                 {!selectedCapabilityIsFresh && (
                   <span className="text-muted-foreground">
                     {t("settings.sections.llm.profiles.capabilityStale")}

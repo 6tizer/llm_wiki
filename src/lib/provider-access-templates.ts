@@ -20,6 +20,7 @@ export interface ProviderAccessTemplate {
   apiKeyUrl?: string
   endpoint: string
   endpointCandidates?: string[]
+  modelsUrl?: string
   apiMode: RuntimeProfileApiMode
   authStyle: RuntimeProfileAuthStyle
   defaultModelId: string
@@ -122,6 +123,7 @@ export const PROVIDER_ACCESS_TEMPLATES: ProviderAccessTemplate[] = [
     websiteUrl: "https://www.deepseek.com",
     apiKeyUrl: "https://platform.deepseek.com/api_keys",
     endpoint: "https://api.deepseek.com/anthropic",
+    modelsUrl: "https://api.deepseek.com/models",
     authStyle: "bearer",
     defaultModelId: "deepseek-v4-pro",
   }),

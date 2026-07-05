@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   runtimeProfileCreate,
+  runtimeProfileModelsList,
   runtimeProfileProbe,
   type RuntimeProfileCreateRequest,
   type RuntimeProfileKind,
@@ -30,6 +31,7 @@ import {
   type ProviderAccessTemplate,
   type ProviderAccessTemplateGroup,
 } from "@/lib/provider-access-templates"
+import { ProfileCapabilityBadge, capabilityBadgeMeta } from "./profile-capability-badge"
 
 const TEMPLATE_GROUPS: ProviderAccessTemplateGroup[] = [
   "intl-official",
@@ -46,6 +48,12 @@ type WizardProbeState =
   | { kind: "running" }
   | { kind: "success"; result: RuntimeProfileProbeResult; latencyMs: number }
   | { kind: "error"; message: string; latencyMs?: number }
+
+type WizardModelListState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; models: string[]; sourceUrl: string }
+  | { kind: "error"; message: string }
 
 interface ProviderAccessWizardProps {
   disabled?: boolean
@@ -121,12 +129,14 @@ export function buildQuickConnectCreateRequest(
   form: Pick<WizardFormState, "displayName" | "endpoint" | "modelId">,
   secretRef: string | null,
   includeAgentTask: boolean,
+  modelIdOverride?: string,
+  displayNameOverride?: string,
 ): RuntimeProfileCreateRequest {
   const kind = profileKindForTemplate(template, includeAgentTask)
-  const resolvedModelId = form.modelId.trim() || template.defaultModelId
+  const resolvedModelId = modelIdOverride?.trim() || form.modelId.trim() || template.defaultModelId
   return {
     kind,
-    displayName: form.displayName.trim() || template.displayName,
+    displayName: displayNameOverride?.trim() || form.displayName.trim() || template.displayName,
     providerId: template.id,
     modelId: resolvedModelId,
     agentSdkModelId: kind === "agent-run"
@@ -166,10 +176,16 @@ export function ProviderAccessWizard({
   }))
   const [secretRef, setSecretRef] = useState<string | null>(null)
   const [probeState, setProbeState] = useState<WizardProbeState>({ kind: "idle" })
+  const [modelListState, setModelListState] = useState<WizardModelListState>({ kind: "idle" })
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>(() => (
+    selectedTemplate?.defaultModelId ? [selectedTemplate.defaultModelId] : []
+  ))
   const [retestMessage, setRetestMessage] = useState<string | null>(null)
   const [createMessage, setCreateMessage] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const secretRefRef = useRef<string | null>(null)
+  const secretRefOwnedRef = useRef(false)
+  const createdModelIdsRef = useRef<Set<string>>(new Set())
   const profileCreatedRef = useRef(false)
   const creatingRef = useRef(false)
 
@@ -190,6 +206,8 @@ export function ProviderAccessWizard({
 
   function resetWizard(template = PROVIDER_ACCESS_TEMPLATES[0]) {
     secretRefRef.current = null
+    secretRefOwnedRef.current = false
+    createdModelIdsRef.current.clear()
     profileCreatedRef.current = false
     setStep(1)
     setSearch("")
@@ -202,6 +220,8 @@ export function ProviderAccessWizard({
     })
     setSecretRef(null)
     setProbeState({ kind: "idle" })
+    setModelListState({ kind: "idle" })
+    setSelectedModelIds([template.defaultModelId])
     setRetestMessage(null)
     setCreateMessage(null)
     setCreating(false)
@@ -211,6 +231,11 @@ export function ProviderAccessWizard({
   async function cleanupDraftSecret() {
     const ref = secretRefRef.current
     if (!ref || profileCreatedRef.current) return
+    if (secretRefOwnedRef.current) {
+      secretRefRef.current = null
+      setSecretRef(null)
+      return
+    }
     secretRefRef.current = null
     setSecretRef(null)
     await profileSecretDelete({ secretRef: ref }).catch(() => undefined)
@@ -243,6 +268,8 @@ export function ProviderAccessWizard({
     })
     setSecretRef(null)
     setProbeState({ kind: "idle" })
+    setModelListState({ kind: "idle" })
+    setSelectedModelIds([template.defaultModelId])
     setRetestMessage(null)
     setCreateMessage(null)
     setStep(2)
@@ -260,11 +287,13 @@ export function ProviderAccessWizard({
       throw new Error(t("settings.sections.llm.profiles.wizard.keyRequired"))
     }
     const previousRef = secretRefRef.current
+    const previousRefOwned = secretRefOwnedRef.current
     const result = await profileSecretWrite({ secretValue: rawSecret })
-    if (previousRef) {
+    if (previousRef && !previousRefOwned) {
       await profileSecretDelete({ secretRef: previousRef }).catch(() => undefined)
     }
     secretRefRef.current = result.secretRef
+    secretRefOwnedRef.current = false
     setSecretRef(result.secretRef)
     setForm((current) => ({ ...current, apiKey: "" }))
     return { ref: result.secretRef, rawSecret }
@@ -305,6 +334,70 @@ export function ProviderAccessWizard({
     }
   }
 
+  function selectedModelsForCreate(): string[] {
+    const fallback = form.modelId.trim() || selectedTemplate?.defaultModelId || ""
+    const values = modelListState.kind === "ready" ? selectedModelIds : [fallback]
+    const out: string[] = []
+    for (const value of values) {
+      const trimmed = value.trim()
+      if (trimmed && !createdModelIdsRef.current.has(trimmed) && !out.includes(trimmed)) {
+        out.push(trimmed)
+      }
+    }
+    return out
+  }
+
+  function toggleSelectedModel(modelId: string, checked: boolean) {
+    setSelectedModelIds((current) => {
+      const trimmed = modelId.trim()
+      if (!trimmed) return current
+      if (checked) return current.includes(trimmed) ? current : [...current, trimmed]
+      return current.filter((value) => value !== trimmed)
+    })
+  }
+
+  async function loadModelList() {
+    if (!selectedTemplate) return
+    if (runtimeUnavailableMessage) {
+      setModelListState({ kind: "error", message: runtimeUnavailableMessage })
+      return
+    }
+    setCreateMessage(null)
+    setModelListState({ kind: "loading" })
+    try {
+      const { rawSecret } = await ensureSecretForCreate()
+      if (authStyleRequiresSecret(selectedTemplate) && !rawSecret) {
+        throw new Error(t("settings.sections.llm.profiles.wizard.reenterKeyForModels"))
+      }
+      const result = await runtimeProfileModelsList({
+        draft: {
+          endpoint: form.endpoint.trim() || null,
+          apiMode: selectedTemplate.apiMode,
+          authStyle: selectedTemplate.authStyle,
+        },
+        ...(rawSecret ? { rawSecret } : {}),
+        ...(selectedTemplate.modelsUrl ? { modelsUrl: selectedTemplate.modelsUrl } : {}),
+      })
+      const defaultModel = selectedTemplate.defaultModelId
+      const manualModel = form.modelId.trim() || defaultModel
+      const models = result.models.filter((model, index, list) => (
+        model.trim() && list.indexOf(model) === index
+      ))
+      const initialSelection = selectedModelIds.filter((model) => models.includes(model))
+      if (models.includes(defaultModel) && !initialSelection.includes(defaultModel)) {
+        initialSelection.push(defaultModel)
+      }
+      if (initialSelection.length === 0) {
+        initialSelection.push(manualModel)
+      }
+      setSelectedModelIds(initialSelection)
+      setModelListState({ kind: "ready", models, sourceUrl: result.sourceUrl })
+    } catch (error) {
+      setSelectedModelIds([form.modelId.trim() || selectedTemplate.defaultModelId])
+      setModelListState({ kind: "error", message: errorMessage(error) })
+    }
+  }
+
   async function finishWizard() {
     if (!selectedTemplate) return
     if (creatingRef.current) return
@@ -315,23 +408,52 @@ export function ProviderAccessWizard({
     creatingRef.current = true
     setCreating(true)
     setCreateMessage(null)
+    const created: RuntimeProfileRecord[] = []
     try {
       const { ref } = await ensureSecretForCreate()
       const includeAgentTask = selectedTemplate.agentSupport === "anthropic-compat" && probePassed(probeState)
-      const saved = await runtimeProfileCreate(buildQuickConnectCreateRequest(
-        selectedTemplate,
-        form,
-        ref,
-        includeAgentTask,
-      ))
+      const models = selectedModelsForCreate()
+      if (models.length === 0) {
+        profileCreatedRef.current = true
+        secretRefRef.current = null
+        secretRefOwnedRef.current = false
+        setSecretRef(null)
+        setOpen(false)
+        return
+      }
+      for (const modelId of models) {
+        const displayName = models.length === 1
+          ? undefined
+          : `${form.displayName.trim() || selectedTemplate.displayName} · ${modelId}`
+        const saved = await runtimeProfileCreate(buildQuickConnectCreateRequest(
+          selectedTemplate,
+          form,
+          ref,
+          includeAgentTask,
+          modelId,
+          displayName,
+        ))
+        created.push(saved)
+        createdModelIdsRef.current.add(modelId)
+        if (ref) secretRefOwnedRef.current = true
+        onProfileCreated(saved)
+      }
       profileCreatedRef.current = true
       secretRefRef.current = null
+      secretRefOwnedRef.current = false
       setSecretRef(null)
-      onProfileCreated(saved)
       setOpen(false)
     } catch (error) {
+      if (created.length > 0) {
+        profileCreatedRef.current = true
+      }
+      const createdProfiles = created.length > 0
+        ? ` ${t("settings.sections.llm.profiles.wizard.createdBeforeFailure", {
+            names: created.map((profile) => profile.displayName).join(", "),
+          })}`
+        : ""
       setCreateMessage(t("settings.sections.llm.profiles.wizard.createFailed", {
-        message: errorMessage(error),
+        message: `${errorMessage(error)}${createdProfiles}`,
       }))
     } finally {
       creatingRef.current = false
@@ -438,16 +560,83 @@ export function ProviderAccessWizard({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>{t("settings.model")}</Label>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label>{t("settings.model")}</Label>
+                    <button
+                      type="button"
+                      data-testid="wizard-fetch-models"
+                      onClick={() => void loadModelList()}
+                      disabled={modelListState.kind === "loading" || Boolean(runtimeUnavailableMessage)}
+                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-accent disabled:opacity-60"
+                    >
+                      {modelListState.kind === "loading" && <Loader2 className="h-3 w-3 animate-spin" />}
+                      {t("settings.sections.llm.profiles.wizard.fetchModels")}
+                    </button>
+                  </div>
                   <Input
                     data-testid="wizard-model-id"
                     value={form.modelId}
                     onChange={(event) => {
-                      setForm((current) => ({ ...current, modelId: event.target.value }))
+                      const nextModel = event.target.value
+                      const previousManual = form.modelId.trim() || selectedTemplate.defaultModelId
+                      setForm((current) => ({ ...current, modelId: nextModel }))
+                      setSelectedModelIds((current) => current.includes(previousManual)
+                        ? current.map((model) => model === previousManual
+                            ? (nextModel.trim() || selectedTemplate.defaultModelId)
+                            : model)
+                        : current)
                       setProbeState({ kind: "idle" })
                       setRetestMessage(null)
                     }}
                   />
+                  {modelListState.kind === "ready" && (
+                    <div className="space-y-2 rounded-md border p-2" data-testid="wizard-model-list">
+                      <div className="text-[10px] text-muted-foreground">
+                        {t("settings.sections.llm.profiles.wizard.modelsSource", {
+                          url: modelListState.sourceUrl,
+                        })}
+                      </div>
+                      <div className="max-h-36 space-y-1 overflow-y-auto pr-1">
+                        {modelListState.models.map((model) => (
+                          <label key={model} className="flex items-center gap-2 text-xs">
+                            <input
+                              data-testid={`wizard-model-option-${model}`}
+                              type="checkbox"
+                              checked={selectedModelIds.includes(model)}
+                              onChange={(event) => toggleSelectedModel(model, event.target.checked)}
+                            />
+                            <span className="truncate">{model}</span>
+                          </label>
+                        ))}
+                        <label className="flex items-center gap-2 text-xs">
+                          <input
+                            data-testid="wizard-model-option-manual"
+                            type="checkbox"
+                            checked={selectedModelIds.includes(form.modelId.trim() || selectedTemplate.defaultModelId)}
+                            onChange={(event) => toggleSelectedModel(
+                              form.modelId.trim() || selectedTemplate.defaultModelId,
+                              event.target.checked,
+                            )}
+                          />
+                          <span className="truncate">
+                            {t("settings.sections.llm.profiles.wizard.manualModel", {
+                              model: form.modelId.trim() || selectedTemplate.defaultModelId,
+                            })}
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                  {modelListState.kind === "error" && (
+                    <p
+                      className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300"
+                      data-testid="wizard-model-list-error"
+                    >
+                      {t("settings.sections.llm.profiles.wizard.modelsFallback", {
+                        message: modelListState.message,
+                      })}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label>{t("settings.sections.llm.endpoint")}</Label>
@@ -459,6 +648,8 @@ export function ProviderAccessWizard({
                       onChange={(event) => {
                         setForm((current) => ({ ...current, endpoint: event.target.value }))
                         setProbeState({ kind: "idle" })
+                        setModelListState({ kind: "idle" })
+                        setSelectedModelIds([form.modelId.trim() || selectedTemplate.defaultModelId])
                         setRetestMessage(null)
                       }}
                     >
@@ -473,6 +664,8 @@ export function ProviderAccessWizard({
                       onChange={(event) => {
                         setForm((current) => ({ ...current, endpoint: event.target.value }))
                         setProbeState({ kind: "idle" })
+                        setModelListState({ kind: "idle" })
+                        setSelectedModelIds([form.modelId.trim() || selectedTemplate.defaultModelId])
                         setRetestMessage(null)
                       }}
                     />
@@ -502,6 +695,8 @@ export function ProviderAccessWizard({
                         }
                         setForm((current) => ({ ...current, apiKey: event.target.value }))
                         setProbeState({ kind: "idle" })
+                        setModelListState({ kind: "idle" })
+                        setSelectedModelIds([form.modelId.trim() || selectedTemplate.defaultModelId])
                         setRetestMessage(null)
                       }}
                       placeholder={t("settings.sections.llm.profiles.wizard.keyPlaceholder")}
@@ -531,9 +726,14 @@ export function ProviderAccessWizard({
             {step === 3 && (
               <div className="space-y-3" data-testid="wizard-test-step">
                 <div className="rounded-md border px-3 py-2 text-sm">
-                  <div className="font-medium">{form.displayName || selectedTemplate.displayName}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-medium">{form.displayName || selectedTemplate.displayName}</div>
+                    {probeState.kind === "success" && (
+                      <ProfileCapabilityBadge status={probeState.result.status} t={t} />
+                    )}
+                  </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {selectedTemplate.displayName} / {form.modelId || selectedTemplate.defaultModelId}
+                    {selectedTemplate.displayName} / {selectedModelsForCreate().join(", ")}
                   </div>
                   <div className="mt-1 break-all text-xs text-muted-foreground">{form.endpoint}</div>
                 </div>
@@ -564,7 +764,9 @@ export function ProviderAccessWizard({
                 )}
                 {probeState.kind === "success" && (
                   <div
-                    className="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400"
+                    className={`flex items-start gap-2 rounded-md border px-3 py-2 text-xs ${
+                      capabilityBadgeMeta(probeState.result.status, t).className
+                    }`}
                     data-testid="wizard-probe-success"
                   >
                     <CheckCircle2 className="mt-0.5 h-3.5 w-3.5" />

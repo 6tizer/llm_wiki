@@ -144,7 +144,7 @@ describe("ProviderMigrationBanner", () => {
     unmount(root)
   })
 
-  it("preserves Anthropic-compatible custom preset apiMode and endpoint", async () => {
+  it("corrects Anthropic-compatible legacy presets through provider access templates", async () => {
     useWikiStore.setState({
       activePresetId: "minimax-global",
       providerConfigs: {},
@@ -156,9 +156,9 @@ describe("ProviderMigrationBanner", () => {
     })
     runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
       displayName: "Migrated: minimax-global",
-      providerId: "minimax-global",
+      providerId: "minimax",
       modelId: "MiniMax-M2.7",
-      endpoint: "https://api.minimax.io/anthropic",
+      endpoint: "https://api.minimaxi.com/anthropic",
       apiMode: "anthropic-messages",
       authStyle: "bearer",
       secretRef: null,
@@ -174,9 +174,9 @@ describe("ProviderMigrationBanner", () => {
     expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         displayName: "Migrated: minimax-global",
-        providerId: "minimax-global",
+        providerId: "minimax",
         modelId: "MiniMax-M2.7",
-        endpoint: "https://api.minimax.io/anthropic",
+        endpoint: "https://api.minimaxi.com/anthropic",
         apiMode: "anthropic-messages",
       }),
     )
@@ -184,7 +184,7 @@ describe("ProviderMigrationBanner", () => {
     unmount(root)
   })
 
-  it("keeps default apiMode for OpenAI-family and OpenAI-compatible custom presets", async () => {
+  it("keeps OpenAI templates and corrects mapped OpenAI-compatible legacy presets", async () => {
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
       status: "healthy",
@@ -211,12 +211,179 @@ describe("ProviderMigrationBanner", () => {
     await click(customCreate)
     expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        providerId: "zhipu",
-        endpoint: "https://open.bigmodel.cn/api/paas/v4",
-        apiMode: "openai-chat-completions",
+        providerId: "zhipu-glm",
+        endpoint: "https://open.bigmodel.cn/api/anthropic",
+        apiMode: "anthropic-messages",
       }),
     )
     unmount(customOpenAi.root)
+  })
+
+  it("migrates kimi through the template Anthropic-compatible endpoint", async () => {
+    useWikiStore.setState({ activePresetId: "kimi", providerConfigs: {} })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      displayName: "Migrated: kimi",
+      providerId: "kimi",
+      endpoint: "https://api.moonshot.cn/anthropic",
+      apiMode: "anthropic-messages",
+    }))
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    expect(container.querySelector("[data-testid='provider-migration-template-note']")).not.toBeNull()
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: "Migrated: kimi",
+        providerId: "kimi",
+        endpoint: "https://api.moonshot.cn/anthropic",
+        apiMode: "anthropic-messages",
+      }),
+    )
+    unmount(root)
+  })
+
+  it("does not replace custom migration endpoints with template placeholders", async () => {
+    useWikiStore.setState({
+      activePresetId: "custom",
+      providerConfigs: {
+        custom: {
+          apiKey: "custom-secret",
+          model: "custom-model",
+          baseUrl: "https://real-gateway.example.com/v1",
+          apiMode: "anthropic_messages",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      displayName: "Migrated: custom",
+      providerId: "custom",
+      endpoint: "https://real-gateway.example.com/v1",
+      apiMode: "anthropic-messages",
+    }))
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    expect(container.querySelector("[data-testid='provider-migration-template-note']")).toBeNull()
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "custom",
+        endpoint: "https://real-gateway.example.com/v1",
+        apiMode: "anthropic-messages",
+      }),
+    )
+    expect(runtimeDbMocks.runtimeProfileCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "https://your-provider.example.com/v1" }),
+    )
+    unmount(root)
+  })
+
+  it("does not replace azure migration endpoints with template placeholders", async () => {
+    useWikiStore.setState({
+      activePresetId: "azure",
+      providerConfigs: {
+        azure: {
+          apiKey: "azure-secret",
+          model: "prod-deployment",
+          baseUrl: "https://prod-resource.openai.azure.com/openai/deployments/prod-deployment",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      displayName: "Migrated: azure",
+      providerId: "azure",
+      endpoint: "https://prod-resource.openai.azure.com/openai/deployments/prod-deployment",
+      apiMode: "openai-chat-completions",
+    }))
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    expect(container.querySelector("[data-testid='provider-migration-template-note']")).toBeNull()
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "azure",
+        endpoint: "https://prod-resource.openai.azure.com/openai/deployments/prod-deployment",
+        apiMode: "openai-chat-completions",
+      }),
+    )
+    expect(runtimeDbMocks.runtimeProfileCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "https://your-resource.openai.azure.com/openai/deployments/your-deployment" }),
+    )
+    unmount(root)
+  })
+
+  it("can keep the resolved endpoint while applying template api/auth corrections", async () => {
+    useWikiStore.setState({
+      activePresetId: "kimi",
+      providerConfigs: {
+        kimi: {
+          model: "kimi-k2.7-code",
+          baseUrl: "https://legacy.moonshot.example/anthropic",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      displayName: "Migrated: kimi",
+      providerId: "kimi",
+      endpoint: "https://legacy.moonshot.example/anthropic",
+      apiMode: "anthropic-messages",
+    }))
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    expect(container.querySelector("[data-testid='provider-migration-template-note']")?.textContent)
+      .toContain("https://legacy.moonshot.example/anthropic")
+    const keep = container.querySelector<HTMLInputElement>("[data-testid='provider-migration-keep-endpoint']")
+    if (!keep) throw new Error("keep endpoint checkbox not found")
+    await click(keep)
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "kimi",
+        endpoint: "https://legacy.moonshot.example/anthropic",
+        apiMode: "anthropic-messages",
+        authStyle: "bearer",
+      }),
+    )
+    unmount(root)
   })
 
   it("cleans up a newly written secret and stays retryable when profile creation fails", async () => {

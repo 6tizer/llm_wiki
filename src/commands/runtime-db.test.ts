@@ -20,6 +20,7 @@ import {
   runtimeProfileCreate,
   runtimeProfileDelete,
   runtimeProfileList,
+  runtimeProfileModelsList,
   runtimeProfilePoolClaim,
   runtimeProfilePoolList,
   runtimeProfilePoolRelease,
@@ -652,6 +653,7 @@ describe("runtime-db commands", () => {
       backoffUntilMs: null,
       message: "Probe succeeded.",
     }
+    const models = { models: ["gpt-5.5"], sourceUrl: "https://api.openai.com/v1/models" }
     const list = { enabled: true, status: "healthy", profiles: [updated] }
     const deleted = {
       profileId: "profile-1",
@@ -662,6 +664,7 @@ describe("runtime-db commands", () => {
       .mockResolvedValueOnce(created)
       .mockResolvedValueOnce(updated)
       .mockResolvedValueOnce(probe)
+      .mockResolvedValueOnce(models)
       .mockResolvedValueOnce(list)
       .mockResolvedValueOnce(updated)
       .mockResolvedValueOnce(deleted)
@@ -698,6 +701,16 @@ describe("runtime-db commands", () => {
         force: true,
       }),
     ).resolves.toBe(probe)
+    await expect(
+      runtimeProfileModelsList({
+        draft: {
+          endpoint: "https://api.openai.com/v1",
+          apiMode: "openai-chat-completions",
+          authStyle: "bearer",
+        },
+        rawSecret: "sk-test",
+      }),
+    ).resolves.toBe(models)
     await expect(runtimeProfileList()).resolves.toBe(list)
     await expect(runtimeProfileStatus({ profileId: "profile-1" })).resolves.toBe(updated)
     await expect(runtimeProfileDelete({ profileId: "profile-1" })).resolves.toBe(deleted)
@@ -734,11 +747,21 @@ describe("runtime-db commands", () => {
         force: true,
       },
     })
-    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_list")
-    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(5, "runtime_profile_status", {
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_models_list", {
+      request: {
+        draft: {
+          endpoint: "https://api.openai.com/v1",
+          apiMode: "openai-chat-completions",
+          authStyle: "bearer",
+        },
+        rawSecret: "sk-test",
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(5, "runtime_profile_list")
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(6, "runtime_profile_status", {
       request: { profileId: "profile-1" },
     })
-    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(6, "runtime_profile_delete", {
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(7, "runtime_profile_delete", {
       request: { profileId: "profile-1" },
     })
   })

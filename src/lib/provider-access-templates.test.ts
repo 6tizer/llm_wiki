@@ -80,6 +80,10 @@ describe("provider access templates", () => {
     expect(providerAccessTemplateById("volcengine-ark")?.defaultModelId).toBe("doubao-seed-2-1-pro-260628")
     expect(providerAccessTemplateById("openrouter")?.defaultModelId).toBe("anthropic/claude-sonnet-5")
     expect(providerAccessTemplateById("aws-bedrock")?.notes).toContain("SigV4")
+    expect(providerAccessTemplateById("deepseek")).toMatchObject({
+      endpoint: "https://api.deepseek.com/anthropic",
+      modelsUrl: "https://api.deepseek.com/models",
+    })
   })
 
   it("includes legacy-only model-call providers and local CLI templates", () => {
