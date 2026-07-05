@@ -148,6 +148,14 @@ async function captureAgentProfileEnv(
 	options: Partial<AgentRequest["options"]>,
 	baseEnv: Record<string, string | undefined> = {},
 ): Promise<Record<string, string | undefined> | undefined> {
+	const capturedOptions = await captureAgentProfileOptions(options, baseEnv);
+	return capturedOptions?.env;
+}
+
+async function captureAgentProfileOptions(
+	options: Partial<AgentRequest["options"]>,
+	baseEnv: Record<string, string | undefined> = {},
+): Promise<Parameters<QueryFn>[0]["options"] | undefined> {
 	let capturedInput: Parameters<QueryFn>[0] | undefined;
 	const queryFn: QueryFn = async function* (input) {
 		capturedInput = input;
@@ -168,7 +176,7 @@ async function captureAgentProfileEnv(
 		},
 	});
 
-	return capturedInput?.options?.env;
+	return capturedInput?.options;
 }
 
 test("agent profile bearer auth uses ANTHROPIC_AUTH_TOKEN", async () => {
@@ -243,6 +251,94 @@ test("agent profile unknown auth style keeps legacy API key mapping", async () =
 
 	assert.equal(env?.ANTHROPIC_API_KEY, "legacy-token");
 	assert.equal(env?.ANTHROPIC_AUTH_TOKEN, undefined);
+});
+
+test("agent profile bearer auth isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: "bearer",
+		apiKey: "bearer-token",
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("agent profile x-api-key auth isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: "x-api-key",
+		apiKey: "api-key-token",
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("agent profile api-key auth isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: "api-key",
+		apiKey: "api-key-token",
+		baseUrl: undefined,
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("agent profile none auth with baseUrl isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: "none",
+		apiKey: undefined,
+		baseUrl: "https://bedrock-runtime.example.com",
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("agent profile oauth-local-cli with baseUrl isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: "oauth-local-cli",
+		apiKey: undefined,
+		baseUrl: "https://oauth-provider.example.com",
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("agent profile oauth-local-cli without injected provider env keeps default settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: "oauth-local-cli",
+		apiKey: undefined,
+		baseUrl: undefined,
+	});
+
+	assert.equal(options?.settingSources, undefined);
+});
+
+test("legacy agent auth with apiKey isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: undefined,
+		apiKey: "legacy-key",
+		baseUrl: undefined,
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("legacy agent auth with baseUrl isolates user settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: undefined,
+		apiKey: undefined,
+		baseUrl: "https://legacy-provider.example.com",
+	});
+
+	assert.deepEqual(options?.settingSources, ["project", "local"]);
+});
+
+test("legacy agent auth without injected provider env keeps default settings sources", async () => {
+	const options = await captureAgentProfileOptions({
+		agentProfileAuthStyle: undefined,
+		apiKey: undefined,
+		baseUrl: undefined,
+	});
+
+	assert.equal(options?.settingSources, undefined);
 });
 
 test("query request forwards bundled Claude executable path when configured", async () => {

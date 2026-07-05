@@ -94,6 +94,83 @@ test("rewind_session: matching init session_id calls rewindFiles and reports suc
 	assert.equal((options as { mcpServers?: unknown }).mcpServers, undefined);
 });
 
+test("rewind_session: managed bearer profile isolates user settings sources", async () => {
+	let capturedInput: QueryInput | undefined;
+	const queryFn: QueryFn = (input) => {
+		capturedInput = input;
+		const query = (async function* () {
+			yield initMessage("session-abc");
+		})() as QueryControl;
+		query.rewindFiles = async () => ({ canRewind: true });
+		return query;
+	};
+
+	await handleRewindSessionRequest({
+		request: {
+			...baseRequest,
+			agentProfileAuthStyle: "bearer",
+			apiKey: "bearer-token",
+		},
+		queryFn,
+		activeQueries: new Map(),
+		send: () => {},
+		loadTranscript: workingTranscriptLoader(),
+	});
+
+	assert.deepEqual(capturedInput?.options?.settingSources, ["project", "local"]);
+});
+
+test("rewind_session: baseUrl-only profile isolates user settings sources", async () => {
+	let capturedInput: QueryInput | undefined;
+	const queryFn: QueryFn = (input) => {
+		capturedInput = input;
+		const query = (async function* () {
+			yield initMessage("session-abc");
+		})() as QueryControl;
+		query.rewindFiles = async () => ({ canRewind: true });
+		return query;
+	};
+
+	await handleRewindSessionRequest({
+		request: {
+			...baseRequest,
+			agentProfileAuthStyle: "none",
+			baseUrl: "https://bedrock-runtime.example.com",
+		},
+		queryFn,
+		activeQueries: new Map(),
+		send: () => {},
+		loadTranscript: workingTranscriptLoader(),
+	});
+
+	assert.deepEqual(capturedInput?.options?.settingSources, ["project", "local"]);
+});
+
+test("rewind_session: oauth-local-cli keeps default settings sources", async () => {
+	let capturedInput: QueryInput | undefined;
+	const queryFn: QueryFn = (input) => {
+		capturedInput = input;
+		const query = (async function* () {
+			yield initMessage("session-abc");
+		})() as QueryControl;
+		query.rewindFiles = async () => ({ canRewind: true });
+		return query;
+	};
+
+	await handleRewindSessionRequest({
+		request: {
+			...baseRequest,
+			agentProfileAuthStyle: "oauth-local-cli",
+		},
+		queryFn,
+		activeQueries: new Map(),
+		send: () => {},
+		loadTranscript: workingTranscriptLoader(),
+	});
+
+	assert.equal(capturedInput?.options?.settingSources, undefined);
+});
+
 test("rewind_session: a synthetic/unverified rewindUserMessageId is corrected via the JSONL fallback before rewindFiles is called (review-round anchor fix)", async () => {
 	const sent: AgentMessage[] = [];
 	let rewindCalledWith: string | undefined;

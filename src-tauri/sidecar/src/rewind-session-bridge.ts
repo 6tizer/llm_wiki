@@ -1,5 +1,5 @@
 import type { QueryControl, QueryFn, QueryInput } from "./core.js";
-import { applyAgentProfileEnv } from "./core.js";
+import { applyAgentProfileEnv, settingSourcesForProfileRun } from "./core.js";
 import { resolveVerifiedRewindAnchor, type SessionTranscriptLoader } from "./rewind-anchor.js";
 import type { AgentMessage, RewindSessionRequest, RewindSessionUnavailableReason } from "./types.js";
 
@@ -116,6 +116,11 @@ export async function handleRewindSessionRequest({
 			permissionMode: "bypassPermissions",
 			abortController,
 			env,
+			settingSources: settingSourcesForProfileRun({
+				apiKey: request.apiKey,
+				agentProfileAuthStyle: request.agentProfileAuthStyle,
+				baseUrl: request.baseUrl,
+			}),
 		};
 		query = queryFn({ prompt: "OK", options });
 
