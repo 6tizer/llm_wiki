@@ -52,6 +52,12 @@ function isAllowDecision(decision: AgentPermissionEventDecision): boolean {
   return decision === "allow_temporary" || decision === "allow_permanent"
 }
 
+function shouldShowPermissionPolicy(
+  policy: AgentPermissionEventRecord["permissionPolicy"],
+): policy is Exclude<AgentPermissionEventRecord["permissionPolicy"], "default" | undefined> {
+  return policy !== undefined && policy !== "default"
+}
+
 export function AgentToolTimeline({
   toolCalls,
   progressSummaries = [],
@@ -143,6 +149,11 @@ export function AgentToolTimeline({
                 <span className="min-w-0 flex-1 truncate text-foreground">
                   {t(`agent.timeline.permission.${event.decision}`, { toolName: event.toolName })}
                 </span>
+                {shouldShowPermissionPolicy(event.permissionPolicy) && (
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {t(`chat.agentRouting.policyOptions.${event.permissionPolicy}.label`)}
+                  </span>
+                )}
                 <span className="shrink-0 text-[10px]">{formatTimelineTime(event.timestamp)}</span>
               </div>
             )

@@ -13,6 +13,7 @@ function resetChatStore(): void {
     streamingContent: "",
     ingestSource: null,
     activeRunModelByConversation: {},
+    activeRunProfileByConversation: {},
     maxHistoryMessages: 10,
     activeAgentPermissionRequest: null,
     queuedAgentPermissionRequests: [],
@@ -260,6 +261,77 @@ describe("chat store agent data model", () => {
     useChatStore.getState().finishAgentStreamMessage(messageId, "done")
 
     expect(useChatStore.getState().activeRunModelByConversation[convId]).toBeNull()
+  })
+
+  it("tracks active resolved profile per conversation and clears it when the stream finishes", () => {
+    const convId = useChatStore.getState().createConversation()
+    const messageId = useChatStore.getState().startAgentStreamMessage()
+    if (!messageId) throw new Error("expected agent message")
+
+    expect(useChatStore.getState().activeRunProfileByConversation[convId]).toBeNull()
+
+    useChatStore.getState().setActiveRunProfile(convId, {
+      profileId: "profile-agent",
+      claimId: "claim-agent",
+      agentSdkModelId: "claude-runtime",
+      authStyle: "x-api-key",
+      endpoint: "https://agent.example/v1",
+    })
+
+    expect(useChatStore.getState().activeRunProfileByConversation[convId]).toMatchObject({
+      profileId: "profile-agent",
+      agentSdkModelId: "claude-runtime",
+    })
+
+    useChatStore.getState().finishAgentStreamMessage(messageId, "done")
+
+    expect(useChatStore.getState().activeRunProfileByConversation[convId]).toBeNull()
+  })
+
+  it("persists normalized conversation-level agent overrides", () => {
+    const convId = useChatStore.getState().createConversation()
+
+    useChatStore.getState().setConversationAgentProfileOverride(convId, " profile-agent ")
+    useChatStore.getState().setConversationAgentPermissionPolicyOverride(
+      convId,
+      "bypassPermissions",
+    )
+
+    expect(useChatStore.getState().conversations[0]).toMatchObject({
+      agentProfileIdOverride: "profile-agent",
+      agentPermissionPolicyOverride: "bypassPermissions",
+    })
+
+    useChatStore.getState().setConversationAgentProfileOverride(convId, undefined)
+    useChatStore.getState().setConversationAgentPermissionPolicyOverride(
+      convId,
+      "bypass" as never,
+    )
+
+    expect(useChatStore.getState().conversations[0].agentProfileIdOverride).toBeUndefined()
+    expect(
+      useChatStore.getState().conversations[0].agentPermissionPolicyOverride,
+    ).toBeUndefined()
+  })
+
+  it("normalizes legacy conversations loaded without override fields", () => {
+    useChatStore.getState().setConversations([
+      {
+        id: "conv-1",
+        title: "Legacy",
+        createdAt: 1,
+        updatedAt: 1,
+        agentPermissionPolicyOverride: "auto" as never,
+      },
+    ])
+
+    expect(useChatStore.getState().conversations[0]).toMatchObject({
+      id: "conv-1",
+      title: "Legacy",
+    })
+    expect(
+      useChatStore.getState().conversations[0].agentPermissionPolicyOverride,
+    ).toBeUndefined()
   })
 
   it("updates one agent stream message without touching other messages", () => {
@@ -607,6 +679,7 @@ describe("chat store agent data model", () => {
       toolName: "wiki_write",
       decision: "deny_interrupt",
       timestamp: 456,
+      permissionPolicy: "restricted",
     })
 
     expect(useChatStore.getState().messages[0].permissionEvents).toEqual([
@@ -614,6 +687,7 @@ describe("chat store agent data model", () => {
         toolName: "wiki_write",
         decision: "deny_interrupt",
         timestamp: 456,
+        permissionPolicy: "restricted",
       },
     ])
     expect(useChatStore.getState().messages[1].permissionEvents).toBeUndefined()

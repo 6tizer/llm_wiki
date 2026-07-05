@@ -2,6 +2,8 @@ import { create } from "zustand"
 import type { ChatMessage } from "@/lib/llm-client"
 import type { ContentBlock } from "@/lib/llm-providers"
 import type {
+  AgentPermissionPolicy,
+  AgentProfileResolvedPayload,
   AgentResourceLimitPayload,
   AgentWikiChangedPayload,
   AgentPermissionDecision,
@@ -28,6 +30,8 @@ export interface Conversation {
    * `agentForkSessionPending` by the rewind orchestration — never set alone.
    */
   agentResumeSessionAt?: string
+  agentProfileIdOverride?: string
+  agentPermissionPolicyOverride?: AgentPermissionPolicy
 }
 
 export interface MessageReference {
@@ -111,6 +115,7 @@ export interface AgentPermissionEventRecord {
   toolName: string
   decision: AgentPermissionEventDecision
   timestamp: number
+  permissionPolicy?: AgentPermissionPolicy
 }
 
 /** Final per-message Agent run statistics emitted by the sidecar result event. */
@@ -205,6 +210,7 @@ interface ChatState {
   streamingContent: string
   ingestSource: string | null
   activeRunModelByConversation: Record<string, string | null>
+  activeRunProfileByConversation: Record<string, AgentProfileResolvedPayload | null>
   maxHistoryMessages: number
   activeAgentPermissionRequest: AgentPermissionRequestRecord | null
   queuedAgentPermissionRequests: AgentPermissionRequestRecord[]
@@ -292,6 +298,18 @@ interface ChatState {
   ) => void
   setIngestSource: (path: string | null) => void
   setActiveRunModel: (conversationId: string, model: string | null) => void
+  setActiveRunProfile: (
+    conversationId: string,
+    profile: AgentProfileResolvedPayload | null
+  ) => void
+  setConversationAgentProfileOverride: (
+    conversationId: string,
+    profileId: string | undefined
+  ) => void
+  setConversationAgentPermissionPolicyOverride: (
+    conversationId: string,
+    policy: AgentPermissionPolicy | undefined
+  ) => void
   clearMessages: () => void
   setMaxHistoryMessages: (n: number) => void
   removeLastAssistantMessage: () => void  // for regenerate: remove last assistant reply
@@ -388,6 +406,42 @@ function fallbackPermissionDecision(decision?: AgentPermissionDecision): AgentPe
   )
 }
 
+const CONVERSATION_AGENT_PERMISSION_POLICIES = new Set<AgentPermissionPolicy>([
+  "default",
+  "restricted",
+  "bypassPermissions",
+])
+
+function normalizeConversationAgentPermissionPolicy(
+  value: unknown
+): AgentPermissionPolicy | undefined {
+  return typeof value === "string" &&
+    CONVERSATION_AGENT_PERMISSION_POLICIES.has(value as AgentPermissionPolicy)
+    ? (value as AgentPermissionPolicy)
+    : undefined
+}
+
+function normalizeConversation(conversation: Conversation): Conversation {
+  const profileId =
+    typeof conversation.agentProfileIdOverride === "string" &&
+    conversation.agentProfileIdOverride.trim()
+      ? conversation.agentProfileIdOverride.trim()
+      : undefined
+  const permissionPolicy = normalizeConversationAgentPermissionPolicy(
+    conversation.agentPermissionPolicyOverride
+  )
+  const {
+    agentProfileIdOverride: _profileOverride,
+    agentPermissionPolicyOverride: _policyOverride,
+    ...rest
+  } = conversation
+  return {
+    ...rest,
+    ...(profileId ? { agentProfileIdOverride: profileId } : {}),
+    ...(permissionPolicy ? { agentPermissionPolicyOverride: permissionPolicy } : {}),
+  }
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
@@ -398,6 +452,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingContent: "",
   ingestSource: null,
   activeRunModelByConversation: {},
+  activeRunProfileByConversation: {},
   maxHistoryMessages: 10,
   activeAgentPermissionRequest: null,
   queuedAgentPermissionRequests: [],
@@ -475,6 +530,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       delete nextRewindLocks[id]
       const nextActiveRunModel = { ...state.activeRunModelByConversation }
       delete nextActiveRunModel[id]
+      const nextActiveRunProfile = { ...state.activeRunProfileByConversation }
+      delete nextActiveRunProfile[id]
       const nextRewindRequests = { ...state.agentRewindRequestsByConversation }
       delete nextRewindRequests[id]
       return withPresentations(state, {
@@ -484,6 +541,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         agentRewindTargets: nextRewindTargets,
         agentRewindLocks: nextRewindLocks,
         activeRunModelByConversation: nextActiveRunModel,
+        activeRunProfileByConversation: nextActiveRunProfile,
         agentPermissionRequestsByConversation: nextPermissionRequests,
         agentRewindRequestsByConversation: nextRewindRequests,
       })
@@ -556,7 +614,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setMessages: (messages) => set({ messages }),
 
-  setConversations: (conversations) => set({ conversations }),
+  setConversations: (conversations) =>
+    set({ conversations: conversations.map(normalizeConversation) }),
 
   setStreaming: (isStreaming) =>
     set((state) => ({
@@ -649,6 +708,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...state.activeRunModelByConversation,
           [targetId]: null,
         },
+        activeRunProfileByConversation: {
+          ...state.activeRunProfileByConversation,
+          [targetId]: null,
+        },
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
           c.id === targetId
@@ -699,6 +762,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...state.activeRunModelByConversation,
           [activeConversationId]: null,
         },
+        activeRunProfileByConversation: {
+          ...state.activeRunProfileByConversation,
+          [activeConversationId]: null,
+        },
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
           c.id === activeConversationId
@@ -743,6 +810,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 [targetConversationId]: null,
               }
             : state.activeRunModelByConversation,
+        activeRunProfileByConversation:
+          targetConversationId && finishesCurrentStream
+            ? {
+                ...state.activeRunProfileByConversation,
+                [targetConversationId]: null,
+              }
+            : state.activeRunProfileByConversation,
         messages: state.messages.map((m) =>
           m.id === messageId
             ? {
@@ -1109,6 +1183,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...state.activeRunModelByConversation,
         [conversationId]: model,
       },
+    })),
+
+  setActiveRunProfile: (conversationId, profile) =>
+    set((state) => ({
+      activeRunProfileByConversation: {
+        ...state.activeRunProfileByConversation,
+        [conversationId]: profile,
+      },
+    })),
+
+  setConversationAgentProfileOverride: (conversationId, profileId) =>
+    set((state) => ({
+      conversations: state.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? normalizeConversation({
+              ...conversation,
+              agentProfileIdOverride: profileId,
+            })
+          : conversation
+      ),
+    })),
+
+  setConversationAgentPermissionPolicyOverride: (conversationId, policy) =>
+    set((state) => ({
+      conversations: state.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? normalizeConversation({
+              ...conversation,
+              agentPermissionPolicyOverride: policy,
+            })
+          : conversation
+      ),
     })),
 
   clearMessages: () =>

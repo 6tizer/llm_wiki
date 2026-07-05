@@ -196,6 +196,25 @@
     "webSearchOffHint": "Off means no network access.",
     "modelAuto": "Auto",
     "modelIndicator": "Model routing",
+    "agentRouting": {
+      "profile": "Profile",
+      "profileAuto": "Auto (recommended)",
+      "policy": "Policy",
+      "policyOptions": {
+        "default": {
+          "label": "Default",
+          "description": "Ask before tool use and file changes."
+        },
+        "restricted": {
+          "label": "Restricted",
+          "description": "Disables built-in tools, including Bash and file reads."
+        },
+        "bypassPermissions": {
+          "label": "Skip confirmation",
+          "description": "Runs commands and edits files without asking — including shell commands."
+        }
+      }
+    },
     "emptySuggestions": {
       "brokenLinks": "Check the wiki for broken links",
       "recentSources": "Summarize recently imported materials",

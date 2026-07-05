@@ -196,6 +196,25 @@
     "webSearchOffHint": "关闭后不访问网络。",
     "modelAuto": "自动",
     "modelIndicator": "模型路由",
+    "agentRouting": {
+      "profile": "运行配置",
+      "profileAuto": "自动（推荐）",
+      "policy": "权限策略",
+      "policyOptions": {
+        "default": {
+          "label": "默认",
+          "description": "使用工具和修改文件前逐项确认。"
+        },
+        "restricted": {
+          "label": "受限",
+          "description": "禁用全部内置工具，包括 Bash 和读取文件。"
+        },
+        "bypassPermissions": {
+          "label": "跳过确认",
+          "description": "不再询问直接执行——包括 shell 命令与任意文件修改。"
+        }
+      }
+    },
     "emptySuggestions": {
       "brokenLinks": "检查 wiki 中的失效链接",
       "recentSources": "总结最近导入的资料",

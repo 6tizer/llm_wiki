@@ -50,6 +50,7 @@ describe("agent resource settings", () => {
       maxFilesChanged: 200,
       maxFilesChangedEnabled: false,
       maxWriteBytes: DEFAULT_AGENT_RESOURCE_CONFIG.maxWriteBytes,
+      defaultPermissionPolicy: "default",
     })
   })
 
@@ -59,6 +60,40 @@ describe("agent resource settings", () => {
     expect(normalizeAgentResourceConfig({}).maxFilesChangedEnabled).toBe(false)
     // Truthy non-boolean values are NOT coerced to true — only explicit true.
     expect(normalizeAgentResourceConfig({ maxFilesChangedEnabled: "yes" as unknown as boolean }).maxFilesChangedEnabled).toBe(false)
+  })
+
+  it("normalizes defaultPermissionPolicy to the supported UI contract values", () => {
+    expect(
+      normalizeAgentResourceConfig({ defaultPermissionPolicy: "restricted" })
+        .defaultPermissionPolicy,
+    ).toBe("restricted")
+    expect(
+      normalizeAgentResourceConfig({ defaultPermissionPolicy: "bypassPermissions" })
+        .defaultPermissionPolicy,
+    ).toBe("bypassPermissions")
+    expect(
+      normalizeAgentResourceConfig({ defaultPermissionPolicy: "bypass" })
+        .defaultPermissionPolicy,
+    ).toBe("default")
+    expect(normalizeAgentResourceConfig({}).defaultPermissionPolicy).toBe("default")
+  })
+
+  it("loads legacy settings without defaultPermissionPolicy as default", async () => {
+    fsMocks.fileExists.mockResolvedValue(true)
+    fsMocks.readFile.mockResolvedValue(JSON.stringify({
+      maxTurns: 40,
+      maxFilesChanged: 12,
+      maxFilesChangedEnabled: true,
+      maxWriteBytes: 512 * 1024,
+    }))
+
+    await expect(loadAgentResourceConfig("/project")).resolves.toEqual({
+      maxTurns: 40,
+      maxFilesChanged: 12,
+      maxFilesChangedEnabled: true,
+      maxWriteBytes: 512 * 1024,
+      defaultPermissionPolicy: "default",
+    })
   })
 
   it("saves normalized settings under .llm-wiki/agent-settings.json", async () => {
@@ -73,6 +108,7 @@ describe("agent resource settings", () => {
       maxFilesChanged: 12,
       maxFilesChangedEnabled: false,
       maxWriteBytes: 512 * 1024,
+      defaultPermissionPolicy: "default",
     })
     expect(fsMocks.createDirectory).toHaveBeenCalledWith("/project/.llm-wiki")
     expect(fsMocks.writeFileAtomic).toHaveBeenCalledWith(

@@ -501,6 +501,60 @@ fn release_agent_profile_claim(owner: &AgentProfileClaimOwner, exit_code: i32, s
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProfileResolvedPayload {
+    profile_id: String,
+    claim_id: String,
+    agent_sdk_model_id: String,
+    auth_style: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentProfileResolvedEvent {
+    stream_id: String,
+    r#type: &'static str,
+    data: AgentProfileResolvedPayload,
+}
+
+fn build_agent_profile_resolved_event(
+    stream_id: &str,
+    claim_id: &str,
+    config: &runtime_db::AgentRunProfileConfig,
+) -> AgentProfileResolvedEvent {
+    AgentProfileResolvedEvent {
+        stream_id: stream_id.to_string(),
+        r#type: "profile_resolved",
+        data: AgentProfileResolvedPayload {
+            profile_id: config.profile_id.clone(),
+            claim_id: claim_id.to_string(),
+            agent_sdk_model_id: config.agent_sdk_model_id.clone(),
+            auth_style: config.auth_style.clone(),
+            endpoint: config.endpoint.as_deref().map(redact_url_userinfo_for_log),
+        },
+    }
+}
+
+fn emit_agent_profile_resolved(
+    app: &AppHandle,
+    stream_id: &str,
+    claim_id: &str,
+    config: &runtime_db::AgentRunProfileConfig,
+) {
+    let event = build_agent_profile_resolved_event(stream_id, claim_id, config);
+    match serde_json::to_string(&event) {
+        Ok(payload) => {
+            let _ = app.emit(&format!("agent:{stream_id}"), &payload);
+        }
+        Err(err) => {
+            eprintln!("[agent_spawn] failed to serialize profile_resolved event: {err}");
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn agent_spawn(
     app: AppHandle,
@@ -517,6 +571,7 @@ pub async fn agent_spawn(
         args.agent_profile_claim_id.as_deref(),
     )? {
         Some((owner, config)) => {
+            emit_agent_profile_resolved(&app, &args.stream_id, &owner.claim_id, &config);
             args.model = Some(config.agent_sdk_model_id);
             args.base_url = config.endpoint;
             args.agent_profile_auth_style = Some(config.auth_style);
@@ -571,6 +626,7 @@ pub async fn agent_rewind_session(
         args.agent_profile_claim_id.as_deref(),
     )? {
         Some((owner, config)) => {
+            emit_agent_profile_resolved(&app, &args.stream_id, &owner.claim_id, &config);
             args.model = Some(config.agent_sdk_model_id);
             args.base_url = config.endpoint;
             args.agent_profile_auth_style = Some(config.auth_style);
@@ -1237,6 +1293,55 @@ mod tests {
             options.get("agentProfileAuthStyle").and_then(Value::as_str),
             Some("x-api-key")
         );
+    }
+
+    #[test]
+    fn profile_resolved_event_serializes_camel_case_without_secret_or_display_name() {
+        let config = runtime_db::AgentRunProfileConfig {
+            profile_id: "profile-agent".to_string(),
+            provider_model_id: "claude-provider".to_string(),
+            endpoint: Some("https://user:pass@agent.example/v1".to_string()),
+            agent_sdk_model_id: "claude-runtime".to_string(),
+            auth_style: "x-api-key".to_string(),
+            secret_value: Some("resolved-secret-never-emit".to_string()),
+        };
+
+        let event = build_agent_profile_resolved_event("stream-1", "claim-agent", &config);
+        let value: Value = serde_json::to_value(event).unwrap();
+        let text = serde_json::to_string(&value).unwrap();
+
+        assert_eq!(
+            value.get("streamId").and_then(Value::as_str),
+            Some("stream-1")
+        );
+        assert_eq!(
+            value.get("type").and_then(Value::as_str),
+            Some("profile_resolved")
+        );
+        let data = value.get("data").unwrap();
+        assert_eq!(
+            data.get("profileId").and_then(Value::as_str),
+            Some("profile-agent")
+        );
+        assert_eq!(
+            data.get("claimId").and_then(Value::as_str),
+            Some("claim-agent")
+        );
+        assert_eq!(
+            data.get("agentSdkModelId").and_then(Value::as_str),
+            Some("claude-runtime")
+        );
+        assert_eq!(
+            data.get("authStyle").and_then(Value::as_str),
+            Some("x-api-key")
+        );
+        assert_eq!(
+            data.get("endpoint").and_then(Value::as_str),
+            Some("https://***@agent.example/v1")
+        );
+        assert!(!text.contains("user:pass"));
+        assert!(!text.contains("secret"));
+        assert!(!text.contains("displayName"));
     }
 
     #[test]

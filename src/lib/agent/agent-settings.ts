@@ -1,4 +1,5 @@
 import { createDirectory, fileExists, readFile, writeFileAtomic } from "@/commands/fs"
+import type { AgentPermissionPolicy } from "./agent-types"
 import { normalizePath } from "@/lib/path-utils"
 
 export interface AgentResourceConfig {
@@ -23,6 +24,7 @@ export interface AgentResourceConfig {
    */
   maxFilesChangedEnabled: boolean
   maxWriteBytes: number
+  defaultPermissionPolicy: AgentPermissionPolicy
 }
 
 // Keep these defaults in sync with the sidecar defaults in core.ts and wiki-tools.ts.
@@ -31,6 +33,7 @@ export const DEFAULT_AGENT_RESOURCE_CONFIG: AgentResourceConfig = {
   maxFilesChanged: 10,
   maxFilesChangedEnabled: false,
   maxWriteBytes: 256 * 1024,
+  defaultPermissionPolicy: "default",
 }
 
 const AGENT_SETTINGS_REL_PATH = ".llm-wiki/agent-settings.json"
@@ -43,6 +46,19 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
   const numeric = finiteNumber(value)
   if (numeric === undefined) return fallback
   return Math.max(min, Math.min(max, Math.trunc(numeric)))
+}
+
+const AGENT_PERMISSION_POLICIES = new Set<AgentPermissionPolicy>([
+  "default",
+  "restricted",
+  "bypassPermissions",
+])
+
+function normalizeAgentPermissionPolicy(value: unknown): AgentPermissionPolicy {
+  return typeof value === "string" &&
+    AGENT_PERMISSION_POLICIES.has(value as AgentPermissionPolicy)
+    ? (value as AgentPermissionPolicy)
+    : DEFAULT_AGENT_RESOURCE_CONFIG.defaultPermissionPolicy
 }
 
 export function normalizeAgentResourceConfig(
@@ -68,6 +84,9 @@ export function normalizeAgentResourceConfig(
       DEFAULT_AGENT_RESOURCE_CONFIG.maxWriteBytes,
       1024,
       10 * 1024 * 1024,
+    ),
+    defaultPermissionPolicy: normalizeAgentPermissionPolicy(
+      config?.defaultPermissionPolicy,
     ),
   }
 }

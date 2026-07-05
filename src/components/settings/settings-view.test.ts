@@ -417,6 +417,7 @@ const agent = {
   maxFilesChanged: 20,
   maxFilesChangedEnabled: false,
   maxWriteBytes: 256 * 1024,
+  defaultPermissionPolicy: "default" as const,
 }
 
 function draftWithMineru(mineru: {

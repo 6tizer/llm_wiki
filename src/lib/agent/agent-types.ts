@@ -98,6 +98,15 @@ export interface AgentWikiChangedPayload {
 	snapshotted?: boolean;
 }
 
+export interface AgentProfileResolvedPayload {
+	streamId?: string;
+	profileId: string;
+	claimId: string;
+	agentSdkModelId: string;
+	authStyle: string;
+	endpoint?: string;
+}
+
 export interface AgentToolEventPayload {
 	phase: "pre" | "post" | "failure" | "batch";
 	toolName: string;
@@ -114,6 +123,7 @@ export interface AgentToolEventPayload {
 	}>;
 }
 
+// Keep in sync with src-tauri/sidecar/src/agent-policy.ts.
 export type AgentPermissionPolicy =
 	| "default"
 	| "restricted"
@@ -345,6 +355,7 @@ export interface AgentCallbacks {
 	onSessionCompact?: (payload: AgentSessionCompactPayload) => void;
 	onActionRequired?: (payload: AgentActionRequiredPayload) => void;
 	onTaskEvent?: (type: string, payload: AgentTaskEventPayload) => void;
+	onProfileResolved?: (payload: AgentProfileResolvedPayload) => void;
 	onPermissionRequest?: (
 		payload: AgentPermissionRequestPayload,
 	) => AgentPermissionDecision | Promise<AgentPermissionDecision>;
