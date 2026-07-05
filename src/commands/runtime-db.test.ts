@@ -18,10 +18,12 @@ import {
   runtimeJobPause,
   runtimeJobResume,
   runtimeProfileCreate,
+  runtimeProfileBreakerClear,
   runtimeProfileDelete,
   runtimeProfileList,
   runtimeProfileModelsList,
   runtimeProfilePoolClaim,
+  runtimeProfilePoolEventsList,
   runtimeProfilePoolList,
   runtimeProfilePoolRelease,
   runtimeProfileProbe,
@@ -35,6 +37,8 @@ import {
   runtimeStagingArtifactCommitSuccess,
   runtimeStagingArtifactList,
   runtimeStagingArtifactStore,
+  runtimeTaskPolicyList,
+  runtimeTaskPolicySet,
   runtimeTimelineList,
 } from "./runtime-db"
 
@@ -832,6 +836,50 @@ describe("runtime-db commands", () => {
         taskFamily: "summarize",
         jobId: "job-1",
       },
+    })
+  })
+
+  it("sends fallback policy and profile-pool observability commands", async () => {
+    const policyList = { enabled: true, status: "healthy", policies: [] }
+    const policySet = {
+      policy: {
+        taskFamily: "chat",
+        profileOrder: ["profile-1"],
+        autoFailover: true,
+        updatedAtMs: 1,
+      },
+      removedProfileIds: [],
+    }
+    const events = { enabled: true, status: "healthy", events: [] }
+    const cleared = { profileId: "profile-1", cleared: true }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(policyList)
+      .mockResolvedValueOnce(policySet)
+      .mockResolvedValueOnce(events)
+      .mockResolvedValueOnce(cleared)
+
+    await expect(runtimeTaskPolicyList()).resolves.toBe(policyList)
+    await expect(runtimeTaskPolicySet({
+      taskFamily: "chat",
+      profileOrder: ["profile-1"],
+      autoFailover: true,
+    })).resolves.toBe(policySet)
+    await expect(runtimeProfilePoolEventsList({ limit: 20 })).resolves.toBe(events)
+    await expect(runtimeProfileBreakerClear({ profileId: "profile-1" })).resolves.toBe(cleared)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(1, "runtime_task_policy_list")
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_task_policy_set", {
+      request: {
+        taskFamily: "chat",
+        profileOrder: ["profile-1"],
+        autoFailover: true,
+      },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(3, "runtime_profile_pool_events_list", {
+      request: { limit: 20 },
+    })
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(4, "runtime_profile_breaker_clear", {
+      request: { profileId: "profile-1" },
     })
   })
 })

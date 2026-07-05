@@ -8,6 +8,44 @@
     "cancel": "取消",
     "next": "下一步"
   },
+  "fallbackPolicy": {
+    "title": "Fallback 队列",
+    "description": "按任务族配置有序 profile 队列，并查看池转移与熔断状态。",
+    "loading": "正在加载 fallback 策略...",
+    "refresh": "刷新",
+    "refreshFailed": "刷新失败：{{message}}",
+    "queueSize": "队列中 {{count}} 个 profile",
+    "autoFailover": "自动转移",
+    "emptyQueue": "该队列暂无 profile。",
+    "missingProfile": "Profile 不存在",
+    "addProfile": "添加可用 profile",
+    "save": "保存",
+    "saved": "Fallback 策略已保存。",
+    "savedWithRemoved": "Fallback 策略已保存。已移除不存在的 profile：{{ids}}",
+    "saveFailed": "保存失败：{{message}}",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "remove": "移除",
+    "breakersTitle": "熔断状态",
+    "noPoolState": "没有活跃 claim 或打开的熔断。",
+    "activeClaim": "{{profile}} 正在处理 {{family}}，到 {{time}} 过期",
+    "noReason": "无原因",
+    "clearBreaker": "清除",
+    "breakerCleared": "熔断已清除。",
+    "breakerClearFailed": "清除失败：{{message}}",
+    "eventsTitle": "转移事件",
+    "noEvents": "暂无最近 profile-pool 事件。",
+    "unknownFamily": "未知任务族",
+    "eventRoute": "{{from}} → {{to}} · {{reason}}",
+    "eventOrdered": "有序转移：{{reason}}",
+    "eventExhausted": "候选耗尽：{{reason}}"
+  },
+  "profileGroups": {
+    "heading": "{{provider}} · {{count}} 个 profile",
+    "defaultEndpoint": "默认 endpoint",
+    "addModel": "添加模型",
+    "empty": "还没有 profile。"
+  },
   "nav": {
     "wiki": "对话",
     "sources": "资料",
@@ -576,7 +614,8 @@
           "llm": "LLM 模型",
           "sources": "外部信息源",
           "profiles": "Model Profiles",
-          "taskMatrix": "任务分配矩阵"
+          "taskMatrix": "任务分配矩阵",
+          "fallback": "Fallback 队列"
         },
         "migration": {
           "title": "从当前活跃 provider 创建 runtime Profile",

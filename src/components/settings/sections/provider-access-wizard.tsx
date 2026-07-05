@@ -59,6 +59,8 @@ interface ProviderAccessWizardProps {
   disabled?: boolean
   runtimeUnavailableMessage?: string | null
   onProfileCreated: (profile: RuntimeProfileRecord) => void
+  initialConnection?: ProviderAccessWizardInitialConnection | null
+  triggerLabel?: string
 }
 
 interface WizardFormState {
@@ -66,6 +68,12 @@ interface WizardFormState {
   endpoint: string
   modelId: string
   apiKey: string
+}
+
+export interface ProviderAccessWizardInitialConnection {
+  providerId: string
+  endpoint?: string | null
+  secretRef?: string | null
 }
 
 function errorMessage(error: unknown): string {
@@ -78,6 +86,19 @@ function nowMs(): number {
 
 function authStyleRequiresSecret(template: ProviderAccessTemplate): boolean {
   return template.authStyle !== "none" && template.authStyle !== "oauth-local-cli"
+}
+
+function customProviderTemplate(): ProviderAccessTemplate {
+  return PROVIDER_ACCESS_TEMPLATES.find((template) => template.id === "custom")
+    ?? PROVIDER_ACCESS_TEMPLATES[0]
+}
+
+function providerTemplateForInitialConnection(
+  connection: ProviderAccessWizardInitialConnection | null,
+): ProviderAccessTemplate {
+  if (!connection) return PROVIDER_ACCESS_TEMPLATES[0]
+  return PROVIDER_ACCESS_TEMPLATES.find((template) => template.id === connection.providerId)
+    ?? customProviderTemplate()
 }
 
 function profileKindForTemplate(
@@ -157,6 +178,8 @@ export function ProviderAccessWizard({
   disabled = false,
   runtimeUnavailableMessage = null,
   onProfileCreated,
+  initialConnection = null,
+  triggerLabel,
 }: ProviderAccessWizardProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -184,7 +207,8 @@ export function ProviderAccessWizard({
   const [createMessage, setCreateMessage] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const secretRefRef = useRef<string | null>(null)
-  const secretRefOwnedRef = useRef(false)
+  // true means the current ref came from an existing connection/profile and cleanup must not delete it.
+  const secretRefProtectedRef = useRef(false)
   const createdModelIdsRef = useRef<Set<string>>(new Set())
   const profileCreatedRef = useRef(false)
   const creatingRef = useRef(false)
@@ -204,21 +228,22 @@ export function ProviderAccessWizard({
     templates: filteredTemplates.filter((template) => template.group === group),
   })), [filteredTemplates])
 
-  function resetWizard(template = PROVIDER_ACCESS_TEMPLATES[0]) {
-    secretRefRef.current = null
-    secretRefOwnedRef.current = false
+  function resetWizard(template = PROVIDER_ACCESS_TEMPLATES[0], connection = initialConnection) {
+    const reusedSecretRef = connection?.secretRef ?? null
+    secretRefRef.current = reusedSecretRef
+    secretRefProtectedRef.current = Boolean(reusedSecretRef)
     createdModelIdsRef.current.clear()
     profileCreatedRef.current = false
-    setStep(1)
+    setStep(connection ? 2 : 1)
     setSearch("")
     setSelectedTemplateId(template.id)
     setForm({
       displayName: template.displayName,
-      endpoint: template.endpoint,
+      endpoint: connection?.endpoint ?? template.endpoint,
       modelId: template.defaultModelId,
       apiKey: "",
     })
-    setSecretRef(null)
+    setSecretRef(reusedSecretRef)
     setProbeState({ kind: "idle" })
     setModelListState({ kind: "idle" })
     setSelectedModelIds([template.defaultModelId])
@@ -231,7 +256,7 @@ export function ProviderAccessWizard({
   async function cleanupDraftSecret() {
     const ref = secretRefRef.current
     if (!ref || profileCreatedRef.current) return
-    if (secretRefOwnedRef.current) {
+    if (secretRefProtectedRef.current) {
       secretRefRef.current = null
       setSecretRef(null)
       return
@@ -243,7 +268,8 @@ export function ProviderAccessWizard({
 
   function handleOpenChange(nextOpen: boolean) {
     if (nextOpen) {
-      resetWizard()
+      const template = providerTemplateForInitialConnection(initialConnection)
+      resetWizard(template)
       setOpen(true)
       return
     }
@@ -287,13 +313,13 @@ export function ProviderAccessWizard({
       throw new Error(t("settings.sections.llm.profiles.wizard.keyRequired"))
     }
     const previousRef = secretRefRef.current
-    const previousRefOwned = secretRefOwnedRef.current
+    const previousRefProtected = secretRefProtectedRef.current
     const result = await profileSecretWrite({ secretValue: rawSecret })
-    if (previousRef && !previousRefOwned) {
+    if (previousRef && !previousRefProtected) {
       await profileSecretDelete({ secretRef: previousRef }).catch(() => undefined)
     }
     secretRefRef.current = result.secretRef
-    secretRefOwnedRef.current = false
+    secretRefProtectedRef.current = false
     setSecretRef(result.secretRef)
     setForm((current) => ({ ...current, apiKey: "" }))
     return { ref: result.secretRef, rawSecret }
@@ -416,7 +442,7 @@ export function ProviderAccessWizard({
       if (models.length === 0) {
         profileCreatedRef.current = true
         secretRefRef.current = null
-        secretRefOwnedRef.current = false
+        secretRefProtectedRef.current = false
         setSecretRef(null)
         setOpen(false)
         return
@@ -435,12 +461,12 @@ export function ProviderAccessWizard({
         ))
         created.push(saved)
         createdModelIdsRef.current.add(modelId)
-        if (ref) secretRefOwnedRef.current = true
+        if (ref) secretRefProtectedRef.current = true
         onProfileCreated(saved)
       }
       profileCreatedRef.current = true
       secretRefRef.current = null
-      secretRefOwnedRef.current = false
+      secretRefProtectedRef.current = false
       setSecretRef(null)
       setOpen(false)
     } catch (error) {
@@ -478,7 +504,7 @@ export function ProviderAccessWizard({
         onClick={() => handleOpenChange(true)}
       >
         <KeyRound className="h-3.5 w-3.5" />
-        {t("settings.sections.llm.profiles.wizard.open")}
+        {triggerLabel ?? t("settings.sections.llm.profiles.wizard.open")}
       </button>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
