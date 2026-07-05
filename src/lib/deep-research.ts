@@ -42,9 +42,7 @@ export function queueResearch(
   if (searchQueries && searchQueries.length > 0) {
     store.updateTask(taskId, { searchQueries })
   }
-  // Ensure panel is open
-  store.setPanelOpen(true)
-  // Start processing on next tick to ensure React has rendered the panel
+  // Start processing on next tick so task state is committed before workers read it.
   setTimeout(() => {
     processQueue(pp, llmConfig, searchConfig)
   }, 50)

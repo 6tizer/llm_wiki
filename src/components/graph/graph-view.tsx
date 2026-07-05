@@ -67,7 +67,6 @@ import {
 	type GraphNode,
 } from "@/lib/wiki-graph";
 import { wikiTypeLabel } from "@/lib/wiki-page-types";
-import { useResearchStore } from "@/stores/research-store";
 import { useWikiStore } from "@/stores/wiki-store";
 
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -906,10 +905,9 @@ export function GraphView() {
 	// Sigma crashes with "could not find suitable program for node type circle"
 	// when its canvas is resized by external layout changes.
 
-	// 1. Detect panel open/close (selectedFile, researchPanel, insights)
+	// 1. Detect layout-affecting panels (selectedFile, insights)
 	const selectedFileForLayout = useWikiStore((s) => s.selectedFile);
-	const researchPanelForLayout = useResearchStore((s) => s.panelOpen);
-	const layoutKey = `${!!selectedFileForLayout}-${researchPanelForLayout}-${showInsights}`;
+	const layoutKey = `${!!selectedFileForLayout}-${showInsights}`;
 	const prevLayoutKey = useRef(layoutKey);
 
 	useEffect(() => {

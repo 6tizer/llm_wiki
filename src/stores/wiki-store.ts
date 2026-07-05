@@ -336,7 +336,7 @@ interface WikiState {
    */
 	pendingScrollImageSrc: string | null
 	chatExpanded: boolean
-	activeView: "wiki" | "sources" | "search" | "graph" | "lint" | "review" | "settings"
+	activeView: "wiki" | "sources" | "explore" | "wiki-health" | "research" | "settings"
 	llmConfig: LlmConfig
 	/** Per-provider-preset stored overrides (API key, model, endpoint, …). */
 	providerConfigs: ProviderConfigs

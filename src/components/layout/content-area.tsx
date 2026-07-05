@@ -2,28 +2,35 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { ChatPanel } from "@/components/chat/chat-panel"
 import { SettingsView } from "@/components/settings/settings-view"
 import { SourcesView } from "@/components/sources/sources-view"
-import { ReviewView } from "@/components/review/review-view"
-import { LintView } from "@/components/lint/lint-view"
-import { SearchView } from "@/components/search/search-view"
-import { GraphView } from "@/components/graph/graph-view"
+import { ExploreView } from "@/components/explore/explore-view"
+import { WikiHealthView } from "@/components/wiki-health/wiki-health-view"
+import { ResearchPanel } from "./research-panel"
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled active view: ${String(value)}`)
+}
 
 export function ContentArea() {
   const activeView = useWikiStore((s) => s.activeView)
 
   switch (activeView) {
+    case "wiki":
+      return <ChatPanel />
     case "settings":
       return <SettingsView />
     case "sources":
       return <SourcesView />
-    case "review":
-      return <ReviewView />
-    case "lint":
-      return <LintView />
-    case "search":
-      return <SearchView />
-    case "graph":
-      return <GraphView />
+    case "explore":
+      return <ExploreView />
+    case "wiki-health":
+      return <WikiHealthView />
+    case "research":
+      return (
+        <div className="h-full min-h-0">
+          <ResearchPanel />
+        </div>
+      )
     default:
-      return <ChatPanel />
+      return assertNever(activeView)
   }
 }

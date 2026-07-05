@@ -7,9 +7,7 @@ import { UpdateBanner } from "./update-banner"
 import { SidebarPanel } from "./sidebar-panel"
 import { ContentArea } from "./content-area"
 import { PreviewPanel } from "./preview-panel"
-import { ResearchPanel } from "./research-panel"
 import { ActivityPanel } from "./activity-panel"
-import { useResearchStore } from "@/stores/research-store"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { getAppLayoutVisibility } from "./app-layout-visibility"
 
@@ -21,7 +19,6 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
   const project = useWikiStore((s) => s.project)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const activeView = useWikiStore((s) => s.activeView)
-  const researchPanelOpen = useResearchStore((s) => s.panelOpen)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const [leftWidth, setLeftWidth] = useState(220)
   const [rightWidth, setRightWidth] = useState(400)
@@ -84,11 +81,7 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
     []
   )
 
-  const { showLeftPanel, hasRightPanel } = getAppLayoutVisibility(
-    activeView,
-    selectedFile,
-    researchPanelOpen,
-  )
+  const { showLeftPanel, hasRightPanel } = getAppLayoutVisibility(activeView, selectedFile)
 
   return (
     // Outer column layout: full-width update banner on top (when an
@@ -139,18 +132,7 @@ export function AppLayout({ onSwitchProject }: AppLayoutProps) {
                 style={{ width: rightWidth }}
               >
                 <ErrorBoundary>
-                  {/* File preview on top (if file selected) */}
-                  {selectedFile && (
-                    <div className={researchPanelOpen ? "flex-1 overflow-hidden border-b" : "flex-1 overflow-hidden"}>
-                      <PreviewPanel />
-                    </div>
-                  )}
-                  {/* Research panel on bottom (if open) */}
-                  {researchPanelOpen && (
-                    <div className={selectedFile ? "h-1/2 shrink-0 overflow-hidden" : "flex-1 overflow-hidden"}>
-                      <ResearchPanel />
-                    </div>
-                  )}
+                  <PreviewPanel />
                 </ErrorBoundary>
               </div>
             </>

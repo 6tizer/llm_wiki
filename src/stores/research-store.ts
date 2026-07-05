@@ -17,13 +17,11 @@ export interface ResearchTask {
 
 interface ResearchState {
   tasks: ResearchTask[]
-  panelOpen: boolean
   maxConcurrent: number
 
   addTask: (topic: string, projectPath: string) => string
   updateTask: (id: string, updates: Partial<ResearchTask>) => void
   removeTask: (id: string) => void
-  setPanelOpen: (open: boolean) => void
   getRunningCount: (projectPath: string) => number
   getNextQueued: (projectPath: string) => ResearchTask | undefined
 }
@@ -32,7 +30,6 @@ let counter = 0
 
 export const useResearchStore = create<ResearchState>((set, get) => ({
   tasks: [],
-  panelOpen: false,
   maxConcurrent: 3,
 
   addTask: (topic, projectPath) => {
@@ -52,7 +49,6 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
           createdAt: Date.now(),
         },
       ],
-      panelOpen: true,
     }))
     return id
   },
@@ -66,8 +62,6 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     set((state) => ({
       tasks: state.tasks.filter((t) => t.id !== id),
     })),
-
-  setPanelOpen: (panelOpen) => set({ panelOpen }),
 
   getRunningCount: (projectPath) => {
     const { tasks } = get()
