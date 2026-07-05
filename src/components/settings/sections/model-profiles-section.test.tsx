@@ -19,6 +19,7 @@ const runtimeDbMocks = vi.hoisted(() => ({
   runtimeProfileCreate: vi.fn(),
   runtimeProfileDelete: vi.fn(),
   runtimeProfileList: vi.fn(),
+  runtimeProfileModelsList: vi.fn(),
   runtimeProfileProbe: vi.fn(),
   runtimeProfileUpdate: vi.fn(),
 }))
@@ -801,14 +802,14 @@ describe("ModelProfilesSection UI", () => {
     const { container, root } = renderProfiles()
     await flush()
 
-    expect(container.textContent).toContain("supported")
+    expect(container.textContent).toContain("Healthy")
 
     const model = container.querySelector<HTMLInputElement>("[data-testid='profile-model']")
     if (!model) throw new Error("profile model input not found")
     await input(model, "gpt-new")
 
     expect(container.textContent).toContain("not probed")
-    expect(container.textContent).not.toContain("supported")
+    expect(container.textContent).toContain("Untested")
 
     unmount(root)
   })
@@ -983,6 +984,143 @@ describe("ModelProfilesSection UI", () => {
         taskFamilies: ["chat", "ingest", "review", "synthesis", "taxonomy", "agent"],
       }),
     )
+
+    unmount(root)
+  })
+
+  it("fetches model list and creates one profile per selected model with one secret ref", async () => {
+    runtimeDbMocks.runtimeProfileModelsList.mockResolvedValueOnce({
+      models: ["deepseek-v4-pro", "deepseek-reasoner"],
+      sourceUrl: "https://api.deepseek.com/models",
+    })
+    runtimeDbMocks.runtimeProfileCreate
+      .mockResolvedValueOnce(runtimeProfile({
+        profileId: "profile-deepseek-v4",
+        displayName: "DeepSeek · deepseek-v4-pro",
+        providerId: "deepseek",
+        modelId: "deepseek-v4-pro",
+      }))
+      .mockResolvedValueOnce(runtimeProfile({
+        profileId: "profile-deepseek-reasoner",
+        displayName: "DeepSeek · deepseek-reasoner",
+        providerId: "deepseek",
+        modelId: "deepseek-reasoner",
+      }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-fetch-models']"))
+    await flush()
+    await click(bodyElement<HTMLInputElement>("[data-testid='wizard-model-option-deepseek-reasoner']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+
+    expect(runtimeDbMocks.runtimeProfileModelsList).toHaveBeenCalledWith({
+      draft: {
+        endpoint: "https://api.deepseek.com/anthropic",
+        apiMode: "anthropic-messages",
+        authStyle: "bearer",
+      },
+      rawSecret: "sk-deepseek",
+      modelsUrl: "https://api.deepseek.com/models",
+    })
+    expect(secretMocks.profileSecretWrite).toHaveBeenCalledTimes(1)
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      displayName: "DeepSeek · deepseek-v4-pro",
+      modelId: "deepseek-v4-pro",
+      secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+    }))
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      displayName: "DeepSeek · deepseek-reasoner",
+      modelId: "deepseek-reasoner",
+      secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+    }))
+
+    unmount(root)
+  })
+
+  it("retries only remaining quick connect models after a partial batch failure", async () => {
+    runtimeDbMocks.runtimeProfileModelsList.mockResolvedValueOnce({
+      models: ["deepseek-v4-pro", "deepseek-reasoner"],
+      sourceUrl: "https://api.deepseek.com/models",
+    })
+    runtimeDbMocks.runtimeProfileCreate
+      .mockResolvedValueOnce(runtimeProfile({
+        profileId: "profile-deepseek-v4",
+        displayName: "DeepSeek · deepseek-v4-pro",
+        providerId: "deepseek",
+        modelId: "deepseek-v4-pro",
+      }))
+      .mockRejectedValueOnce(new Error("provider rejected"))
+      .mockResolvedValueOnce(runtimeProfile({
+        profileId: "profile-deepseek-reasoner",
+        displayName: "DeepSeek · deepseek-reasoner",
+        providerId: "deepseek",
+        modelId: "deepseek-reasoner",
+      }))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-fetch-models']"))
+    await flush()
+    await click(bodyElement<HTMLInputElement>("[data-testid='wizard-model-option-deepseek-reasoner']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+    await flush()
+
+    expect(document.body.textContent).toContain("provider rejected")
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledTimes(2)
+
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+
+    expect(secretMocks.profileSecretWrite).toHaveBeenCalledTimes(1)
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledTimes(3)
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      modelId: "deepseek-reasoner",
+      secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+    }))
+
+    unmount(root)
+  })
+
+  it("does not delete an owned quick connect secret when cancelling after partial failure", async () => {
+    runtimeDbMocks.runtimeProfileModelsList.mockResolvedValueOnce({
+      models: ["deepseek-v4-pro", "deepseek-reasoner"],
+      sourceUrl: "https://api.deepseek.com/models",
+    })
+    runtimeDbMocks.runtimeProfileCreate
+      .mockResolvedValueOnce(runtimeProfile({
+        profileId: "profile-deepseek-v4",
+        displayName: "DeepSeek · deepseek-v4-pro",
+        providerId: "deepseek",
+        modelId: "deepseek-v4-pro",
+      }))
+      .mockRejectedValueOnce(new Error("provider rejected"))
+    const { container, root } = renderProfiles()
+    await flush()
+
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-quick-connect']")!)
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-template-deepseek']"))
+    await input(bodyElement<HTMLInputElement>("[data-testid='wizard-api-key']"), "sk-deepseek")
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-fetch-models']"))
+    await flush()
+    await click(bodyElement<HTMLInputElement>("[data-testid='wizard-model-option-deepseek-reasoner']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-next']"))
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-finish']"))
+    await flush()
+    await click(bodyElement<HTMLButtonElement>("[data-testid='wizard-cancel']"))
+    await flush()
+
+    expect(secretMocks.profileSecretWrite).toHaveBeenCalledTimes(1)
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalledWith({
+      secretRef: "llm-wiki-profile-secret:44444444-4444-4444-8444-444444444444",
+    })
 
     unmount(root)
   })

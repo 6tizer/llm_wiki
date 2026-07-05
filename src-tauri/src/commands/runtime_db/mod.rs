@@ -117,6 +117,7 @@ const DEFAULT_PROFILE_STATUS: &str = "unknown";
 const PROFILE_PROBE_BACKOFF_MS: i64 = DEFAULT_RETRY_BACKOFF_MS;
 const PROFILE_PROBE_MAX_TOKENS: i64 = 8;
 const PROFILE_PROBE_TIMEOUT_SECS: u64 = 30;
+const PROFILE_MODELS_LIST_TIMEOUT_SECS: u64 = 10;
 // Keep aligned with PREPARE_PROFILE_TASK_FAMILY in
 // src/lib/parallel-knowledge/prepare-worker-pool.ts.
 const PREPARE_PROFILE_TASK_FAMILY: &str = "ingest";
@@ -854,6 +855,33 @@ pub struct RuntimeProfileProbeRequest {
     force: Option<bool>,
 }
 
+/// Unsaved profile connection metadata used for listing provider models.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileModelsListDraftRequest {
+    endpoint: Option<String>,
+    api_mode: String,
+    auth_style: String,
+}
+
+/// Request payload for listing provider models from a stored or draft profile target.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileModelsListRequest {
+    profile_id: Option<String>,
+    draft: Option<RuntimeProfileModelsListDraftRequest>,
+    raw_secret: Option<String>,
+    models_url: Option<String>,
+}
+
+/// Non-secret provider models list response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileModelsListResult {
+    models: Vec<String>,
+    source_url: String,
+}
+
 /// Non-secret profile capability probe result returned to Tauri callers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1016,6 +1044,21 @@ impl std::fmt::Debug for RuntimeProfileProbeRequest {
                 &self.raw_secret.as_ref().map(|_| "[REDACTED]"),
             )
             .field("force", &self.force)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for RuntimeProfileModelsListRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeProfileModelsListRequest")
+            .field("profile_id", &self.profile_id)
+            .field("draft", &self.draft)
+            .field(
+                "raw_secret",
+                &self.raw_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("models_url", &self.models_url)
             .finish()
     }
 }

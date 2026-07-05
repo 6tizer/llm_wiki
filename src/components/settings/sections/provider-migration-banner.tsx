@@ -6,6 +6,7 @@ import { runtimeProfileList, type RuntimeProfileApiMode, type RuntimeProfileReco
 import { useWikiStore } from "@/stores/wiki-store"
 import { LLM_PRESETS } from "../llm-presets"
 import { resolveConfig } from "../preset-resolver"
+import { providerAccessTemplateById, type ProviderAccessTemplate } from "@/lib/provider-access-templates"
 import {
   defaultApiModeForProvider,
   defaultAuthStyleForProvider,
@@ -25,6 +26,29 @@ function errorMessage(error: unknown): string {
 
 function migratedProfilePrefix(presetId: string): string {
   return `Migrated: ${presetId}`
+}
+
+function migrationTemplateIdForPreset(presetId: string): string | undefined {
+  const mapped: Record<string, string> = {
+    "kimi": "kimi",
+    "kimi-cn": "kimi",
+    "deepseek": "deepseek",
+    "zhipu": "zhipu-glm",
+    "minimax-global": "minimax",
+    "minimax-cn": "minimax",
+    "xiaomi-mimo": "xiaomi-mimo",
+    "volcengine-ark": "volcengine-ark",
+    "bailian-coding": "dashscope",
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "google": "google-gemini",
+  }
+  return mapped[presetId]
+}
+
+function migrationTemplateForPreset(presetId: string): ProviderAccessTemplate | undefined {
+  const templateId = migrationTemplateIdForPreset(presetId)
+  return templateId ? providerAccessTemplateById(templateId) : undefined
 }
 
 function endpointFromResolvedConfig(resolved: ReturnType<typeof resolveConfig>): string {
@@ -55,6 +79,7 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" })
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [keepResolvedEndpoint, setKeepResolvedEndpoint] = useState(false)
   const savingRef = useRef(false)
 
   const activePreset = useMemo(
@@ -62,15 +87,43 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
     [activePresetId],
   )
   const migrationPrefix = activePresetId ? migratedProfilePrefix(activePresetId) : ""
+  const migrationTemplate = activePresetId ? migrationTemplateForPreset(activePresetId) : undefined
+  const resolvedPreview = useMemo(
+    () => activePreset && activePresetId
+      ? resolveConfig(activePreset, providerConfigs[activePresetId], llmConfig)
+      : null,
+    [activePreset, activePresetId, providerConfigs, llmConfig],
+  )
+  const resolvedEndpoint = resolvedPreview ? endpointFromResolvedConfig(resolvedPreview) : ""
+  const resolvedApiMode = activePreset && resolvedPreview
+    ? apiModeFromResolvedConfig(activePreset.id, resolvedPreview)
+    : undefined
+  const resolvedAuthStyle = activePreset ? defaultAuthStyleForProvider(activePreset.id) : undefined
+  const migrationEndpoint = migrationTemplate && !keepResolvedEndpoint
+    ? migrationTemplate.endpoint
+    : resolvedEndpoint
+  const migrationApiMode = migrationTemplate?.apiMode ?? resolvedApiMode
+  const migrationAuthStyle = migrationTemplate?.authStyle ?? resolvedAuthStyle
+  const migrationCorrectsValues = Boolean(
+    migrationTemplate
+      && resolvedApiMode
+      && resolvedAuthStyle
+      && (
+        migrationEndpoint !== resolvedEndpoint
+          || migrationApiMode !== resolvedApiMode
+          || migrationAuthStyle !== resolvedAuthStyle
+      ),
+  )
   // The displayName prefix is a one-click migration marker, not a durable
   // identity contract. If a user renames the generated profile, running the
   // convenience action again may create a second clean profile instead of
   // mutating legacy provider data.
   const migratedProfile = loadState.kind === "ready"
-    ? loadState.profiles.find((profile) => (
-        profile.providerId === activePresetId
-        && profile.displayName.startsWith(migrationPrefix)
-      ))
+    ? loadState.profiles.find((profile) => {
+        const providerMatches = profile.providerId === activePresetId
+          || profile.providerId === migrationTemplate?.id
+        return providerMatches && profile.displayName.startsWith(migrationPrefix)
+      })
     : undefined
 
   useEffect(() => {
@@ -102,21 +155,26 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
     }
   }, [activePresetId])
 
+  useEffect(() => {
+    setKeepResolvedEndpoint(false)
+  }, [activePresetId])
+
   async function migrateActivePreset() {
     if (!activePreset || !activePresetId || loadState.kind !== "ready" || migratedProfile || savingRef.current) return
     savingRef.current = true
     setSaving(true)
     setMessage(null)
-    const resolved = resolveConfig(activePreset, providerConfigs[activePresetId], llmConfig)
+    const resolved = resolvedPreview ?? resolveConfig(activePreset, providerConfigs[activePresetId], llmConfig)
+    const template = migrationTemplateForPreset(activePreset.id)
     const draft: ModelProfileDraft = {
       kind: "model-call",
       displayName: migrationPrefix,
-      providerId: activePreset.id,
+      providerId: template?.id ?? activePreset.id,
       modelId: resolved.model,
       agentSdkModelId: "",
-      endpoint: endpointFromResolvedConfig(resolved),
-      apiMode: apiModeFromResolvedConfig(activePreset.id, resolved),
-      authStyle: defaultAuthStyleForProvider(activePreset.id),
+      endpoint: template && !keepResolvedEndpoint ? template.endpoint : endpointFromResolvedConfig(resolved),
+      apiMode: template?.apiMode ?? apiModeFromResolvedConfig(activePreset.id, resolved),
+      authStyle: template?.authStyle ?? defaultAuthStyleForProvider(activePreset.id),
       enabled: true,
       taskFamilies: ["chat"],
       maxConcurrency: 1,
@@ -170,6 +228,25 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
         <p className="mt-1 text-xs text-muted-foreground">
           {t("settings.sections.modelConfig.migration.description", { preset: activePreset.label })}
         </p>
+        {migrationCorrectsValues && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="provider-migration-template-note">
+            {t("settings.sections.modelConfig.migration.templateCorrected", {
+              from: resolvedEndpoint || "∅",
+              to: migrationEndpoint || "∅",
+            })}
+          </p>
+        )}
+        {migrationTemplate && resolvedEndpoint && migrationTemplate.endpoint !== resolvedEndpoint && (
+          <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={keepResolvedEndpoint}
+              onChange={(event) => setKeepResolvedEndpoint(event.target.checked)}
+              data-testid="provider-migration-keep-endpoint"
+            />
+            {t("settings.sections.modelConfig.migration.keepResolvedEndpoint")}
+          </label>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button

@@ -9,6 +9,7 @@ use crate::commands::profile_secrets::{read_profile_secret, OsSecretStore, Secre
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::time::Duration;
 
 /// Probe stored or draft model profile capabilities without returning secrets.
@@ -33,6 +34,32 @@ pub async fn runtime_profile_probe(
         runtime_enabled,
         request,
         now,
+        &OsSecretStore,
+        &client,
+    )
+    .await
+}
+
+/// List available provider model ids without returning or logging secrets.
+#[tauri::command]
+pub async fn runtime_profile_models_list(
+    request: RuntimeProfileModelsListRequest,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeProfileModelsListResult, String> {
+    let (project_root, runtime_enabled) = run_guarded("runtime_profile_models_list", || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        Ok((root_state.get(), runtime_enabled))
+    })?;
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(PROFILE_MODELS_LIST_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| format!("profile-models-list-client-failed: {err}"))?;
+    runtime_profile_models_list_for_project_with_store(
+        project_root.as_deref(),
+        runtime_enabled,
+        request,
         &OsSecretStore,
         &client,
     )
@@ -129,6 +156,18 @@ async fn runtime_profile_probe_for_project_with_store(
     Ok(runtime_profile_probe_result(profile, outcome, now))
 }
 
+async fn runtime_profile_models_list_for_project_with_store(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileModelsListRequest,
+    store: &impl SecretStore,
+    client: &Client,
+) -> Result<RuntimeProfileModelsListResult, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let target = resolve_profile_models_list_target(project_root, request, store)?;
+    list_profile_models(client, &target).await
+}
+
 fn runtime_profile_probe_result(
     profile: Option<RuntimeProfileRecord>,
     outcome: RuntimeProfileProbeOutcome,
@@ -191,29 +230,7 @@ fn resolve_profile_probe_target(
                     None,
                 ));
             }
-            let secret_value = match profile_secret_required(&profile.auth_style) {
-                true => {
-                    let secret_ref = profile.secret_ref.as_deref().ok_or_else(|| {
-                        "profile-probe-missing-secret: stored profile has no secretRef".to_string()
-                    })?;
-                    read_profile_secret(store, secret_ref)?
-                }
-                false => String::new(),
-            };
-            Ok((
-                None,
-                Some(RuntimeProfileProbeTarget {
-                    profile_id: Some(profile.profile_id),
-                    kind: profile.kind,
-                    provider_id: profile.provider_id,
-                    model_id: profile.model_id,
-                    agent_sdk_model_id: profile.agent_sdk_model_id,
-                    endpoint: profile.endpoint,
-                    api_mode: profile.api_mode,
-                    auth_style: profile.auth_style,
-                    secret_value,
-                }),
-            ))
+            Ok((None, Some(probe_target_from_profile(profile, store)?)))
         }
         (None, Some(draft)) => Ok((
             None,
@@ -221,6 +238,40 @@ fn resolve_profile_probe_target(
         )),
         _ => Err(
             "invalid-profile-probe-request: provide exactly one of profileId or draft".to_string(),
+        ),
+    }
+}
+
+fn resolve_profile_models_list_target(
+    project_root: &Path,
+    request: RuntimeProfileModelsListRequest,
+    store: &impl SecretStore,
+) -> Result<RuntimeProfileModelsListTarget, String> {
+    let RuntimeProfileModelsListRequest {
+        profile_id,
+        draft,
+        raw_secret,
+        models_url,
+    } = request;
+    match (profile_id, draft) {
+        (Some(profile_id), None) => {
+            let profile_id = normalize_profile_text(
+                "invalid-profile-id",
+                "profileId",
+                &profile_id,
+                MAX_PROFILE_ID_BYTES,
+            )?;
+            let connection = open_profile_runtime_locked(project_root)?;
+            let profile = read_visible_profile(&connection, &profile_id)?;
+            let target = probe_target_from_profile(profile, store)?;
+            RuntimeProfileModelsListTarget::from_probe_target(&target, models_url)
+        }
+        (None, Some(draft)) => {
+            RuntimeProfileModelsListTarget::from_draft(draft, raw_secret, models_url)
+        }
+        _ => Err(
+            "invalid-profile-models-list-request: provide exactly one of profileId or draft"
+                .to_string(),
         ),
     }
 }
@@ -279,6 +330,100 @@ fn probe_target_from_draft(
         auth_style,
         secret_value,
     })
+}
+
+fn probe_target_from_profile(
+    profile: RuntimeProfileRecord,
+    store: &impl SecretStore,
+) -> Result<RuntimeProfileProbeTarget, String> {
+    let secret_value = match profile_secret_required(&profile.auth_style) {
+        true => {
+            let secret_ref = profile.secret_ref.as_deref().ok_or_else(|| {
+                "profile-probe-missing-secret: stored profile has no secretRef".to_string()
+            })?;
+            read_profile_secret(store, secret_ref)?
+        }
+        false => String::new(),
+    };
+    Ok(RuntimeProfileProbeTarget {
+        profile_id: Some(profile.profile_id),
+        kind: profile.kind,
+        provider_id: profile.provider_id,
+        model_id: profile.model_id,
+        agent_sdk_model_id: profile.agent_sdk_model_id,
+        endpoint: profile.endpoint,
+        api_mode: profile.api_mode,
+        auth_style: profile.auth_style,
+        secret_value,
+    })
+}
+
+struct RuntimeProfileModelsListTarget {
+    endpoint: Option<String>,
+    api_mode: String,
+    auth_style: String,
+    secret_value: String,
+    models_url: Option<String>,
+}
+
+impl RuntimeProfileModelsListTarget {
+    fn from_probe_target(
+        target: &RuntimeProfileProbeTarget,
+        models_url: Option<String>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            endpoint: target.endpoint.clone(),
+            api_mode: target.api_mode.clone(),
+            auth_style: target.auth_style.clone(),
+            secret_value: target.secret_value.clone(),
+            models_url: normalize_optional_profile_text(
+                models_url,
+                "invalid-models-url",
+                "modelsUrl",
+                MAX_PROFILE_ENDPOINT_BYTES,
+            )?,
+        })
+    }
+
+    fn from_draft(
+        draft: RuntimeProfileModelsListDraftRequest,
+        raw_secret: Option<String>,
+        models_url: Option<String>,
+    ) -> Result<Self, String> {
+        let endpoint = normalize_optional_profile_text(
+            draft.endpoint,
+            "invalid-endpoint",
+            "endpoint",
+            MAX_PROFILE_ENDPOINT_BYTES,
+        )?;
+        let api_mode = normalize_profile_api_mode(&draft.api_mode)?.to_string();
+        let auth_style = normalize_profile_auth_style(&draft.auth_style)?.to_string();
+        let secret_value = if profile_secret_required(&auth_style) {
+            raw_secret
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "profile-models-list-missing-secret: draft requests require rawSecret"
+                        .to_string()
+                })?
+                .to_string()
+        } else {
+            String::new()
+        };
+        Ok(Self {
+            endpoint,
+            api_mode,
+            auth_style,
+            secret_value,
+            models_url: normalize_optional_profile_text(
+                models_url,
+                "invalid-models-url",
+                "modelsUrl",
+                MAX_PROFILE_ENDPOINT_BYTES,
+            )?,
+        })
+    }
 }
 
 pub(crate) fn profile_secret_required(auth_style: &str) -> bool {
@@ -749,6 +894,152 @@ fn probe_headers(api_mode: &str, auth_style: &str, secret_value: &str) -> Header
     headers
 }
 
+async fn list_profile_models(
+    client: &Client,
+    target: &RuntimeProfileModelsListTarget,
+) -> Result<RuntimeProfileModelsListResult, String> {
+    let candidates = profile_models_url_candidates(target)?;
+    let headers = probe_headers(&target.api_mode, &target.auth_style, &target.secret_value);
+    let mut failures = Vec::new();
+    for url in &candidates {
+        let response = client.get(url).headers(headers.clone()).send().await;
+        let response = match response {
+            Ok(response) => response,
+            Err(_) => {
+                failures.push(format!("{url}: network failed"));
+                continue;
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            failures.push(format!("{url}: provider returned {status}"));
+            continue;
+        }
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(_) => {
+                failures.push(format!("{url}: response read failed"));
+                continue;
+            }
+        };
+        match parse_profile_models_body(&body) {
+            Some(models) => {
+                return Ok(RuntimeProfileModelsListResult {
+                    models,
+                    source_url: url.clone(),
+                });
+            }
+            None => failures.push(format!("{url}: response was not a model list")),
+        }
+    }
+    Err(format!(
+        "profile-models-list-failed: no usable model list; attempted [{}]; failures [{}]",
+        candidates.join(", "),
+        failures.join("; ")
+    ))
+}
+
+fn profile_models_url_candidates(
+    target: &RuntimeProfileModelsListTarget,
+) -> Result<Vec<String>, String> {
+    if let Some(models_url) = target.models_url.as_ref() {
+        return Ok(vec![models_url.trim_end_matches('/').to_string()]);
+    }
+
+    let base = endpoint_base(
+        target.endpoint.as_deref(),
+        default_models_endpoint_base(&target.api_mode),
+    );
+    let mut candidates = Vec::new();
+    push_unique_url(&mut candidates, &join_url_path(base, "v1/models"));
+    push_unique_url(&mut candidates, &join_url_path(base, "models"));
+
+    for stripped in stripped_models_endpoint_bases(base) {
+        push_unique_url(&mut candidates, &join_url_path(&stripped, "models"));
+        push_unique_url(&mut candidates, &join_url_path(&stripped, "v1/models"));
+    }
+    Ok(candidates)
+}
+
+fn default_models_endpoint_base(api_mode: &str) -> &'static str {
+    match api_mode {
+        "anthropic-messages" => "https://api.anthropic.com",
+        "google-generate-content" => "https://generativelanguage.googleapis.com",
+        _ => "https://api.openai.com",
+    }
+}
+
+fn stripped_models_endpoint_bases(base: &str) -> Vec<String> {
+    const KNOWN_SUFFIXES: &[&str] = &[
+        "/anthropic/coding",
+        "/api/anthropic",
+        "/apps/anthropic",
+        "/api/compatible",
+        "/anthropic",
+        "/step_plan",
+        // KAT templates contain `{ENDPOINT_ID}` before this suffix; stripping it
+        // still only gives a best-effort candidate and live fetch failure is expected.
+        "/claude-code-proxy",
+    ];
+    let trimmed = base.trim_end_matches('/');
+    let mut out = Vec::new();
+    for suffix in KNOWN_SUFFIXES {
+        if let Some(stripped) = trimmed.strip_suffix(suffix) {
+            if !stripped.is_empty() {
+                push_unique_url(&mut out, stripped);
+            }
+        }
+    }
+    out
+}
+
+fn join_url_path(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn push_unique_url(out: &mut Vec<String>, value: &str) {
+    let value = value.trim().trim_end_matches('/');
+    if !value.is_empty() && !out.iter().any(|existing| existing == value) {
+        out.push(value.to_string());
+    }
+}
+
+fn parse_profile_models_body(body: &str) -> Option<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let source = if let Some(data) = value.get("data").and_then(|item| item.as_array()) {
+        data
+    } else if let Some(models) = value.get("models").and_then(|item| item.as_array()) {
+        models
+    } else {
+        value.as_array()?
+    };
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for item in source {
+        let model = item
+            .as_str()
+            .or_else(|| item.get("id").and_then(|value| value.as_str()))
+            .or_else(|| item.get("name").and_then(|value| value.as_str()))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(model) = model {
+            let model = model.to_string();
+            if seen.insert(model.clone()) {
+                out.push(model);
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 fn anthropic_messages_url(endpoint: Option<&str>) -> String {
     // Keep these cases aligned with src/lib/llm-providers.ts buildAnthropicUrl.
     let base = endpoint_base(endpoint, "https://api.anthropic.com");
@@ -1087,6 +1378,112 @@ mod tests {
 
         assert!(!format!("{request:?}").contains("debug-secret"));
         assert!(!format!("{target:?}").contains("debug-secret"));
+    }
+
+    #[test]
+    fn profile_models_list_request_uses_camel_case_and_redacts_raw_secret() {
+        let request: RuntimeProfileModelsListRequest = serde_json::from_value(serde_json::json!({
+            "draft": {
+                "endpoint": "https://api.deepseek.com/anthropic",
+                "apiMode": "anthropic-messages",
+                "authStyle": "bearer"
+            },
+            "rawSecret": "debug-secret",
+            "modelsUrl": "https://api.deepseek.com/models"
+        }))
+        .expect("deserialize models list request");
+
+        assert_eq!(request.profile_id, None);
+        assert_eq!(
+            request.draft.as_ref().expect("draft").api_mode,
+            "anthropic-messages"
+        );
+        assert_eq!(
+            request.models_url.as_deref(),
+            Some("https://api.deepseek.com/models")
+        );
+        assert!(!format!("{request:?}").contains("debug-secret"));
+    }
+
+    #[test]
+    fn profile_models_url_candidates_use_explicit_models_url_when_present() {
+        let target = RuntimeProfileModelsListTarget {
+            endpoint: Some("https://api.deepseek.com/anthropic".to_string()),
+            api_mode: "anthropic-messages".to_string(),
+            auth_style: "bearer".to_string(),
+            secret_value: "sk-test".to_string(),
+            models_url: Some("https://api.deepseek.com/models".to_string()),
+        };
+
+        assert_eq!(
+            profile_models_url_candidates(&target).expect("models urls"),
+            vec!["https://api.deepseek.com/models"]
+        );
+    }
+
+    #[test]
+    fn profile_models_url_candidates_try_base_then_stripped_compat_paths() {
+        let target = RuntimeProfileModelsListTarget {
+            endpoint: Some("https://api.deepseek.com/anthropic".to_string()),
+            api_mode: "anthropic-messages".to_string(),
+            auth_style: "bearer".to_string(),
+            secret_value: "sk-test".to_string(),
+            models_url: None,
+        };
+
+        assert_eq!(
+            profile_models_url_candidates(&target).expect("models urls"),
+            vec![
+                "https://api.deepseek.com/anthropic/v1/models",
+                "https://api.deepseek.com/anthropic/models",
+                "https://api.deepseek.com/models",
+                "https://api.deepseek.com/v1/models",
+            ]
+        );
+    }
+
+    #[test]
+    fn profile_models_url_candidates_strip_kat_proxy_suffix_best_effort() {
+        let target = RuntimeProfileModelsListTarget {
+            endpoint: Some(
+                "https://vanchin.streamlake.ai/api/gateway/v1/endpoints/{ENDPOINT_ID}/claude-code-proxy"
+                    .to_string(),
+            ),
+            api_mode: "anthropic-messages".to_string(),
+            auth_style: "bearer".to_string(),
+            secret_value: "sk-test".to_string(),
+            models_url: None,
+        };
+
+        let candidates = profile_models_url_candidates(&target).expect("models urls");
+        assert!(candidates.contains(
+            &"https://vanchin.streamlake.ai/api/gateway/v1/endpoints/{ENDPOINT_ID}/models"
+                .to_string()
+        ));
+    }
+
+    #[test]
+    fn parse_profile_models_body_accepts_common_provider_shapes() {
+        assert_eq!(
+            parse_profile_models_body(r#"{"data":[{"id":"gpt-a"},{"id":"gpt-b"}]}"#),
+            Some(vec!["gpt-a".to_string(), "gpt-b".to_string()])
+        );
+        assert_eq!(
+            parse_profile_models_body(r#"{"models":["m-a",{"name":"m-b"},{"id":"m-c"}]}"#),
+            Some(vec![
+                "m-a".to_string(),
+                "m-b".to_string(),
+                "m-c".to_string()
+            ])
+        );
+        assert_eq!(
+            parse_profile_models_body(r#"[{"id":"bare-a/"},"bare-a","bare-a/",{}]"#),
+            Some(vec![
+                "bare-a/".to_string(),
+                "bare-a".to_string()
+            ])
+        );
+        assert_eq!(parse_profile_models_body(r#"{"data":[]}"#), None);
     }
 
     #[tokio::test]

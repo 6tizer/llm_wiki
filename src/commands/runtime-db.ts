@@ -431,6 +431,24 @@ export interface RuntimeProfileProbeRequest {
   force?: boolean | null
 }
 
+export interface RuntimeProfileModelsListDraftRequest {
+  endpoint?: string | null
+  apiMode: RuntimeProfileApiMode
+  authStyle: RuntimeProfileAuthStyle
+}
+
+export interface RuntimeProfileModelsListRequest {
+  profileId?: string | null
+  draft?: RuntimeProfileModelsListDraftRequest | null
+  rawSecret?: string | null
+  modelsUrl?: string | null
+}
+
+export interface RuntimeProfileModelsListResult {
+  models: string[]
+  sourceUrl: string
+}
+
 export interface RuntimeProfileRecord {
   profileId: string
   kind: RuntimeProfileKind
@@ -779,6 +797,12 @@ export function runtimeProfileProbe(
   request: RuntimeProfileProbeRequest,
 ): Promise<RuntimeProfileProbeResult> {
   return invoke<RuntimeProfileProbeResult>("runtime_profile_probe", { request })
+}
+
+export function runtimeProfileModelsList(
+  request: RuntimeProfileModelsListRequest,
+): Promise<RuntimeProfileModelsListResult> {
+  return invoke<RuntimeProfileModelsListResult>("runtime_profile_models_list", { request })
 }
 
 export function runtimeModelCallForward(
