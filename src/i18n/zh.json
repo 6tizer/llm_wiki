@@ -583,11 +583,7 @@
       "app": "应用"
     },
     "categories": {
-      "llm": "LLM 模型",
       "modelConfig": "模型配置",
-      "modelProfiles": "模型 Profiles",
-      "embedding": "向量嵌入",
-      "multimodal": "图片描述",
       "webSearch": "外部信息源",
       "import": "导入",
       "network": "网络",
@@ -607,110 +603,8 @@
     "sections": {
       "modelConfig": {
         "title": "模型配置",
-        "description": "集中管理旧 provider 连接、runtime 模型 Profiles 和任务族分配矩阵。",
+        "description": "集中管理外部信息源、runtime 模型 Profiles、任务分配，以及从旧 provider 设置的一次性导入。",
         "connections": "连接",
-        "profiles": "Profiles",
-        "taskMatrixHeading": "任务分配矩阵",
-        "tabs": {
-          "navLabel": "模型配置分区",
-          "llm": "LLM 模型",
-          "sources": "外部信息源",
-          "profiles": "Model Profiles",
-          "taskMatrix": "任务分配矩阵",
-          "fallback": "Fallback 队列"
-        },
-        "migration": {
-          "title": "从当前活跃 provider 创建 runtime Profile",
-          "description": "基于 {{preset}} 生成 Model Profile，为未来统一路由做准备。当前聊天、提取、向量和视觉行为不会因此改变。",
-          "templateCorrected": "端点已按模板库校正：{{from}} → {{to}}。",
-          "keepResolvedEndpoint": "保留原端点",
-          "create": "创建 Profile",
-          "created": "Profile 已创建。",
-          "complete": "已存在迁移 profile：{{name}}。需要时可在 Profiles 中编辑。",
-          "failed": "迁移失败：{{message}}"
-        },
-        "taskMatrix": {
-          "title": "任务分配矩阵",
-          "description": "切换每个 runtime profile 声明的任务族。这里只更新 taskFamilies；能力探测新鲜度沿用 Profile 现有规则。",
-          "loading": "正在加载任务分配…",
-          "empty": "还没有 profile。请先在上方创建 Profile，再分配任务族。",
-          "taskFamily": "任务族",
-          "effective": "已生效",
-          "notWired": "尚未接入运行时选择——当前不影响实际行为",
-          "configure": "前往配置",
-          "toggle": "切换 {{profile}} 的 {{family}}",
-          "saved": "任务分配已保存。",
-          "saveFailed": "保存失败：{{message}}",
-          "families": {
-            "chat": "聊天",
-            "ingest": "提取",
-            "review": "审阅",
-            "synthesis": "综合",
-            "taxonomy": "标签体系",
-            "agent": "Agent",
-            "vision": "视觉",
-            "embedding": "向量"
-          }
-        }
-      },
-      "llm": {
-        "title": "LLM 模型",
-        "description": "旧路径/默认 provider 配置。这里同一时间只有一个活跃 provider，用于 legacy fallback；runtime Model Profiles 可同时保存多条可调度模型记录。",
-        "expand": "展开配置",
-        "collapse": "收起",
-        "toggleOff": "点击关闭",
-        "toggleOn": "点击启用（会关闭其他 provider）",
-        "deactivate": "停用",
-        "activate": "启用",
-        "apiMode": "API 模式",
-        "endpoint": "Endpoint",
-        "contextWindow": "上下文窗口",
-        "wireOpenAi": "OpenAI 兼容",
-        "wireAnthropic": "Anthropic 兼容",
-        "apiKeyPlaceholderCustom": "无 Key 可留空（本地模型）",
-        "apiKeyPlaceholder": "请输入 API Key",
-        "savedBadge": "已保存",
-        "saveFailedBadge": "保存失败",
-        "saveFailedTitle": "保存失败：{{message}}",
-        "configuredBadge": "已配置",
-        "activeBadge": "● 活跃",
-        "useModel": "使用 {{model}}",
-        "typeCustomModel": "输入自定义模型 ID",
-        "customModel": "自定义…",
-        "customModelBadge": "自定义：{{model}}",
-        "endpointPreviewWillUse": "将使用",
-        "endpointPreviewAutoApply": "（离开输入框时自动套用）",
-        "providerTests": "Provider 测试",
-        "providerTestsHint": "连接测试用于确认 endpoint 能正常响应；功能测试会让模型执行一个极小指令。",
-        "testConnection": "测试连接",
-        "testFunction": "测试功能",
-        "testingConnection": "正在测试连接…",
-        "testingFunction": "正在测试功能…",
-        "localCliIsolation": "隔离本地 CLI 配置",
-        "localCliIsolationHint": "聊天和 provider 测试不读取用户级 CLI rules、MCP 配置、工具、斜杠命令或会话。",
-        "claudeCliTimeout": "Claude Code CLI 超时（分钟）",
-        "claudeCliTimeoutHint": "可选；留空表示禁用 Rust 侧超时。取值范围 1-240 分钟。",
-        "codexCliTimeout": "Codex CLI 超时（分钟）",
-        "codexCliTimeoutHint": "取值范围 1-240 分钟，默认 10。",
-        "deploymentName": "部署名称",
-        "azureApiVersion": "Azure API 版本",
-        "azureApiVersionHint": "会作为 Azure OpenAI 的 api-version 查询参数发送。",
-        "azureModelFamily": "Azure 模型族",
-        "azureModelFamilyAuto": "根据部署名称自动判断",
-        "azureModelFamilyGpt5": "GPT-5 / o-series 严格参数",
-        "azureModelFamilyHint": "Azure 的 deployment 名称可以任意命名。如果该部署拒绝 max_tokens 或非默认 temperature，请选择 GPT-5 / o-series。",
-        "reasoning": {
-          "title": "Reasoning / thinking",
-          "auto": "自动",
-          "off": "关闭",
-          "low": "低",
-          "medium": "中",
-          "high": "高",
-          "max": "最大",
-          "custom": "自定义",
-          "budgetTokens": "thinking token 预算",
-          "hint": "结构化任务（如 ingest）可能会自动关闭 reasoning，避免模型只输出思考过程而没有正文。"
-        },
         "profiles": {
           "title": "Model Profiles",
           "description": "Profile 是 runtime 用于 model-call 和 agent-run 调度的记录。密钥只以引用形式保存。",
@@ -803,6 +697,54 @@
               "gateway": "网关"
             }
           }
+        },
+        "taskMatrixHeading": "任务分配矩阵",
+        "tabs": {
+          "navLabel": "模型配置分区",
+          "sources": "外部信息源",
+          "profiles": "Model Profiles",
+          "taskMatrix": "任务分配矩阵",
+          "fallback": "Fallback 队列"
+        },
+        "migration": {
+          "title": "导入旧配置",
+          "description": "从旧 provider 设置创建 {{count}} 个 runtime Model Profile：{{presets}}。这不会改变当前 fallback 行为。",
+          "templateCorrected": "部分 endpoint、API 模式或鉴权方式会按 provider 模板库校正。",
+          "keepResolvedEndpoint": "模板建议校正时仍保留原 endpoint",
+          "create": "导入旧配置",
+          "created": "已导入 {{count}} 个 profile。",
+          "partialFailed": "已导入 {{count}}/{{total}} 个 profile。失败：{{message}}",
+          "stale": "旧配置密钥已变更：{{presets}}。请到 Profiles 更新对应 Profile。"
+        },
+        "taskMatrix": {
+          "title": "任务分配矩阵",
+          "description": "切换每个 runtime profile 声明的任务族。Embedding 和 Vision 的任务专用设置在矩阵下方行内配置。",
+          "loading": "正在加载任务分配…",
+          "empty": "还没有 profile。请先在上方创建 Profile，再分配任务族。",
+          "taskFamily": "任务族",
+          "effective": "已生效",
+          "notWired": "尚未接入运行时选择——当前不影响实际行为",
+          "configure": "行内配置",
+          "toggle": "切换 {{profile}} 的 {{family}}",
+          "saved": "任务分配已保存。",
+          "saveFailed": "保存失败：{{message}}",
+          "families": {
+            "chat": "聊天",
+            "ingest": "提取",
+            "review": "审阅",
+            "synthesis": "综合",
+            "taxonomy": "标签体系",
+            "agent": "Agent",
+            "vision": "视觉",
+            "embedding": "向量"
+          },
+          "hideConfig": "收起配置",
+          "inlineSaved": "配置已保存。",
+          "inlineSaveFailed": "配置保存失败：{{message}}"
+        },
+        "profileFields": {
+          "endpoint": "Endpoint",
+          "apiMode": "API 模式"
         }
       },
       "embedding": {

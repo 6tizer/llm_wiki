@@ -309,7 +309,7 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
       )}
       {loadState.kind === "ready" && loadState.status === "no-project" && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          {t("settings.sections.llm.profiles.runtimeUnavailableNoProject")}
+          {t("settings.sections.modelConfig.profiles.runtimeUnavailableNoProject")}
         </div>
       )}
 

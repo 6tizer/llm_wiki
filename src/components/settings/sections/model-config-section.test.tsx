@@ -112,13 +112,14 @@ describe("ModelConfigSection", () => {
     })
   })
 
-  it("renders the four tabs with real child components", async () => {
+  it("renders the remaining tabs with real child components", async () => {
     const { container, root } = renderSection()
     await flush()
 
     expect(container.querySelector("[data-testid='model-config-section']")).not.toBeNull()
-    expect(container.textContent).toContain("LLM Models")
-    expect(container.querySelector("[data-testid='model-config-tab-llm']")?.getAttribute("aria-current")).toBe("page")
+    expect(container.querySelector("[data-testid='model-config-tab-llm']")).toBeNull()
+    expect(container.textContent).toContain("External Information Sources")
+    expect(container.querySelector("[data-testid='model-config-tab-sources']")?.getAttribute("aria-current")).toBe("page")
 
     await clickTab(container, "sources")
     expect(container.textContent).toContain("External Information Sources")
@@ -186,7 +187,7 @@ describe("ModelConfigSection", () => {
     await clickTab(container, "profiles")
     await flush()
     expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
-    expect(container.querySelector("[data-testid='provider-migration-complete']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
 
     unmount(root)
   })

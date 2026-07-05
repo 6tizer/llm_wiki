@@ -1,5 +1,4 @@
-import type { CustomApiMode } from "./llm-presets"
-import type { AzureModelFamily, MineruModelVersion, ReasoningConfig, SourceWatchConfig } from "@/stores/wiki-store"
+import type { MineruModelVersion, SourceWatchConfig } from "@/stores/wiki-store"
 import type { AppTheme } from "@/lib/theme"
 import type { CloseBehavior } from "@/lib/project-store"
 import type { AgentPermissionPolicy } from "@/lib/agent/agent-types"
@@ -11,48 +10,6 @@ import type { AgentPermissionPolicy } from "@/lib/agent/agent-types"
  * stores + disk in one commit.
  */
 export interface SettingsDraft {
-  // LLM provider
-  provider: "openai" | "anthropic" | "google" | "azure" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli"
-  apiKey: string
-  model: string
-  ollamaUrl: string
-  customEndpoint: string
-  azureApiVersion: string
-  azureModelFamily: AzureModelFamily
-  maxContextSize: number
-  apiMode: CustomApiMode | undefined
-  reasoning: ReasoningConfig | undefined
-  localCliIsolation: boolean
-  claudeCliTimeoutMinutes: number | undefined
-  codexCliTimeoutMinutes: number | undefined
-
-  // Embedding
-  embeddingEnabled: boolean
-  embeddingEndpoint: string
-  embeddingApiKey: string
-  embeddingModel: string
-  /** Optional Gemini native output_dimensionality. Empty = provider default. */
-  embeddingOutputDimensionality: number | undefined
-  /** Target characters per chunk. Empty = use chunker default (1000). */
-  embeddingMaxChunkChars: number | undefined
-  /** Overlap characters between adjacent chunks. Empty = default (200). */
-  embeddingOverlapChunkChars: number | undefined
-  /** Custom HTTP headers for embedding requests. */
-  embeddingExtraHeaders: Record<string, string> | undefined
-
-  // Multimodal (image captioning at ingest time)
-  multimodalEnabled: boolean
-  multimodalUseMainLlm: boolean
-  multimodalProvider: "openai" | "anthropic" | "google" | "azure" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli"
-  multimodalApiKey: string
-  multimodalModel: string
-  multimodalOllamaUrl: string
-  multimodalCustomEndpoint: string
-  multimodalAzureApiVersion: string
-  multimodalAzureModelFamily: AzureModelFamily
-  multimodalApiMode: CustomApiMode | undefined
-  multimodalConcurrency: number
-
   // Output preferences
   outputLanguage: string
   maxHistoryMessages: number

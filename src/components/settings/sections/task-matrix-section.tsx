@@ -7,8 +7,8 @@ import {
   type RuntimeDbHealthState,
   type RuntimeProfileRecord,
 } from "@/commands/runtime-db"
-import type { CategoryId } from "../settings-view"
 import { PROFILE_TASK_FAMILY_OPTIONS } from "./model-profiles-section"
+import { EmbeddingInlineConfig, MultimodalInlineConfig } from "./task-matrix-inline-config"
 
 type LoadState =
   | { kind: "loading" }
@@ -16,13 +16,10 @@ type LoadState =
   | { kind: "error"; message: string }
 
 const EFFECTIVE_TASK_FAMILIES = new Set(["agent", "ingest"])
-const CONFIG_TARGETS: Partial<Record<(typeof PROFILE_TASK_FAMILY_OPTIONS)[number], CategoryId>> = {
-  embedding: "embedding",
-  vision: "multimodal",
-}
+type InlineConfigTarget = "embedding" | "vision"
+const CONFIG_TARGETS = new Set<InlineConfigTarget>(["embedding", "vision"])
 
 interface Props {
-  onNavigateToCategory?: (category: CategoryId) => void
   refreshToken?: number
   onProfilesChanged?: () => void
 }
@@ -45,7 +42,6 @@ function taskFamilyLabelKey(family: string): string {
 }
 
 export function TaskMatrixSection({
-  onNavigateToCategory,
   refreshToken = 0,
   onProfilesChanged,
 }: Props) {
@@ -53,6 +49,7 @@ export function TaskMatrixSection({
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" })
   const [updatingProfileIds, setUpdatingProfileIds] = useState<Set<string>>(() => new Set())
   const [message, setMessage] = useState<string | null>(null)
+  const [expandedConfig, setExpandedConfig] = useState<InlineConfigTarget | null>(null)
   const profilesRef = useRef<RuntimeProfileRecord[]>([])
 
   async function loadProfiles(shouldApply = () => true) {
@@ -157,7 +154,7 @@ export function TaskMatrixSection({
           className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
           data-testid="task-matrix-runtime-unavailable"
         >
-          {t("settings.sections.llm.profiles.runtimeUnavailableNoProject")}
+          {t("settings.sections.modelConfig.profiles.runtimeUnavailableNoProject")}
         </div>
       )}
 
@@ -203,14 +200,18 @@ export function TaskMatrixSection({
                             ? t("settings.sections.modelConfig.taskMatrix.effective")
                             : t("settings.sections.modelConfig.taskMatrix.notWired")}
                         </span>
-                        {CONFIG_TARGETS[family] && onNavigateToCategory && (
+                        {CONFIG_TARGETS.has(family as InlineConfigTarget) && (
                           <button
                             type="button"
                             className="text-[11px] text-primary underline-offset-2 hover:underline"
-                            onClick={() => onNavigateToCategory(CONFIG_TARGETS[family] as CategoryId)}
+                            onClick={() => setExpandedConfig((current) => (
+                              current === family ? null : family as InlineConfigTarget
+                            ))}
                             data-testid={`task-matrix-config-${family}`}
                           >
-                            {t("settings.sections.modelConfig.taskMatrix.configure")}
+                            {expandedConfig === family
+                              ? t("settings.sections.modelConfig.taskMatrix.hideConfig")
+                              : t("settings.sections.modelConfig.taskMatrix.configure")}
                           </button>
                         )}
                       </div>
@@ -241,7 +242,7 @@ export function TaskMatrixSection({
                               className="max-w-44 rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300"
                               data-testid={`task-matrix-agent-kind-warning-${profile.profileId}`}
                             >
-                              {t("settings.sections.llm.profiles.agentKindWarning", { kind: profile.kind })}
+                              {t("settings.sections.modelConfig.profiles.agentKindWarning", { kind: profile.kind })}
                             </p>
                           )}
                         </div>
@@ -254,6 +255,9 @@ export function TaskMatrixSection({
           </table>
         </div>
       )}
+
+      {expandedConfig === "embedding" && <EmbeddingInlineConfig />}
+      {expandedConfig === "vision" && <MultimodalInlineConfig />}
 
       {message && <p className="text-xs text-muted-foreground">{message}</p>}
     </div>

@@ -506,7 +506,7 @@ export function ModelProfilesSection({
           setSecretBackendState({
             kind: "error",
             backend: "file",
-            message: tRef.current("settings.sections.llm.profiles.secretBackendLoadFailed", {
+            message: tRef.current("settings.sections.modelConfig.profiles.secretBackendLoadFailed", {
               message: errorMessage(error),
             }),
           })
@@ -542,13 +542,13 @@ export function ModelProfilesSection({
       setSecretBackendState({
         kind: "ready",
         backend: result.backend,
-        message: t("settings.sections.llm.profiles.secretBackendSaved"),
+        message: t("settings.sections.modelConfig.profiles.secretBackendSaved"),
       })
     } catch (error) {
       setSecretBackendState({
         kind: "error",
         backend: previous,
-        message: t("settings.sections.llm.profiles.secretBackendSaveFailed", {
+        message: t("settings.sections.modelConfig.profiles.secretBackendSaveFailed", {
           message: errorMessage(error),
         }),
       })
@@ -571,10 +571,10 @@ export function ModelProfilesSection({
       profilesRef.current = nextProfiles
       setProfiles(nextProfiles)
       setDraft(draftFromProfile(saved))
-      setSaveMessage(t("settings.sections.llm.profiles.saved"))
+      setSaveMessage(t("settings.sections.modelConfig.profiles.saved"))
       onProfilesChanged?.()
     } catch (error) {
-      setSaveMessage(t("settings.sections.llm.profiles.saveFailed", { message: errorMessage(error) }))
+      setSaveMessage(t("settings.sections.modelConfig.profiles.saveFailed", { message: errorMessage(error) }))
     }
   }
 
@@ -586,7 +586,7 @@ export function ModelProfilesSection({
     profilesRef.current = nextProfiles
     setProfiles(nextProfiles)
     setDraft(draftFromProfile(saved))
-    setSaveMessage(t("settings.sections.llm.profiles.wizard.created"))
+    setSaveMessage(t("settings.sections.modelConfig.profiles.wizard.created"))
     setProbeState({ kind: "idle" })
     onProfilesChanged?.()
   }
@@ -600,7 +600,7 @@ export function ModelProfilesSection({
     }
     if (!selectedProfile) return
     const confirmed = window.confirm(
-      t("settings.sections.llm.profiles.deleteConfirm", {
+      t("settings.sections.modelConfig.profiles.deleteConfirm", {
         name: selectedProfile.displayName,
       }),
     )
@@ -615,11 +615,11 @@ export function ModelProfilesSection({
       profilesRef.current = nextProfiles
       setProfiles(nextProfiles)
       setDraft(nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft())
-      setDeleteMessage(t("settings.sections.llm.profiles.deleted"))
+      setDeleteMessage(t("settings.sections.modelConfig.profiles.deleted"))
       setProbeState({ kind: "idle" })
       onProfilesChanged?.()
     } catch (error) {
-      setDeleteMessage(t("settings.sections.llm.profiles.deleteFailed", { message: errorMessage(error) }))
+      setDeleteMessage(t("settings.sections.modelConfig.profiles.deleteFailed", { message: errorMessage(error) }))
     }
   }
 
@@ -671,16 +671,16 @@ export function ModelProfilesSection({
     ? selectedProfile?.capabilityStatus ?? "unknown"
     : "unknown"
   const runtimeUnavailableMessage = loadState.kind === "ready" && loadState.status === "no-project"
-    ? t("settings.sections.llm.profiles.runtimeUnavailableNoProject")
+    ? t("settings.sections.modelConfig.profiles.runtimeUnavailableNoProject")
     : null
   const agentKindWarning = draft.kind !== "agent-run" && draft.taskFamilies.includes("agent")
-    ? t("settings.sections.llm.profiles.agentKindWarning", { kind: draft.kind })
+    ? t("settings.sections.modelConfig.profiles.agentKindWarning", { kind: draft.kind })
     : null
   const agentRunCapabilityWarning = draft.kind === "agent-run" && draft.taskFamilies.includes("agent")
     ? draft.apiMode !== "anthropic-messages"
-      ? t("settings.sections.llm.profiles.agentRunApiModeWarning")
+      ? t("settings.sections.modelConfig.profiles.agentRunApiModeWarning")
       : selectedCapabilityIsFresh && agentRunSupported(selectedProfile) !== true
-        ? t("settings.sections.llm.profiles.agentRunCapabilityWarning")
+        ? t("settings.sections.modelConfig.profiles.agentRunCapabilityWarning")
         : null
     : null
 
@@ -692,9 +692,9 @@ export function ModelProfilesSection({
     <div className="space-y-3" data-testid="model-profiles-section">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold">{t("settings.sections.llm.profiles.title")}</h3>
+          <h3 className="text-base font-semibold">{t("settings.sections.modelConfig.profiles.title")}</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            {t("settings.sections.llm.profiles.description")}
+            {t("settings.sections.modelConfig.profiles.description")}
           </p>
         </div>
         {loadState.kind === "ready" && (
@@ -709,7 +709,7 @@ export function ModelProfilesSection({
       {loadState.kind === "loading" && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          {t("settings.sections.llm.profiles.loading")}
+          {t("settings.sections.modelConfig.profiles.loading")}
         </div>
       )}
       {loadState.kind === "error" && (
@@ -728,9 +728,9 @@ export function ModelProfilesSection({
 
       <div className="space-y-2 rounded-md border p-3" data-testid="profile-secret-backend-section">
         <div className="space-y-1">
-          <Label>{t("settings.sections.llm.profiles.secretBackendLabel")}</Label>
+          <Label>{t("settings.sections.modelConfig.profiles.secretBackendLabel")}</Label>
           <p className="text-xs text-muted-foreground">
-            {t("settings.sections.llm.profiles.secretBackendHint")}
+            {t("settings.sections.modelConfig.profiles.secretBackendHint")}
           </p>
         </div>
         <select
@@ -740,12 +740,12 @@ export function ModelProfilesSection({
           disabled={secretBackendState.kind === "loading" || secretBackendState.kind === "saving"}
           onChange={(event) => void selectSecretBackend(event.target.value as ProfileSecretBackend)}
         >
-          <option value="file">{t("settings.sections.llm.profiles.secretBackendFile")}</option>
-          <option value="keychain">{t("settings.sections.llm.profiles.secretBackendKeychain")}</option>
+          <option value="file">{t("settings.sections.modelConfig.profiles.secretBackendFile")}</option>
+          <option value="keychain">{t("settings.sections.modelConfig.profiles.secretBackendKeychain")}</option>
         </select>
         {secretBackendState.kind === "saving" && (
           <p className="text-xs text-muted-foreground">
-            {t("settings.sections.llm.profiles.secretBackendSaving")}
+            {t("settings.sections.modelConfig.profiles.secretBackendSaving")}
           </p>
         )}
         {"message" in secretBackendState && secretBackendState.message && (
@@ -768,7 +768,7 @@ export function ModelProfilesSection({
               onClick={() => setDraft(createEmptyProfileDraft())}
             >
               <Plus className="h-3.5 w-3.5" />
-              {t("settings.sections.llm.profiles.newProfile")}
+              {t("settings.sections.modelConfig.profiles.newProfile")}
             </button>
             {profileGroups.map((group) => (
               <section
@@ -806,11 +806,11 @@ export function ModelProfilesSection({
                   const detailOpen = capabilityDetailProfileId === profile.profileId
                   const checkedAt = profile.capabilityCheckedAtMs
                     ? new Date(profile.capabilityCheckedAtMs).toLocaleString()
-                    : t("settings.sections.llm.profiles.capabilityNeverChecked")
+                    : t("settings.sections.modelConfig.profiles.capabilityNeverChecked")
                   const message = profile.lastCapabilityError
                     || (hasFreshCapability(profile)
-                      ? t("settings.sections.llm.profiles.capabilityMessageOk")
-                      : t("settings.sections.llm.profiles.capabilityStale"))
+                      ? t("settings.sections.modelConfig.profiles.capabilityMessageOk")
+                      : t("settings.sections.modelConfig.profiles.capabilityStale"))
                   return (
                     <div
                       key={profile.profileId}
@@ -843,7 +843,7 @@ export function ModelProfilesSection({
                           data-testid={`profile-capability-detail-${profile.profileId}`}
                         >
                           <div>{message}</div>
-                          <div>{t("settings.sections.llm.profiles.capabilityChecked", { time: checkedAt })}</div>
+                          <div>{t("settings.sections.modelConfig.profiles.capabilityChecked", { time: checkedAt })}</div>
                         </div>
                       )}
                     </div>
@@ -861,7 +861,7 @@ export function ModelProfilesSection({
           <div className="space-y-4 rounded-md border p-3">
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.profiles.displayName")}</Label>
+                <Label>{t("settings.sections.modelConfig.profiles.displayName")}</Label>
                 <Input
                   data-testid="profile-display-name"
                   value={draft.displayName}
@@ -869,7 +869,7 @@ export function ModelProfilesSection({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.profiles.provider")}</Label>
+                <Label>{t("settings.sections.modelConfig.profiles.provider")}</Label>
                 <select
                   data-testid="profile-provider"
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -894,7 +894,7 @@ export function ModelProfilesSection({
               </div>
               {draft.kind === "agent-run" && (
                 <div className="space-y-1.5">
-                  <Label>{t("settings.sections.llm.profiles.agentSdkModel")}</Label>
+                  <Label>{t("settings.sections.modelConfig.profiles.agentSdkModel")}</Label>
                   <Input
                     data-testid="profile-agent-sdk-model"
                     value={draft.agentSdkModelId}
@@ -903,7 +903,7 @@ export function ModelProfilesSection({
                 </div>
               )}
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.endpoint")}</Label>
+                <Label>{t("settings.sections.modelConfig.profileFields.endpoint")}</Label>
                 <Input
                   data-testid="profile-endpoint"
                   value={draft.endpoint}
@@ -911,7 +911,7 @@ export function ModelProfilesSection({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.profiles.kind")}</Label>
+                <Label>{t("settings.sections.modelConfig.profiles.kind")}</Label>
                 <select
                   data-testid="profile-kind"
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -928,7 +928,7 @@ export function ModelProfilesSection({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.apiMode")}</Label>
+                <Label>{t("settings.sections.modelConfig.profileFields.apiMode")}</Label>
                 <select
                   data-testid="profile-api-mode"
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -939,7 +939,7 @@ export function ModelProfilesSection({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.profiles.authStyle")}</Label>
+                <Label>{t("settings.sections.modelConfig.profiles.authStyle")}</Label>
                 <select
                   data-testid="profile-auth-style"
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -950,7 +950,7 @@ export function ModelProfilesSection({
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label>{t("settings.sections.llm.profiles.maxConcurrency")}</Label>
+                <Label>{t("settings.sections.modelConfig.profiles.maxConcurrency")}</Label>
                 <Input
                   data-testid="profile-max-concurrency"
                   type="number"
@@ -969,11 +969,11 @@ export function ModelProfilesSection({
                 checked={draft.enabled}
                 onChange={(event) => updateDraft({ enabled: event.target.checked })}
               />
-              {t("settings.sections.llm.profiles.enabled")}
+              {t("settings.sections.modelConfig.profiles.enabled")}
             </label>
 
             <div className="space-y-2">
-              <Label>{t("settings.sections.llm.profiles.taskFamilies")}</Label>
+              <Label>{t("settings.sections.modelConfig.profiles.taskFamilies")}</Label>
               <div className="flex flex-wrap gap-2">
                 {allTaskFamilies.map((family) => {
                   const checked = draft.taskFamilies.includes(family)
@@ -1018,12 +1018,12 @@ export function ModelProfilesSection({
                 <Label className="m-0">{t("settings.apiKey")}</Label>
                 {draft.secretRef && !draft.clearSecret && (
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                    {t("settings.sections.llm.profiles.secretSaved")}
+                    {t("settings.sections.modelConfig.profiles.secretSaved")}
                   </span>
                 )}
                 {draft.clearSecret && (
                   <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-                    {t("settings.sections.llm.profiles.secretWillClear")}
+                    {t("settings.sections.modelConfig.profiles.secretWillClear")}
                   </span>
                 )}
               </div>
@@ -1032,7 +1032,7 @@ export function ModelProfilesSection({
                 type="password"
                 value={draft.rawSecret}
                 onChange={(event) => updateDraft({ rawSecret: event.target.value, clearSecret: false })}
-                placeholder={t("settings.sections.llm.profiles.secretPlaceholder")}
+                placeholder={t("settings.sections.modelConfig.profiles.secretPlaceholder")}
               />
               {draft.secretRef && (
                 <button
@@ -1041,38 +1041,38 @@ export function ModelProfilesSection({
                   className="rounded-md border px-2 py-1 text-xs hover:bg-accent"
                   onClick={() => updateDraft({ clearSecret: true, rawSecret: "" })}
                 >
-                  {t("settings.sections.llm.profiles.clearSecret")}
+                  {t("settings.sections.modelConfig.profiles.clearSecret")}
                 </button>
               )}
             </div>
 
             <div className="space-y-1 rounded-md border px-3 py-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{t("settings.sections.llm.profiles.capability")}</span>
+                <span className="font-medium">{t("settings.sections.modelConfig.profiles.capability")}</span>
                 <ProfileCapabilityBadge status={capabilityStatus} t={t} />
                 {!selectedCapabilityIsFresh && (
                   <span className="text-muted-foreground">
-                    {t("settings.sections.llm.profiles.capabilityStale")}
+                    {t("settings.sections.modelConfig.profiles.capabilityStale")}
                   </span>
                 )}
               </div>
               {selectedCapabilityIsFresh && selectedProfile?.capabilityCheckedAtMs && (
                 <p className="text-muted-foreground">
-                  {t("settings.sections.llm.profiles.capabilityChecked", {
+                  {t("settings.sections.modelConfig.profiles.capabilityChecked", {
                     time: new Date(selectedProfile.capabilityCheckedAtMs).toLocaleString(),
                   })}
                 </p>
               )}
               {selectedCapabilityIsFresh && selectedProfile?.probeBackoffUntilMs && (
                 <p className="text-amber-700 dark:text-amber-300">
-                  {t("settings.sections.llm.profiles.capabilityBackoff", {
+                  {t("settings.sections.modelConfig.profiles.capabilityBackoff", {
                     time: new Date(selectedProfile.probeBackoffUntilMs).toLocaleString(),
                   })}
                 </p>
               )}
               {selectedCapabilityIsFresh && selectedProfile?.lastCapabilityError && (
                 <p className="text-destructive">
-                  {t("settings.sections.llm.profiles.capabilityError", {
+                  {t("settings.sections.modelConfig.profiles.capabilityError", {
                     message: selectedProfile.lastCapabilityError,
                   })}
                 </p>
@@ -1087,7 +1087,7 @@ export function ModelProfilesSection({
                 disabled={Boolean(runtimeUnavailableMessage)}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
               >
-                {t("settings.sections.llm.profiles.saveProfile")}
+                {t("settings.sections.modelConfig.profiles.saveProfile")}
               </button>
               <button
                 type="button"
@@ -1096,7 +1096,7 @@ export function ModelProfilesSection({
                 disabled={probeState.kind === "running" || Boolean(runtimeUnavailableMessage)}
                 className="rounded-md border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-60"
               >
-                {t("settings.sections.llm.profiles.probe")}
+                {t("settings.sections.modelConfig.profiles.probe")}
               </button>
               {selectedProfile && (
                 <button
@@ -1106,7 +1106,7 @@ export function ModelProfilesSection({
                   disabled={Boolean(runtimeUnavailableMessage)}
                   className="rounded-md border border-destructive/40 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/5 disabled:opacity-60"
                 >
-                  {t("settings.sections.llm.profiles.deleteProfile")}
+                  {t("settings.sections.modelConfig.profiles.deleteProfile")}
                 </button>
               )}
             </div>
@@ -1114,7 +1114,7 @@ export function ModelProfilesSection({
             {deleteMessage && <p className="text-xs text-muted-foreground">{deleteMessage}</p>}
             {probeState.kind === "running" && (
               <p className="text-xs text-muted-foreground">
-                {t("settings.sections.llm.profiles.probing")}
+                {t("settings.sections.modelConfig.profiles.probing")}
               </p>
             )}
             {probeState.kind === "error" && (
