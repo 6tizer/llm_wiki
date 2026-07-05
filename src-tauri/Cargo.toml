@@ -1,7 +1,7 @@
 [package]
 name = "llm-wiki"
-version = "0.4.14"
-description = "LLM Wiki - A personal knowledge base for LLM concepts"
+version = "0.7.0"
+description = "LLM Wiki Agent — agentic chat workbench over a self-maintaining local wiki"
 authors = []
 edition = "2021"
 

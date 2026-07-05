@@ -1179,6 +1179,7 @@
         "lastChecked": "Last checked",
         "lastCheckedNever": "Never",
         "unreachable": "couldn't reach GitHub",
+        "noRelease": "No release published yet for this fork.",
         "checkNow": "Check now",
         "checking": "Checking…",
         "upToDate": "Up to date (v{{version}}).",

@@ -1179,6 +1179,7 @@
         "lastChecked": "上次检查",
         "lastCheckedNever": "从未",
         "unreachable": "未能连接 GitHub",
+        "noRelease": "本 fork 尚未发布正式版本。",
         "checkNow": "立即检查",
         "checking": "检查中…",
         "upToDate": "已是最新版本（v{{version}}）。",

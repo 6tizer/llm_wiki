@@ -16,6 +16,7 @@ import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
 import { normalizeMineruConfig } from "@/lib/mineru-config"
 import { createSerialQueue } from "@/lib/serial-queue"
+import { UPDATE_REPO } from "@/lib/update-check"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
@@ -116,7 +117,7 @@ function App() {
                 "- Bigger red dot on the Settings icon\n" +
                 "- Top banner with one-click dismiss\n" +
                 "- Once dismissed, won't reappear for this version",
-              html_url: "https://github.com/nashsu/llm_wiki/releases",
+              html_url: `https://github.com/${UPDATE_REPO}/releases`,
               published_at: new Date().toISOString(),
             },
           },
@@ -202,7 +203,7 @@ function App() {
         )
         const result = await checkForUpdates({
           currentVersion: __APP_VERSION__,
-          repo: "nashsu/llm_wiki",
+          repo: UPDATE_REPO,
         })
         if (cancelled) return
         useUpdateStore.getState().setResult(result, Date.now())
@@ -214,8 +215,10 @@ function App() {
           console.log(
             `[update-check] up to date: local=${result.local}, remote latest=${result.remote}`,
           )
-        } else {
+        } else if (result.kind === "error") {
           console.log(`[update-check] error: ${result.message}`)
+        } else {
+          console.log(`[update-check] no release published yet: local=${result.local}`)
         }
         await saveUpdateCheckState({
           enabled: useUpdateStore.getState().enabled,

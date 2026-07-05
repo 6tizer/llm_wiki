@@ -3,8 +3,24 @@
  * (`fetchLatestRelease`) is covered via `checkForUpdates` mocking the
  * fetch layer — we don't exercise it against real GitHub in CI.
  */
-import { describe, it, expect } from "vitest"
-import { isNewer, toLatestReleaseUrl } from "./update-check"
+import { beforeEach, describe, it, expect, vi } from "vitest"
+import {
+  checkForUpdates,
+  formatAppVersion,
+  isNewer,
+  toLatestReleaseUrl,
+} from "./update-check"
+
+const fetchMock = vi.hoisted(() => vi.fn())
+
+vi.mock("./tauri-fetch", () => ({
+  getHttpFetch: vi.fn(async () => fetchMock),
+  isFetchNetworkError: vi.fn((err: unknown) => err instanceof TypeError),
+}))
+
+beforeEach(() => {
+  fetchMock.mockReset()
+})
 
 describe("isNewer — semver comparison", () => {
   it("remote > local on patch", () => {
@@ -118,5 +134,41 @@ describe("toLatestReleaseUrl — canonical /releases/latest mapping", () => {
     expect(toLatestReleaseUrl("https://github.com/nashsu/llm_wiki")).toBe(
       "https://github.com/nashsu/llm_wiki",
     )
+  })
+})
+
+describe("checkForUpdates — GitHub latest release states", () => {
+  it("returns no-release when GitHub reports latest release 404", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 404 }))
+
+    await expect(
+      checkForUpdates({ currentVersion: "0.7.0", repo: "6tizer/llm_wiki" }),
+    ).resolves.toEqual({ kind: "no-release", local: "0.7.0" })
+  })
+
+  it("returns error when the release request has a network failure", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+
+    await expect(
+      checkForUpdates({ currentVersion: "0.7.0", repo: "6tizer/llm_wiki" }),
+    ).resolves.toEqual({
+      kind: "error",
+      local: "0.7.0",
+      message: "Could not reach GitHub Releases API.",
+    })
+  })
+})
+
+describe("formatAppVersion — channel display", () => {
+  it("appends alpha channel", () => {
+    expect(formatAppVersion("0.7.0", "alpha")).toBe("v0.7.0-alpha")
+  })
+
+  it("does not append stable channel", () => {
+    expect(formatAppVersion("0.7.0", "stable")).toBe("v0.7.0")
+  })
+
+  it("appends other non-stable channels", () => {
+    expect(formatAppVersion("0.7.0", "beta")).toBe("v0.7.0-beta")
   })
 })

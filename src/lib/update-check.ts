@@ -16,6 +16,9 @@
 
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
 
+/** GitHub repo used for release checks and release links. */
+export const UPDATE_REPO = "6tizer/llm_wiki"
+
 /** The subset of the GitHub release API response we care about. */
 /**
  * Map any GitHub release-related URL to that repo's
@@ -56,6 +59,7 @@ export interface GithubRelease {
 export type UpdateStatus =
   | { kind: "available"; local: string; remote: string; release: GithubRelease }
   | { kind: "up-to-date"; local: string; remote: string }
+  | { kind: "no-release"; local: string }
   | { kind: "error"; local: string; message: string }
 
 /**
@@ -87,9 +91,17 @@ export function isNewer(remote: string, local: string): boolean {
   return rc > lc
 }
 
+/** Format the app version for display, appending non-stable channels. */
+export function formatAppVersion(version: string, channel: string): string {
+  return channel === "stable" ? `v${version}` : `v${version}-${channel}`
+}
+
+export type FetchLatestReleaseResult = GithubRelease | null | "no-release"
+
 /**
- * Fetch the latest release from a GitHub repo. Returns null on any
- * failure (network / rate-limit / 404 when no release exists yet).
+ * Fetch the latest release from a GitHub repo. Returns "no-release"
+ * when GitHub reports no release exists yet, and null on other
+ * failures (network / rate-limit / malformed response).
  * Doesn't throw — the caller's job is to render the failure as an
  * "error" status, not to log it or alert the user.
  *
@@ -100,7 +112,7 @@ export function isNewer(remote: string, local: string): boolean {
  */
 export async function fetchLatestRelease(
   repo: string,
-): Promise<GithubRelease | null> {
+): Promise<FetchLatestReleaseResult> {
   const url = `https://api.github.com/repos/${repo}/releases/latest`
   try {
     const httpFetch = await getHttpFetch()
@@ -111,6 +123,7 @@ export async function fetchLatestRelease(
         "X-GitHub-Api-Version": "2022-11-28",
       },
     })
+    if (resp.status === 404) return "no-release"
     if (!resp.ok) return null
     const data = await resp.json()
     // Duck-type the response shape — GitHub occasionally adds fields
@@ -147,6 +160,9 @@ export async function checkForUpdates(opts: {
 }): Promise<UpdateStatus> {
   const { currentVersion, repo } = opts
   const release = await fetchLatestRelease(repo)
+  if (release === "no-release") {
+    return { kind: "no-release", local: currentVersion }
+  }
   if (!release) {
     return {
       kind: "error",

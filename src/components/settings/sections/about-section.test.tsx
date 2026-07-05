@@ -22,7 +22,10 @@ vi.mock("@/lib/project-store", () => ({
 
 vi.mock("@/lib/update-check", () => ({
   checkForUpdates: vi.fn(async () => ({ kind: "up-to-date", local: "1.0.0" })),
+  formatAppVersion: (version: string, channel: string) =>
+    channel === "stable" ? `v${version}` : `v${version}-${channel}`,
   toLatestReleaseUrl: (url: string) => url,
+  UPDATE_REPO: "6tizer/llm_wiki",
 }))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })

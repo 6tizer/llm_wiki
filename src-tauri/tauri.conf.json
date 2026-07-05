@@ -1,7 +1,7 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "LLM Wiki Agent",
-	"version": "0.4.14",
+	"version": "0.7.0",
 	"identifier": "com.6tizer.llmwiki.agent",
 	"build": {
 		"beforeDevCommand": "npm --prefix src-tauri/sidecar run build:if-stale && npm run dev",
