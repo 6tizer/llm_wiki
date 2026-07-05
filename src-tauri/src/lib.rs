@@ -459,6 +459,7 @@ pub fn run() {
             app.manage(commands::file_sync::FileSyncState::default());
             app.manage(commands::file_sync::ProjectRootState::default());
             app.manage(commands::agent::AgentState::default());
+            app.manage(commands::runtime_db::RuntimeModelCallStreamState::default());
             api_server::start_api_server(app.handle().clone());
             // Core-runtime background scheduler: reclaims runtime jobs stuck
             // `running` after their active lease expired (crashed worker,
@@ -515,6 +516,8 @@ pub fn run() {
             commands::runtime_db::runtime_job_retry,
             commands::runtime_db::runtime_job_resume,
             commands::runtime_db::runtime_model_call_forward,
+            commands::runtime_db::runtime_model_call_stream,
+            commands::runtime_db::runtime_model_call_stream_cancel,
             commands::runtime_db::runtime_profile_create,
             commands::runtime_db::runtime_profile_delete,
             commands::runtime_db::runtime_profile_list,

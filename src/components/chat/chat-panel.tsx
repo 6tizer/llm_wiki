@@ -60,7 +60,7 @@ import type {
 } from "@/lib/agent/agent-types";
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
 import { executeIngestWrites, startIngest } from "@/lib/ingest";
-import { streamChat } from "@/lib/llm-client";
+import { hasModelCallProfileCandidate, streamChatRouted } from "@/lib/pool-chat";
 import { normalizePath } from "@/lib/path-utils";
 import { SOURCE_WATCH_FILE_TYPE_GROUPS } from "@/lib/source-watch-config";
 import { buildChatAgentMessages, type ChatAgentEvent } from "@/lib/chat-agent";
@@ -187,6 +187,11 @@ function buildAgentTransportOptions(useWebSearch: boolean) {
 function agentRunCandidatesInList(result: RuntimeProfileList): RuntimeProfileRecord[] {
 	if (!result.enabled || result.status !== "healthy") return [];
 	return result.profiles.filter(hasAgentRunProfileCandidate);
+}
+
+function modelCallChatCandidatesInList(result: RuntimeProfileList): RuntimeProfileRecord[] {
+	if (!result.enabled || result.status !== "healthy") return [];
+	return result.profiles.filter((profile) => hasModelCallProfileCandidate(profile, "chat"));
 }
 
 function shortProfileId(profileId: string): string {
@@ -551,6 +556,7 @@ export function ChatPanel() {
 	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
 	const [manualQaBusy, setManualQaBusy] = useState(false);
 	const [hasAgentRunCandidate, setHasAgentRunCandidate] = useState(false);
+	const [hasModelCallChatCandidate, setHasModelCallChatCandidate] = useState(false);
 	const [agentRunProfileCandidates, setAgentRunProfileCandidates] = useState<
 		RuntimeProfileRecord[]
 	>([]);
@@ -566,15 +572,18 @@ export function ChatPanel() {
 		try {
 			const result = await runtimeProfileList();
 			const candidates = agentRunCandidatesInList(result);
+			const chatCandidates = modelCallChatCandidatesInList(result);
 			setAgentRunProfileCandidates(candidates);
 			setHasAgentRunCandidate(candidates.length > 0);
+			setHasModelCallChatCandidate(chatCandidates.length > 0);
 			setAgentRunCandidateResolved(true);
-			return candidates;
+			return { agentCandidates: candidates, chatCandidates };
 		} catch {
 			setAgentRunProfileCandidates([]);
 			setHasAgentRunCandidate(false);
+			setHasModelCallChatCandidate(false);
 			setAgentRunCandidateResolved(true);
-			return [];
+			return { agentCandidates: [], chatCandidates: [] };
 		}
 	}, []);
 	useEffect(() => {
@@ -583,14 +592,17 @@ export function ChatPanel() {
 			.then((result) => {
 				if (cancelled) return;
 				const candidates = agentRunCandidatesInList(result);
+				const chatCandidates = modelCallChatCandidatesInList(result);
 				setAgentRunProfileCandidates(candidates);
 				setHasAgentRunCandidate(candidates.length > 0);
+				setHasModelCallChatCandidate(chatCandidates.length > 0);
 				setAgentRunCandidateResolved(true);
 			})
 			.catch(() => {
 				if (!cancelled) {
 					setAgentRunProfileCandidates([]);
 					setHasAgentRunCandidate(false);
+					setHasModelCallChatCandidate(false);
 					setAgentRunCandidateResolved(true);
 				}
 			});
@@ -1044,7 +1056,7 @@ export function ChatPanel() {
 			}
 			setManualQaStatus(null);
 			const hasImages = images.length > 0;
-			let canDeferApiKeyCheck = hasAgentRunCandidate;
+			let canDeferApiKeyCheck = hasAgentRunCandidate || hasModelCallChatCandidate;
 			if (
 				!canDeferApiKeyCheck &&
 				!agentRunCandidateResolved &&
@@ -1052,7 +1064,8 @@ export function ChatPanel() {
 				!llmConfig.apiKey.trim()
 			) {
 				const candidates = await refreshAgentRunProfileCandidates();
-				canDeferApiKeyCheck = candidates.length > 0;
+				canDeferApiKeyCheck =
+					candidates.agentCandidates.length > 0 || candidates.chatCandidates.length > 0;
 			}
 			const preflightError = getAgentPreflightError(project, llmConfig, {
 				deferApiKeyCheck: canDeferApiKeyCheck,
@@ -1119,7 +1132,8 @@ export function ChatPanel() {
 				};
 				const streamFinalAnswer = async (reasoningOff: boolean) => {
 					let streamError: Error | null = null;
-					await streamChat(
+					await streamChatRouted(
+						"chat",
 						llmConfig,
 						agentResult.messages,
 						{
@@ -1138,6 +1152,7 @@ export function ChatPanel() {
 						},
 						controller.signal,
 						reasoningOff ? { reasoning: { mode: "off" } } : undefined,
+						`chat:${convId}`,
 					);
 					if (streamError) throw streamError;
 				};
@@ -1174,6 +1189,7 @@ export function ChatPanel() {
 		[
 			agentRunCandidateResolved,
 			hasAgentRunCandidate,
+			hasModelCallChatCandidate,
 			handleAgentSend,
 			handleManualSaveQa,
 			refreshAgentRunProfileCandidates,

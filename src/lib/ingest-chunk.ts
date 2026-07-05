@@ -7,7 +7,7 @@
 
 import { readFile, writeFile, createDirectory, deleteFile, fileExists } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { computeContextBudget } from "@/lib/context-budget"
@@ -272,7 +272,8 @@ export async function analyzeLongSourceInChunks(
 
     let raw = ""
     let hadError = false
-    await streamChat(
+    await streamChatRouted(
+      "ingest",
       llmConfig,
       [
         { role: "system", content: systemPrompt },
@@ -296,6 +297,7 @@ export async function analyzeLongSourceInChunks(
       },
       signal,
       { temperature: 0.1, reasoning: { mode: "off" }, max_tokens: 4096 },
+      `ingest:${sourceIdentity}:chunk-${chunk.index}`,
     )
 
     if (signal?.aborted) throw new Error("Ingest cancelled")
