@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Bot,
   Binary,
-  Globe,
   Languages,
   Palette,
   Settings,
@@ -17,7 +16,6 @@ import {
   BrainCircuit,
   Tags,
   GitMerge,
-  Layers,
   ListTree,
   Activity,
 } from "lucide-react"
@@ -36,11 +34,9 @@ import { activateThemePreference, readThemeMirror, type AppTheme } from "@/lib/t
 import { persistSetting } from "@/lib/store-helpers"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
-import { LlmProviderSection } from "./sections/llm-provider-section"
-import { ModelProfilesSection } from "./sections/model-profiles-section"
 import { EmbeddingSection } from "./sections/embedding-section"
 import { MultimodalSection } from "./sections/multimodal-section"
-import { WebSearchSection } from "./sections/web-search-section"
+import { ModelConfigSection } from "./sections/model-config-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { GeneralSection } from "./sections/general-section"
@@ -64,11 +60,9 @@ import {
 } from "@/lib/mineru-config"
 
 export type CategoryId =
-  | "llm"
-  | "model-profiles"
+  | "model-config"
   | "embedding"
   | "multimodal"
-  | "web-search"
   | "import"
   | "network"
   | "api-server"
@@ -109,11 +103,9 @@ interface SettingsGroup {
 }
 
 const CATEGORIES: Category[] = [
-  { id: "llm", labelKey: "settings.categories.llm", icon: Bot },
-  { id: "model-profiles", labelKey: "settings.categories.modelProfiles", icon: Layers },
+  { id: "model-config", labelKey: "settings.categories.modelConfig", icon: Bot },
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
   { id: "multimodal", labelKey: "settings.categories.multimodal", icon: ImageIcon },
-  { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
   { id: "import", labelKey: "settings.categories.import", icon: FolderSync },
   { id: "knowledge-agents", labelKey: "settings.categories.knowledgeAgents", icon: BrainCircuit },
   { id: "taxonomy", labelKey: "settings.categories.taxonomy", icon: Tags },
@@ -136,7 +128,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
     id: "aiModels",
     labelKey: "settings.groups.aiModels",
-    categoryIds: ["llm", "model-profiles", "embedding", "multimodal", "web-search"],
+    categoryIds: ["model-config", "embedding", "multimodal"],
   },
   {
     id: "pipeline",
@@ -161,8 +153,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
 // These sections own their persistence instead of writing through SettingsDraft.
 const INLINE_PERSIST_SETTINGS_CATEGORIES = new Set<CategoryId>([
   "about",
-  "llm",
-  "model-profiles",
+  "model-config",
   "knowledge-agents",
   "taxonomy",
   "synthesis",
@@ -195,11 +186,13 @@ export function coerceSettingsCategory(
   }
   const migratedActive = ["source-watch", "scheduled-import", "mineru"].includes(active)
     ? "import"
-    : active
+    : ["llm", "model-profiles", "web-search"].includes(active)
+      ? "model-config"
+      : active
   if (categories.some((category) => category.id === migratedActive)) {
     return migratedActive as CategoryId
   }
-  return categories[0]?.id ?? "llm"
+  return categories[0]?.id ?? "model-config"
 }
 
 /** Returns whether the shared Settings draft Save bar should be shown. */
@@ -436,7 +429,7 @@ export function SettingsView() {
   // per version.
   const updateAvailable = useUpdateStore((s) => hasAvailableUpdate(s))
 
-  const [active, setActive] = useState<CategoryId>("llm")
+  const [active, setActive] = useState<CategoryId>("model-config")
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: "idle" })
   const [savedTheme, setSavedTheme] = useState<AppTheme>(() => readThemeMirror())
   const [savedCloseBehavior, setSavedCloseBehavior] = useState<CloseBehavior>("hide")
@@ -923,19 +916,12 @@ export function SettingsView() {
 
   const body = useMemo(() => {
     switch (activeCategory) {
-      case "llm":
-        // The LLM section manages its own store state (per-provider
-        // configs + active preset) and persists directly — it bypasses
-        // the shared draft / global Save button.
-        return <LlmProviderSection />
-      case "model-profiles":
-        return <ModelProfilesSection />
+      case "model-config":
+        return <ModelConfigSection onNavigateToCategory={setActive} />
       case "embedding":
         return <EmbeddingSection draft={draft} setDraft={setDraft} />
       case "multimodal":
         return <MultimodalSection draft={draft} setDraft={setDraft} />
-      case "web-search":
-        return <WebSearchSection />
       case "network":
         return <NetworkSection draft={draft} setDraft={setDraft} />
       case "import":

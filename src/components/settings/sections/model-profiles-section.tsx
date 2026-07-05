@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Loader2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Input } from "@/components/ui/input"
@@ -89,7 +89,7 @@ function presetForProviderId(providerId: string) {
   return LLM_PRESETS.find((preset) => preset.id === providerId)
 }
 
-function defaultApiModeForProvider(providerId: string): RuntimeProfileApiMode {
+export function defaultApiModeForProvider(providerId: string): RuntimeProfileApiMode {
   const preset = presetForProviderId(providerId)
   if (preset?.provider === "anthropic") return "anthropic-messages"
   if (preset?.provider === "google") return "google-generate-content"
@@ -97,7 +97,7 @@ function defaultApiModeForProvider(providerId: string): RuntimeProfileApiMode {
   return "openai-chat-completions"
 }
 
-function defaultAuthStyleForProvider(providerId: string): RuntimeProfileAuthStyle {
+export function defaultAuthStyleForProvider(providerId: string): RuntimeProfileAuthStyle {
   const preset = presetForProviderId(providerId)
   if (preset?.provider === "ollama") return "none"
   if (preset?.provider === "claude-code" || preset?.provider === "codex-cli") {
@@ -171,6 +171,52 @@ export function taskFamiliesForRender(values: string[]): string[] {
   const known: string[] = [...PROFILE_TASK_FAMILY_OPTIONS]
   const unknown = normalizedTaskFamilies(values).filter((value) => !known.includes(value))
   return [...known, ...unknown]
+}
+
+function sameStringArray(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((value, index) => value === b[index])
+}
+
+function draftHasUnsavedChanges(draft: ModelProfileDraft, profile: RuntimeProfileRecord): boolean {
+  const clean = draftFromProfile(profile)
+  return draft.kind !== clean.kind
+    || draft.displayName !== clean.displayName
+    || draft.providerId !== clean.providerId
+    || draft.modelId !== clean.modelId
+    || draft.agentSdkModelId !== clean.agentSdkModelId
+    || draft.endpoint !== clean.endpoint
+    || draft.apiMode !== clean.apiMode
+    || draft.authStyle !== clean.authStyle
+    || draft.enabled !== clean.enabled
+    || !sameStringArray(normalizedTaskFamilies(draft.taskFamilies), clean.taskFamilies)
+    || draft.maxConcurrency !== clean.maxConcurrency
+    || (draft.secretRef ?? null) !== (clean.secretRef ?? null)
+    || draft.rawSecret.trim().length > 0
+    || draft.clearSecret
+}
+
+function reconcileDraftAfterProfileLoad(
+  draft: ModelProfileDraft,
+  nextProfiles: RuntimeProfileRecord[],
+  previousProfiles: RuntimeProfileRecord[],
+  isInitialLoad: boolean,
+): ModelProfileDraft {
+  if (isInitialLoad) {
+    return nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft()
+  }
+  if (!draft.profileId) return draft
+
+  const nextSelected = nextProfiles.find((profile) => profile.profileId === draft.profileId)
+  if (!nextSelected) {
+    return nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft()
+  }
+
+  const previousSelected = previousProfiles.find((profile) => profile.profileId === draft.profileId)
+  if (previousSelected && draftHasUnsavedChanges(draft, previousSelected)) {
+    return draft
+  }
+  return draftFromProfile(nextSelected)
 }
 
 function toCreateRequest(draft: ModelProfileDraft, secretRef?: string): RuntimeProfileCreateRequest {
@@ -315,7 +361,15 @@ export async function saveProfileDraft(
   }
 }
 
-export function ModelProfilesSection() {
+interface ModelProfilesSectionProps {
+  refreshToken?: number
+  onProfilesChanged?: () => void
+}
+
+export function ModelProfilesSection({
+  refreshToken = 0,
+  onProfilesChanged,
+}: ModelProfilesSectionProps = {}) {
   const { t } = useTranslation()
   const [profiles, setProfiles] = useState<RuntimeProfileRecord[]>([])
   const [draft, setDraft] = useState<ModelProfileDraft>(() => createEmptyProfileDraft())
@@ -323,6 +377,8 @@ export function ModelProfilesSection() {
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null)
   const [probeState, setProbeState] = useState<ProbeState>({ kind: "idle" })
+  const profilesRef = useRef<RuntimeProfileRecord[]>([])
+  const loadedOnceRef = useRef(false)
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.profileId === draft.profileId),
@@ -330,16 +386,28 @@ export function ModelProfilesSection() {
   )
 
   async function loadProfiles(shouldApply = () => true) {
-    setLoadState({ kind: "loading" })
+    const isInitialLoad = !loadedOnceRef.current
+    if (isInitialLoad) {
+      setLoadState({ kind: "loading" })
+    }
     try {
       const result = await runtimeProfileList()
       if (!shouldApply()) return
       const nextProfiles = Array.isArray(result.profiles) ? result.profiles : []
+      const previousProfiles = profilesRef.current
+      profilesRef.current = nextProfiles
       setProfiles(nextProfiles)
-      setDraft(nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft())
+      setDraft((current) => reconcileDraftAfterProfileLoad(
+        current,
+        nextProfiles,
+        previousProfiles,
+        isInitialLoad,
+      ))
+      loadedOnceRef.current = true
       setLoadState({ kind: "ready", enabled: Boolean(result.enabled), status: result.status })
     } catch (error) {
       if (!shouldApply()) return
+      if (!isInitialLoad) return
       setLoadState({ kind: "error", message: errorMessage(error) })
     }
   }
@@ -350,7 +418,7 @@ export function ModelProfilesSection() {
     return () => {
       active = false
     }
-  }, [])
+  }, [refreshToken])
 
   function updateDraft(patch: Partial<ModelProfileDraft>) {
     setDraft((current) => ({ ...current, ...patch }))
@@ -378,12 +446,15 @@ export function ModelProfilesSection() {
     }
     try {
       const saved = await saveProfileDraft(draft, selectedProfile)
-      setProfiles((current) => {
-        const others = current.filter((profile) => profile.profileId !== saved.profileId)
-        return [...others, saved].sort((a, b) => a.displayName.localeCompare(b.displayName))
-      })
+      const nextProfiles = [
+        ...profilesRef.current.filter((profile) => profile.profileId !== saved.profileId),
+        saved,
+      ].sort((a, b) => a.displayName.localeCompare(b.displayName))
+      profilesRef.current = nextProfiles
+      setProfiles(nextProfiles)
       setDraft(draftFromProfile(saved))
       setSaveMessage(t("settings.sections.llm.profiles.saved"))
+      onProfilesChanged?.()
     } catch (error) {
       setSaveMessage(t("settings.sections.llm.profiles.saveFailed", { message: errorMessage(error) }))
     }
@@ -409,11 +480,13 @@ export function ModelProfilesSection() {
       if (result.secretRef) {
         await profileSecretDelete({ secretRef: result.secretRef }).catch(() => undefined)
       }
-      const nextProfiles = profiles.filter((profile) => profile.profileId !== result.profileId)
+      const nextProfiles = profilesRef.current.filter((profile) => profile.profileId !== result.profileId)
+      profilesRef.current = nextProfiles
       setProfiles(nextProfiles)
       setDraft(nextProfiles[0] ? draftFromProfile(nextProfiles[0]) : createEmptyProfileDraft())
       setDeleteMessage(t("settings.sections.llm.profiles.deleted"))
       setProbeState({ kind: "idle" })
+      onProfilesChanged?.()
     } catch (error) {
       setDeleteMessage(t("settings.sections.llm.profiles.deleteFailed", { message: errorMessage(error) }))
     }
@@ -442,10 +515,13 @@ export function ModelProfilesSection() {
           })
       const updatedProfile = result.profile
       if (updatedProfile) {
-        setProfiles((current) => current.map((profile) => (
+        const nextProfiles = profilesRef.current.map((profile) => (
           profile.profileId === updatedProfile.profileId ? updatedProfile : profile
-        )))
+        ))
+        profilesRef.current = nextProfiles
+        setProfiles(nextProfiles)
         setDraft(draftFromProfile(updatedProfile))
+        onProfilesChanged?.()
       }
       setProbeState({ kind: "done", result })
     } catch (error) {

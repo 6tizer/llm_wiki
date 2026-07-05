@@ -483,6 +483,7 @@
     },
     "categories": {
       "llm": "LLM 模型",
+      "modelConfig": "模型配置",
       "modelProfiles": "模型 Profiles",
       "embedding": "向量嵌入",
       "multimodal": "图片描述",
@@ -507,6 +508,44 @@
       "about": "关于"
     },
     "sections": {
+      "modelConfig": {
+        "title": "模型配置",
+        "description": "集中管理旧 provider 连接、runtime 模型 Profiles 和任务族分配矩阵。",
+        "connections": "连接",
+        "profiles": "Profiles",
+        "taskMatrixHeading": "任务分配矩阵",
+        "migration": {
+          "title": "从当前活跃 provider 创建 runtime Profile",
+          "description": "基于 {{preset}} 生成 Model Profile，为未来统一路由做准备。当前聊天、提取、向量和视觉行为不会因此改变。",
+          "create": "创建 Profile",
+          "created": "Profile 已创建。",
+          "complete": "已存在迁移 profile：{{name}}。需要时可在 Profiles 中编辑。",
+          "failed": "迁移失败：{{message}}"
+        },
+        "taskMatrix": {
+          "title": "任务分配矩阵",
+          "description": "切换每个 runtime profile 声明的任务族。这里只更新 taskFamilies；能力探测新鲜度沿用 Profile 现有规则。",
+          "loading": "正在加载任务分配…",
+          "empty": "还没有 profile。请先在上方创建 Profile，再分配任务族。",
+          "taskFamily": "任务族",
+          "effective": "已生效",
+          "notWired": "尚未接入运行时选择——当前不影响实际行为",
+          "configure": "前往配置",
+          "toggle": "切换 {{profile}} 的 {{family}}",
+          "saved": "任务分配已保存。",
+          "saveFailed": "保存失败：{{message}}",
+          "families": {
+            "chat": "聊天",
+            "ingest": "提取",
+            "review": "审阅",
+            "synthesis": "综合",
+            "taxonomy": "标签体系",
+            "agent": "Agent",
+            "vision": "视觉",
+            "embedding": "向量"
+          }
+        }
+      },
       "llm": {
         "title": "LLM 模型",
         "description": "旧路径/默认 provider 配置。这里同一时间只有一个活跃 provider，用于 legacy fallback；runtime Model Profiles 可同时保存多条可调度模型记录。",

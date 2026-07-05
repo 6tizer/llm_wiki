@@ -87,12 +87,13 @@ describe("LlmProviderSection", () => {
     vi.mocked(saveLlmConfig).mockReset().mockResolvedValue(undefined)
   })
 
-  it("does not render the runtime model profiles entry inside the LLM settings section", () => {
+  it("does not render the full runtime profiles editor inside the LLM provider section", () => {
     const { container, root } = renderSection()
 
     expect(container.textContent).toContain("LLM Models")
     expect(container.textContent).not.toContain("New profile")
     expect(container.textContent).not.toContain("Display name")
+    expect(container.querySelector("[data-testid='model-profiles-section']")).toBeNull()
 
     unmount(root)
   })
