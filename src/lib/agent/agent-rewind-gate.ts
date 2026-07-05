@@ -89,8 +89,18 @@ export function computeAgentRewindGateDecision(args: {
         continue
       }
       if (!isWikiWriteToolCall(call.toolName)) continue
-      const covered = Boolean(call.toolUseId) && (message.wikiChanges ?? []).some((change) =>
-        change.toolUseId === call.toolUseId && change.snapshotted === true
+      const matchingChanges = (message.wikiChanges ?? []).filter((change) =>
+        change.toolUseId === call.toolUseId
+      )
+      if (
+        Boolean(call.toolUseId) &&
+        matchingChanges.length > 0 &&
+        matchingChanges.every((change) => change.reverted)
+      ) {
+        continue
+      }
+      const covered = Boolean(call.toolUseId) && matchingChanges.some((change) =>
+        change.snapshotted === true && !change.reverted
       )
       if (covered) {
         hasSnapshottedWikiWriteAfterTarget = true

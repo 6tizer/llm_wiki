@@ -61,4 +61,43 @@ describe("ChatMessage hover actions", () => {
     expect(container.textContent).toContain("Copy")
     act(() => root.unmount())
   })
+
+  it("jumps to the newest matching agent-write review when a wiki change has no toolUseId", async () => {
+    const older = document.createElement("div")
+    older.dataset.agentWritePath = "wiki/page.md"
+    older.dataset.agentWriteTimestamp = "1"
+    older.scrollIntoView = vi.fn()
+    const newer = document.createElement("div")
+    newer.dataset.agentWritePath = "wiki/page.md"
+    newer.dataset.agentWriteTimestamp = "3"
+    newer.scrollIntoView = vi.fn()
+    document.body.append(older, newer)
+
+    const { container, root } = renderHovered(
+      assistantMessage({
+        wikiChanges: [{
+          path: "wiki/page.md",
+          operation: "update",
+          timestamp: 2,
+        }],
+      }),
+    )
+    const reviewButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("审阅"),
+    )
+    if (!reviewButton) throw new Error("review button not found")
+
+    await act(async () => {
+      reviewButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+
+    expect(newer.scrollIntoView).toHaveBeenCalledWith({ block: "center" })
+    expect(older.scrollIntoView).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+    container.remove()
+    older.remove()
+    newer.remove()
+  })
 })

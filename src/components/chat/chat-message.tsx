@@ -363,6 +363,29 @@ function AgentSessionCompactNotice() {
 
 function AgentWikiChangeList({ changes }: { changes: AgentWikiChangeRecord[] }) {
   const { t } = useTranslation()
+  const setActiveView = useWikiStore((s) => s.setActiveView)
+  const handleReview = useCallback((change: AgentWikiChangeRecord) => {
+    setActiveView("wiki-health")
+    window.setTimeout(() => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-agent-write-path]")
+      )
+      const samePath = candidates.filter((candidate) =>
+        candidate.dataset.agentWritePath === change.path
+      )
+      const target = change.toolUseId
+        ? samePath.find((candidate) =>
+            candidate.dataset.agentWriteToolUseId === change.toolUseId
+          )
+        // Some legacy/app-tool changes may not carry a toolUseId; same path
+        // can appear multiple times, so jump to the newest matching review.
+        : samePath.sort((a, b) =>
+            Number(b.dataset.agentWriteTimestamp ?? 0) -
+            Number(a.dataset.agentWriteTimestamp ?? 0)
+          )[0]
+      target?.scrollIntoView({ block: "center" })
+    }, 0)
+  }, [setActiveView])
 
   return (
     <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-xs">
@@ -381,9 +404,19 @@ function AgentWikiChangeList({ changes }: { changes: AgentWikiChangeRecord[] }) 
           return (
             <div
               key={`${change.path}-${change.timestamp}-${index}`}
-              className="break-all text-muted-foreground"
+              className="flex items-center justify-between gap-2 text-muted-foreground"
             >
-              {t(key, { path: change.path })}
+              <span className="min-w-0 break-all">
+                {t(key, { path: change.path })}
+                {change.reverted ? "（已撤销）" : ""}
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-[11px] text-primary hover:underline"
+                onClick={() => handleReview(change)}
+              >
+                审阅
+              </button>
             </div>
           )
         })}

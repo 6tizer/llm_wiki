@@ -8,6 +8,7 @@ import i18n from "@/i18n"
 import { ChatPanel, shouldPromptForQaBeforeConversationDelete } from "./chat-panel"
 import { ChatMessage, StreamingMessage } from "./chat-message"
 import { type DisplayMessage, useChatStore } from "@/stores/chat-store"
+import { useReviewStore } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { getChatAgentTools } from "@/lib/chat-agent"
@@ -364,6 +365,7 @@ describe("ChatPanel agent mode rendering", () => {
       agentRewindRequestsByConversation: {},
       agentRewindLocks: {},
     })
+    useReviewStore.setState({ items: [] })
     useAgentSettingsStore.getState().resetResourceConfig()
     useWikiStore.setState((state) => ({
       project: null,
@@ -1139,6 +1141,57 @@ describe("ChatPanel agent mode rendering", () => {
       })
     })
     expect(useChatStore.getState().activeRunModelByConversation["conv-1"]).toBe("claude-runtime")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("creates one review item for each snapshotted agent wiki change", async () => {
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+
+    const callbacks = streamAgentMock.mock.calls[0]?.[2] as {
+      onStreamStart: (streamId: string) => void
+      onWikiChanged: (payload: {
+        path: string
+        operation: "update" | "create" | "delete"
+        toolUseId?: string
+        snapshotted?: boolean
+      }) => void
+    }
+
+    act(() => {
+      callbacks.onStreamStart("stream-1")
+      callbacks.onWikiChanged({
+        path: "wiki/page.md",
+        operation: "update",
+        toolUseId: "tool-1",
+        snapshotted: true,
+      })
+    })
+
+    const item = useReviewStore.getState().items[0]
+    expect(item).toMatchObject({
+      type: "agent-write",
+      title: "更新 wiki/page.md",
+      sourcePath: "wiki/page.md",
+      agentWrite: {
+        path: "wiki/page.md",
+        operation: "update",
+        conversationId: "conv-1",
+        streamId: "stream-1",
+        toolUseId: "tool-1",
+        snapshotted: true,
+      },
+    })
+    expect(item?.options.map((option) => option.label)).toEqual([
+      "查看页面",
+      "撤销此写入",
+      "接受",
+    ])
 
     act(() => root.unmount())
     container.remove()

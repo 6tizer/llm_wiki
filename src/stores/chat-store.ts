@@ -131,6 +131,7 @@ export interface AgentStreamStats {
 /** Wiki file change emitted during an Agent run and persisted with the message. */
 export interface AgentWikiChangeRecord extends AgentWikiChangedPayload {
   timestamp: number
+  reverted?: boolean
 }
 
 /** Runtime-only Agent permission request shown in the approval dialog. */
@@ -262,6 +263,11 @@ interface ChatState {
     record: AgentPermissionEventRecord
   ) => void
   appendAgentWikiChange: (messageId: string, payload: AgentWikiChangedPayload) => void
+  markAgentWikiChangeReverted: (args: {
+    messageId: string
+    path: string
+    toolUseId?: string
+  }) => void
   markAgentMessageRewindable: (messageId: string, payload: AgentRewindablePatch) => void
   clearAgentMessageRewindable: (
     messageId: string,
@@ -910,6 +916,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   timestamp: Date.now(),
                 },
               ],
+            }
+          : m
+      ),
+    })),
+
+  markAgentWikiChangeReverted: ({ messageId, path, toolUseId }) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              wikiChanges: (m.wikiChanges ?? []).map((change) => {
+                const sameTool = toolUseId
+                  ? change.toolUseId === toolUseId
+                  : !change.toolUseId
+                return sameTool && change.path === path
+                  ? { ...change, reverted: true }
+                  : change
+              }),
             }
           : m
       ),

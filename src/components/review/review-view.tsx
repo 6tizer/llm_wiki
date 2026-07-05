@@ -21,7 +21,10 @@ import { hasConfiguredDeepResearchSources } from "@/lib/web-search"
 import { makeQueryFileName } from "@/lib/wiki-filename"
 import { createReviewPageDrafts, reviewPageDestinationDir } from "@/lib/review-create-page"
 import { loadProjectWikiSchemaRouting } from "@/lib/wiki-schema"
+import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue"
+import { restoreSingleAgentWikiSnapshot } from "@/lib/agent/agent-wiki-snapshot-restore"
 import { useTranslation } from "react-i18next"
+import { useChatStore } from "@/stores/chat-store"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
   contradiction: { icon: AlertTriangle, label: "Contradiction", color: "text-amber-500" },
@@ -29,6 +32,7 @@ const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label
   "missing-page": { icon: FileQuestion, label: "Missing Page", color: "text-purple-500" },
   confirm: { icon: MessageSquare, label: "Needs Confirmation", color: "text-foreground" },
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
+  "agent-write": { icon: CheckCircle2, label: "Agent Write", color: "text-cyan-600" },
 }
 
 export function ReviewView() {
@@ -44,6 +48,67 @@ export function ReviewView() {
   const handleResolve = useCallback(async (id: string, action: string) => {
     const pp = project ? normalizePath(project.path) : ""
     const item = items.find((i) => i.id === id)
+    if (action === "__agent_write_accept__") {
+      resolveItem(id, "Accepted")
+      return
+    }
+    if (action === "__agent_write_undo__") {
+      if (!project || !item?.agentWrite) return
+      const write = item.agentWrite
+      if (!write.snapshotted) {
+        window.alert("此写入没有写前快照，无法撤销。")
+        return
+      }
+      if (useChatStore.getState().agentRewindLocks[write.conversationId]) {
+        window.alert("该对话正在 rewind，暂不能撤销此写入。")
+        return
+      }
+      const chatState = useChatStore.getState()
+      if (chatState.isStreaming && chatState.streamingConversationId === write.conversationId) {
+        window.alert(t("agent.writeReview.blockedRunning"))
+        return
+      }
+      const restored = await restoreSingleAgentWikiSnapshot({
+        projectPath: pp,
+        streamId: write.streamId,
+        path: write.path,
+        toolUseId: write.toolUseId,
+      })
+      if (!restored.ok) {
+        const message = restored.failures[0]?.error || "撤销失败"
+        window.alert(message)
+        return
+      }
+      try {
+        const tree = await listDirectory(pp)
+        setFileTree(tree)
+      } catch (err) {
+        console.warn("[agent-write-review] failed to refresh file tree after undo:", err)
+      }
+      useWikiStore.getState().bumpDataVersion()
+      enqueueAgentStructuralLint(pp, restored.restoredPaths, 0)
+      useChatStore.getState().markAgentWikiChangeReverted({
+        messageId: write.messageId,
+        path: write.path,
+        toolUseId: write.toolUseId,
+      })
+      const restoredPath = restored.restoredPaths[0]
+      if (restoredPath) {
+        const absolutePath = `${pp}/${restoredPath.replace(/^\/+/, "")}`
+        try {
+          const content = await readFile(absolutePath)
+          useWikiStore.getState().setSelectedFile(absolutePath)
+          useWikiStore.getState().setFileContent(content)
+        } catch {
+          if (useWikiStore.getState().selectedFile === absolutePath) {
+            useWikiStore.getState().setSelectedFile(null)
+            useWikiStore.getState().setFileContent("")
+          }
+        }
+      }
+      resolveItem(id, "Reverted")
+      return
+    }
     // Deep Research — must be checked FIRST before any fuzzy matching
     if (action === "__deep_research__" && project) {
       const searchConfig = useWikiStore.getState().searchApiConfig
@@ -221,7 +286,7 @@ export function ReviewView() {
     } else {
       resolveItem(id, action)
     }
-  }, [project, items, resolveItem, setFileTree, setActiveView])
+  }, [project, items, resolveItem, setFileTree, setActiveView, t])
 
   const pending = items.filter((i) => !i.resolved)
   const resolved = items.filter((i) => i.resolved)
@@ -299,6 +364,9 @@ function ReviewCard({
       className={`rounded-lg border p-3 text-sm transition-opacity ${
         item.resolved ? "opacity-50" : ""
       }`}
+      data-agent-write-path={item.agentWrite?.path}
+      data-agent-write-tool-use-id={item.agentWrite?.toolUseId}
+      data-agent-write-timestamp={item.agentWrite?.timestamp}
     >
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">

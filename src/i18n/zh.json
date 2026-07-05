@@ -443,6 +443,9 @@
       "wikiRestoreFailed": "文件已回滚，但 wiki 快照恢复失败。会话未截断。",
       "wikiRestoreFailureFiles": "以下 wiki 快照恢复失败："
     },
+    "writeReview": {
+      "blockedRunning": "该对话正在运行，暂不能撤销"
+    },
     "lint": {
       "queued": "Agent 检查已排队",
       "running": "Agent 检查中",
