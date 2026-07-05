@@ -158,7 +158,6 @@ describe("autoIngest source summary paths", () => {
       conversations: [],
       messages: [],
       activeConversationId: null,
-      mode: "chat",
       ingestSource: null,
       isStreaming: false,
       streamingContent: "",

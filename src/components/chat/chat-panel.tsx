@@ -1,15 +1,14 @@
 import {
 	BookOpen,
 	Bot,
+	ChevronDown,
 	GitFork,
 	Loader2,
 	MessageSquare,
 	Plus,
 	Trash2,
-	Upload,
 } from "lucide-react";
 import {
-	type ReactNode,
 	useCallback,
 	useEffect,
 	useRef,
@@ -27,6 +26,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue";
+import { isAgentAssistantMessage } from "@/lib/agent/agent-summary";
 import {
 	cleanupLegacyPendingQaStorage,
 	saveQaForConversation,
@@ -35,11 +35,13 @@ import {
 import {
 	type AgentErrorKind,
 	type AgentRunPhase,
+	agentProviderNeedsApiKey,
 	agentErrorKindFromError,
 	agentRunPhaseI18nKey,
 	getAgentPreflightError,
 } from "@/lib/agent/agent-run-state";
-import { streamAgent } from "@/lib/agent/agent-transport";
+import { hasAgentRunProfileCandidate, streamAgent } from "@/lib/agent/agent-transport";
+import { runtimeProfileList, type RuntimeProfileList } from "@/commands/runtime-db";
 import type {
 	AgentActionRequiredPayload,
 	AgentRewindFilesPayload,
@@ -93,11 +95,7 @@ export function shouldPromptForQaBeforeConversationDelete(
 	}
 	return (
 		conversationMessages.some(
-			(message) =>
-				message.mode === "agent" ||
-				Boolean(message.agentSessionId) ||
-				Boolean(message.agentBlocks?.length) ||
-				Boolean(message.toolCalls?.length),
+			(message) => isAgentAssistantMessage(message),
 		)
 	);
 }
@@ -134,7 +132,9 @@ function changedPathsFromAction(payload: AgentActionRequiredPayload): string[] {
 	return payload.kind === "lint_recommended" ? payload.paths : [];
 }
 
-function buildAgentTransportOptions() {
+const AGENT_NETWORK_TOOLS = ["WebSearch", "WebFetch"] as const;
+
+function buildAgentTransportOptions(useWebSearch: boolean) {
 	const wikiState = useWikiStore.getState();
 	const chatState = useChatStore.getState();
 	const agentSettings = useAgentSettingsStore.getState();
@@ -146,36 +146,18 @@ function buildAgentTransportOptions() {
 		conversations: chatState.conversations,
 		activeConversationId: chatState.activeConversationId,
 		resourceConfig: agentSettings.resourceConfig,
+		disallowedTools: useWebSearch ? undefined : [...AGENT_NETWORK_TOOLS],
 	});
 }
 
-function ModeButton({
-	active,
-	children,
-	disabled = false,
-	onClick,
-}: {
-	active: boolean;
-	children: ReactNode;
-	disabled?: boolean;
-	onClick: () => void;
-}) {
+function hasAgentRunCandidateInList(result: RuntimeProfileList): boolean {
 	return (
-		<button
-			type="button"
-			aria-pressed={active}
-			disabled={disabled}
-			onClick={onClick}
-			className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors ${
-				active
-					? "bg-background text-foreground shadow-sm"
-					: "text-muted-foreground hover:bg-background/70 hover:text-foreground"
-			} disabled:pointer-events-none disabled:opacity-50`}
-		>
-			{children}
-		</button>
+		result.enabled &&
+		result.status === "healthy" &&
+		result.profiles.some(hasAgentRunProfileCandidate)
 	);
 }
+
 function ConversationSidebar() {
 	const { t } = useTranslation();
 	const conversations = useChatStore((s) => s.conversations);
@@ -450,12 +432,17 @@ export function ChatPanel() {
 		activeConversationId && agentRewindLocks[activeConversationId],
 	);
 	const streamingContent = useChatStore((s) => s.streamingContent);
-	const mode = useChatStore((s) => s.mode);
+	const streamingConversationId = useChatStore((s) => s.streamingConversationId);
+	const streamingAgentMessageId = useChatStore((s) => s.streamingAgentMessageId);
+	const ingestSource = useChatStore((s) => s.ingestSource);
+	const activeRunModelByConversation = useChatStore(
+		(s) => s.activeRunModelByConversation,
+	);
 	const addMessage = useChatStore((s) => s.addMessage);
 	const setStreaming = useChatStore((s) => s.setStreaming);
-	const setMode = useChatStore((s) => s.setMode);
 	const appendStreamToken = useChatStore((s) => s.appendStreamToken);
 	const finalizeStream = useChatStore((s) => s.finalizeStream);
+	const setActiveRunModel = useChatStore((s) => s.setActiveRunModel);
 	const createConversation = useChatStore((s) => s.createConversation);
 	const removeLastAssistantMessage = useChatStore(
 		(s) => s.removeLastAssistantMessage,
@@ -501,11 +488,31 @@ export function ChatPanel() {
 			abortRef.current?.abort();
 		};
 	}, []);
+	useEffect(() => {
+		let cancelled = false;
+		runtimeProfileList()
+			.then((result) => {
+				if (cancelled) return;
+				setHasAgentRunCandidate(hasAgentRunCandidateInList(result));
+				setAgentRunCandidateResolved(true);
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setHasAgentRunCandidate(false);
+					setAgentRunCandidateResolved(true);
+				}
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const bottomRef = useRef<HTMLDivElement>(null);
 	const [agentRunPhase, setAgentRunPhase] = useState<AgentRunPhase>("idle");
 	const [chatAgentEvents, setChatAgentEvents] = useState<ChatAgentEvent[]>([]);
 	const [manualQaBusy, setManualQaBusy] = useState(false);
+	const [hasAgentRunCandidate, setHasAgentRunCandidate] = useState(false);
+	const [agentRunCandidateResolved, setAgentRunCandidateResolved] = useState(false);
 	const [manualQaStatus, setManualQaStatus] = useState<{
 		kind: "success" | "error" | "skipped";
 		message: string;
@@ -524,7 +531,13 @@ export function ChatPanel() {
 	}, []);
 
 	const handleAgentSend = useCallback(
-		async (text: string) => {
+		async (
+			text: string,
+			options: ChatSendOptions = {
+				useWebSearch: false,
+				useAnyTxtSearch: false,
+			},
+		) => {
 			let convId = useChatStore.getState().activeConversationId;
 			if (!convId) {
 				convId = createConversation();
@@ -549,7 +562,6 @@ export function ChatPanel() {
 				latestUserText: text,
 			});
 			addMessage("user", text, {
-				mode: "agent",
 				agentSessionId,
 			});
 
@@ -595,13 +607,13 @@ export function ChatPanel() {
 				return;
 			}
 
-			const options = buildAgentTransportOptions();
-			if (!options) {
+			const transportOptions = buildAgentTransportOptions(options.useWebSearch);
+			if (!transportOptions) {
 				finishAgentError("unavailable");
 				return;
 			}
 			if (intentOverride) {
-				options.intentOverride = intentOverride;
+				transportOptions.intentOverride = intentOverride;
 			}
 
 			const controller = new AbortController();
@@ -632,7 +644,7 @@ export function ChatPanel() {
 			try {
 				await streamAgent(
 					text,
-					options,
+					transportOptions,
 					{
 						onStreamStart: (id) => {
 							streamId = id;
@@ -653,6 +665,7 @@ export function ChatPanel() {
 								return;
 							}
 							if (!isSdkAssistantMessage(message)) return;
+							setActiveRunModel(convId, message.message.model ?? null);
 							updateAgentStreamMessage(messageId, {
 								agentBlocks: message.message.content,
 							});
@@ -703,7 +716,7 @@ export function ChatPanel() {
 							markAgentRunning();
 							appendAgentWikiChange(messageId, payload);
 							const projectPath =
-								options.projectPath ?? options.cwd ?? project?.path;
+								transportOptions.projectPath ?? transportOptions.cwd ?? project?.path;
 							refreshAgentFileTree(projectPath).catch((err) => {
 								console.warn("[agent] failed to refresh file tree:", err);
 							});
@@ -728,7 +741,7 @@ export function ChatPanel() {
 							}
 							const paths = changedPathsFromAction(payload);
 							enqueueAgentLintFromPaths(
-								options.projectPath ?? options.cwd ?? project?.path,
+								transportOptions.projectPath ?? transportOptions.cwd ?? project?.path,
 								paths,
 							);
 						},
@@ -743,7 +756,7 @@ export function ChatPanel() {
 							}
 							const paths = payload.result?.filesChanged ?? [];
 							const projectPath =
-								options.projectPath ?? options.cwd ?? project?.path;
+								transportOptions.projectPath ?? transportOptions.cwd ?? project?.path;
 							enqueueAgentLintFromPaths(projectPath, paths);
 							refreshAgentFileTree(projectPath).catch((err) => {
 								console.warn(
@@ -771,6 +784,7 @@ export function ChatPanel() {
 			markAgentMessageRewindable,
 			project,
 			requestAgentPermission,
+			setActiveRunModel,
 			startAgentStreamMessage,
 			t,
 			updateAgentProgress,
@@ -850,7 +864,6 @@ export function ChatPanel() {
 			options: ChatSendOptions = {
 				useWebSearch: false,
 				useAnyTxtSearch: false,
-				agentMode: "standard",
 			},
 		) => {
 			if (text.trim() === "/save-qa") {
@@ -858,11 +871,32 @@ export function ChatPanel() {
 				return;
 			}
 			setManualQaStatus(null);
-			if (mode === "agent") {
-				await handleAgentSend(text);
+			const hasImages = images.length > 0;
+			let canDeferApiKeyCheck = hasAgentRunCandidate;
+			if (
+				!canDeferApiKeyCheck &&
+				!agentRunCandidateResolved &&
+				agentProviderNeedsApiKey(llmConfig.provider) &&
+				!llmConfig.apiKey.trim()
+			) {
+				try {
+					const result = await runtimeProfileList();
+					canDeferApiKeyCheck = hasAgentRunCandidateInList(result);
+					setHasAgentRunCandidate(canDeferApiKeyCheck);
+					setAgentRunCandidateResolved(true);
+				} catch {
+					canDeferApiKeyCheck = false;
+					setHasAgentRunCandidate(false);
+					setAgentRunCandidateResolved(true);
+				}
+			}
+			const preflightError = getAgentPreflightError(project, llmConfig, {
+				deferApiKeyCheck: canDeferApiKeyCheck,
+			});
+			if (ingestSource === null && !hasImages && !preflightError) {
+				await handleAgentSend(text, options);
 				return;
 			}
-			const chatImages = mode === "chat" ? images : [];
 
 			// Auto-create a conversation if none is active
 			let convId = useChatStore.getState().activeConversationId;
@@ -870,9 +904,8 @@ export function ChatPanel() {
 				convId = createConversation();
 			}
 			addMessage("user", text, {
-				images: chatImages,
-				mode: mode === "ingest" ? "ingest" : undefined,
-				chatOptions: mode === "chat" ? options : undefined,
+				images,
+				chatOptions: options,
 			});
 			setStreaming(true);
 			try {
@@ -975,9 +1008,11 @@ export function ChatPanel() {
 			return;
 		},
 		[
-			mode,
+			agentRunCandidateResolved,
+			hasAgentRunCandidate,
 			handleAgentSend,
 			handleManualSaveQa,
+			ingestSource,
 			llmConfig,
 			searchApiConfig,
 			project,
@@ -1030,7 +1065,13 @@ export function ChatPanel() {
 				messages: s.messages.filter((m) => m.id !== lastUser.id),
 			}));
 		}
-		handleSend(lastUserMsg.content, lastUserMsg.images ?? [], lastUserMsg.chatOptions);
+		const chatOptions = lastUserMsg.chatOptions
+			? {
+					useWebSearch: lastUserMsg.chatOptions.useWebSearch,
+					useAnyTxtSearch: lastUserMsg.chatOptions.useAnyTxtSearch,
+				}
+			: undefined;
+		handleSend(lastUserMsg.content, lastUserMsg.images ?? [], chatOptions);
 	}, [isStreaming, removeLastAssistantMessage, handleSend]);
 	const handleWriteToWiki = useCallback(async () => {
 		if (!project) return;
@@ -1047,15 +1088,30 @@ export function ChatPanel() {
 			console.error("Failed to write to wiki:", err);
 		}
 	}, [project, llmConfig, setFileTree]);
-	const agentStatusKey =
-		mode === "agent" && isStreaming
-			? agentRunPhaseI18nKey(agentRunPhase)
-			: null;
+	const isActiveAgentStream =
+		isStreaming &&
+		streamingConversationId === activeConversationId &&
+		Boolean(streamingAgentMessageId);
+	const agentStatusKey = isActiveAgentStream
+		? agentRunPhaseI18nKey(agentRunPhase)
+		: null;
 	const hasAssistantMessages = activeMessages.some(
 		(m) => m.role === "assistant",
 	);
 	const showWriteButton =
-		mode === "ingest" && !isStreaming && hasAssistantMessages;
+		ingestSource !== null && !isStreaming && hasAssistantMessages;
+	const modelIndicator =
+		isActiveAgentStream && activeConversationId
+			? activeRunModelByConversation[activeConversationId] ?? t("chat.modelAuto")
+			: hasAgentRunCandidate
+				? t("chat.modelAuto")
+				: llmConfig.model || "-";
+	const emptySuggestionKeys = [
+		"chat.emptySuggestions.brokenLinks",
+		"chat.emptySuggestions.recentSources",
+		"chat.emptySuggestions.topicOverview",
+		"chat.emptySuggestions.findGaps",
+	];
 	return (
 		<div className="flex h-full flex-row overflow-hidden">
 			<AgentPermissionDialogHost />
@@ -1079,6 +1135,29 @@ export function ChatPanel() {
 							className="flex-1 overflow-y-auto px-3 py-2"
 						>
 							<div className="flex flex-col gap-3">
+								{activeMessages.length === 0 && (
+									<div className="mx-auto grid w-full max-w-3xl grid-cols-1 gap-2 py-6 sm:grid-cols-2">
+										{emptySuggestionKeys.map((key) => {
+											const label = t(key);
+											return (
+												<button
+													key={key}
+													type="button"
+													onClick={() =>
+														void handleSend(label, [], {
+															useWebSearch: false,
+															useAnyTxtSearch: false,
+														})
+													}
+													disabled={isStreaming || activeConversationRewindLocked}
+													className="rounded-md border border-border bg-background p-3 text-left text-sm leading-5 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+												>
+													{label}
+												</button>
+											);
+										})}
+									</div>
+								)}
 								{activeMessages.map((msg, idx) => {
 									// Check if this is the last assistant message
 									const isLastAssistant =
@@ -1099,7 +1178,7 @@ export function ChatPanel() {
 										/>
 									);
 								})}
-								{isStreaming && mode !== "agent" && (
+								{isStreaming && !streamingAgentMessageId && (
 									<StreamingMessage
 										content={streamingContent}
 										agentEvents={chatAgentEvents}
@@ -1124,51 +1203,15 @@ export function ChatPanel() {
 					</>
 				)}
 				<div className="border-t bg-muted/20 px-3 py-2">
-					<div className="flex flex-wrap items-center justify-between gap-2">
-						<div className="inline-flex max-w-full flex-wrap rounded-lg bg-muted p-0.5">
-							<ModeButton
-								active={mode === "chat"}
-								disabled={isStreaming}
-								onClick={() => setMode("chat")}
-							>
-								<MessageSquare className="h-3.5 w-3.5" />
-								{t("agent.mode.chat")}
-							</ModeButton>
-							<ModeButton
-								active={mode === "agent"}
-								disabled={isStreaming}
-								onClick={() => setMode("agent")}
-							>
-								<Bot className="h-3.5 w-3.5" />
-								{t("agent.mode.agent")}
-							</ModeButton>
-							<ModeButton
-								active={mode === "ingest"}
-								disabled={isStreaming}
-								onClick={() => setMode("ingest")}
-							>
-								<Upload className="h-3.5 w-3.5" />
-								{t("agent.mode.ingest")}
-							</ModeButton>
+					<div className="flex items-center justify-end">
+						<div
+							className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground"
+							title={t("chat.modelIndicator")}
+						>
+							<Bot className="h-3.5 w-3.5" />
+							<span className="truncate">{modelIndicator}</span>
+							<ChevronDown className="h-3.5 w-3.5" />
 						</div>
-						{mode === "agent" && (
-							<div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-								{project ? (
-									<>
-										<span className="truncate">
-											{t("agent.config.model")}: {llmConfig.model || "-"}
-										</span>
-										<span className="hidden sm:inline">·</span>
-										<span>
-											{t("agent.config.permissionPolicy")}:{" "}
-											{t("agent.config.defaultPolicy")}
-										</span>
-									</>
-								) : (
-									<span>{t("agent.config.noProject")}</span>
-								)}
-							</div>
-						)}
 					</div>
 				</div>
 				{agentStatusKey && (
@@ -1179,7 +1222,7 @@ export function ChatPanel() {
 						</div>
 					</div>
 				)}
-				{activeConversationId && mode !== "ingest" && (
+				{activeConversationId && ingestSource === null && (
 					<div className="border-t bg-muted/10 px-3 py-2">
 						<div className="flex flex-wrap items-center gap-2">
 							<Button
@@ -1217,15 +1260,8 @@ export function ChatPanel() {
 					onStop={handleStop}
 					isStreaming={isStreaming || activeConversationRewindLocked}
 					anyTxtAvailable={anyTxtAvailable}
-					imageInputAvailable={mode === "chat"}
-					showSearchToggles={mode === "chat"}
-					placeholder={
-						mode === "agent"
-							? t("agent.placeholder")
-							: mode === "ingest"
-								? t("chat.ingestPlaceholder")
-								: t("chat.typeAMessage")
-					}
+					imageInputAvailable={true}
+					placeholder={ingestSource ? t("chat.ingestPlaceholder") : t("chat.typeAMessage")}
 				/>
 			</div>
 		</div>

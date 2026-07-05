@@ -1,5 +1,6 @@
 import type { DisplayMessage } from "@/stores/chat-store";
 import { extractAgentTextContent } from "./agent-format";
+import { isAgentAssistantMessage } from "@/lib/agent/agent-summary";
 
 export const AGENT_RESUME_INTENT_OVERRIDE =
 	"[System: User's latest message is a correction or new topic. Do NOT continue previous pending actions. Treat the latest user message as the primary instruction.]";
@@ -56,9 +57,8 @@ export function buildAgentResumeIntentOverrideForConversation({
 		.reverse()
 		.find(
 			(message) =>
-				message.conversationId === conversationId
-				&& message.role === "assistant"
-				&& message.mode === "agent",
+				message.conversationId === conversationId &&
+				isAgentAssistantMessage(message),
 		);
 
 	return buildAgentResumeIntentOverride({

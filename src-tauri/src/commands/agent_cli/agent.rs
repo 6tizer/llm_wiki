@@ -149,6 +149,7 @@ pub struct AgentSpawnArgs {
     agent_profile_id: Option<String>,
     agent_profile_claim_id: Option<String>,
     permission_policy: Option<String>,
+    disallowed_tools: Option<Vec<String>>,
     project_id: Option<String>,
     project_path: Option<String>,
     api_server_base_url: Option<String>,
@@ -203,6 +204,7 @@ pub struct AgentRewindSessionArgs {
     agent_profile_auth_style: Option<String>,
     agent_profile_id: Option<String>,
     agent_profile_claim_id: Option<String>,
+    disallowed_tools: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -224,6 +226,8 @@ struct AgentRewindSessionRequest {
     base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_profile_auth_style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disallowed_tools: Option<Vec<String>>,
 }
 
 fn build_agent_rewind_session_request(args: AgentRewindSessionArgs) -> AgentRewindSessionRequest {
@@ -238,6 +242,7 @@ fn build_agent_rewind_session_request(args: AgentRewindSessionArgs) -> AgentRewi
         api_key: args.api_key,
         base_url: args.base_url,
         agent_profile_auth_style: args.agent_profile_auth_style,
+        disallowed_tools: args.disallowed_tools,
     }
 }
 
@@ -276,6 +281,8 @@ struct AgentRequestOptions {
     agent_profile_auth_style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disallowed_tools: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -364,6 +371,7 @@ fn build_agent_request(args: AgentSpawnArgs) -> AgentRequest {
             base_url: args.base_url,
             agent_profile_auth_style: args.agent_profile_auth_style,
             permission_policy: args.permission_policy,
+            disallowed_tools: args.disallowed_tools,
             project_id: args.project_id,
             project_path: args.project_path,
             api_server_base_url: args.api_server_base_url,
@@ -1126,6 +1134,7 @@ mod tests {
             agent_profile_id: None,
             agent_profile_claim_id: None,
             permission_policy: None,
+            disallowed_tools: None,
             project_id: None,
             project_path: None,
             api_server_base_url: None,
@@ -1178,6 +1187,26 @@ mod tests {
         assert!(options.get("intentOverride").is_none());
         assert!(options.get("title").is_none());
         assert!(options.get("apiKey").is_none());
+        assert!(options.get("disallowedTools").is_none());
+    }
+
+    #[test]
+    fn agent_request_serializes_disallowed_tools_as_camel_case() {
+        let args: AgentSpawnArgs = serde_json::from_value(serde_json::json!({
+            "streamId": "stream-1",
+            "prompt": "hello",
+            "disallowedTools": ["WebSearch", "WebFetch"],
+        }))
+        .unwrap();
+
+        let request = build_agent_request(args);
+        let value: Value = serde_json::to_value(request).unwrap();
+        let options = value.get("options").unwrap();
+
+        assert_eq!(
+            options.get("disallowedTools"),
+            Some(&serde_json::json!(["WebSearch", "WebFetch"]))
+        );
     }
 
     #[test]
@@ -1335,6 +1364,7 @@ mod tests {
         args.api_key = Some("test-key".to_string());
         args.base_url = Some("http://localhost:4000".to_string());
         args.permission_policy = Some("default".to_string());
+        args.disallowed_tools = Some(vec!["WebSearch".to_string(), "WebFetch".to_string()]);
         args.project_id = Some("project-1".to_string());
         args.project_path = Some("/tmp/wiki".to_string());
         args.api_server_base_url = Some("http://127.0.0.1:19828".to_string());
@@ -1398,6 +1428,10 @@ mod tests {
         assert_eq!(
             options.get("permissionPolicy").and_then(Value::as_str),
             Some("default")
+        );
+        assert_eq!(
+            options.get("disallowedTools"),
+            Some(&serde_json::json!(["WebSearch", "WebFetch"]))
         );
         assert_eq!(
             options.get("projectId").and_then(Value::as_str),
@@ -1514,8 +1548,8 @@ mod tests {
     /// orphans.
     #[cfg(unix)]
     #[tokio::test]
-    async fn agent_state_kill_all_terminates_multiple_wedged_streams_concurrently_without_orphans(
-    ) {
+    async fn agent_state_kill_all_terminates_multiple_wedged_streams_concurrently_without_orphans()
+    {
         const WEDGED_STREAM_COUNT: usize = 3;
         let state = AgentState::default();
         let mut descendant_pids = Vec::with_capacity(WEDGED_STREAM_COUNT);
@@ -1611,6 +1645,7 @@ mod tests {
             agent_profile_auth_style: None,
             agent_profile_id: None,
             agent_profile_claim_id: None,
+            disallowed_tools: None,
         }
     }
 
@@ -1650,6 +1685,7 @@ mod tests {
         assert!(value.get("apiKey").is_none());
         assert!(value.get("baseUrl").is_none());
         assert!(value.get("agentProfileAuthStyle").is_none());
+        assert!(value.get("disallowedTools").is_none());
     }
 
     #[test]
@@ -1661,12 +1697,15 @@ mod tests {
         args.api_key = Some("sk-test".to_string());
         args.base_url = Some("https://example.com".to_string());
         args.agent_profile_auth_style = Some("bearer".to_string());
+        args.disallowed_tools = Some(vec!["WebSearch".to_string(), "WebFetch".to_string()]);
 
         let request = build_agent_rewind_session_request(args);
         let value: Value = serde_json::to_value(request).unwrap();
 
         assert_eq!(
-            value.get("fallbackAssistantMessageId").and_then(Value::as_str),
+            value
+                .get("fallbackAssistantMessageId")
+                .and_then(Value::as_str),
             Some("assistant-uuid-1")
         );
         assert_eq!(value.get("cwd").and_then(Value::as_str), Some("/wiki"));
@@ -1682,6 +1721,10 @@ mod tests {
         assert_eq!(
             value.get("agentProfileAuthStyle").and_then(Value::as_str),
             Some("bearer")
+        );
+        assert_eq!(
+            value.get("disallowedTools"),
+            Some(&serde_json::json!(["WebSearch", "WebFetch"]))
         );
     }
 
@@ -1729,8 +1772,7 @@ const AGENT_GRACEFUL_KILL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 async fn kill_agent_stream(state: &AgentState, stream_id: &str) -> Result<(), String> {
     let stdin = {
         let map = state.children.lock().await;
-        map.get(stream_id)
-            .map(|process| Arc::clone(&process.stdin))
+        map.get(stream_id).map(|process| Arc::clone(&process.stdin))
     };
 
     if let Some(stdin) = stdin {

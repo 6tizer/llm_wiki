@@ -22,6 +22,7 @@ export function buildAgentTransportOptionsFromState({
   conversations,
   activeConversationId,
   resourceConfig,
+  disallowedTools,
 }: {
   project: WikiProject | null
   llmConfig: LlmConfig
@@ -29,6 +30,7 @@ export function buildAgentTransportOptionsFromState({
   conversations: Conversation[]
   activeConversationId: string | null
   resourceConfig: AgentResourceConfig
+  disallowedTools?: string[]
 }): AgentTransportOptions | null {
   if (!project) return null
   const activeConversation = conversations.find(
@@ -62,6 +64,7 @@ export function buildAgentTransportOptionsFromState({
     resumeSessionAt,
     persistSession: true,
     permissionPolicy: "default",
+    ...(disallowedTools ? { disallowedTools } : {}),
     enableWikiTools: true,
     enableWriteTools: true,
     enableFileCheckpointing: true,

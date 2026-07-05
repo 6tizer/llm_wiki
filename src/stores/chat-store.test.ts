@@ -11,8 +11,8 @@ function resetChatStore(): void {
     streamingConversationId: null,
     streamingAgentMessageId: null,
     streamingContent: "",
-    mode: "chat",
     ingestSource: null,
+    activeRunModelByConversation: {},
     maxHistoryMessages: 10,
     activeAgentPermissionRequest: null,
     queuedAgentPermissionRequests: [],
@@ -49,14 +49,6 @@ describe("chat store agent data model", () => {
     resetChatStore()
   })
 
-  it("defaults to chat mode and accepts agent mode", () => {
-    expect(useChatStore.getState().mode).toBe("chat")
-
-    useChatStore.getState().setMode("agent")
-
-    expect(useChatStore.getState().mode).toBe("agent")
-  })
-
   it("keeps addMessage backward compatible for ordinary messages", () => {
     const convId = useChatStore.getState().createConversation()
 
@@ -72,19 +64,11 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().messages[0].mode).toBeUndefined()
   })
 
-  it("stores images only for ordinary chat user messages", () => {
+  it("stores images only for user messages", () => {
     useChatStore.getState().createConversation()
     const image = { mediaType: "image/png", dataBase64: "AAAA" }
 
     useChatStore.getState().addMessage("user", "look", { images: [image] })
-    useChatStore.getState().addMessage("user", "agent", {
-      mode: "agent",
-      images: [image],
-    })
-    useChatStore.getState().addMessage("user", "ingest", {
-      mode: "ingest",
-      images: [image],
-    })
     useChatStore.getState().addMessage("assistant", "assistant", {
       images: [image],
     })
@@ -92,27 +76,16 @@ describe("chat store agent data model", () => {
     const messages = useChatStore.getState().messages
     expect(messages[0].images).toEqual([image])
     expect(messages[1].images).toBeUndefined()
-    expect(messages[2].images).toBeUndefined()
-    expect(messages[3].images).toBeUndefined()
   })
 
-  it("stores Chat Router options only for ordinary chat user messages", () => {
+  it("stores Chat Router options only for user messages", () => {
     useChatStore.getState().createConversation()
     const chatOptions = {
       useWebSearch: true,
       useAnyTxtSearch: true,
-      agentMode: "deep" as const,
     }
 
     useChatStore.getState().addMessage("user", "chat", { chatOptions })
-    useChatStore.getState().addMessage("user", "agent", {
-      mode: "agent",
-      chatOptions,
-    })
-    useChatStore.getState().addMessage("user", "ingest", {
-      mode: "ingest",
-      chatOptions,
-    })
     useChatStore.getState().addMessage("assistant", "assistant", {
       chatOptions,
     })
@@ -120,15 +93,12 @@ describe("chat store agent data model", () => {
     const messages = useChatStore.getState().messages
     expect(messages[0].chatOptions).toEqual(chatOptions)
     expect(messages[1].chatOptions).toBeUndefined()
-    expect(messages[2].chatOptions).toBeUndefined()
-    expect(messages[3].chatOptions).toBeUndefined()
   })
 
   it("stores agent metadata when addMessage receives options", () => {
     const convId = useChatStore.getState().createConversation()
 
     useChatStore.getState().addMessage("user", "run task", {
-      mode: "agent",
       agentSessionId: "session-1",
     })
 
@@ -136,9 +106,9 @@ describe("chat store agent data model", () => {
       role: "user",
       content: "run task",
       conversationId: convId,
-      mode: "agent",
       agentSessionId: "session-1",
     })
+    expect(useChatStore.getState().messages[0].mode).toBeUndefined()
   })
 
 	  it("keeps finalizeStream ordinary assistant output free of agent metadata", () => {
@@ -216,7 +186,6 @@ describe("chat store agent data model", () => {
       role: "assistant",
       content: "agent done",
       conversationId: convId,
-      mode: "agent",
       agentSessionId: "agent-session-1",
       costUsd: 0.12,
       inputTokens: 100,
@@ -227,6 +196,7 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().conversations[0].agentSessionId).toBe("agent-session-1")
     expect(useChatStore.getState().isStreaming).toBe(false)
     expect(useChatStore.getState().streamingContent).toBe("")
+    expect(useChatStore.getState().messages[0].mode).toBeUndefined()
   })
 
   it("forks only conversations with an agent session and marks fork pending", () => {
@@ -269,11 +239,27 @@ describe("chat store agent data model", () => {
       role: "assistant",
       content: "",
       conversationId: convId,
-      mode: "agent",
       agentSessionId: "session-1",
     })
+    expect(useChatStore.getState().messages[0].mode).toBeUndefined()
     expect(useChatStore.getState().isStreaming).toBe(true)
     expect(useChatStore.getState().streamingContent).toBe("")
+  })
+
+  it("tracks active run model per conversation", () => {
+    const convId = useChatStore.getState().createConversation()
+    const messageId = useChatStore.getState().startAgentStreamMessage()
+    if (!messageId) throw new Error("expected agent message")
+
+    expect(useChatStore.getState().activeRunModelByConversation[convId]).toBeNull()
+
+    useChatStore.getState().setActiveRunModel(convId, "claude-test")
+
+    expect(useChatStore.getState().activeRunModelByConversation[convId]).toBe("claude-test")
+
+    useChatStore.getState().finishAgentStreamMessage(messageId, "done")
+
+    expect(useChatStore.getState().activeRunModelByConversation[convId]).toBeNull()
   })
 
   it("updates one agent stream message without touching other messages", () => {

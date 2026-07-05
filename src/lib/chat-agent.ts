@@ -57,12 +57,9 @@ export interface ChatAgentProject {
   path: string
 }
 
-export type ChatAgentMode = "fast" | "standard" | "deep" | "local_first"
-
 export interface ChatAgentOptions {
   useWebSearch: boolean
   useAnyTxtSearch: boolean
-  mode?: ChatAgentMode
 }
 
 export interface ChatAgentDeps {
@@ -178,7 +175,6 @@ interface RetrievedContext {
 }
 
 const MAX_AGENT_ROUNDS = 3
-const MAX_DEEP_AGENT_ROUNDS = 5
 const MAX_TOOL_CONTEXT_CHARS = 48_000
 
 const CHAT_AGENT_TOOL_REGISTRY: ChatAgentToolDefinition[] = [
@@ -235,13 +231,11 @@ export function getChatAgentTools(args: {
   hasProject: boolean
   webSearchEnabled: boolean
   anyTxtSearchEnabled: boolean
-  mode?: ChatAgentMode
 }): ChatAgentToolDefinition[] {
   return CHAT_AGENT_TOOL_REGISTRY.filter((tool) => {
     if (tool.requiresProject && !args.hasProject) return false
-    if (tool.name === "web_search") return args.webSearchEnabled && args.mode !== "local_first"
+    if (tool.name === "web_search") return args.webSearchEnabled
     if (tool.name === "anytxt_search") return args.anyTxtSearchEnabled
-    if (tool.name === "project_file_read") return args.mode !== "fast"
     return true
   })
 }
@@ -266,7 +260,6 @@ export async function buildChatAgentMessages(input: ChatAgentInput): Promise<Cha
   throwIfAborted(input.signal)
   const deps = { searchWiki, webSearch, anyTxtSearchSmart, streamChat, ...input.deps }
   const projectPath = input.project ? normalizePath(input.project.path) : ""
-  const mode = input.options.mode ?? "standard"
   const searchConfig = resolveSearchConfig(input.searchApiConfig)
   const observations: ToolObservation[] = []
   const plan: ChatAgentDecision[] = []
@@ -276,7 +269,6 @@ export async function buildChatAgentMessages(input: ChatAgentInput): Promise<Cha
     hasProject: Boolean(input.project),
     webSearchEnabled: input.options.useWebSearch,
     anyTxtSearchEnabled: input.options.useAnyTxtSearch,
-    mode,
   })
   const direct = shouldBypassAgentPlanner(input.text)
     ?? (!input.project && !input.options.useWebSearch && !input.options.useAnyTxtSearch
@@ -301,7 +293,6 @@ export async function buildChatAgentMessages(input: ChatAgentInput): Promise<Cha
       projectContext,
       webSearchEnabled: input.options.useWebSearch,
       anyTxtSearchEnabled: input.options.useAnyTxtSearch,
-      mode,
       tools: enabledTools,
       signal: input.signal,
       streamChatImpl: deps.streamChat,
@@ -330,10 +321,9 @@ export async function buildChatAgentMessages(input: ChatAgentInput): Promise<Cha
       })
     }
 
-    const maxRounds = mode === "deep" ? MAX_DEEP_AGENT_ROUNDS : MAX_AGENT_ROUNDS
     for (
       let round = 0;
-      round < maxRounds && !["answer", "finish"].includes(plan[plan.length - 1]?.action ?? "");
+      round < MAX_AGENT_ROUNDS && !["answer", "finish"].includes(plan[plan.length - 1]?.action ?? "");
       round++
     ) {
       throwIfAborted(input.signal)
@@ -352,7 +342,6 @@ export async function buildChatAgentMessages(input: ChatAgentInput): Promise<Cha
             projectContext,
             webSearchEnabled: input.options.useWebSearch,
             anyTxtSearchEnabled: input.options.useAnyTxtSearch,
-            mode,
             signal: input.signal,
             streamChatImpl: deps.streamChat,
           })
@@ -494,7 +483,6 @@ async function decideNextAction(args: {
   projectContext?: ProjectPromptContext
   webSearchEnabled: boolean
   anyTxtSearchEnabled: boolean
-  mode: ChatAgentMode
   signal?: AbortSignal
   streamChatImpl: typeof streamChat
 }): Promise<ChatAgentDecision> {
@@ -510,9 +498,6 @@ async function decideNextAction(args: {
     "- Use project_files before project_file_read when a file/page name is fuzzy.",
     "- Use graph_search for relationships, dependencies, links, entities, concepts, clusters, or graph questions.",
     "- Respect enabled external sources. Never choose external_search if no external source is enabled.",
-    "- local_first prefers project_files, project_file_read, wiki_search, or graph_search.",
-    "- fast avoids multi-step file inspection.",
-    "- deep may use multiple tools when broader evidence is needed.",
     "- If observations are enough, choose finish.",
     "Enabled tools:",
     toolDescriptions,
@@ -522,7 +507,6 @@ async function decideNextAction(args: {
     `Local wiki available: ${args.hasProject ? "yes" : "no"}`,
     `Web Search enabled: ${args.webSearchEnabled ? "yes" : "no"}`,
     `AnyTXT Search enabled: ${args.anyTxtSearchEnabled ? "yes" : "no"}`,
-    `Agent mode: ${args.mode}`,
     `Query understanding: ${JSON.stringify(args.understanding)}`,
     formatProjectContextForRouting(args.projectContext),
     formatHistory(args.historyMessages, 6, 1200),
@@ -545,7 +529,6 @@ async function understandUserQuery(args: {
   projectContext?: ProjectPromptContext
   webSearchEnabled: boolean
   anyTxtSearchEnabled: boolean
-  mode: ChatAgentMode
   tools: ChatAgentToolDefinition[]
   signal?: AbortSignal
   streamChatImpl: typeof streamChat
@@ -560,8 +543,6 @@ async function understandUserQuery(args: {
     "- Use kb_search for local wiki/project/document questions.",
     "- Use graph for relationship/entity/connection questions.",
     "- Use external for current facts, public docs, web pages, versions, pricing, or local files outside the wiki when enabled.",
-    "- In local_first mode, set needsWiki=true for any topic plausibly covered by the project.",
-    "- In deep mode, prefer mixed when both local and external evidence could help.",
     "Enabled tools:",
     toolDescriptions,
   ].join("\n")
@@ -569,7 +550,6 @@ async function understandUserQuery(args: {
     `Local wiki available: ${args.hasProject ? "yes" : "no"}`,
     `Web Search enabled: ${args.webSearchEnabled ? "yes" : "no"}`,
     `AnyTXT Search enabled: ${args.anyTxtSearchEnabled ? "yes" : "no"}`,
-    `Agent mode: ${args.mode}`,
     formatProjectContextForRouting(args.projectContext),
     formatHistory(args.historyMessages, 6, 1000),
     `Current user message:\n${args.text}`,

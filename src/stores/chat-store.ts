@@ -11,7 +11,7 @@ import type {
 import i18n from "@/i18n"
 import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
 import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
-import type { ChatAgentMode, ChatAgentStep } from "@/lib/chat-agent"
+import type { ChatAgentStep } from "@/lib/chat-agent"
 
 export interface Conversation {
   id: string
@@ -48,7 +48,6 @@ export interface MessageImage {
 export interface ChatMessageOptions {
   useWebSearch: boolean
   useAnyTxtSearch: boolean
-  agentMode: ChatAgentMode
 }
 
 export interface DisplayMessage {
@@ -133,7 +132,6 @@ export interface AgentRewindRequestRecord {
 }
 
 interface AddMessageOptions {
-  mode?: DisplayMessage["mode"]
   agentSessionId?: string
   references?: MessageReference[]
   images?: MessageImage[]
@@ -180,8 +178,8 @@ interface ChatState {
   streamingConversationId: string | null
   streamingAgentMessageId: string | null
   streamingContent: string
-  mode: "chat" | "agent" | "ingest"
   ingestSource: string | null
+  activeRunModelByConversation: Record<string, string | null>
   maxHistoryMessages: number
   activeAgentPermissionRequest: AgentPermissionRequestRecord | null
   queuedAgentPermissionRequests: AgentPermissionRequestRecord[]
@@ -259,8 +257,8 @@ interface ChatState {
     conversationId: string,
     decision?: AgentPermissionDecision
   ) => void
-  setMode: (mode: ChatState["mode"]) => void
   setIngestSource: (path: string | null) => void
+  setActiveRunModel: (conversationId: string, model: string | null) => void
   clearMessages: () => void
   setMaxHistoryMessages: (n: number) => void
   removeLastAssistantMessage: () => void  // for regenerate: remove last assistant reply
@@ -365,8 +363,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingConversationId: null,
   streamingAgentMessageId: null,
   streamingContent: "",
-  mode: "chat",
   ingestSource: null,
+  activeRunModelByConversation: {},
   maxHistoryMessages: 10,
   activeAgentPermissionRequest: null,
   queuedAgentPermissionRequests: [],
@@ -442,6 +440,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : state.activeConversationId
       const nextRewindLocks = { ...state.agentRewindLocks }
       delete nextRewindLocks[id]
+      const nextActiveRunModel = { ...state.activeRunModelByConversation }
+      delete nextActiveRunModel[id]
       const nextRewindRequests = { ...state.agentRewindRequestsByConversation }
       delete nextRewindRequests[id]
       return withPresentations(state, {
@@ -450,6 +450,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         activeConversationId: newActiveId,
         agentRewindTargets: nextRewindTargets,
         agentRewindLocks: nextRewindLocks,
+        activeRunModelByConversation: nextActiveRunModel,
         agentPermissionRequestsByConversation: nextPermissionRequests,
         agentRewindRequestsByConversation: nextRewindRequests,
       })
@@ -475,14 +476,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const { activeConversationId, conversations } = state
       if (!activeConversationId) return state
 
-      const images =
-        role === "user" && (options?.mode === undefined || options.mode === "chat")
-          ? options?.images?.filter(Boolean)
-          : undefined
-      const chatOptions =
-        role === "user" && (options?.mode === undefined || options.mode === "chat")
-          ? options?.chatOptions
-          : undefined
+      const images = role === "user" ? options?.images?.filter(Boolean) : undefined
+      const chatOptions = role === "user" ? options?.chatOptions : undefined
       const newMessage: DisplayMessage = {
         id: nextId(),
         role,
@@ -490,7 +485,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: Date.now(),
         conversationId: activeConversationId,
         references: options?.references,
-        mode: options?.mode,
         agentSessionId: options?.agentSessionId,
         ...(images && images.length > 0 ? { images } : {}),
         ...(chatOptions ? { chatOptions } : {}),
@@ -605,7 +599,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content,
         timestamp: Date.now(),
         conversationId: targetId,
-        mode: "agent",
         agentSessionId: stats?.agentSessionId,
         costUsd: stats?.costUsd,
         inputTokens: stats?.inputTokens,
@@ -619,6 +612,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingConversationId: null,
         streamingAgentMessageId: null,
         streamingContent: "",
+        activeRunModelByConversation: {
+          ...state.activeRunModelByConversation,
+          [targetId]: null,
+        },
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
           c.id === targetId
@@ -657,7 +654,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: "",
         timestamp: Date.now(),
         conversationId: activeConversationId,
-        mode: "agent",
         agentSessionId: options?.agentSessionId,
       }
 
@@ -666,6 +662,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingConversationId: activeConversationId,
         streamingAgentMessageId: messageId,
         streamingContent: "",
+        activeRunModelByConversation: {
+          ...state.activeRunModelByConversation,
+          [activeConversationId]: null,
+        },
         messages: [...state.messages, newMessage],
         conversations: conversations.map((c) =>
           c.id === activeConversationId
@@ -703,12 +703,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         streamingConversationId: finishesCurrentStream ? null : state.streamingConversationId,
         streamingAgentMessageId: finishesCurrentStream ? null : state.streamingAgentMessageId,
         streamingContent: finishesCurrentStream ? "" : state.streamingContent,
+        activeRunModelByConversation:
+          targetConversationId && finishesCurrentStream
+            ? {
+                ...state.activeRunModelByConversation,
+                [targetConversationId]: null,
+              }
+            : state.activeRunModelByConversation,
         messages: state.messages.map((m) =>
           m.id === messageId
             ? {
                 ...m,
                 content: options?.agentErrorKind ? "" : content,
-                mode: "agent" as const,
                 agentSessionId: stats?.agentSessionId ?? m.agentSessionId,
                 costUsd: stats?.costUsd,
                 inputTokens: stats?.inputTokens,
@@ -1038,9 +1044,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
   },
 
-  setMode: (mode) => set({ mode }),
-
   setIngestSource: (ingestSource) => set({ ingestSource }),
+
+  setActiveRunModel: (conversationId, model) =>
+    set((state) => ({
+      activeRunModelByConversation: {
+        ...state.activeRunModelByConversation,
+        [conversationId]: model,
+      },
+    })),
 
   clearMessages: () =>
     set((state) => ({
@@ -1076,8 +1088,9 @@ export function chatMessagesToLLM(messages: DisplayMessage[]): ChatMessage[] {
   return messages
     .filter((m) => !isCompactOnlyAgentMessage(m))
     .map((m) => {
-      const isNormalChat = m.role === "user" && (m.mode === undefined || m.mode === "chat")
-      if (!isNormalChat || !m.images || m.images.length === 0) {
+      const canSendImages =
+        m.role === "user" && (m.mode === undefined || m.mode === "chat")
+      if (!canSendImages || !m.images || m.images.length === 0) {
         return {
           role: m.role,
           content: m.content,

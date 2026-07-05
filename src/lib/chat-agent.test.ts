@@ -44,13 +44,12 @@ describe("chat agent router", () => {
     fsMock.files.clear()
   })
 
-  it("filters tools by project availability, external toggles, and mode", () => {
+  it("filters tools by project availability and source toggles", () => {
     expect(
       getChatAgentTools({
         hasProject: false,
         webSearchEnabled: true,
         anyTxtSearchEnabled: true,
-        mode: "standard",
       }).map((tool) => tool.name),
     ).toEqual(["web_search", "anytxt_search"])
 
@@ -59,18 +58,36 @@ describe("chat agent router", () => {
         hasProject: true,
         webSearchEnabled: true,
         anyTxtSearchEnabled: true,
-        mode: "fast",
       }).map((tool) => tool.name),
-    ).not.toContain("project_file_read")
+    ).toEqual([
+      "project_files",
+      "project_file_read",
+      "wiki_search",
+      "graph_search",
+      "web_search",
+      "anytxt_search",
+    ])
 
     expect(
       getChatAgentTools({
         hasProject: true,
-        webSearchEnabled: true,
+        webSearchEnabled: false,
         anyTxtSearchEnabled: false,
-        mode: "local_first",
       }).map((tool) => tool.name),
     ).not.toContain("web_search")
+  })
+
+  it("ignores legacy four-level mode fields when selecting tools", () => {
+    const toolNames = getChatAgentTools({
+      hasProject: true,
+      webSearchEnabled: true,
+      anyTxtSearchEnabled: false,
+      agentMode: "deep",
+      mode: "local_first",
+    } as unknown as Parameters<typeof getChatAgentTools>[0]).map((tool) => tool.name)
+
+    expect(toolNames).toContain("project_file_read")
+    expect(toolNames).toContain("web_search")
   })
 
   it("bypasses retrieval for greetings and short follow-ups", () => {
@@ -114,7 +131,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: false,
         useAnyTxtSearch: false,
-        mode: "standard",
       },
       deps: { streamChat },
     })
@@ -145,7 +161,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: false,
         useAnyTxtSearch: false,
-        mode: "standard",
       },
       deps: { streamChat, searchWiki },
     })
@@ -199,7 +214,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: true,
         useAnyTxtSearch: false,
-        mode: "standard",
       },
       deps: { streamChat, searchWiki, webSearch },
     })
@@ -270,7 +284,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: true,
         useAnyTxtSearch: false,
-        mode: "standard",
       },
       signal: controller.signal,
       deps: { streamChat, webSearch },
@@ -334,7 +347,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: false,
         useAnyTxtSearch: true,
-        mode: "standard",
       },
       signal: controller.signal,
       deps: { streamChat, anyTxtSearchSmart },
@@ -356,7 +368,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: false,
         useAnyTxtSearch: false,
-        mode: "deep",
       },
       deps: { streamChat },
     })
@@ -417,7 +428,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: false,
         useAnyTxtSearch: false,
-        mode: "standard",
       },
       deps: { streamChat, searchWiki },
     })
@@ -475,7 +485,6 @@ describe("chat agent router", () => {
       options: {
         useWebSearch: false,
         useAnyTxtSearch: false,
-        mode: "standard",
       },
       deps: { streamChat, searchWiki },
     })

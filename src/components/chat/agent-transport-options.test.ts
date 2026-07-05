@@ -89,6 +89,33 @@ describe("buildAgentTransportOptionsFromState", () => {
     expect(options?.maxFilesChangedEnabled).toBe(true)
   })
 
+  it("threads disallowed tools through to transport options", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [],
+      activeConversationId: null,
+      resourceConfig: DEFAULT_AGENT_RESOURCE_CONFIG,
+      disallowedTools: ["WebSearch", "WebFetch"],
+    })
+
+    expect(options?.disallowedTools).toEqual(["WebSearch", "WebFetch"])
+  })
+
+  it("omits disallowed tools when none are requested", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [],
+      activeConversationId: null,
+      resourceConfig: DEFAULT_AGENT_RESOURCE_CONFIG,
+    })
+
+    expect(options).not.toHaveProperty("disallowedTools")
+  })
+
   it("does not fork without a resume session", () => {
     const options = buildAgentTransportOptionsFromState({
       project: { id: "project-1", name: "Wiki", path: "/wiki" },

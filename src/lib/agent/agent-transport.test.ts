@@ -194,6 +194,67 @@ describe("streamAgent", () => {
 		await stream;
 	});
 
+	it("threads disallowedTools into the agent_spawn payload when provided", async () => {
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent(
+			"run agent",
+			{
+				apiKey: "test-key",
+				disallowedTools: ["WebSearch", "WebFetch"],
+			},
+			callbacks,
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
+		});
+		const payload = latestAgentSpawnPayload();
+		expect(payload.args.disallowedTools).toEqual(["WebSearch", "WebFetch"]);
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+	});
+
+	it("omits disallowedTools from the agent_spawn payload when web tools are allowed", async () => {
+		const callbacks = {
+			onStreamStart: vi.fn(),
+			onMessage: vi.fn(),
+			onToken: vi.fn(),
+			onDone: vi.fn(),
+			onError: vi.fn(),
+		};
+
+		const stream = streamAgent("run agent", { apiKey: "test-key" }, callbacks);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_spawn",
+				expect.anything(),
+			);
+		});
+		const payload = latestAgentSpawnPayload();
+		expect(payload.args.disallowedTools).toBeUndefined();
+
+		tauriMocks.emit(`agent:${payload.args.streamId}:done`, {
+			code: 0,
+			stderr: "",
+		});
+		await stream;
+	});
+
 	it("keeps the legacy Agent config path when runtime profile pool is disabled", async () => {
 		const callbacks = {
 			onStreamStart: vi.fn(),

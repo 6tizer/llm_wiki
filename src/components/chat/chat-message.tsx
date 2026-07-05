@@ -32,7 +32,7 @@ import { AgentBlockList } from "./agent-block-list"
 import { AgentCostCard, hasAgentCostData } from "./agent-cost-card"
 import { extractAgentTextContent } from "./agent-format"
 import { AgentToolTimeline } from "./agent-tool-timeline"
-import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
+import { isAgentAssistantMessage, isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
 import type { ChatAgentEvent, ChatAgentStep } from "@/lib/chat-agent"
 
 // Module-level cache of source file names
@@ -87,7 +87,7 @@ function ChatMessageImpl({
   const isUser = message.role === "user"
   const isSystem = message.role === "system"
   const isAssistant = message.role === "assistant"
-  const isAgent = isAssistant && message.mode === "agent"
+  const isAgent = isAgentAssistantMessage(message)
   const isAgentError = isAgent && Boolean(message.agentErrorKind)
   const hasAgentBlocks = isAgent && (message.agentBlocks?.length ?? 0) > 0
   const content = message.content ?? ""

@@ -32,6 +32,7 @@ export interface AgentRequest {
 		persistSession?: boolean;
 		title?: string;
 		allowedTools?: string[];
+		disallowedTools?: string[];
 		permissionPolicy?:
 			| "default"
 			| "restricted"

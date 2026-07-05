@@ -66,8 +66,8 @@ describe("resetProjectState — Zustand stores", () => {
       streamingConversationId: "c1",
       streamingAgentMessageId: "m2",
       streamingContent: "partial",
-      mode: "ingest",
       ingestSource: "/some/file",
+      activeRunModelByConversation: { c1: "claude-test" },
       agentRewindLocks: { c1: true },
     })
 
@@ -81,8 +81,8 @@ describe("resetProjectState — Zustand stores", () => {
     expect(chat.streamingConversationId).toBeNull()
     expect(chat.streamingAgentMessageId).toBeNull()
     expect(chat.streamingContent).toBe("")
-    expect(chat.mode).toBe("chat")
     expect(chat.ingestSource).toBeNull()
+    expect(chat.activeRunModelByConversation).toEqual({})
     expect(chat.agentRewindLocks).toEqual({})
   })
 

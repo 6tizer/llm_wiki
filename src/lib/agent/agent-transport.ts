@@ -62,6 +62,7 @@ type InvokePayload = Record<string, unknown> & {
 	agentProfileId?: string;
 	agentProfileClaimId?: string;
 	permissionPolicy?: AgentPermissionPolicy;
+	disallowedTools?: string[];
 	projectId?: string;
 	projectPath?: string;
 	apiServerBaseUrl?: string;
@@ -142,7 +143,7 @@ function agentRunCapabilitySupported(profile: RuntimeProfileRecord): boolean {
 	}
 }
 
-function hasAgentRunProfileCandidate(profile: RuntimeProfileRecord): boolean {
+export function hasAgentRunProfileCandidate(profile: RuntimeProfileRecord): boolean {
 	return profile.enabled
 		&& profile.kind === "agent-run"
 		&& profile.taskFamilies.includes("agent")

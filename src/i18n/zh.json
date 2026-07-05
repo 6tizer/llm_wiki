@@ -175,12 +175,14 @@
     "typeAMessage": "输入消息...",
     "useWebSearch": "网页搜索",
     "useAnyTxtSearch": "AnyTXT 搜索",
-    "agentMode": "对话模式",
-    "agentModes": {
-      "fast": "快速",
-      "standard": "标准",
-      "deep": "深入",
-      "localFirst": "本地优先"
+    "webSearchOffHint": "关闭后不访问网络。",
+    "modelAuto": "自动",
+    "modelIndicator": "模型路由",
+    "emptySuggestions": {
+      "brokenLinks": "检查 wiki 中的失效链接",
+      "recentSources": "总结最近导入的资料",
+      "topicOverview": "为 X 主题建一页综述",
+      "findGaps": "找出这个 wiki 的缺口"
     },
     "agentStages": {
       "understanding": "理解问题",
