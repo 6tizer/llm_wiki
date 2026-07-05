@@ -43,7 +43,11 @@ function apiModeFromResolvedConfig(
   return defaultApiModeForProvider(presetId)
 }
 
-export function ProviderMigrationBanner() {
+interface Props {
+  onMigrated?: () => void
+}
+
+export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
   const { t } = useTranslation()
   const providerConfigs = useWikiStore((s) => s.providerConfigs)
   const activePresetId = useWikiStore((s) => s.activePresetId)
@@ -127,6 +131,7 @@ export function ProviderMigrationBanner() {
         ? { kind: "ready", profiles: [...current.profiles, saved] }
         : current)
       setMessage(t("settings.sections.modelConfig.migration.created"))
+      onMigrated?.()
     } catch (error) {
       setMessage(t("settings.sections.modelConfig.migration.failed", { message: errorMessage(error) }))
     } finally {

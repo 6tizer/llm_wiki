@@ -14,7 +14,11 @@ import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/l
 import { persistMany } from "@/lib/store-helpers"
 import { ProviderMigrationBanner } from "./provider-migration-banner"
 
-export function LlmProviderSection() {
+interface LlmProviderSectionProps {
+  onMigrated?: () => void
+}
+
+export function LlmProviderSection({ onMigrated }: LlmProviderSectionProps = {}) {
   const { t } = useTranslation()
   const providerConfigs = useWikiStore((s) => s.providerConfigs)
   const setProviderConfigs = useWikiStore((s) => s.setProviderConfigs)
@@ -132,7 +136,7 @@ export function LlmProviderSection() {
         </p>
       </div>
 
-      <ProviderMigrationBanner />
+      <ProviderMigrationBanner onMigrated={onMigrated} />
 
       <div className="space-y-2">
         {LLM_PRESETS.map((preset) => (
