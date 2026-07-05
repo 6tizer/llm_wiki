@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
-import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown, ListTodo } from "lucide-react"
+import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown, ListTodo, MessageSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -19,6 +19,7 @@ import {
   importSourceFolder,
 } from "@/lib/source-lifecycle"
 import { runBulkKnowledgePrepare } from "@/lib/parallel-knowledge/bulk-prepare-driver"
+import { startIngest } from "@/lib/ingest"
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
@@ -30,16 +31,19 @@ export function SourcesView() {
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setFileTree = useWikiStore((s) => s.setFileTree)
+  const setActiveView = useWikiStore((s) => s.setActiveView)
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const sourceWatchConfig = useWikiStore((s) => s.sourceWatchConfig)
   const dataVersion = useWikiStore((s) => s.dataVersion)
   const [sources, setSources] = useState<FileNode[]>([])
   const [importing, setImporting] = useState(false)
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
+  const [discussingPath, setDiscussingPath] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [planningRuntime, setPlanningRuntime] = useState(false)
   const [runtimePlanError, setRuntimePlanError] = useState<string | null>(null)
+  const mountedRef = useRef(true)
   const sourceFilePaths = useMemo(() => collectSourceFilePaths(sources), [sources])
   const sourceFileCount = sourceFilePaths.length
   /**
@@ -54,6 +58,12 @@ export function SourcesView() {
    *      anchored here is the right scope.
    */
   const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null)
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // Auto-disarm: 5 seconds without a second click resets the
   // pending state. Prevents a stale armed button from firing if
@@ -318,6 +328,19 @@ export function SourcesView() {
     }
   }
 
+  async function handleDiscuss(node: FileNode) {
+    if (!project || discussingPath) return
+    setDiscussingPath(node.path)
+    setActiveView("wiki")
+    try {
+      await startIngest(project.path, node.path, llmConfig)
+    } catch (err) {
+      console.error("Failed to start source discussion:", err)
+    } finally {
+      if (mountedRef.current) setDiscussingPath(null)
+    }
+  }
+
   return (
     <TooltipProvider delay={300}>
       <div className="flex h-full flex-col">
@@ -406,11 +429,13 @@ export function SourcesView() {
               nodes={sources}
               onOpen={handleOpenSource}
               onIngest={handleIngest}
+              onDiscuss={handleDiscuss}
               onDelete={handleDelete}
               onDeleteFolder={handleDeleteFolder}
               pendingDeletePath={pendingDeletePath}
               setPendingDeletePath={setPendingDeletePath}
               ingestingPath={ingestingPath}
+              discussingPath={discussingPath}
             />
           </div>
         )}
@@ -511,15 +536,18 @@ function SourceTree({
   nodes,
   onOpen,
   onIngest,
+  onDiscuss,
   onDelete,
   onDeleteFolder,
   pendingDeletePath,
   setPendingDeletePath,
   ingestingPath,
+  discussingPath,
 }: {
   nodes: FileNode[]
   onOpen: (node: FileNode) => void
   onIngest: (node: FileNode) => void
+  onDiscuss: (node: FileNode) => void
   onDelete: (node: FileNode) => void
   onDeleteFolder: (node: FileNode) => void
   /** Path of the node currently in "click again to confirm" state.
@@ -529,6 +557,7 @@ function SourceTree({
   pendingDeletePath: string | null
   setPendingDeletePath: (path: string | null) => void
   ingestingPath: string | null
+  discussingPath: string | null
 }) {
   const { t } = useTranslation()
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -646,6 +675,16 @@ function SourceTree({
               onClick={() => onIngest(node)}
             >
               <BookOpen className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              title={t("sources.discuss")}
+              disabled={discussingPath === node.path}
+              onClick={() => onDiscuss(node)}
+            >
+              <MessageSquare className="h-4 w-4" />
             </Button>
             <DeleteButton
               isPending={isPendingDelete}

@@ -1,5 +1,6 @@
 import { saveChatHistory } from "@/lib/persist"
 import { useChatStore, type AgentRewindRequestRecord } from "@/stores/chat-store"
+import { cancelAgentChatRunJobByStreamId } from "./agent-chat-run-job"
 import { computeAgentRewindGateDecision, type AgentRewindGateDecision } from "./agent-rewind-gate"
 import { rewindAgentFiles, rewindAgentSession } from "./agent-transport"
 import type { AgentRewindFilesPayload, AgentTransportOptions } from "./agent-types"
@@ -149,6 +150,7 @@ export async function runAgentRewind(args: {
       // at all — this must surface as an explicit half-state, not success.
       return { status: "state_mismatch", payload }
     }
+    cancelAgentChatRunJobByStreamId(target.streamId, "rewind")
 
     if (!projectPath) {
       return {

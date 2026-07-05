@@ -8,6 +8,7 @@ import {
 	Plus,
 	Trash2,
 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
 	useCallback,
 	useEffect,
@@ -26,6 +27,10 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue";
+import {
+	startAgentChatRunJob,
+	type AgentChatRunJobController,
+} from "@/lib/agent/agent-chat-run-job";
 import { isAgentAssistantMessage } from "@/lib/agent/agent-summary";
 import {
 	cleanupLegacyPendingQaStorage,
@@ -47,9 +52,10 @@ import type {
 	AgentRewindFilesPayload,
 } from "@/lib/agent/agent-types";
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
-import { executeIngestWrites } from "@/lib/ingest";
+import { executeIngestWrites, startIngest } from "@/lib/ingest";
 import { streamChat } from "@/lib/llm-client";
 import { normalizePath } from "@/lib/path-utils";
+import { SOURCE_WATCH_FILE_TYPE_GROUPS } from "@/lib/source-watch-config";
 import { buildChatAgentMessages, type ChatAgentEvent } from "@/lib/chat-agent";
 import {
 	chatMessagesToLLM,
@@ -75,6 +81,10 @@ import { ChatInput, type ChatSendOptions } from "./chat-input";
 import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message";
 // Store the page mapping from the last query so SourceFilesBar can show which pages were cited
 export let lastQueryPages: { title: string; path: string }[] = [];
+const DOCUMENT_DIALOG_EXTENSIONS = [
+	...new Set(SOURCE_WATCH_FILE_TYPE_GROUPS.flatMap((group) => group.extensions)),
+];
+
 function formatDate(timestamp: number): string {
 	const d = new Date(timestamp);
 	const now = new Date();
@@ -481,10 +491,14 @@ export function ChatPanel() {
 	const searchApiConfig = useWikiStore((s) => s.searchApiConfig);
 	const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt);
 	const setFileTree = useWikiStore((s) => s.setFileTree);
+	const setActiveView = useWikiStore((s) => s.setActiveView);
 	const abortRef = useRef<AbortController | null>(null);
+	const agentRunJobRef = useRef<AgentChatRunJobController | null>(null);
 	// Abort any in-flight agent/LLM stream on unmount to prevent stale callbacks
 	useEffect(() => {
 		return () => {
+			agentRunJobRef.current?.cancel("unmount");
+			agentRunJobRef.current = null;
 			abortRef.current?.abort();
 		};
 	}, []);
@@ -572,6 +586,7 @@ export function ChatPanel() {
 			let settled = false;
 			let streamId: string | undefined;
 			let sawSessionCompact = false;
+			let runJob: AgentChatRunJobController | null = null;
 
 			const finishAgentError = (kind: AgentErrorKind, detail?: string) => {
 				if (settled) return;
@@ -595,6 +610,9 @@ export function ChatPanel() {
 				);
 				if (finishesCurrent) {
 					abortRef.current = null;
+					if (agentRunJobRef.current === runJob) {
+						agentRunJobRef.current = null;
+					}
 					setAgentRunPhase("idle");
 				}
 			};
@@ -633,29 +651,52 @@ export function ChatPanel() {
 				finishAgentStreamMessage(messageId, content, stats);
 				if (finishesCurrent) {
 					abortRef.current = null;
+					if (agentRunJobRef.current === runJob) {
+						agentRunJobRef.current = null;
+					}
 					setAgentRunPhase("idle");
 				}
 			};
 
-			const markAgentRunning = () => {
-				setAgentRunPhase((phase) => (phase === "idle" ? phase : "running"));
-			};
+				const markAgentRunning = () => {
+					setAgentRunPhase((phase) => (phase === "idle" ? phase : "running"));
+				};
+				const heartbeatRunJob = () => {
+					const job = runJob;
+					if (job) job.heartbeat();
+				};
+				const completeRunJob = () => {
+					const job = runJob;
+					if (job) job.complete();
+				};
+				const failRunJob = (error: unknown) => {
+					const job = runJob;
+					if (job) job.fail(error);
+				};
 
-			try {
+				try {
 				await streamAgent(
 					text,
 					transportOptions,
 					{
 						onStreamStart: (id) => {
 							streamId = id;
-						},
-						onToken: (token) => {
-							markAgentRunning();
-							accumulated += token;
-							updateAgentStreamMessage(messageId, { content: accumulated });
-						},
-						onMessage: (message) => {
-							markAgentRunning();
+							runJob = startAgentChatRunJob({
+								conversationId: convId,
+								streamId: id,
+								title: text,
+							});
+							agentRunJobRef.current = runJob;
+							},
+							onToken: (token) => {
+								markAgentRunning();
+								heartbeatRunJob();
+								accumulated += token;
+								updateAgentStreamMessage(messageId, { content: accumulated });
+							},
+							onMessage: (message) => {
+								markAgentRunning();
+								heartbeatRunJob();
 							if (isSdkUserMessage(message) && message.uuid) {
 								markAgentMessageRewindable(messageId, {
 									streamId,
@@ -674,16 +715,18 @@ export function ChatPanel() {
 								agentSessionId: message.session_id,
 								assistantMessageId: message.uuid,
 							});
-						},
-						onDone: (result) => {
-							markAgentRunning();
-							const stats = agentResultToStats(result);
+							},
+							onDone: (result) => {
+								markAgentRunning();
+								completeRunJob();
+								const stats = agentResultToStats(result);
 							const finalContent =
 								accumulated || (sawSessionCompact ? "" : result?.result || "");
 							finishAgentMessage(finalContent, stats);
-						},
-						onError: (err) => {
-							const kind = agentErrorKindFromError(err);
+							},
+							onError: (err) => {
+								failRunJob(err);
+								const kind = agentErrorKindFromError(err);
 							finishAgentError(kind, err.message);
 						},
 						onToolEvent: (event) => {
@@ -768,9 +811,10 @@ export function ChatPanel() {
 					},
 					controller.signal,
 				);
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				const kind = agentErrorKindFromError(err);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					failRunJob(err);
+					const kind = agentErrorKindFromError(err);
 				finishAgentError(kind, message);
 			}
 		},
@@ -1027,6 +1071,8 @@ export function ChatPanel() {
 	const handleStop = useCallback(() => {
 		const streamingConversationId =
 			useChatStore.getState().streamingConversationId;
+		agentRunJobRef.current?.cancel("stopped");
+		agentRunJobRef.current = null;
 		abortRef.current?.abort();
 		abortRef.current = null;
 		setAgentRunPhase("idle");
@@ -1041,6 +1087,43 @@ export function ChatPanel() {
 			});
 		}
 	}, [clearAgentPermissionRequestsForConversation, setStreaming, t]);
+	const handleDocumentDiscussion = useCallback(async (sourcePath: string) => {
+		if (!project || isStreaming) return;
+		const controller = new AbortController();
+		abortRef.current = controller;
+		setActiveView("wiki");
+		try {
+			await startIngest(project.path, sourcePath, llmConfig, controller.signal);
+		} catch (err) {
+			if (!isAbortLikeError(err)) {
+				console.error("Failed to start document discussion:", err);
+			}
+		} finally {
+			if (abortRef.current === controller) {
+				abortRef.current = null;
+			}
+		}
+	}, [isStreaming, llmConfig, project, setActiveView]);
+	const handlePickDocument = useCallback(async () => {
+		if (!project || isStreaming) return;
+		const selected = await open({
+			multiple: false,
+			title: t("chat.attachDocument"),
+			filters: [
+				{
+					name: "Documents",
+					extensions: DOCUMENT_DIALOG_EXTENSIONS,
+				},
+			],
+		});
+		if (!selected || typeof selected !== "string") return;
+		await handleDocumentDiscussion(selected);
+	}, [handleDocumentDiscussion, isStreaming, project, t]);
+	const handleDropDocuments = useCallback((paths: string[]) => {
+		const [sourcePath] = paths;
+		if (!sourcePath) return;
+		void handleDocumentDiscussion(sourcePath);
+	}, [handleDocumentDiscussion]);
 	const handleRegenerate = useCallback(async () => {
 		if (isStreaming) return;
 		// Find the last user message in active conversation
@@ -1261,6 +1344,8 @@ export function ChatPanel() {
 					isStreaming={isStreaming || activeConversationRewindLocked}
 					anyTxtAvailable={anyTxtAvailable}
 					imageInputAvailable={true}
+					onPickDocument={handlePickDocument}
+					onDropDocuments={handleDropDocuments}
 					placeholder={ingestSource ? t("chat.ingestPlaceholder") : t("chat.typeAMessage")}
 				/>
 			</div>

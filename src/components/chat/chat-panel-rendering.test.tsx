@@ -18,6 +18,15 @@ const streamChatMock = vi.hoisted(() => vi.fn())
 const streamAgentMock = vi.hoisted(() => vi.fn())
 const deleteFileMock = vi.hoisted(() => vi.fn())
 const runtimeProfileListMock = vi.hoisted(() => vi.fn())
+const runtimeJobCreateMock = vi.hoisted(() => vi.fn())
+const runtimeJobClaimByKindMock = vi.hoisted(() => vi.fn())
+const runtimeJobHeartbeatMock = vi.hoisted(() => vi.fn())
+const runtimeJobCompleteMock = vi.hoisted(() => vi.fn())
+const runtimeJobFailMock = vi.hoisted(() => vi.fn())
+const runtimeJobCancelMock = vi.hoisted(() => vi.fn())
+const startIngestMock = vi.hoisted(() => vi.fn())
+const executeIngestWritesMock = vi.hoisted(() => vi.fn())
+const dialogOpenMock = vi.hoisted(() => vi.fn())
 
 const PNG_BASE64 = "iVBORw0KGgo="
 
@@ -65,11 +74,22 @@ vi.mock("@/lib/agent/agent-transport", async (importOriginal) => {
   }
 })
 
+vi.mock("@/lib/ingest", () => ({
+  startIngest: startIngestMock,
+  executeIngestWrites: executeIngestWritesMock,
+}))
+
 vi.mock("@/commands/runtime-db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/commands/runtime-db")>()
   return {
     ...actual,
     runtimeProfileList: runtimeProfileListMock,
+    runtimeJobCreate: runtimeJobCreateMock,
+    runtimeJobClaimByKind: runtimeJobClaimByKindMock,
+    runtimeJobHeartbeat: runtimeJobHeartbeatMock,
+    runtimeJobComplete: runtimeJobCompleteMock,
+    runtimeJobFail: runtimeJobFailMock,
+    runtimeJobCancel: runtimeJobCancelMock,
   }
 })
 
@@ -83,6 +103,10 @@ vi.mock("@/commands/fs", async (importOriginal) => {
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
+}))
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: dialogOpenMock,
 }))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -279,6 +303,34 @@ describe("ChatPanel agent mode rendering", () => {
     saveQaForConversationMock.mockResolvedValue({ ok: true, saved: true })
     streamAgentMock.mockResolvedValue(undefined)
     deleteFileMock.mockResolvedValue(undefined)
+    runtimeJobCreateMock.mockResolvedValue({
+      jobId: "agent-job-1",
+      kind: "agent-chat-run",
+      payload: "{}",
+      state: "queued",
+      attempt: 1,
+      maxAttempts: 1,
+      priority: 0,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+    })
+    runtimeJobClaimByKindMock.mockResolvedValue({
+      job: { jobId: "agent-job-1" },
+      lease: { leaseId: "agent-lease-1" },
+    })
+    runtimeJobHeartbeatMock.mockResolvedValue({})
+    runtimeJobCompleteMock.mockResolvedValue({})
+    runtimeJobFailMock.mockResolvedValue({})
+    runtimeJobCancelMock.mockResolvedValue({})
+    executeIngestWritesMock.mockResolvedValue([])
+    startIngestMock.mockImplementation(async (_projectPath, sourcePath) => {
+      const store = useChatStore.getState()
+      const id = store.createConversation()
+      store.addMessage("user", `discussion:${sourcePath}`)
+      store.finalizeStream("analysis", undefined, id)
+      store.renameConversation(id, String(sourcePath).split("/").pop() || "source")
+    })
+    dialogOpenMock.mockResolvedValue(null)
     runtimeProfileListMock.mockResolvedValue({
       enabled: true,
       status: "healthy",
@@ -507,6 +559,45 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("starts picked document discussion in a new conversation without clearing the current one", async () => {
+    setupActiveProjectConversation()
+    dialogOpenMock.mockResolvedValue("/external/docs/report.md")
+    const oldMessageCount = useChatStore.getState().messages.filter((message) => (
+      message.conversationId === "conv-1"
+    )).length
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[title="Add attachment"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+    })
+    await act(async () => {
+      findButtonByText(container, "Document").dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(startIngestMock).toHaveBeenCalledWith(
+      "/project",
+      "/external/docs/report.md",
+      expect.any(Object),
+      expect.any(AbortSignal),
+    )
+    const chatState = useChatStore.getState()
+    const activeConversationId = chatState.activeConversationId
+    expect(chatState.messages.filter((message) => message.conversationId === "conv-1")).toHaveLength(oldMessageCount)
+    expect(activeConversationId).not.toBe("conv-1")
+    expect(chatState.messages.some((message) => (
+      message.conversationId === activeConversationId &&
+      message.content === "analysis"
+    ))).toBe(true)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("routes text messages to Agent when project preflight passes", async () => {
     setupActiveProjectConversation()
     const { container, root } = renderChatPanel()
@@ -520,6 +611,122 @@ describe("ChatPanel agent mode rendering", () => {
     })
     expect(buildChatAgentMessagesMock).not.toHaveBeenCalled()
     expect(streamChatMock).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("keeps the Agent message flow completing when job ledger calls reject", async () => {
+    setupActiveProjectConversation()
+    runtimeJobCreateMock.mockRejectedValueOnce(new Error("job create failed"))
+    streamAgentMock.mockImplementation(async (
+      _text: string,
+      _options: unknown,
+      callbacks: {
+        onStreamStart?: (streamId: string) => void
+        onToken?: (token: string) => void
+        onDone?: (result: { result: string } | null) => void
+      },
+    ) => {
+      callbacks.onStreamStart?.("stream-1")
+      callbacks.onToken?.("agent answer")
+      callbacks.onDone?.({ result: "agent answer" })
+    })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run the agent")
+    await pressEnter(container)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(runtimeJobCreateMock).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      "[agent-chat-run-job] create/claim failed:",
+      expect.any(Error),
+    )
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(useChatStore.getState().messages.some((message) => (
+      message.role === "assistant" && message.content === "agent answer"
+    ))).toBe(true)
+
+    warn.mockRestore()
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("uses the locally captured job when an older Agent stream finishes after a newer one starts", async () => {
+    setupActiveProjectConversation()
+    let createCount = 0
+    runtimeJobCreateMock.mockImplementation(async () => {
+      createCount += 1
+      return {
+        jobId: `job-${createCount}`,
+        kind: "agent-chat-run",
+        payload: "{}",
+        state: "queued",
+        attempt: 1,
+        maxAttempts: 1,
+        priority: 0,
+        createdAtMs: 0,
+        updatedAtMs: 0,
+      }
+    })
+    runtimeJobClaimByKindMock.mockImplementation(async (request: { jobId?: string | null }) => ({
+      job: { jobId: request.jobId },
+      lease: { leaseId: `${request.jobId}-lease` },
+    }))
+    const callbacksByRun: Array<{
+      onStreamStart?: (streamId: string) => void
+      onDone?: (result: { result: string } | null) => void
+    }> = []
+    streamAgentMock.mockImplementation(async (
+      _text: string,
+      _options: unknown,
+      callbacks: {
+        onStreamStart?: (streamId: string) => void
+        onDone?: (result: { result: string } | null) => void
+      },
+    ) => {
+      callbacksByRun.push(callbacks)
+      callbacks.onStreamStart?.(`stream-${callbacksByRun.length}`)
+    })
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "first run")
+    await pressEnter(container)
+    await act(async () => {
+      useChatStore.setState({
+        isStreaming: false,
+        streamingConversationId: null,
+        streamingAgentMessageId: null,
+      })
+      await Promise.resolve()
+    })
+    await typeText(container, "second run")
+    await pressEnter(container)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(callbacksByRun).toHaveLength(2)
+    callbacksByRun[0].onDone?.({ result: "late first result" })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(runtimeJobCompleteMock).toHaveBeenCalledWith({
+      jobId: "job-1",
+      leaseId: "job-1-lease",
+    })
+    expect(runtimeJobCompleteMock).not.toHaveBeenCalledWith({
+      jobId: "job-2",
+      leaseId: "job-2-lease",
+    })
 
     act(() => root.unmount())
     container.remove()

@@ -2050,8 +2050,8 @@ export async function startIngest(
   const sourceSummarySlug = sourceSummarySlugFromIdentity(sourceIdentity)
   const store = getStore()
   store.setIngestSource(sp)
-  store.clearMessages()
   store.setStreaming(false)
+  const conversationId = store.createConversation()
 
   // Extract embedded images upfront — independent of the LLM call
   // that follows. Done eagerly here (rather than in
@@ -2102,6 +2102,7 @@ export async function startIngest(
   ].join("\n")
 
   store.addMessage("user", userMessage)
+  store.renameConversation(conversationId, getFileName(sp).slice(0, 50) || "Source discussion")
   store.setStreaming(true)
 
   let accumulated = ""

@@ -14,6 +14,26 @@ describe("source identity helpers", () => {
     ).toBe("project-a/config.yaml")
   })
 
+  it("keeps project-local non-source fallback identity unchanged", () => {
+    expect(
+      sourceIdentityForPath("/tmp/project", "/tmp/project/notes/config.yaml"),
+    ).toBe("config.yaml")
+  })
+
+  it("names external absolute sources with a stable hashed identity", () => {
+    const first = sourceIdentityForPath("/tmp/project", "/tmp/a/report.pdf")
+    const second = sourceIdentityForPath("/tmp/project", "/tmp/b/report.pdf")
+    const repeated = sourceIdentityForPath("/tmp/project", "/tmp/a/report.pdf")
+
+    expect(first).toMatch(/^external\/[a-z0-9]{8}\/report\.pdf$/)
+    expect(second).toMatch(/^external\/[a-z0-9]{8}\/report\.pdf$/)
+    expect(first).not.toBe(second)
+    expect(repeated).toBe(first)
+    expect(sourceSummarySlugFromIdentity(first)).not.toBe(
+      sourceSummarySlugFromIdentity(second),
+    )
+  })
+
   it("normalizes source references that include raw/sources prefixes", () => {
     expect(sourceReferenceIdentity("raw/sources/project-a/config.yaml")).toBe(
       "project-a/config.yaml",

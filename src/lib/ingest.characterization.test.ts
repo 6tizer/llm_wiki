@@ -113,6 +113,12 @@ vi.mock("./llm-client", () => ({
       return
     }
 
+    if (systemPrompt.startsWith("You are a knowledgeable assistant helping to build a wiki")) {
+      cb.onToken(analysisResponse)
+      cb.onDone()
+      return
+    }
+
     // Fallback (e.g. long-source chunk analysis — unused here).
     cb.onToken("")
     cb.onDone()
@@ -137,7 +143,7 @@ vi.mock("./ingest-write", async () => {
   return { ...actual, recordEmbeddingStaleMarker: vi.fn(async () => "recorded" as const) }
 })
 
-import { autoIngest, executeIngestWrites } from "./ingest"
+import { autoIngest, executeIngestWrites, startIngest } from "./ingest"
 import { streamChat } from "./llm-client"
 import { embedPage } from "@/lib/embedding"
 import { recordEmbeddingStaleMarker } from "./ingest-write"
@@ -290,6 +296,43 @@ function track(tmp: Tmp): Tmp {
   cleanups.push(tmp.cleanup)
   return tmp
 }
+
+describe("startIngest discussion mode", () => {
+  it("creates a new discussion conversation without clearing the previous one", async () => {
+    const tmp = track(await seedProject("start-discussion"))
+    await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
+    useChatStore.setState({
+      conversations: [{ id: "old", title: "Old chat", createdAt: 1, updatedAt: 1 }],
+      activeConversationId: "old",
+      messages: [
+        { id: "old-u", role: "user", content: "keep me", timestamp: 1, conversationId: "old" },
+        { id: "old-a", role: "assistant", content: "still here", timestamp: 2, conversationId: "old" },
+      ],
+      ingestSource: null,
+      isStreaming: false,
+      streamingContent: "",
+    })
+
+    await startIngest(tmp.path, `${tmp.path}/raw/sources/doc.md`, useWikiStore.getState().llmConfig)
+
+    const state = useChatStore.getState()
+    const newConversationId = state.activeConversationId
+    expect(newConversationId).toBeTruthy()
+    expect(newConversationId).not.toBe("old")
+    expect(state.messages.filter((message) => message.conversationId === "old")).toHaveLength(2)
+    expect(state.conversations.find((conversation) => conversation.id === newConversationId)?.title).toBe("doc.md")
+    expect(state.messages.some((message) => (
+      message.conversationId === newConversationId &&
+      message.role === "user" &&
+      message.content.includes("I'm ingesting the following source file")
+    ))).toBe(true)
+    expect(state.messages.some((message) => (
+      message.conversationId === newConversationId &&
+      message.role === "assistant" &&
+      message.content.includes("Basic analysis")
+    ))).toBe(true)
+  })
+})
 
 // ── A. autoIngestImpl ────────────────────────────────────────────────────
 
