@@ -71,7 +71,9 @@
 | [SPEC-7/pr2-rewind-plan.md](./SPEC-7/pr2-rewind-plan.md) | SPEC-7 PR2 执行计划（design r3）：resume-only-for-rewind 桥、JSONL 锚点验证、wiki 写工具 fail-closed 门禁、延迟 fork 复用。 | merged（#291） |
 | [SPEC-7/pr2-rewind-investigation.md](./SPEC-7/pr2-rewind-investigation.md) | SPEC-7 PR2 前置调查 + E1/E2 实证（E1 跨进程 checkpoint PASS；E2 wiki 工具假成功 FAIL）。 | merged（#291） |
 | [SPEC-7/pr2-adversarial-matrix.md](./SPEC-7/pr2-adversarial-matrix.md) | SPEC-7 PR2 对抗矩阵（19 场景 + 裁定记录）。 | merged（#291） |
-| [spec-12-ui-ia-consolidation.md](./spec-12-ui-ia-consolidation.md) | UI 信息架构收敛：Work Runtime 生产转正、设置三组重组、模型配置合并页 + legacy 退役、Wiki 健康中心、主导航 8→5。 | planned / ready for PR split |
+| [spec-12-ui-ia-consolidation.md](./spec-12-ui-ia-consolidation.md) | UI 信息架构收敛：Work Runtime 生产转正、设置三组重组、模型配置合并页 + legacy 退役、Wiki 健康中心、主导航 8→5。 | completed（2026-07-05 closeout） |
+| [spec-13-model-access-redesign.md](./spec-13-model-access-redesign.md) | 模型接入一站式重设计：供应商模板库 + 三步向导 + capability probe + 调用点全迁移 + legacy 退役；吸收 SPEC-4 剩余与 #310/#312；借鉴 CC Switch/LiteLLM。 | draft / 待用户确认交互稿 |
+| [spec-14-ui-ia-round2.md](./spec-14-ui-ia-round2.md) | UI IA 二轮：知识库/文件面板右移可折叠、深度研究归并探索（已裁决）、Wiki 健康中心 Dashboard 化、Agent 设置最终形态。 | charter draft / SPEC-13 之后 |
 | [SPEC-12/ui-audit-2026-07.md](./SPEC-12/ui-audit-2026-07.md) | 2026-07-04 生产 app 全页 UI 走查证据：三病根、问题清单 A/B/C、Notion AI 对照 N1-N8、用户裁定 D1-D5。SPEC-12 与 SPEC-7 修订的共同依据。 | evidence |
 | [spec-8-maintainability-tooling.md](./spec-8-maintainability-tooling.md) | 维护性重构、GitNexus warning、QA fixture 和测试债收纳。 | in progress（PR10 先行） |
 | [SPEC-8/pr10-runtime-db-mod-split-plan.md](./SPEC-8/pr10-runtime-db-mod-split-plan.md) | SPEC-8 PR10 执行计划：runtime_db.rs 保行为拆分为 runtime_db/ 15 模块（行号测绘、可见性纪律、characterization 验证）。 | merged |
@@ -130,9 +132,9 @@
 
 2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
-当前优先级（2026-07-04 更新，轨间并行布局）：
+当前优先级（2026-07-05 更新，基于用户实测反馈）：
 
-0. **双轨主线已收官（2026-07-05）**：SPEC-7 与 SPEC-12 全部 closeout（closeout 节见各 SPEC 文档）。后续候选：SPEC-8 剩余（含 QA fixture 壳接管 #86 语境）、#309（appTool 快照阶段二）、#310（运行时任务族路由，legacy 退役前置）、#286/#287/#289、#311/#312/#313/#314。
+0. **主线 = SPEC-13 模型接入一站式**（吸收 SPEC-4 剩余 + #310/#312；SPEC-4 原文档剩余范围由其取代）→ 之后 **SPEC-14 UI IA 二轮**（含深研归并探索的已定裁决）。UI 快赢批（tabs 化/图谱前置/nav 改名/QA 栏合并）先行小 PR 不占轨。SPEC-8 剩余填缝；SPEC-9 维持 deferred 且移出 1.0 门槛（1.0 条件修订为 SPEC-13/14/8 完成）。其余 follow-up：#309、#286/#287/#289、#311/#313/#314（#310/#312 已并入 SPEC-13）。
 
 历史优先级记录：
 
