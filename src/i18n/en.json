@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "LLM Wiki Agent",
-    "subtitle": "Build and maintain your personal knowledge base with LLMs"
+    "subtitle": "Chat, delegate, and grow a knowledge base that maintains itself"
   },
   "nav": {
     "wiki": "Wiki",
@@ -1187,7 +1187,7 @@
         "openDownload": "Open download page",
         "later": "Later",
         "autoCheck": "Check for updates automatically on startup (at most once every 6 hours)",
-        "appDescription": "An LLM-driven personal knowledge base. Source:",
+        "appDescription": "An agentic knowledge workbench — unified chat, permissioned agent runs, and a self-maintaining local wiki. Source:",
         "saveFailed": "Failed to save update-check preference: {{message}}"
       }
     }
