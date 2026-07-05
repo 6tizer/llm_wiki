@@ -43,6 +43,29 @@
 2. **一连接多模型**（报告 #2：DeepSeek Pro/Flash 被迫建两个 profile 重复填 Key）：CC Switch 语义=一个供应商下多模型映射。我们采**轻方案**：profile 仍是（连接×模型）粒度（调度/熔断按模型隔离是优点），但①向导第二步支持从模型列表**多选**，一次批量创建多个 profile **共享同一 secretRef**（一次填 Key）；②Profiles 列表按「连接」（providerId+endpoint+secretRef）分组展示，组内一键加模型。重实体方案（独立 connection 表）推迟，除非分组 UI 撞墙。→ **进 PR2（向导多选+共享 secretRef）与 PR3（列表分组）**。
 3. **legacy 端点沿用污染**（报告 #1：Kimi 等 legacy 端点/apiMode 与模板真相不一致，迁移向导 `endpointFromResolvedConfig` 原样沿用进 profile 致测试失败）：legacy「LLM 模型」预设与模板库存在同名不同值（如 kimi：legacy=api.moonshot.ai/v1+chat_completions，模板=api.moonshot.cn/anthropic）。修法：**迁移向导产出前按模板库做映射校正**（providerId/模型可识别时优先模板 endpoint/apiMode，UI 显示映射说明，允许用户保留原值），模板库为单一真相。→ **进 PR2**；根治=PR4 legacy 退役（原计划）。
 
+
+## 2026-07-05 重编排：直通「完整测试节点 M」（用户裁定）
+
+**病根承认**：PR1/PR1b/PR2 都在修接入配置面，但 chat 主流仍走 `streamChat(llmConfig)` legacy 路径（chat-panel.tsx:63/:178），用户配好 profile 也无法真正对话——per-PR 增量在用户侧不可验收。重编排为直通 E2E 可测节点。
+
+**M 节点定义（验收脚本，先 Commander 用真实 API 全跑——用户已授权大方使用额度，验收通过后用户做业务验收）**：
+1. 三步向导接入真实供应商（DeepSeek/Kimi，真 Key，拉真实模型列表多选）
+2. 全程无钥匙串重复弹窗
+3. 普通对话流式回答成功（走 profile 池）
+4. Agent run 读写 wiki 成功（权限审批/timeline 正常）
+5. ingest 一份文档成功
+全五项通过 = M 达成。
+
+**轨道布局（轨间并行/轨内串行）**：
+- **轨1 pipeline（关键路径）**：
+  - K1 密钥存储简化：默认后端从 OS 钥匙串改为**应用私有文件**（`.llm-wiki`/app-config 目录、0600、profile-secrets.rs 后端切换、secretRef 抽象保留、现有钥匙串条目一次性迁移导入；钥匙串降级为高级选项开关）。SPEC-4「必须存 Keychain」裁定正式变更（用户裁定：简单优先，CC Switch 同款文件方案；弹窗根源=keyring 逐条 ACL × ad-hoc 签名每次重建失效）。顺带：tauri.conf 配置稳定签名身份（本地自签证书），双保险。
+  - K2 核心调用点迁移（#310 第一阶段）：chat 主流 + agent preflight + ingest 三消费方改走 profile 池 claim + legacy fallback（SPEC-4 canonical fallback policy）。
+  - K3 Commander 真实 API 实测 M 五项 → 用户业务验收。
+- **轨2 security（并行辅线）**：P1 fallback 队列面板 + Profiles 连接分组；P2 长尾调用点迁移（synthesis/lint/dedup/vision/embedding/deep-research）。文件边界：轨1=src/lib 调用点+profile-secrets+chat 管线；轨2=settings sections+runtime_db UI 面。i18n en/zh.json 为共享冲突面：轨2 文案改动待轨1 K2 合并后 rebase。
+- **M 后合流**：PR4 legacy 退役（#312）→ closeout（e2e=M 脚本重跑+深度 review+docs）。
+
+原 PR3/PR4 拆分由本节取代。
+
 ## 非目标
 
 - 不替换 Claude Agent SDK；不把 provider 体系缩成 OpenAI vs Claude（SPEC-4 non-goals 继承）。
