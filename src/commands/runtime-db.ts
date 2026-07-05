@@ -560,6 +560,49 @@ export interface RuntimeProfilePoolList {
   circuitBreakers: RuntimeProfileCircuitBreakerRecord[]
 }
 
+export interface RuntimeTaskFamilyPolicyRecord {
+  taskFamily: string
+  profileOrder: string[]
+  autoFailover: boolean
+  updatedAtMs: number
+}
+
+export interface RuntimeTaskPolicyList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  policies: RuntimeTaskFamilyPolicyRecord[]
+}
+
+export interface RuntimeTaskPolicySetRequest {
+  taskFamily: string
+  profileOrder: string[]
+  autoFailover?: boolean | null
+}
+
+export interface RuntimeTaskPolicySetResult {
+  policy: RuntimeTaskFamilyPolicyRecord
+  removedProfileIds: string[]
+}
+
+export interface RuntimeProfilePoolEventsListRequest {
+  limit?: number | null
+}
+
+export interface RuntimeProfilePoolEventsList {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  events: RuntimeEventRecord[]
+}
+
+export interface RuntimeProfileBreakerClearRequest {
+  profileId: string
+}
+
+export interface RuntimeProfileBreakerClearResult {
+  profileId: string
+  cleared: boolean
+}
+
 /**
  * Secretless model-call plan forwarded to Rust. `provider`/`apiMode`/
  * `model` are cross-checked against the claimed profile server-side but
@@ -848,6 +891,28 @@ export function runtimeProfilePoolList(
   request: RuntimeProfilePoolListRequest = {},
 ): Promise<RuntimeProfilePoolList> {
   return invoke<RuntimeProfilePoolList>("runtime_profile_pool_list", { request })
+}
+
+export function runtimeProfilePoolEventsList(
+  request: RuntimeProfilePoolEventsListRequest = {},
+): Promise<RuntimeProfilePoolEventsList> {
+  return invoke<RuntimeProfilePoolEventsList>("runtime_profile_pool_events_list", { request })
+}
+
+export function runtimeProfileBreakerClear(
+  request: RuntimeProfileBreakerClearRequest,
+): Promise<RuntimeProfileBreakerClearResult> {
+  return invoke<RuntimeProfileBreakerClearResult>("runtime_profile_breaker_clear", { request })
+}
+
+export function runtimeTaskPolicyList(): Promise<RuntimeTaskPolicyList> {
+  return invoke<RuntimeTaskPolicyList>("runtime_task_policy_list")
+}
+
+export function runtimeTaskPolicySet(
+  request: RuntimeTaskPolicySetRequest,
+): Promise<RuntimeTaskPolicySetResult> {
+  return invoke<RuntimeTaskPolicySetResult>("runtime_task_policy_set", { request })
 }
 
 export function runtimeJobCancel(jobId: string): Promise<RuntimeJobRecord> {

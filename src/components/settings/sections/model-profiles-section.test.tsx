@@ -8,7 +8,9 @@ import "@/i18n"
 import {
   createEmptyProfileDraft,
   draftFromProfile,
+  groupProfilesByConnection,
   ModelProfilesSection,
+  profileConnectionGroupKey,
   saveProfileDraft,
   taskFamiliesForRender,
   type ModelProfileDraft,
@@ -252,6 +254,37 @@ describe("ModelProfilesSection helpers", () => {
 
     expect(draft.providerId).toBe("custom")
     expect(taskFamiliesForRender(["chat", "future-family"])).toContain("future-family")
+  })
+
+  it("groups profiles by provider endpoint and secret reference", () => {
+    const sharedA = runtimeProfile({
+      profileId: "profile-a",
+      displayName: "B model",
+      providerId: "openai",
+      endpoint: "https://api.openai.com/v1",
+      secretRef: "llm-wiki-profile-secret:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    })
+    const sharedB = runtimeProfile({
+      profileId: "profile-b",
+      displayName: "A model",
+      providerId: "openai",
+      endpoint: "https://api.openai.com/v1",
+      secretRef: "llm-wiki-profile-secret:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    })
+    const separate = runtimeProfile({
+      profileId: "profile-c",
+      providerId: "openai",
+      endpoint: "https://other.example/v1",
+      secretRef: "llm-wiki-profile-secret:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    })
+
+    expect(profileConnectionGroupKey(sharedA)).toBe(profileConnectionGroupKey(sharedB))
+    expect(profileConnectionGroupKey(sharedA)).not.toBe(profileConnectionGroupKey(separate))
+
+    const groups = groupProfilesByConnection([sharedA, separate, sharedB])
+
+    expect(groups).toHaveLength(2)
+    expect(groups[0].profiles.map((profile) => profile.profileId)).toEqual(["profile-b", "profile-a"])
   })
 
   it("clamps profile concurrency before sending create payloads", async () => {

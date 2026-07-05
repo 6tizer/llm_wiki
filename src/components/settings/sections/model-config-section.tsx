@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import type { CategoryId } from "../settings-view"
 import { LlmProviderSection } from "./llm-provider-section"
 import { ModelProfilesSection } from "./model-profiles-section"
+import { FallbackPolicySection } from "./fallback-policy-section"
 import { ProviderMigrationBanner } from "./provider-migration-banner"
 import { TaskMatrixSection } from "./task-matrix-section"
 import { WebSearchSection } from "./web-search-section"
@@ -11,13 +12,14 @@ interface Props {
   onNavigateToCategory?: (category: CategoryId) => void
 }
 
-type ModelConfigTab = "llm" | "sources" | "profiles" | "taskMatrix"
+type ModelConfigTab = "llm" | "sources" | "profiles" | "taskMatrix" | "fallback"
 
 const MODEL_CONFIG_TABS: Array<{ id: ModelConfigTab; labelKey: string }> = [
   { id: "llm", labelKey: "settings.sections.modelConfig.tabs.llm" },
   { id: "sources", labelKey: "settings.sections.modelConfig.tabs.sources" },
   { id: "profiles", labelKey: "settings.sections.modelConfig.tabs.profiles" },
   { id: "taskMatrix", labelKey: "settings.sections.modelConfig.tabs.taskMatrix" },
+  { id: "fallback", labelKey: "settings.sections.modelConfig.tabs.fallback" },
 ]
 
 export function ModelConfigSection({ onNavigateToCategory }: Props) {
@@ -76,6 +78,10 @@ export function ModelConfigSection({ onNavigateToCategory }: Props) {
             refreshToken={profilesRefreshToken}
             onProfilesChanged={bumpProfilesRefreshToken}
           />
+        )}
+
+        {activeTab === "fallback" && (
+          <FallbackPolicySection refreshToken={profilesRefreshToken} />
         )}
       </div>
     </div>

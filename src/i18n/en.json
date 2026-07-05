@@ -8,6 +8,44 @@
     "cancel": "Cancel",
     "next": "Next"
   },
+  "fallbackPolicy": {
+    "title": "Fallback queue",
+    "description": "Configure ordered profile queues per task family and inspect pool transfers and circuit breakers.",
+    "loading": "Loading fallback policies...",
+    "refresh": "Refresh",
+    "refreshFailed": "Refresh failed: {{message}}",
+    "queueSize": "{{count}} profiles queued",
+    "autoFailover": "Auto transfer",
+    "emptyQueue": "No profiles in this queue.",
+    "missingProfile": "Profile missing",
+    "addProfile": "Add eligible profile",
+    "save": "Save",
+    "saved": "Fallback policy saved.",
+    "savedWithRemoved": "Fallback policy saved. Removed missing profiles: {{ids}}",
+    "saveFailed": "Save failed: {{message}}",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "remove": "Remove",
+    "breakersTitle": "Circuit breaker status",
+    "noPoolState": "No active claims or open circuit breakers.",
+    "activeClaim": "{{profile}} is active for {{family}} until {{time}}",
+    "noReason": "no reason",
+    "clearBreaker": "Clear",
+    "breakerCleared": "Circuit breaker cleared.",
+    "breakerClearFailed": "Clear failed: {{message}}",
+    "eventsTitle": "Transfer events",
+    "noEvents": "No recent profile-pool events.",
+    "unknownFamily": "unknown family",
+    "eventRoute": "{{from}} → {{to}} · {{reason}}",
+    "eventOrdered": "ordered transfer: {{reason}}",
+    "eventExhausted": "ordered candidates exhausted: {{reason}}"
+  },
+  "profileGroups": {
+    "heading": "{{provider}} · {{count}} profiles",
+    "defaultEndpoint": "Default endpoint",
+    "addModel": "Add model",
+    "empty": "No profiles yet."
+  },
   "nav": {
     "wiki": "Chat",
     "sources": "Sources",
@@ -576,7 +614,8 @@
           "llm": "LLM Models",
           "sources": "External Information Sources",
           "profiles": "Model Profiles",
-          "taskMatrix": "Task assignment matrix"
+          "taskMatrix": "Task assignment matrix",
+          "fallback": "Fallback queue"
         },
         "migration": {
           "title": "Create a runtime Profile from the active provider",

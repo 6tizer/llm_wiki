@@ -1356,7 +1356,11 @@ mod tests {
         let _ = fs::remove_dir_all(project);
     }
 
-    fn create_derived_rebuild_request(job_id: &str, layer: &str, priority: i64) -> RuntimeJobCreateRequest {
+    fn create_derived_rebuild_request(
+        job_id: &str,
+        layer: &str,
+        priority: i64,
+    ) -> RuntimeJobCreateRequest {
         RuntimeJobCreateRequest {
             job_id: Some(job_id.to_string()),
             kind: "derived-rebuild".to_string(),
@@ -1405,7 +1409,12 @@ mod tests {
         let claimed = runtime_job_claim_by_kind_for_project(
             Some(&project),
             true,
-            claim_by_kind_request_with_layer("taxonomy-consumer", "lease-tax", "derived-rebuild", "taxonomy"),
+            claim_by_kind_request_with_layer(
+                "taxonomy-consumer",
+                "lease-tax",
+                "derived-rebuild",
+                "taxonomy",
+            ),
             200,
         )
         .expect("claim taxonomy-layer job despite lower priority");
@@ -1425,7 +1434,8 @@ mod tests {
     }
 
     #[test]
-    fn scoped_claim_by_kind_with_payload_layer_no_match_returns_no_queued_job_and_does_not_touch_other_layers() {
+    fn scoped_claim_by_kind_with_payload_layer_no_match_returns_no_queued_job_and_does_not_touch_other_layers(
+    ) {
         let project = temp_project("job-claim-payload-layer-miss");
         fs::create_dir_all(&project).expect("create temp project");
         runtime_job_create_for_project(
@@ -1439,7 +1449,12 @@ mod tests {
         let error = runtime_job_claim_by_kind_for_project(
             Some(&project),
             true,
-            claim_by_kind_request_with_layer("taxonomy-consumer", "lease-tax", "derived-rebuild", "taxonomy"),
+            claim_by_kind_request_with_layer(
+                "taxonomy-consumer",
+                "lease-tax",
+                "derived-rebuild",
+                "taxonomy",
+            ),
             200,
         )
         .expect_err("no taxonomy-layer job is queued");
@@ -1511,7 +1526,11 @@ mod tests {
         let claimed = runtime_job_claim_for_project(
             Some(&project),
             true,
-            claim_request_with_job_id("synthesis-manual-rebuild", "lease-1", "job-target-low-priority"),
+            claim_request_with_job_id(
+                "synthesis-manual-rebuild",
+                "lease-1",
+                "job-target-low-priority",
+            ),
             200,
         )
         .expect("claim the exact requested job");
@@ -2330,8 +2349,9 @@ mod tests {
         let first = select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[])
             .expect("select first job");
         assert_eq!(first, "job-1");
-        let second = select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[first.clone()])
-            .expect("select next candidate excluding first");
+        let second =
+            select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[first.clone()])
+                .expect("select next candidate excluding first");
         assert_eq!(second, "job-2");
         let none_left =
             select_queued_job_id_tx(&tx, Some("compile-page"), None, None, &[first, second]);

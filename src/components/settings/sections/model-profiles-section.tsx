@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Loader2 } from "lucide-react"
+import { Loader2, Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -79,6 +79,15 @@ export interface ModelProfileDraft {
   clearSecret: boolean
 }
 
+export interface ProfileConnectionGroup {
+  key: string
+  providerId: string
+  providerLabel: string
+  endpoint: string
+  secretRef: string
+  profiles: RuntimeProfileRecord[]
+}
+
 type LoadState =
   | { kind: "loading" }
   | { kind: "ready"; enabled: boolean; status: RuntimeDbHealthState }
@@ -98,6 +107,49 @@ type SecretBackendState =
 
 function presetForProviderId(providerId: string) {
   return LLM_PRESETS.find((preset) => preset.id === providerId)
+}
+
+function providerLabel(providerId: string): string {
+  return presetForProviderId(providerId)?.label ?? providerId
+}
+
+export function profileConnectionGroupKey(profile: RuntimeProfileRecord): string {
+  return JSON.stringify([
+    profile.providerId,
+    profile.endpoint ?? "",
+    profile.secretRef ?? "",
+  ])
+}
+
+/** Groups runtime profiles by shared provider endpoint and secret reference. */
+export function groupProfilesByConnection(profiles: RuntimeProfileRecord[]): ProfileConnectionGroup[] {
+  const groups = new Map<string, ProfileConnectionGroup>()
+  for (const profile of profiles) {
+    const key = profileConnectionGroupKey(profile)
+    const existing = groups.get(key)
+    if (existing) {
+      existing.profiles.push(profile)
+      continue
+    }
+    groups.set(key, {
+      key,
+      providerId: profile.providerId,
+      providerLabel: providerLabel(profile.providerId),
+      endpoint: profile.endpoint ?? "",
+      secretRef: profile.secretRef ?? "",
+      profiles: [profile],
+    })
+  }
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      profiles: [...group.profiles].sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    }))
+    .sort((a, b) => (
+      a.providerLabel.localeCompare(b.providerLabel)
+        || a.endpoint.localeCompare(b.endpoint)
+        || a.secretRef.localeCompare(b.secretRef)
+    ))
 }
 
 export function defaultApiModeForProvider(providerId: string): RuntimeProfileApiMode {
@@ -401,6 +453,7 @@ export function ModelProfilesSection({
     () => profiles.find((profile) => profile.profileId === draft.profileId),
     [draft.profileId, profiles],
   )
+  const profileGroups = useMemo(() => groupProfilesByConnection(profiles), [profiles])
 
   async function loadProfiles(shouldApply = () => true) {
     const isInitialLoad = !loadedOnceRef.current
@@ -710,59 +763,99 @@ export function ModelProfilesSection({
           <div className="space-y-2">
             <button
               type="button"
-              className="w-full rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
               data-testid="profile-new"
               onClick={() => setDraft(createEmptyProfileDraft())}
             >
+              <Plus className="h-3.5 w-3.5" />
               {t("settings.sections.llm.profiles.newProfile")}
             </button>
-            {profiles.map((profile) => {
-              const detailOpen = capabilityDetailProfileId === profile.profileId
-              const checkedAt = profile.capabilityCheckedAtMs
-                ? new Date(profile.capabilityCheckedAtMs).toLocaleString()
-                : t("settings.sections.llm.profiles.capabilityNeverChecked")
-              const message = profile.lastCapabilityError
-                || (hasFreshCapability(profile)
-                  ? t("settings.sections.llm.profiles.capabilityMessageOk")
-                  : t("settings.sections.llm.profiles.capabilityStale"))
-              return (
-                <div
-                  key={profile.profileId}
-                  className={`rounded-md border ${
-                    draft.profileId === profile.profileId ? "border-primary bg-primary/5" : "border-border"
-                  }`}
-                >
-                  <div className="flex items-start gap-2 px-3 py-2">
-                    <button
-                      type="button"
-                      data-testid={`profile-select-${profile.profileId}`}
-                      onClick={() => setDraft(draftFromProfile(profile))}
-                      className="min-w-0 flex-1 text-left text-xs hover:text-primary"
-                    >
-                      <span className="block truncate font-medium">{profile.displayName}</span>
-                      <span className="block truncate text-muted-foreground">
-                        {profile.providerId} / {profile.modelId}
-                      </span>
-                    </button>
-                    <ProfileCapabilityBadge
-                      status={profile.capabilityStatus}
-                      t={t}
-                      as="button"
-                      onClick={() => setCapabilityDetailProfileId(detailOpen ? null : profile.profileId)}
+            {profileGroups.map((group) => (
+              <section
+                key={group.key}
+                className="space-y-2 rounded-md border bg-muted/20 p-2"
+                data-testid={`profile-group-${group.providerId}`}
+              >
+                <div className="space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold">
+                        {t("profileGroups.heading", {
+                          provider: group.providerLabel,
+                          count: group.profiles.length,
+                        })}
+                      </div>
+                      <div className="truncate text-[11px] text-muted-foreground" title={group.endpoint}>
+                        {group.endpoint || t("profileGroups.defaultEndpoint")}
+                      </div>
+                    </div>
+                    <ProviderAccessWizard
+                      disabled={Boolean(runtimeUnavailableMessage)}
+                      runtimeUnavailableMessage={runtimeUnavailableMessage}
+                      onProfileCreated={applyCreatedProfile}
+                      initialConnection={{
+                        providerId: group.providerId,
+                        endpoint: group.endpoint || null,
+                        secretRef: group.secretRef || null,
+                      }}
+                      triggerLabel={t("profileGroups.addModel")}
                     />
                   </div>
-                  {detailOpen && (
-                    <div
-                      className="border-t px-3 py-2 text-[11px] text-muted-foreground"
-                      data-testid={`profile-capability-detail-${profile.profileId}`}
-                    >
-                      <div>{message}</div>
-                      <div>{t("settings.sections.llm.profiles.capabilityChecked", { time: checkedAt })}</div>
-                    </div>
-                  )}
                 </div>
-              )
-            })}
+                {group.profiles.map((profile) => {
+                  const detailOpen = capabilityDetailProfileId === profile.profileId
+                  const checkedAt = profile.capabilityCheckedAtMs
+                    ? new Date(profile.capabilityCheckedAtMs).toLocaleString()
+                    : t("settings.sections.llm.profiles.capabilityNeverChecked")
+                  const message = profile.lastCapabilityError
+                    || (hasFreshCapability(profile)
+                      ? t("settings.sections.llm.profiles.capabilityMessageOk")
+                      : t("settings.sections.llm.profiles.capabilityStale"))
+                  return (
+                    <div
+                      key={profile.profileId}
+                      className={`rounded-md border bg-background ${
+                        draft.profileId === profile.profileId ? "border-primary bg-primary/5" : "border-border"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2 px-3 py-2">
+                        <button
+                          type="button"
+                          data-testid={`profile-select-${profile.profileId}`}
+                          onClick={() => setDraft(draftFromProfile(profile))}
+                          className="min-w-0 flex-1 text-left text-xs hover:text-primary"
+                        >
+                          <span className="block truncate font-medium">{profile.displayName}</span>
+                          <span className="block truncate text-muted-foreground">
+                            {profile.providerId} / {profile.modelId}
+                          </span>
+                        </button>
+                        <ProfileCapabilityBadge
+                          status={profile.capabilityStatus}
+                          t={t}
+                          as="button"
+                          onClick={() => setCapabilityDetailProfileId(detailOpen ? null : profile.profileId)}
+                        />
+                      </div>
+                      {detailOpen && (
+                        <div
+                          className="border-t px-3 py-2 text-[11px] text-muted-foreground"
+                          data-testid={`profile-capability-detail-${profile.profileId}`}
+                        >
+                          <div>{message}</div>
+                          <div>{t("settings.sections.llm.profiles.capabilityChecked", { time: checkedAt })}</div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </section>
+            ))}
+            {profiles.length === 0 && (
+              <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+                {t("profileGroups.empty")}
+              </div>
+            )}
           </div>
 
           <div className="space-y-4 rounded-md border p-3">

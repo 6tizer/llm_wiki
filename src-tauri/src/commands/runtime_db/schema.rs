@@ -343,6 +343,7 @@ pub(crate) fn open_profile_pool_runtime_locked(project_root: &Path) -> Result<Co
     let connection = open_events_progress_runtime_locked(project_root)?;
     initialize_profile_schema(&connection)?;
     initialize_profile_pool_schema(&connection)?;
+    initialize_task_family_policy_schema(&connection)?;
     Ok(connection)
 }
 
@@ -957,6 +958,36 @@ fn initialize_profile_pool_schema(connection: &Connection) -> Result<(), String>
         .map_err(|err| format!("Failed to initialize runtime profile breaker index: {err}"))?;
 
     record_migration_family(connection, PROFILE_POOL_FAMILY, PROFILE_POOL_VERSION)
+}
+
+fn initialize_task_family_policy_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS runtime_task_family_policies (
+                    task_family TEXT PRIMARY KEY CHECK(
+                        length(CAST(task_family AS BLOB)) > 0
+                        AND length(CAST(task_family AS BLOB)) <= {MAX_PROFILE_TASK_FAMILY_BYTES}
+                    ),
+                    profile_order TEXT NOT NULL DEFAULT '[]' CHECK(
+                        length(CAST(profile_order AS BLOB)) > 0
+                        AND length(CAST(profile_order AS BLOB)) <= {MAX_TASK_POLICY_PROFILE_ORDER_BYTES}
+                    ),
+                    auto_failover INTEGER NOT NULL DEFAULT 1 CHECK(auto_failover IN (0, 1)),
+                    updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+                )"
+            ),
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime task family policies table: {err}")
+        })?;
+
+    record_migration_family(
+        connection,
+        TASK_FAMILY_POLICIES_FAMILY,
+        TASK_FAMILY_POLICIES_VERSION,
+    )
 }
 
 fn record_migration_family(

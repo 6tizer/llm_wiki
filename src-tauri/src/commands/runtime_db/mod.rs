@@ -12,6 +12,7 @@ mod redact;
 mod scheduler;
 mod schema;
 mod staging;
+mod task_policies;
 #[cfg(test)]
 mod test_support;
 mod txhelpers;
@@ -28,6 +29,7 @@ pub(crate) use redact::*;
 pub use scheduler::*;
 pub use schema::*;
 pub use staging::*;
+pub use task_policies::*;
 #[cfg(test)]
 pub(crate) use test_support::*;
 pub(crate) use txhelpers::*;
@@ -63,6 +65,8 @@ const PROFILE_STATUS_FAMILY: &str = "profile-status";
 const PROFILE_STATUS_VERSION: i64 = 1;
 const PROFILE_POOL_FAMILY: &str = "profile-pool";
 const PROFILE_POOL_VERSION: i64 = 1;
+const TASK_FAMILY_POLICIES_FAMILY: &str = "task-family-policies";
+const TASK_FAMILY_POLICIES_VERSION: i64 = 1;
 const WORK_RUNTIME_ENABLED_ENV: &str = "LLM_WIKI_CORE_WORK_RUNTIME_ENABLED";
 const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 const DEFAULT_PRIORITY: i64 = 0;
@@ -109,6 +113,7 @@ const MAX_PROFILE_CAPABILITY_JSON_BYTES: usize = 8192;
 const MAX_PROFILE_CAPABILITY_VERSION_BYTES: usize = 64;
 const MAX_PROFILE_CAPABILITY_ERROR_BYTES: usize = 4096;
 const MAX_PROFILE_POOL_REASON_BYTES: usize = 1024;
+const MAX_TASK_POLICY_PROFILE_ORDER_BYTES: usize = 4096;
 // Keep these version strings aligned with src/components/settings/sections/model-profiles-section.tsx.
 const DEFAULT_PROFILE_CAPABILITY_VERSION: &str = "spec-4-pr1";
 const PROFILE_PROBE_CAPABILITY_VERSION: &str = "profile-probe.v1";
@@ -146,6 +151,7 @@ const EVENT_APPENDED_NAME: &str = "job-runtime:event-appended";
 const PROGRESS_APPENDED_NAME: &str = "job-runtime:progress-appended";
 const PROFILE_POOL_CLAIMED_NAME: &str = "profile-pool:claimed";
 const PROFILE_POOL_RELEASED_NAME: &str = "profile-pool:released";
+const PROFILE_POOL_FALLBACK_NAME: &str = "profile-pool:fallback";
 pub(crate) const PROFILE_CLAIM_INACTIVE_PREFIX: &str = "claim-inactive:";
 const PROFILE_CLAIM_INACTIVE_ERROR: &str = "claim-inactive: profile pool claim is not active";
 // Rust uses this after agent_spawn has accepted claim ownership.
@@ -1004,6 +1010,73 @@ pub struct RuntimeProfilePoolList {
     status: RuntimeDbHealthState,
     active_claims: Vec<RuntimeProfileClaimRecord>,
     circuit_breakers: Vec<RuntimeProfileCircuitBreakerRecord>,
+}
+
+/// One task-family fallback policy stored in runtime DB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTaskFamilyPolicyRecord {
+    task_family: String,
+    profile_order: Vec<String>,
+    auto_failover: bool,
+    updated_at_ms: i64,
+}
+
+/// Snapshot response for all task-family fallback policies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTaskPolicyList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    policies: Vec<RuntimeTaskFamilyPolicyRecord>,
+}
+
+/// Request payload for upserting one task-family fallback policy.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeTaskPolicySetRequest {
+    task_family: String,
+    profile_order: Vec<String>,
+    auto_failover: Option<bool>,
+}
+
+/// Result for an upserted task-family fallback policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTaskPolicySetResult {
+    policy: RuntimeTaskFamilyPolicyRecord,
+    removed_profile_ids: Vec<String>,
+}
+
+/// Request payload for profile-pool event listing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfilePoolEventsListRequest {
+    limit: Option<i64>,
+}
+
+/// Profile-pool event listing response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfilePoolEventsList {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    events: Vec<RuntimeEventRecord>,
+}
+
+/// Request payload for manually clearing one open profile circuit breaker.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProfileBreakerClearRequest {
+    profile_id: String,
+}
+
+/// Result for manually clearing one open profile circuit breaker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileBreakerClearResult {
+    profile_id: String,
+    cleared: bool,
 }
 
 /// Sidecar-ready Agent profile config. This is crate-internal and may contain a
