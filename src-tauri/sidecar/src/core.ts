@@ -65,6 +65,21 @@ export function appendIntentOverride(
 	return `${systemPrompt}\n\n${intentOverride}`;
 }
 
+type ProfileEnvOptions = Pick<
+	AgentRequest["options"],
+	"apiKey" | "agentProfileAuthStyle" | "baseUrl"
+>;
+
+/** Return whether this run injects provider config into the SDK child env. */
+export function profileEnvInjected(options: ProfileEnvOptions): boolean {
+	if (options.baseUrl) return true;
+	return Boolean(
+		options.apiKey &&
+			options.agentProfileAuthStyle !== "none" &&
+			options.agentProfileAuthStyle !== "oauth-local-cli",
+	);
+}
+
 export function applyAgentProfileEnv(
 	env: Record<string, string | undefined>,
 	options: AgentRequest["options"],
@@ -77,6 +92,7 @@ export function applyAgentProfileEnv(
 	delete env.ANTHROPIC_API_KEY;
 	delete env.ANTHROPIC_AUTH_TOKEN;
 	if (options.model) env.ANTHROPIC_MODEL = options.model;
+	// Keep credential-write conditions in sync with profileEnvInjected().
 	if (!options.apiKey) return;
 	switch (options.agentProfileAuthStyle) {
 		case "bearer":
@@ -89,6 +105,17 @@ export function applyAgentProfileEnv(
 			env.ANTHROPIC_API_KEY = options.apiKey;
 			break;
 	}
+}
+
+/** Return SDK settings sources for provider-env-isolated profile runs. */
+export function settingSourcesForProfileRun(
+	options: ProfileEnvOptions,
+): ["project", "local"] | undefined {
+	if (!profileEnvInjected(options)) return undefined;
+	// Claude settings env overrides process env. Embedded managed profile runs
+	// must ignore user-level settings while retaining project/local CLAUDE.md
+	// and repository settings.
+	return ["project", "local"];
 }
 
 function parseMaxTurnsExceeded(message: string): number | undefined {
@@ -291,6 +318,7 @@ export function createRequestHandler({
 				hooks,
 				abortController,
 				env,
+				settingSources: settingSourcesForProfileRun(req.options),
 				pathToClaudeCodeExecutable: bundledClaudeCodeExecutablePath,
 
 				// PR D: structured output
