@@ -977,6 +977,85 @@ test("query request forwards wiki write resource limits to MCP tools", async () 
 	assert.equal(secondFile.structuredContent?.limit, 1);
 });
 
+test("same-name concurrent wiki tool calls degrade snapshot coverage instead of mis-associating toolUseId", async () => {
+	const projectPath = await tempWikiProject();
+	const sent: AgentMessage[] = [];
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: (msg) => sent.push(msg),
+		error: () => {},
+		env: {},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath,
+			enableWikiTools: true,
+			enableWriteTools: true,
+		},
+	});
+
+	const preToolUse = capturedInput?.options?.hooks?.PreToolUse?.[0]?.hooks[0];
+	assert.ok(preToolUse);
+	await preToolUse(
+		{
+			hook_event_name: "PreToolUse",
+			tool_name: "mcp__llm_wiki__update_page",
+			tool_input: { path: "wiki/index.md", contents: "first" },
+			tool_use_id: "tool-1",
+		} as any,
+		"tool-1",
+		{ signal: new AbortController().signal },
+	);
+	await preToolUse(
+		{
+			hook_event_name: "PreToolUse",
+			tool_name: "mcp__llm_wiki__update_page",
+			tool_input: { path: "wiki/index.md", contents: "second" },
+			tool_use_id: "tool-2",
+		} as any,
+		"tool-2",
+		{ signal: new AbortController().signal },
+	);
+
+	const server = capturedInput?.options?.mcpServers?.llm_wiki as
+		| { instance?: { _registeredTools?: Record<string, RegisteredTool> } }
+		| undefined;
+	const updatePage = server?.instance?._registeredTools?.update_page;
+	assert.ok(updatePage);
+	const first = await updatePage.handler(
+		{ path: "wiki/index.md", contents: "# Index\n\nFirst ambiguous write.\n" },
+		{},
+	);
+	const second = await updatePage.handler(
+		{ path: "wiki/index.md", contents: "# Index\n\nSecond ambiguous write.\n" },
+		{},
+	);
+
+	assert.equal(first.isError, undefined);
+	assert.equal(second.isError, undefined);
+	const wikiChanged = sent
+		.filter((msg) => msg.type === "wiki_changed")
+		.map((msg) => msg.data as { snapshotted?: boolean; toolUseId?: string });
+	assert.deepEqual(
+		wikiChanged.map((payload) => ({
+			snapshotted: payload.snapshotted,
+			toolUseId: payload.toolUseId,
+		})),
+		[
+			{ snapshotted: false, toolUseId: undefined },
+			{ snapshotted: false, toolUseId: undefined },
+		],
+	);
+});
+
 test("query request can restrict tools to pre-approved Wiki MCP tools", async () => {
 	let capturedInput: Parameters<QueryFn>[0] | undefined;
 	const queryFn: QueryFn = async function* (input) {

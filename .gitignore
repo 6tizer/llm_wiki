@@ -56,6 +56,7 @@ pnpm-debug.log*
 CLAUDE.md
 litellm/
 .agent-loop/
+.llm-wiki/rewind-snapshots/
 
 # Lockfiles — npm is the canonical package manager (all scripts use npm run).
 # pnpm-lock.yaml is generated locally and should not be committed; it causes

@@ -415,12 +415,14 @@
       "cancel": "取消",
       "success": "文件已回滚",
       "failed": "回滚失败：{{error}}",
-      "blockedWikiWrite": "回滚不可用：此回滚点之后有 wiki 工具改动，原生文件回滚不覆盖这些改动，继续回滚会导致改动被静默保留而界面却显示成功。",
+      "blockedWikiWrite": "回滚不可用：此回滚点之后的 wiki 改动未被安全覆盖，或原生文件写入与 wiki 快照写入发生混合。继续回滚可能导致文件状态错误但界面显示成功。",
       "blockedCrossFork": "回滚不可用：此回滚点所属的会话已发生分支（fork），无法再安全回滚。",
       "blockedLocked": "当前无法回滚：该会话正忙（有发送或另一次回滚正在进行）。",
       "persistWarning": "文件已回滚，但保存更新后的会话失败：{{error}}。如果在此问题解决前应用退出，回滚状态可能在重启后丢失。",
       "retryPersist": "重试保存",
-      "stateMismatch": "文件已回滚，但此会话已发生变化，回滚目标消息已不存在，界面无法同步更新。请直接检查项目文件。"
+      "stateMismatch": "文件已回滚，但此会话已发生变化，回滚目标消息已不存在，界面无法同步更新。请直接检查项目文件。",
+      "wikiRestoreFailed": "文件已回滚，但 wiki 快照恢复失败。会话未截断。",
+      "wikiRestoreFailureFiles": "以下 wiki 快照恢复失败："
     },
     "lint": {
       "queued": "Agent 检查已排队",

@@ -415,12 +415,14 @@
       "cancel": "Cancel",
       "success": "Files rewound",
       "failed": "Rewind failed: {{error}}",
-      "blockedWikiWrite": "Rewind is disabled: a wiki tool changed files after this point that a native file rewind does not cover, so undoing here would leave those changes in place while reporting success.",
+      "blockedWikiWrite": "Rewind is disabled: wiki changes after this point are not safely covered, or native file writes and wiki snapshots were mixed after this point. Undoing here could leave files in the wrong state while reporting success.",
       "blockedCrossFork": "Rewind is disabled: this checkpoint belongs to a session that has since moved on (a fork happened after it), so it can no longer be safely rewound.",
       "blockedLocked": "Rewind is unavailable right now — this conversation is busy (a send or another rewind is in progress).",
       "persistWarning": "Files were rewound, but saving the updated conversation failed: {{error}}. If the app closes before this succeeds, the rewind may not stick after restart.",
       "retryPersist": "Retry save",
-      "stateMismatch": "Files were rewound, but this conversation changed and the message being rewound to no longer exists, so the visible conversation could not be updated to match. Please check the project's files directly."
+      "stateMismatch": "Files were rewound, but this conversation changed and the message being rewound to no longer exists, so the visible conversation could not be updated to match. Please check the project's files directly.",
+      "wikiRestoreFailed": "Files were rewound, but restoring wiki snapshots failed. The conversation was not truncated.",
+      "wikiRestoreFailureFiles": "Wiki snapshot restore failed for:"
     },
     "lint": {
       "queued": "Agent lint queued",

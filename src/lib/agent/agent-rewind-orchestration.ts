@@ -4,6 +4,10 @@ import { cancelAgentChatRunJobByStreamId } from "./agent-chat-run-job"
 import { computeAgentRewindGateDecision, type AgentRewindGateDecision } from "./agent-rewind-gate"
 import { rewindAgentFiles, rewindAgentSession } from "./agent-transport"
 import type { AgentRewindFilesPayload, AgentTransportOptions } from "./agent-types"
+import {
+  restoreAgentWikiSnapshots,
+  type WikiSnapshotRestoreFailure,
+} from "./agent-wiki-snapshot-restore"
 
 /**
  * Precise outcome of one rewind run — replaces the earlier `ok:true` +
@@ -24,6 +28,9 @@ import type { AgentRewindFilesPayload, AgentTransportOptions } from "./agent-typ
  *   (deleted/reset/switched away mid-rewind) — there is nothing to truncate
  *   or fork from. Must never be reported as a plain success: the files
  *   changed, but the visible conversation state doesn't reflect it at all.
+ * - "wiki_restore_failed": rewindFiles succeeded, but wiki snapshot restore
+ *   failed for at least one sidecar direct-write page. Must never be
+ *   reported as success because the visible conversation was not truncated.
  * - "gate_blocked": the fail-closed pre-flight gate refused to attempt
  *   rewindFiles at all (see `gate`).
  * - "rewind_failed": rewindFiles itself failed on every path attempted, or
@@ -34,6 +41,7 @@ export type RunAgentRewindStatus =
   | "success"
   | "persist_failed"
   | "state_mismatch"
+  | "wiki_restore_failed"
   | "gate_blocked"
   | "rewind_failed"
 
@@ -43,6 +51,8 @@ export interface RunAgentRewindResult {
   payload?: AgentRewindFilesPayload
   /** Set for "persist_failed": why the disk flush didn't happen/succeed. */
   persistError?: string
+  /** Set for "wiki_restore_failed": paths whose sidecar snapshots failed to restore. */
+  wikiRestoreFailures?: WikiSnapshotRestoreFailure[]
 }
 
 /**
@@ -138,6 +148,19 @@ export async function runAgentRewind(args: {
     // Files ARE reverted on disk from this point on — every branch below
     // must fail closed rather than silently report a plain "success" it
     // can't back up (matrix A4/A12-adjacent, review-round P2).
+    const restore = await restoreAgentWikiSnapshots({
+      projectPath,
+      target,
+      messages: useChatStore.getState().messages,
+    })
+    if (!restore.ok) {
+      return {
+        status: "wiki_restore_failed",
+        payload,
+        wikiRestoreFailures: restore.failures,
+      }
+    }
+
     const applied = store.applyAgentRewindSuccess(target.conversationId, {
       throughMessageId: target.chatMessageId,
       resumeSessionAt: target.assistantMessageId,

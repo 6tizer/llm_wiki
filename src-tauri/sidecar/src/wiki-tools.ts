@@ -38,6 +38,8 @@ export interface WikiChangedPayload {
 	operation: "update" | "create" | "delete";
 	oldSha256?: string;
 	newSha256?: string;
+	toolUseId?: string;
+	snapshotted?: boolean;
 }
 
 interface AppToolResult {
@@ -60,8 +62,78 @@ export interface LlmWikiToolContext extends WikiApiClientOptions {
 	onWikiChanged?: (payload: WikiChangedPayload) => void;
 	changedPaths?: Set<string>;
 	streamId?: string;
+	getCurrentToolUseId?: (toolName: string) => string | undefined;
 	appToolBridge?: AppToolBridge;
 	emitAgentEvent?: (type: string, data: unknown) => void;
+}
+
+interface RewindSnapshotManifestEntry {
+	seq: number;
+	path: string;
+	operation: "update" | "create";
+	existedBefore: boolean;
+	beforeSha256?: string;
+	afterSha256: string;
+	toolUseId?: string;
+	timestamp: number;
+	snapshotFile: string;
+}
+
+const snapshotSeqByRun = new Map<string, number>();
+
+function snapshotRunKey(projectPath: string, streamId: string): string {
+	return `${projectPath}\0${streamId}`;
+}
+
+function nextSnapshotSeq(projectPath: string, streamId: string): number {
+	const key = snapshotRunKey(projectPath, streamId);
+	const next = (snapshotSeqByRun.get(key) ?? 0) + 1;
+	snapshotSeqByRun.set(key, next);
+	return next;
+}
+
+function sanitizeSnapshotPath(relativePath: string): string {
+	return relativePath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "wiki-page";
+}
+
+async function writeRewindSnapshot(args: {
+	projectPath: string;
+	streamId?: string;
+	relativePath: string;
+	operation: "update" | "create";
+	existedBefore: boolean;
+	beforeText: string;
+	beforeSha256?: string;
+	afterSha256: string;
+	toolUseId?: string;
+}): Promise<boolean> {
+	if (!args.streamId) return false;
+
+	const seq = nextSnapshotSeq(args.projectPath, args.streamId);
+	const dir = path.join(args.projectPath, ".llm-wiki", "rewind-snapshots", args.streamId);
+	const safePath = sanitizeSnapshotPath(args.relativePath);
+	const safeToolUseId = args.toolUseId ? sanitizeSnapshotPath(args.toolUseId) : "no-tool-use-id";
+	const snapshotFile = `${String(seq).padStart(6, "0")}-${safePath}-${safeToolUseId}.md`;
+	const entry: RewindSnapshotManifestEntry = {
+		seq,
+		path: args.relativePath,
+		operation: args.operation,
+		existedBefore: args.existedBefore,
+		beforeSha256: args.beforeSha256,
+		afterSha256: args.afterSha256,
+		toolUseId: args.toolUseId,
+		timestamp: Date.now(),
+		snapshotFile,
+	};
+
+	try {
+		await fs.mkdir(dir, { recursive: true });
+		await fs.writeFile(path.join(dir, snapshotFile), args.beforeText, "utf8");
+		await fs.appendFile(path.join(dir, "manifest.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function jsonResult(data: unknown, isError = false): CallToolResult {
@@ -532,6 +604,7 @@ async function writePage(args: {
 	expectedSha256?: string;
 	dryRun?: boolean;
 	operation: "update" | "create";
+	toolName: "update_page" | "create_entity" | "create_concept";
 	mustExist: boolean;
 	fixedDirectory?: "entities" | "concepts";
 }): Promise<CallToolResult> {
@@ -582,6 +655,7 @@ async function writePage(args: {
 	assertWritableContents(newText, maxWriteBytes);
 	const newSha256 = sha256(newText);
 	const summary = diffSummary(oldText, newText);
+	const toolUseId = args.context.getCurrentToolUseId?.(`mcp__llm_wiki__${args.toolName}`);
 
 	const payload = {
 		ok: true,
@@ -590,6 +664,7 @@ async function writePage(args: {
 		operation: args.operation,
 		oldSha256,
 		newSha256,
+		toolUseId,
 		diffSummary: JSON.parse(summary) as Record<string, unknown>,
 	};
 
@@ -618,6 +693,18 @@ async function writePage(args: {
 	}
 
 	if (reservesChangedPath) changedPaths.add(plan.relativePath);
+	const snapshotStored = await writeRewindSnapshot({
+		projectPath,
+		streamId: args.context.streamId,
+		relativePath: plan.relativePath,
+		operation: args.operation,
+		existedBefore: exists,
+		beforeText: oldText,
+		beforeSha256: oldSha256,
+		afterSha256: newSha256,
+		toolUseId,
+	});
+	const snapshotted = snapshotStored && Boolean(toolUseId);
 	try {
 		await fsLike.writeFile(plan.absolutePath, newText, "utf8");
 	} catch (err) {
@@ -629,8 +716,10 @@ async function writePage(args: {
 		operation: args.operation,
 		oldSha256,
 		newSha256,
+		toolUseId,
+		snapshotted,
 	});
-	return jsonResult(payload);
+	return jsonResult({ ...payload, snapshotted });
 }
 
 export function createLlmWikiTools(
@@ -1016,6 +1105,7 @@ export function createLlmWikiTools(
 						expectedSha256: args.expectedSha256,
 						dryRun: args.dryRun,
 						operation: "update",
+						toolName: "update_page",
 						mustExist: true,
 					}),
 				),
@@ -1040,6 +1130,7 @@ export function createLlmWikiTools(
 						mode: "replace",
 						dryRun: args.dryRun,
 						operation: "create",
+						toolName: "create_entity",
 						mustExist: false,
 						fixedDirectory: "entities",
 					}),
@@ -1065,6 +1156,7 @@ export function createLlmWikiTools(
 						mode: "replace",
 						dryRun: args.dryRun,
 						operation: "create",
+						toolName: "create_concept",
 						mustExist: false,
 						fixedDirectory: "concepts",
 					}),
