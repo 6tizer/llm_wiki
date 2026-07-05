@@ -6,7 +6,12 @@ import {
   PR1_ADR_MINIMUM_STORAGE_LOCK_KEYS,
   PR4_DISCOVERED_RUST_READ_APP_STATE_KEYS,
   STORE_BOUNDARY_ENTRIES,
+  type StoreBoundaryEntryId,
 } from "./store-boundary"
+
+const POST_SPEC1_STORE_BOUNDARY_ENTRY_IDS = new Set<StoreBoundaryEntryId>([
+  "ui-sidebar-collapsed",
+])
 
 function repoFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf-8")
@@ -209,10 +214,23 @@ describe("SPEC-1 store boundary inventory", () => {
     const updateSession = STORE_BOUNDARY_ENTRIES.find(
       (entry) => entry.id === "update-check-session-state",
     )
+    const sidebarCollapsed = STORE_BOUNDARY_ENTRIES.find(
+      (entry) => entry.id === "ui-sidebar-collapsed",
+    )
 
     expect(uiView?.category).toBe("zustand-ui-view-state")
+    expect(uiView?.currentKeys).not.toContain("sidebarCollapsed")
     expect(persistedMirror?.category).toBe("zustand-persisted-setting-mirror")
     expect(projectMirror?.category).toBe("zustand-project-session-mirror")
+    expect(sidebarCollapsed).toMatchObject({
+      currentSurface: "zustand+localStorage",
+      currentKeys: ["sidebarCollapsed", "llmwiki.sidebarCollapsed"],
+      category: "app-ui-preference",
+      rustLocked: false,
+      crossLanguageReadByRust: false,
+      secretBearing: false,
+      projectScoped: false,
+    })
     expect(updatePersisted?.currentKeys).toEqual(["updateCheckState"])
     expect(updatePersisted?.nestedKeys).toEqual(["enabled", "lastCheckedAt", "dismissedVersion"])
     expect(updateSession?.currentKeys).toEqual(["checking", "lastResult"])
@@ -253,7 +271,7 @@ describe("SPEC-1 store boundary inventory", () => {
   it("keeps the plan aligned with the implemented inventory", () => {
     const plan = repoFile("docs/plans/SPEC-1/pr4-store-boundary-plan.md")
 
-    for (const entry of STORE_BOUNDARY_ENTRIES) {
+    for (const entry of STORE_BOUNDARY_ENTRIES.filter((entry) => !POST_SPEC1_STORE_BOUNDARY_ENTRY_IDS.has(entry.id))) {
       expect(plan, entry.id).toContain(entry.id)
     }
     for (const key of PR4_DISCOVERED_RUST_READ_APP_STATE_KEYS) {
