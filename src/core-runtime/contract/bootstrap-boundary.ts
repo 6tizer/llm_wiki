@@ -235,9 +235,17 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     currentSurface: "src/App.tsx",
     owner: "ui-shell",
     targetBoundary: "ui-shell",
-    currentResponsibilities: ["Apply DOM zoom", "Expose dev-only update banner helper"],
-    currentCallSites: ["applyDocumentZoom", "__llmwiki_testUpdateBanner"],
-    migrationNote: "DOM font-size mutation and dev helper remain UI shell owned.",
+    currentResponsibilities: [
+      "Apply DOM zoom",
+      "Expose dev-only update banner helper",
+      "Register dev-only QA fixture shell",
+    ],
+    currentCallSites: [
+      "applyDocumentZoom",
+      "__llmwiki_testUpdateBanner",
+      "__llmwiki_fixtures.agent",
+    ],
+    migrationNote: "DOM font-size mutation and dev helper fixtures remain UI shell owned.",
   },
 ]
 
