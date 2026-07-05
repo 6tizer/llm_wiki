@@ -6,7 +6,12 @@ import { apiServerStatus, clipServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { API_SERVER_HEALTH_URL, API_SERVER_PORT } from "@/lib/api-server-constants"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
-import { checkForUpdates, toLatestReleaseUrl } from "@/lib/update-check"
+import {
+  checkForUpdates,
+  formatAppVersion,
+  toLatestReleaseUrl,
+  UPDATE_REPO,
+} from "@/lib/update-check"
 import { saveUpdateCheckState, type PersistedUpdateCheckState } from "@/lib/project-store"
 import { persistSetting } from "@/lib/store-helpers"
 
@@ -97,7 +102,7 @@ export function AboutSection() {
     useUpdateStore.getState().setChecking(true)
     const result = await checkForUpdates({
       currentVersion: __APP_VERSION__,
-      repo: "nashsu/llm_wiki",
+      repo: UPDATE_REPO,
     })
     const now = Date.now()
     useUpdateStore.getState().setResult(result, now)
@@ -133,8 +138,13 @@ export function AboutSection() {
     }
     return apiStatus
   })()
+  const repoUrl = `https://github.com/${UPDATE_REPO}`
   const rows: Array<{ label: string; value: string; mono?: boolean }> = [
-    { label: t("settings.sections.about.version"), value: `v${__APP_VERSION__}`, mono: true },
+    {
+      label: t("settings.sections.about.version"),
+      value: formatAppVersion(__APP_VERSION__, __APP_CHANNEL__),
+      mono: true,
+    },
     { label: t("settings.sections.about.clipServer"), value: `${clipStatus}  @  127.0.0.1:19827`, mono: true },
     { label: t("settings.sections.about.apiServer"), value: `${apiStatusDisplay}  @  127.0.0.1:${API_SERVER_PORT}`, mono: true },
   ]
@@ -223,6 +233,12 @@ export function AboutSection() {
             mainland China) and a colored warning would misleadingly
             look like a bug in the app. */}
 
+        {updateStore.lastResult?.kind === "no-release" && (
+          <p className="text-xs text-muted-foreground">
+            {t("settings.sections.about.noRelease")}
+          </p>
+        )}
+
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input
             type="checkbox"
@@ -255,15 +271,15 @@ export function AboutSection() {
            */}
           <a
             className="cursor-pointer underline underline-offset-2 hover:text-primary"
-            href="https://github.com/nashsu/llm_wiki"
+            href={repoUrl}
             onClick={(e) => {
               e.preventDefault()
-              void openUrl("https://github.com/nashsu/llm_wiki").catch((err) => {
+              void openUrl(repoUrl).catch((err) => {
                 console.error("[about] openUrl failed:", err)
               })
             }}
           >
-            github.com/nashsu/llm_wiki
+            github.com/{UPDATE_REPO}
           </a>
         </p>
       </div>

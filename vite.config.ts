@@ -20,6 +20,7 @@ export default defineConfig(async () => ({
 
   define: {
     __APP_VERSION__: JSON.stringify(pkgJson.version),
+    __APP_CHANNEL__: JSON.stringify("alpha"),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
