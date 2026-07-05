@@ -30,6 +30,18 @@ export interface ReviewItem {
   createdAt: number
 }
 
+export interface AgentWriteReviewItemArgs {
+  payload: {
+    path: string
+    operation: "update" | "create" | "delete"
+    toolUseId?: string
+    snapshotted?: boolean
+  }
+  conversationId: string
+  messageId: string
+  streamId: string
+}
+
 interface ReviewState {
   items: ReviewItem[]
   addItem: (item: Omit<ReviewItem, "id" | "resolved" | "createdAt">) => void
@@ -83,6 +95,51 @@ function ensureUniqueReviewIds(items: ReviewItem[]) {
   }
 
   return result
+}
+
+function agentWikiOperationLabel(operation: AgentWriteReviewItemArgs["payload"]["operation"]): string {
+  if (operation === "create") return "创建"
+  if (operation === "delete") return "删除"
+  return "更新"
+}
+
+/** Create the review-store payload for a snapshotted Agent wiki write. */
+export function createAgentWriteReviewItem(
+  args: AgentWriteReviewItemArgs
+): Omit<ReviewItem, "id" | "resolved" | "createdAt"> {
+  const { payload, conversationId, messageId, streamId } = args
+  const label = agentWikiOperationLabel(payload.operation)
+  const canUndo = payload.snapshotted === true
+  const reason = canUndo
+    ? "已保存写前快照，可查看、撤销或接受此写入。"
+    : "未保存写前快照，撤销不可用；可查看页面后接受。"
+  return {
+    type: "agent-write",
+    title: `${label} ${payload.path}`,
+    description: `Agent ${label}了 ${payload.path}。${reason}`,
+    sourcePath: payload.path,
+    affectedPages: [payload.path],
+    agentWrite: {
+      path: payload.path,
+      operation: payload.operation,
+      conversationId,
+      messageId,
+      streamId,
+      toolUseId: payload.toolUseId,
+      snapshotted: canUndo,
+      timestamp: Date.now(),
+    },
+    options: canUndo
+      ? [
+          { label: "查看页面", action: `open:${payload.path}` },
+          { label: "撤销此写入", action: "__agent_write_undo__" },
+          { label: "接受", action: "__agent_write_accept__" },
+        ]
+      : [
+          { label: "查看页面", action: `open:${payload.path}` },
+          { label: "接受", action: "__agent_write_accept__" },
+        ],
+  }
 }
 
 export const useReviewStore = create<ReviewState>((set) => ({

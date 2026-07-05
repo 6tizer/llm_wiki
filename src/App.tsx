@@ -130,6 +130,18 @@ function App() {
     })()
   }, [])
 
+  // Dev-only QA fixture registry.
+  // Open dev tools and run:
+  //   __llmwiki_fixtures.agent("permission")
+  // to inject SPEC-7 Agent QA states through real store actions.
+  // Fixture shell owner=SPEC-8; Agent scenarios owner=SPEC-7.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(async () => {
+      await import("@/lib/agent-dev-fixtures")
+    })()
+  }, [])
+
   // Background update check — hydrate persisted user preferences, then
   // hit GitHub at most once every UPDATE_CHECK_CACHE_MS. Runs 1.5 s
   // after mount so it doesn't contend with the heaviest startup work

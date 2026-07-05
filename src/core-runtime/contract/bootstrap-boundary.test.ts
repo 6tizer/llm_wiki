@@ -77,6 +77,7 @@ describe("SPEC-1 bootstrap boundary inventory", () => {
       "setSelectedFile(null)",
       "applyDocumentZoom",
       "__llmwiki_testUpdateBanner",
+      "__llmwiki_fixtures.agent",
     ]
     const invariantCallSites = APP_BOOTSTRAP_BOUNDARY_INVARIANTS.flatMap(
       (invariant) => invariant.protectedCallSites,
