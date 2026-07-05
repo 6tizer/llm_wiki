@@ -35,10 +35,10 @@ export function WikiHealthView() {
             title={t("wikiHealth.sections.todo")}
           />
           <div className="grid gap-4 xl:grid-cols-2">
-            <div className="min-h-[480px] overflow-hidden rounded-md border border-border/70">
+            <div className="h-[480px] overflow-hidden rounded-md border border-border/70">
               <LintView />
             </div>
-            <div className="min-h-[480px] overflow-hidden rounded-md border border-border/70">
+            <div className="h-[480px] overflow-hidden rounded-md border border-border/70">
               <ReviewView />
             </div>
           </div>

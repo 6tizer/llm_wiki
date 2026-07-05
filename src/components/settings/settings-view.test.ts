@@ -87,6 +87,22 @@ vi.mock("./sections/model-config-section", () => ({
   ModelConfigSection: () => "Mock Model Config Section",
 }))
 
+vi.mock("./sections/derived-status-section", async () => {
+  const React = await vi.importActual<typeof import("react")>("react")
+  return {
+    DerivedStatusSection: ({ onNavigate }: { onNavigate?: (target: "synthesis" | "index-overview") => void }) =>
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          "data-testid": "mock-derived-status-manage",
+          onClick: () => onNavigate?.("synthesis"),
+        },
+        "Manage synthesis",
+      ),
+  }
+})
+
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
 
@@ -317,6 +333,25 @@ describe("SettingsView category rendering", () => {
     expect(container.querySelector("[data-testid='settings-category-index-overview']")).toBeNull()
     expect(container.querySelector("[data-testid='settings-category-maintenance']")).toBeNull()
     expect(container.querySelector("[data-testid='settings-category-derived-status']")).not.toBeNull()
+
+    unmount(root)
+  })
+
+  it("routes Derived Status manage links to the Wiki Health center", async () => {
+    useWikiStore.setState({ activeView: "settings" })
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    const derivedStatusButton = container.querySelector("[data-testid='settings-category-derived-status']")
+    if (!derivedStatusButton) throw new Error("derived-status category button not found")
+    await click(derivedStatusButton)
+    await flush()
+
+    const manage = container.querySelector("[data-testid='mock-derived-status-manage']")
+    if (!manage) throw new Error("mock derived status manage button not found")
+    await click(manage)
+
+    expect(useWikiStore.getState().activeView).toBe("wiki-health")
 
     unmount(root)
   })

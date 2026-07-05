@@ -375,6 +375,7 @@ export function describeFailedSettingsKeys(
 export function SettingsView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
+  const setActiveView = useWikiStore((s) => s.setActiveView)
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const setLlmConfig = useWikiStore((s) => s.setLlmConfig)
   const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
@@ -913,7 +914,12 @@ export function SettingsView() {
       case "knowledge-agents":
         return <KnowledgeAgentsSection project={project} />
       case "derived-status":
-        return <DerivedStatusSection project={project} />
+        return (
+          <DerivedStatusSection
+            project={project}
+            onNavigate={() => setActiveView("wiki-health")}
+          />
+        )
       case "general":
         return <GeneralSection draft={draft} setDraft={setDraft} />
       case "output":
@@ -925,7 +931,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [activeCategory, draft, project, setDraft, setActive])
+  }, [activeCategory, draft, project, setDraft, setActive, setActiveView])
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">

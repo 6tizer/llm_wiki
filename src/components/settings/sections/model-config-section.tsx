@@ -30,7 +30,7 @@ export function ModelConfigSection({ onNavigateToCategory }: Props) {
         <h3 id="settings-model-config-connections" className="text-sm font-semibold text-muted-foreground">
           {t("settings.sections.modelConfig.connections")}
         </h3>
-        <LlmProviderSection />
+        <LlmProviderSection onMigrated={bumpProfilesRefreshToken} />
         <WebSearchSection />
       </section>
 
@@ -49,8 +49,9 @@ export function ModelConfigSection({ onNavigateToCategory }: Props) {
           {t("settings.sections.modelConfig.taskMatrixHeading")}
         </h3>
         {/* Scope note: this matrix edits profile taskFamilies only. Runtime
-            task routing, permission-default UI, and the dedicated
-            embedding/multimodal pages remain separate follow-up work. */}
+            task routing is handled here; permission-default UI lives in
+            AgentSection's application group. Dedicated embedding/multimodal
+            pages remain separate surfaces. */}
         <TaskMatrixSection
           onNavigateToCategory={onNavigateToCategory}
           refreshToken={profilesRefreshToken}

@@ -91,6 +91,10 @@ describe("ModelConfigSection", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useWikiStore.setState({ activePresetId: null })
+    secretMocks.profileSecretWrite.mockResolvedValue({
+      secretRef: "llm-wiki-profile-secret:22222222-2222-4222-8222-222222222222",
+    })
+    secretMocks.profileSecretDelete.mockResolvedValue({ ok: true })
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
       status: "healthy",
@@ -126,6 +130,42 @@ describe("ModelConfigSection", () => {
     await flush()
 
     expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(4)
+
+    unmount(root)
+  })
+
+  it("refreshes Profiles and Matrix after provider migration succeeds", async () => {
+    useWikiStore.setState({
+      activePresetId: "anthropic",
+      providerConfigs: {
+        anthropic: {
+          apiKey: "legacy-secret",
+          model: "claude-sonnet",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      profileId: "profile-migrated",
+      displayName: "Migrated: anthropic",
+      secretRef: "llm-wiki-profile-secret:22222222-2222-4222-8222-222222222222",
+    }))
+    const { container, root } = renderSection()
+    await flush()
+
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(3)
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+
+    await click(create)
+    await flush()
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: "Migrated: anthropic",
+        providerId: "anthropic",
+      }),
+    )
+    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(5)
 
     unmount(root)
   })

@@ -892,6 +892,7 @@ export function GraphView() {
 			store.searchApiConfig,
 			researchDialog.queries,
 		);
+		useWikiStore.getState().setActiveView("research");
 		if (researchDialog.dismissKey) {
 			setDismissedInsights(
 				(prev) => new Set([...prev, researchDialog.dismissKey!]),

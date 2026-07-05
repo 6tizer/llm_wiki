@@ -68,4 +68,19 @@ describe("WikiHealthView", () => {
 
     unmount(root)
   })
+
+  it("keeps to-do panes fixed height so child h-full/flex scrollers own overflow", () => {
+    const { container, root } = renderWikiHealthView()
+
+    // jsdom cannot measure scroll containers; this locks the layout contract:
+    // fixed outer panes, internal scrolling, no page-height expansion.
+    const lintPane = container.querySelector("[data-testid='lint-view']")?.parentElement
+    const reviewPane = container.querySelector("[data-testid='review-view']")?.parentElement
+    expect(lintPane?.className).toContain("h-[480px]")
+    expect(reviewPane?.className).toContain("h-[480px]")
+    expect(lintPane?.className).not.toContain("min-h-[480px]")
+    expect(reviewPane?.className).not.toContain("min-h-[480px]")
+
+    unmount(root)
+  })
 })
