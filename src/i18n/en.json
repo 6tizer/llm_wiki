@@ -4,7 +4,7 @@
     "subtitle": "Chat, delegate, and grow a knowledge base that maintains itself"
   },
   "nav": {
-    "wiki": "Wiki",
+    "wiki": "Chat",
     "sources": "Sources",
     "explore": "Explore",
     "wikiHealth": "Wiki Health",
@@ -566,6 +566,13 @@
         "connections": "Connections",
         "profiles": "Profiles",
         "taskMatrixHeading": "Task assignment matrix",
+        "tabs": {
+          "navLabel": "Model configuration sections",
+          "llm": "LLM Models",
+          "sources": "External Information Sources",
+          "profiles": "Model Profiles",
+          "taskMatrix": "Task assignment matrix"
+        },
         "migration": {
           "title": "Create a runtime Profile from the active provider",
           "description": "Generate a Model Profile from {{preset}} for future unified routing. This does not change current chat, ingest, embedding, or vision behavior.",
@@ -794,7 +801,10 @@
         "title": "Import",
         "sourceWatch": "Source Watch",
         "scheduledImport": "Scheduled Import",
-        "mineru": "MinerU PDF"
+        "mineru": "MinerU PDF",
+        "tabs": {
+          "navLabel": "Import sections"
+        }
       },
       "webSearch": {
         "title": "External Information Sources",

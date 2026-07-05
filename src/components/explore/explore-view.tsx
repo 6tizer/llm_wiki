@@ -7,13 +7,13 @@ import { GraphView } from "@/components/graph/graph-view"
 type ExploreTab = "search" | "graph"
 
 const TABS: Array<{ id: ExploreTab; labelKey: string; icon: typeof Search }> = [
-  { id: "search", labelKey: "explore.tabs.search", icon: Search },
   { id: "graph", labelKey: "explore.tabs.graph", icon: Network },
+  { id: "search", labelKey: "explore.tabs.search", icon: Search },
 ]
 
 export function ExploreView() {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState<ExploreTab>("search")
+  const [activeTab, setActiveTab] = useState<ExploreTab>("graph")
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="explore-view">

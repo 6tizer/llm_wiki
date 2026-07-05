@@ -12,13 +12,8 @@ import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
 import { AZURE_OPENAI_API_VERSION } from "@/lib/azure-openai"
 import { testLlmConnection, testLlmFunction, type ProviderTestResult } from "@/lib/connection-tests"
 import { persistMany } from "@/lib/store-helpers"
-import { ProviderMigrationBanner } from "./provider-migration-banner"
 
-interface LlmProviderSectionProps {
-  onMigrated?: () => void
-}
-
-export function LlmProviderSection({ onMigrated }: LlmProviderSectionProps = {}) {
+export function LlmProviderSection() {
   const { t } = useTranslation()
   const providerConfigs = useWikiStore((s) => s.providerConfigs)
   const setProviderConfigs = useWikiStore((s) => s.setProviderConfigs)
@@ -135,8 +130,6 @@ export function LlmProviderSection({ onMigrated }: LlmProviderSectionProps = {})
           {t("settings.sections.llm.description")}
         </p>
       </div>
-
-      <ProviderMigrationBanner onMigrated={onMigrated} />
 
       <div className="space-y-2">
         {LLM_PRESETS.map((preset) => (
