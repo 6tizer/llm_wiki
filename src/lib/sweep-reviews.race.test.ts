@@ -4,8 +4,8 @@ import { createStreamChatHarness } from "@/test-helpers/mock-stream-chat"
 
 // Mock streamChat via the harness (installed via vi.mock below)
 const harness = createStreamChatHarness()
-vi.mock("./llm-client", () => ({
-  streamChat: (...args: unknown[]) => harness.mock(...args),
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: (...args: unknown[]) => harness.mock(args[1], args[2], args[3], args[4], args[5]),
 }))
 
 // Mock fs: listDirectory for buildWikiIndex, readFile for page content

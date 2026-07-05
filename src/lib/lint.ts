@@ -1,5 +1,5 @@
 import { readFile, listDirectory } from "@/commands/fs"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import type { LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useActivityStore } from "@/stores/activity-store"
@@ -244,7 +244,8 @@ export async function runSemanticLint(
   let raw = ""
   let hadError = false
 
-  await streamChat(
+  await streamChatRouted(
+    "review",
     llmConfig,
     [{ role: "user", content: prompt }],
     {
@@ -258,6 +259,9 @@ export async function runSemanticLint(
         })
       },
     },
+    undefined,
+    undefined,
+    `review:lint:${pp}`,
   )
 
   if (hadError) return []

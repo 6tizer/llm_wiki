@@ -3,15 +3,15 @@ import type { LlmConfig } from "@/stores/wiki-store"
 
 // Mock streamChat — we don't want real network, we just want to capture
 // the prompt sent to the LLM and simulate a canned response.
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(),
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(),
 }))
 
 import { optimizeResearchTopic } from "./optimize-research-topic"
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import { useWikiStore } from "@/stores/wiki-store"
 
-const mockStreamChat = vi.mocked(streamChat)
+const mockStreamChat = vi.mocked(streamChatRouted)
 
 function fakeLlmConfig(): LlmConfig {
   return {
@@ -26,7 +26,7 @@ function fakeLlmConfig(): LlmConfig {
 
 // Helper: simulate streamChat firing a canned response then completing.
 function mockStreamChatReturns(text: string) {
-  mockStreamChat.mockImplementation(async (_config, _msgs, callbacks) => {
+  mockStreamChat.mockImplementation(async (_family, _config, _msgs, callbacks) => {
     callbacks.onToken(text)
     callbacks.onDone()
   })
@@ -43,7 +43,7 @@ describe("optimizeResearchTopic — language directive", () => {
     useWikiStore.getState().setOutputLanguage("Chinese")
     await optimizeResearchTopic(fakeLlmConfig(), "gap", "desc", "missing-page", "", "")
 
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })
 
@@ -58,7 +58,7 @@ describe("optimizeResearchTopic — language directive", () => {
       "专注于深度学习研究",
     )
 
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })
 
@@ -73,14 +73,14 @@ describe("optimizeResearchTopic — language directive", () => {
       "",
     )
 
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("MANDATORY OUTPUT LANGUAGE: English")
     expect(prompt).not.toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })
 
   it("TOPIC output-format hint tells the LLM to use the mandatory language", async () => {
     await optimizeResearchTopic(fakeLlmConfig(), "x", "y", "suggestion", "", "")
-    const prompt = mockStreamChat.mock.calls[0][1][0].content
+    const prompt = mockStreamChat.mock.calls[0][2][0].content
     expect(prompt).toContain("TOPIC:")
     expect(prompt).toMatch(/TOPIC:.*mandatory output language/i)
   })

@@ -9,7 +9,7 @@
 import { readFile, listDirectory, writeFile, createDirectory } from "@/commands/fs"
 import { parseFrontmatter } from "@/lib/frontmatter"
 import { getRelativePath, normalizePath } from "@/lib/path-utils"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import { webSearch, type WebSearchResult } from "@/lib/web-search"
 import { flattenMdFiles } from "@/lib/wiki-utils"
 import { buildLanguageDirective } from "@/lib/output-language"
@@ -512,7 +512,8 @@ export async function runWikiSynthesis(
 
   let accumulated = ""
   let streamError: unknown
-  await streamChat(
+  await streamChatRouted(
+    "synthesis",
     llmConfig,
     [{ role: "user", content: prompt }],
     {
@@ -520,6 +521,9 @@ export async function runWikiSynthesis(
       onDone: () => {},
       onError: (err) => { streamError = err },
     },
+    undefined,
+    undefined,
+    `synthesis:${cluster.slug}`,
   )
   if (streamError) throw streamError
   if (!accumulated.trim()) {

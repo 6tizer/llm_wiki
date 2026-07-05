@@ -11,8 +11,8 @@ import type { FileNode } from "@/types/wiki"
  * page and one auto-fixable broken link, and asserts the orphan page is
  * left untouched (never deleted) while the broken link is processed.
  */
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(),
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(),
 }))
 vi.mock("@/lib/wiki-page-delete", () => ({
   cascadeDeleteWikiPagesWithRefs: vi.fn(),
@@ -43,11 +43,11 @@ vi.mock("@/commands/fs", () => ({
 }))
 
 import { runLintAndReport } from "./lint-fixer"
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 import { useActivityStore } from "@/stores/activity-store"
 
-const mockStreamChat = vi.mocked(streamChat)
+const mockStreamChat = vi.mocked(streamChatRouted)
 const mockCascadeDelete = vi.mocked(cascadeDeleteWikiPagesWithRefs)
 
 function fakeLlmConfig(): LlmConfig {
@@ -71,7 +71,7 @@ beforeEach(() => {
 
 describe("runLintAndReport(autoFix) — orphan survives auto-fix (SPEC-11 D6 bug1)", () => {
   it("never calls cascadeDeleteWikiPagesWithRefs for the orphan and leaves the page on disk", async () => {
-    mockStreamChat.mockImplementation(async (_cfg, _messages, cb) => {
+    mockStreamChat.mockImplementation(async (_family, _cfg, _messages, cb) => {
       cb.onToken(
         "---\ntype: concept\ntitle: Broken\n---\n\nNo longer references a missing page. Plenty of body content survives here so the length-sanity check passes comfortably.",
       )

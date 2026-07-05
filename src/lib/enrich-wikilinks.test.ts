@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 import type { LlmConfig } from "@/stores/wiki-store"
 
 // Mock the LLM client (capture prompts) and the Tauri fs commands (no real FS).
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(),
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(),
 }))
 vi.mock("@/commands/fs", () => ({
   readFile: vi.fn(),
@@ -12,11 +12,11 @@ vi.mock("@/commands/fs", () => ({
 }))
 
 import { enrichWithWikilinks } from "./enrich-wikilinks"
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import { readFile, writeFile } from "@/commands/fs"
 import { useWikiStore } from "@/stores/wiki-store"
 
-const mockStreamChat = vi.mocked(streamChat)
+const mockStreamChat = vi.mocked(streamChatRouted)
 const mockReadFile = vi.mocked(readFile)
 const mockWriteFile = vi.mocked(writeFile)
 
@@ -33,7 +33,7 @@ function fakeLlmConfig(): LlmConfig {
 
 // Returns a large-enough enriched response so the "too short" guard (0.5x) passes.
 function mockStreamChatReturns(text: string) {
-  mockStreamChat.mockImplementation(async (_cfg, _msgs, callbacks) => {
+  mockStreamChat.mockImplementation(async (_family, _cfg, _msgs, callbacks) => {
     callbacks.onToken(text)
     callbacks.onDone()
   })
@@ -57,7 +57,7 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
 
     await enrichWithWikilinks("/project", "/project/wiki/note.md", fakeLlmConfig())
 
-    const systemMsg = mockStreamChat.mock.calls[0][1][0]
+    const systemMsg = mockStreamChat.mock.calls[0][2][0]
     expect(systemMsg.role).toBe("system")
     expect(systemMsg.content).toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })
@@ -72,8 +72,8 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
     useWikiStore.getState().setOutputLanguage("Korean")
     await enrichWithWikilinks("/p", "/p/wiki/b.md", fakeLlmConfig())
 
-    const first = mockStreamChat.mock.calls[0][1][0].content
-    const second = mockStreamChat.mock.calls[1][1][0].content
+    const first = mockStreamChat.mock.calls[0][2][0].content
+    const second = mockStreamChat.mock.calls[1][2][0].content
     expect(first).toContain("MANDATORY OUTPUT LANGUAGE: Japanese")
     expect(second).toContain("MANDATORY OUTPUT LANGUAGE: Korean")
   })
@@ -85,7 +85,7 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
 
     await enrichWithWikilinks("/p", "/p/wiki/attention.md", fakeLlmConfig())
 
-    const content = mockStreamChat.mock.calls[0][1][0].content
+    const content = mockStreamChat.mock.calls[0][2][0].content
     expect(content).toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })
 
@@ -96,7 +96,7 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
 
     await enrichWithWikilinks("/p", "/p/wiki/x.md", fakeLlmConfig())
 
-    const content = mockStreamChat.mock.calls[0][1][0].content
+    const content = mockStreamChat.mock.calls[0][2][0].content
     expect(content).toContain("MANDATORY OUTPUT LANGUAGE: English")
     expect(content).not.toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
   })

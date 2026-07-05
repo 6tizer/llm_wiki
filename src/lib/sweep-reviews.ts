@@ -14,7 +14,7 @@ import { listDirectory, readFile } from "@/commands/fs"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { normalizeReviewTitle } from "@/lib/review-utils"
@@ -235,7 +235,8 @@ async function judgeBatch(
   let hadError = false
 
   try {
-    await streamChat(
+    await streamChatRouted(
+      "review",
       llmConfig,
       [{ role: "user", content: prompt }],
       {
@@ -249,6 +250,8 @@ async function judgeBatch(
         },
       },
       signal,
+      undefined,
+      `review:sweep:${batch.map((item) => item.id).join(",").slice(0, 120)}`,
     )
   } catch (err) {
     console.warn("[Sweep Reviews] LLM call failed:", err)

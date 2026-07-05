@@ -26,8 +26,8 @@ const { getMockMergeResponse, setMockMergeResponse } = vi.hoisted(() => {
   }
 })
 
-vi.mock("@/lib/llm-client", () => ({
-  streamChat: vi.fn(async (_cfg, _messages, cb) => {
+vi.mock("@/lib/pool-chat", () => ({
+  streamChatRouted: vi.fn(async (_family, _cfg, _messages, cb) => {
     cb.onToken(getMockMergeResponse())
     cb.onDone()
   }),

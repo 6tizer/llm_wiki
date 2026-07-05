@@ -34,8 +34,8 @@ const { getMockResponse, setMockResponse } = vi.hoisted(() => {
   }
 })
 
-vi.mock("@/lib/llm-client", () => ({
-  streamChat: vi.fn(async (_cfg: unknown, _messages: unknown, cb: { onToken: (t: string) => void; onDone: () => void }) => {
+vi.mock("@/lib/pool-chat", () => ({
+  streamChatRouted: vi.fn(async (_family: unknown, _cfg: unknown, _messages: unknown, cb: { onToken: (t: string) => void; onDone: () => void }) => {
     const resp = getMockResponse()
     if (resp) {
       cb.onToken(resp)

@@ -246,6 +246,7 @@ const fsMock = vi.hoisted(() => ({
 const streamChatMock = vi.hoisted(() =>
 	vi.fn(
 		async (
+			_family: unknown,
 			_config: unknown,
 			_messages: unknown[],
 			handlers: {
@@ -311,8 +312,8 @@ vi.mock("@/lib/frontmatter", () => ({
 	}),
 }));
 
-vi.mock("@/lib/llm-client", () => ({
-	streamChat: streamChatMock,
+vi.mock("@/lib/pool-chat", () => ({
+	streamChatRouted: streamChatMock,
 }));
 
 vi.mock("@/lib/web-search", () => ({
@@ -334,7 +335,7 @@ describe("saveQaForConversation", () => {
 		listDirectoryMock.mockImplementation(async () => {
 			throw new Error("no qa dir");
 		});
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onToken(
 				"---\ntype: qa\ntitle: What is RAG?\ntags: [qa, ai]\ncreated: 2026-05-31\n---\n\n# Q: What is RAG?\n\n## A: RAG is retrieval augmented generation.\n\n## Key Insights\n\n- Combines retrieval with generation\n- Reduces hallucination\n",
 			);
@@ -359,7 +360,7 @@ describe("saveQaForConversation", () => {
 	});
 
 	it("saves fenced markdown QA as clean frontmatter-first markdown", async () => {
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onToken(
 				"```markdown\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa, ai]\ncreated: 2026-05-31\n---\n\n# Q: What is RAG?\n\n## A: RAG is retrieval augmented generation.\n```",
 			);
@@ -384,7 +385,7 @@ describe("saveQaForConversation", () => {
 	});
 
 	it("skips fenced SKIP responses without writing a file", async () => {
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onToken("```\nSKIP\n```");
 			h.onDone();
 		});
@@ -406,7 +407,7 @@ describe("saveQaForConversation", () => {
 	});
 
 	it("rejects recovered frontmatter that is not at the start of the saved file", async () => {
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onToken(
 				"Here is the QA page:\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\n---\n\n# Q: What is RAG?",
 			);
@@ -430,7 +431,7 @@ describe("saveQaForConversation", () => {
 	});
 
 	it("reports a specific error when a fenced QA has trailing content", async () => {
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onToken(
 				"```markdown\n---\ntype: qa\ntitle: What is RAG?\ntags: [qa]\n---\n\n# Q: What is RAG?\n```\nHope this helps!",
 			);
@@ -455,7 +456,7 @@ describe("saveQaForConversation", () => {
 	});
 
 	it("rejects non-QA frontmatter without writing a file", async () => {
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onToken(
 				"---\ntype: entity\ntitle: What is RAG?\ntags: [qa]\n---\n\n# What is RAG?",
 			);
@@ -489,7 +490,7 @@ describe("saveQaForConversation", () => {
 			messages,
 		);
 
-		const llmMessages = streamChatMock.mock.calls[0]?.[1] as Array<{
+		const llmMessages = streamChatMock.mock.calls[0]?.[2] as Array<{
 			content: string;
 		}>;
 		expect(llmMessages[0].content).not.toContain(
@@ -511,7 +512,7 @@ describe("saveQaForConversation", () => {
 			{ trigger: "delete" },
 		);
 
-		const llmMessages = streamChatMock.mock.calls[0]?.[1] as Array<{
+		const llmMessages = streamChatMock.mock.calls[0]?.[2] as Array<{
 			content: string;
 		}>;
 		expect(result.ok).toBe(true);
@@ -532,7 +533,7 @@ describe("saveQaForConversation", () => {
 				storage.set(key, value);
 			}),
 		});
-		streamChatMock.mockImplementation(async (_c, _m, h) => {
+		streamChatMock.mockImplementation(async (_family, _c, _m, h) => {
 			h.onError?.(new Error("LLM error"));
 		});
 		const messages = [

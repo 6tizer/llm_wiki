@@ -13,7 +13,7 @@ import {
 	writeFile,
 } from "@/commands/fs";
 import { parseFrontmatter } from "@/lib/frontmatter";
-import { streamChat } from "@/lib/llm-client";
+import { streamChatRouted } from "@/lib/pool-chat";
 import { buildLanguageDirective } from "@/lib/output-language";
 import { normalizePath } from "@/lib/path-utils";
 import { type WebSearchResult, webSearch } from "@/lib/web-search";
@@ -419,7 +419,7 @@ export async function saveQaForConversation(
 
 	let accumulated = "";
 	let streamError: unknown;
-	await streamChat(llmConfig, [{ role: "user", content: prompt }], {
+	await streamChatRouted("review", llmConfig, [{ role: "user", content: prompt }], {
 		onToken: (token) => {
 			accumulated += token;
 		},
@@ -427,7 +427,7 @@ export async function saveQaForConversation(
 		onError: (err) => {
 			streamError = err;
 		},
-	});
+	}, undefined, undefined, `review:qa:${pp}`);
 	if (streamError) throw streamError;
 
 	const rawTrimmed = accumulated.trim();

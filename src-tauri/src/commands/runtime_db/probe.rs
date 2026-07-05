@@ -1417,7 +1417,10 @@ async fn runtime_model_call_forward_for_project_with_store(
 }
 
 fn model_call_task_family_supported(task_family: &str) -> bool {
-    task_family == PREPARE_PROFILE_TASK_FAMILY || task_family == "chat"
+    // Keep in sync with the frontend ModelCallTaskFamily union in
+    // src/lib/pool-chat.ts; routed model-call claims must agree on both sides.
+    task_family == PREPARE_PROFILE_TASK_FAMILY
+        || matches!(task_family, "chat" | "synthesis" | "review" | "vision")
 }
 
 async fn runtime_model_call_stream_for_project_with_store(
@@ -2296,6 +2299,18 @@ mod tests {
             model: model.to_string(),
             body,
         }
+    }
+
+    #[test]
+    fn model_call_task_family_supported_matches_frontend_routed_families() {
+        for task_family in ["ingest", "chat", "synthesis", "review", "vision"] {
+            assert!(
+                model_call_task_family_supported(task_family),
+                "{task_family} should be accepted for model-call claims",
+            );
+        }
+
+        assert!(!model_call_task_family_supported("unknown"));
     }
 
     #[test]

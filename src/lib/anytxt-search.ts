@@ -1,7 +1,7 @@
 import type { AnyTxtConfig, LlmConfig } from "@/stores/wiki-store"
 import { getHttpFetch, isFetchNetworkError } from "@/lib/tauri-fetch"
 import { normalizePath } from "@/lib/path-utils"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import type { WebSearchResult } from "./web-search"
 
 export const DEFAULT_ANYTXT_ENDPOINT = "http://127.0.0.1:9920"
@@ -171,7 +171,8 @@ export async function rewriteAnyTxtQueries(
   ].join("\n")
 
   let output = ""
-  await streamChat(
+  await streamChatRouted(
+    "chat",
     llmConfig,
     [{ role: "user", content: prompt }],
     {
@@ -181,6 +182,7 @@ export async function rewriteAnyTxtQueries(
     },
     signal,
     { temperature: 0.1, max_tokens: 512, reasoning: { mode: "off" } },
+    `chat:search:${cleanQueries.length}:${Date.now().toString(36)}`,
   )
   throwIfAborted(signal)
 

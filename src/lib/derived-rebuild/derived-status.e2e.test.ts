@@ -302,7 +302,7 @@ vi.mock("@/lib/embedding", () => ({
 }))
 
 const llmMocks = vi.hoisted(() => ({ streamChat: vi.fn() }))
-vi.mock("@/lib/llm-client", () => ({ streamChat: llmMocks.streamChat }))
+vi.mock("@/lib/pool-chat", () => ({ streamChatRouted: llmMocks.streamChat }))
 
 import { recordEmbeddingStaleMarker } from "@/lib/ingest-write"
 import { startEmbeddingConsumer, stopEmbeddingConsumer } from "./embedding-consumer"
@@ -384,7 +384,7 @@ describe("SPEC-6 PR6 Closeout Gate (a): derived-status end-to-end fixture", () =
     expect(initial.overview?.status).toBe("ready")
     expect(initial.overview?.lastRebuiltAtMs).toBeNull()
 
-    llmMocks.streamChat.mockImplementation(async (_config, _messages, handlers) => {
+    llmMocks.streamChat.mockImplementation(async (_family, _config, _messages, handlers) => {
       const page = "---\ntype: overview\ntitle: Project Overview\ntags: []\nrelated: []\n---\n\n# Overview\n\nSummary."
       handlers.onToken(page)
       handlers.onDone()
@@ -412,7 +412,7 @@ describe("SPEC-6 PR6 Closeout Gate (a): derived-status end-to-end fixture", () =
     // manual-rebuild-marker.test.ts's per-page unit tests — this is
     // specifically the whole-call failure path for a mint-to-close layer
     // (overview), which the happy-path e2e test above doesn't exercise.
-    llmMocks.streamChat.mockImplementation(async (_config, _messages, handlers) => {
+    llmMocks.streamChat.mockImplementation(async (_family, _config, _messages, handlers) => {
       handlers.onToken("") // empty response -> rebuildOverview's execute() throws before writing anything
       handlers.onDone()
     })

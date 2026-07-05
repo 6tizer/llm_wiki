@@ -1,4 +1,4 @@
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { buildLanguageDirective } from "./output-language"
 
@@ -48,7 +48,8 @@ export async function optimizeResearchTopic(
 
   let result = ""
 
-  await streamChat(
+  await streamChatRouted(
+    "chat",
     llmConfig,
     [{ role: "user", content: prompt }],
     {
@@ -56,6 +57,9 @@ export async function optimizeResearchTopic(
       onDone: () => {},
       onError: () => {},
     },
+    undefined,
+    undefined,
+    `chat:research-topic:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
   )
 
   // Parse response

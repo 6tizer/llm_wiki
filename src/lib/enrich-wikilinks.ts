@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "@/commands/fs"
-import { streamChat } from "./llm-client"
+import { streamChatRouted } from "./pool-chat"
 import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
 import { buildLanguageDirective } from "./output-language"
 import { normalizePath } from "@/lib/path-utils"
@@ -41,7 +41,8 @@ export async function enrichWithWikilinks(
   // corrupt anything it doesn't put in the list.
   let raw = ""
 
-  await streamChat(
+  await streamChatRouted(
+    "synthesis",
     llmConfig,
     [
       {
@@ -85,6 +86,9 @@ export async function enrichWithWikilinks(
       onDone: () => {},
       onError: () => {},
     },
+    undefined,
+    undefined,
+    `synthesis:wikilinks:${fp}`,
   )
 
   // Parse the LLM response. Be tolerant of fences / prose wrappers.

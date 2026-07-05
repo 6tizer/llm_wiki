@@ -17,8 +17,8 @@ import type { EnrichScenario } from "@/test-helpers/scenarios/types"
 vi.mock("@/commands/fs", () => realFs)
 
 let currentLlmResponse = ""
-vi.mock("./llm-client", () => ({
-  streamChat: vi.fn(async (_cfg, _msgs, cb) => {
+vi.mock("./pool-chat", () => ({
+  streamChatRouted: vi.fn(async (_family, _cfg, _msgs, cb) => {
     cb.onToken(currentLlmResponse)
     cb.onDone()
   }),

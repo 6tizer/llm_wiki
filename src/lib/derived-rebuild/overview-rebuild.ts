@@ -14,7 +14,7 @@ import { writeFileAtomic } from "@/commands/fs"
 import { computeContextBudget } from "@/lib/context-budget"
 import { parseFrontmatter } from "@/lib/frontmatter"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
-import { streamChat } from "@/lib/llm-client"
+import { streamChatRouted } from "@/lib/pool-chat"
 import { normalizePath } from "@/lib/path-utils"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { formatIndexExportMarkdown, groupIndexExportPages, scanIndexExportPages } from "./index-export"
@@ -93,7 +93,8 @@ export async function rebuildOverview(
 
       let accumulated = ""
       let streamError: unknown
-      await streamChat(
+      await streamChatRouted(
+        "synthesis",
         llmConfig,
         [{ role: "user", content: prompt }],
         {
@@ -101,6 +102,9 @@ export async function rebuildOverview(
           onDone: () => {},
           onError: (err) => { streamError = err },
         },
+        undefined,
+        undefined,
+        `synthesis:overview:${OVERVIEW_AFFECTED_PATH}`,
       )
       if (streamError) throw streamError
 
