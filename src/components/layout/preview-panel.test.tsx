@@ -322,6 +322,21 @@ describe("PreviewPanel per-file debounced save", () => {
     unmount(root)
   })
 
+  it("renders a larger labeled close button for the selected file", async () => {
+    const { container, root } = renderPanel()
+    selectFile("/proj/a.md")
+    await flush()
+
+    const closeButton = container.querySelector<HTMLButtonElement>("button[aria-label='Close']")
+
+    expect(closeButton).not.toBeNull()
+    expect(closeButton?.type).toBe("button")
+    expect(closeButton?.className).toContain("-m-0.5")
+    expect(closeButton?.className).toContain("p-1.5")
+
+    unmount(root)
+  })
+
   it("skips saving Milkdown's initial no-op re-emit (markdown equals last-loaded snapshot) per file", async () => {
     const { container, root } = renderPanel()
     selectFile("/proj/a.md")

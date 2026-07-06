@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from "react"
 import { X } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { readFile, writeFile } from "@/commands/fs"
@@ -33,6 +34,7 @@ interface FileSaveEntry {
 }
 
 export function PreviewPanel() {
+  const { t } = useTranslation()
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const fileContent = useWikiStore((s) => s.fileContent)
   const externalPreview = useWikiStore((s) => s.externalPreview)
@@ -178,8 +180,10 @@ export function PreviewPanel() {
           {fileName}
         </span>
         <button
+          type="button"
+          aria-label={t("common.close")}
           onClick={() => setSelectedFile(null)}
-          className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
+          className="-m-0.5 shrink-0 rounded p-1.5 text-muted-foreground hover:bg-accent"
         >
           <X className="h-3.5 w-3.5" />
         </button>

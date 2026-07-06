@@ -6,6 +6,7 @@
   "common": {
     "back": "Back",
     "cancel": "Cancel",
+    "close": "Close",
     "dismiss": "Dismiss",
     "next": "Next"
   },
