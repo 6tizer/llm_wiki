@@ -142,14 +142,14 @@ function ChatMessageImpl({
           />
         ) : (!isUser || content) && (
           <div
-            className={`min-w-0 rounded-lg px-3 py-2 text-sm ${isUser ? "self-end" : "self-start"} ${
+            className={`min-w-0 rounded-lg max-w-full overflow-hidden px-3 py-2 text-sm ${isUser ? "self-end" : "self-start"} ${
               isUser
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted text-foreground"
             }`}
           >
             {isUser ? (
-              <p dir="auto" className="whitespace-pre-wrap break-words">{content}</p>
+              <p dir="auto" className="whitespace-pre-wrap wrap-anywhere">{content}</p>
             ) : isSessionCompactOnly ? (
               <AgentSessionCompactNotice />
             ) : hasAgentBlocks ? (
