@@ -1,6 +1,6 @@
 # SPEC-16 — UI 交互质量二轮（验收 bug 群收口）
 
-> 类型：SPEC charter | 状态：approved（2026-07-06 用户确认波次与裁定点） | 创建：2026-07-06
+> 类型：SPEC charter | 状态：completed（2026-07-06 收口，见 closeout-report） | 创建：2026-07-06
 > 入口对账：[post-1.0-backlog-triage.md](./post-1.0-backlog-triage.md) 池子 B
 
 ## 1. 问题陈述

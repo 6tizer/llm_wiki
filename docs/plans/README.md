@@ -79,8 +79,8 @@
 | [SPEC-8/pr10-runtime-db-mod-split-plan.md](./SPEC-8/pr10-runtime-db-mod-split-plan.md) | SPEC-8 PR10 执行计划：runtime_db.rs 保行为拆分为 runtime_db/ 15 模块（行号测绘、可见性纪律、characterization 验证）。 | merged |
 | [spec-9-swift-shell-reentry.md](./spec-9-swift-shell-reentry.md) | Swift/SwiftUI native shell 回填锚点；等 core boundary 稳定后进入。 | deferred / gated |
 | [post-1.0-backlog-triage.md](./post-1.0-backlog-triage.md) | **post-1.0 工作唯一入口**：全部 open issues 四池归位（SPEC-15 / SPEC-16 / runtime 长尾 / 维护性长尾）+ 2026-07-06 关闭清单 + 验收发现对照。 | active / entry point |
-| [spec-15-agent-usability.md](./spec-15-agent-usability.md) | Agent 干活可用性收口：claim 契约修复、文件限额死开关、权限弹窗风暴、别名脱节、健康状态可信、空态引导（#371/#372/#337/#340/#376/#352/#377/#362/#84/#66/#67）。 | draft / 待用户确认波次 |
-| [spec-16-ui-interaction-quality.md](./spec-16-ui-interaction-quality.md) | UI 交互质量二轮：审阅队列矛盾、代码块横滚、气泡左裁、图谱详情面板、健康数据失效重算（#373/#374/#359/#375/#378/#335）。 | draft / 待用户确认波次 |
+| [spec-15-agent-usability.md](./spec-15-agent-usability.md) | Agent 干活可用性收口（9 PR #380–#402；#66/#67 对账关闭）。 | **completed（[closeout](./SPEC-15/closeout-report.md)）** |
+| [spec-16-ui-interaction-quality.md](./spec-16-ui-interaction-quality.md) | UI 交互质量二轮（5 PR #382–#395）。 | **completed（[closeout](./SPEC-16/closeout-report.md)）** |
 | [upstream-0.5-delta.md](./upstream-0.5-delta.md) | v0.5.x delta 复核入口；不再承载完成证据，只用于后续 PR 开工前重新核对 upstream 并分流。 | active / recheck gate |
 | [claude-agent-sdk-alignment.md](./claude-agent-sdk-alignment.md) | Claude Agent SDK alignment 背景资料；实际执行归入 SPEC-7 PR1。 | planned via SPEC-7 |
 | [agent-sidecar-phase6.1.md](./agent-sidecar-phase6.1.md) | Phase 7 backlog：Agent SDK productization；文件名保留历史编号。 | backlog |
@@ -134,8 +134,8 @@
 | SPEC-12 | completed（2026-07-05 closeout） | #295/#297/#299/#302/#305/#308 |
 | SPEC-13 | completed（2026-07-06 closeout：A1=M 五项重跑全绿 + 三维度深度 review + hotfix，报告见 SPEC-13/closeout-report.md） | #324/#325/#326/#327/#328/#331-#336/#341/#345/#348 |
 | SPEC-14 | completed（2026-07-06 closeout：A2 生产构建 IA 走查九项+两维度深度 review+hotfix，报告见 SPEC-14/closeout-report.md） | #344/#347/#355/#357/#361 |
-| SPEC-15 | charter draft（Agent 干活可用性收口，池 A，待用户确认波次） | — |
-| SPEC-16 | charter draft（UI 交互质量二轮，池 B，待用户确认波次） | — |
+| SPEC-15 | **completed**（Agent 干活可用性，9 PR，closeout 报告入库） | 三轨清仓 GOAL 轨1 |
+| SPEC-16 | **completed**（UI 交互质量二轮，5 PR，closeout 报告入库） | 三轨清仓 GOAL 轨2 |
 
 2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
@@ -143,6 +143,7 @@
 
 0. **1.0 门槛已达成（2026-07-06）**：SPEC-13/14/8 全部 completed，F 终验三项（M 冒烟/IA 走查/SPEC-8 行为无变化抽查）真机通过——报告见 [release-1.0-final-acceptance.md](./release-1.0-final-acceptance.md)。
 0.5. **post-1.0 入口（2026-07-06 对账后）**：全部 open issues 已四池归位，见 [post-1.0-backlog-triage.md](./post-1.0-backlog-triage.md)——池 A=SPEC-15 Agent 干活可用性（最高优先级，用户真机实测反馈驱动）、池 B=SPEC-16 UI 交互质量二轮、池 C=runtime 长尾（#286/#287/#289/#309/#311/#313/#314/#350/#351/#353，凑波次执行）、池 D=#183 维护性穿插；SPEC-9 维持 deferred。#294/#310/#330/#342/#227/#229/#243/#184/#189/#190/#191/#68 已带理由关闭。
+0.7. **⚡ 三轨清仓 GOAL 已达成（2026-07-06）**：四池全清——SPEC-15/16 completed、池 C 十 issue 全合并、池 D #183 收口。27 PR（#380–#406）。backlog 只剩 SPEC-9（deferred）+ 新拆 follow-up #405/#407。总报告见 [three-track-cleanup-final.md](./three-track-cleanup-final.md)。
 
 历史优先级记录：
 
