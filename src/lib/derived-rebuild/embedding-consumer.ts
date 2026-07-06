@@ -55,6 +55,7 @@ import {
 import { getQueueSummary as getIngestQueueSummary } from "@/lib/ingest-queue"
 import { getQueueSummary as getDedupQueueSummary } from "@/lib/dedup-queue"
 import { isAbsolutePath, normalizePath } from "@/lib/path-utils"
+import { withProjectLock } from "@/lib/project-mutex"
 import { extractPageTitle, isRootStructuralWikiPagePath, wikiPathToVectorPageId } from "@/lib/wiki-page-identity"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { WikiProject } from "@/types/wiki"
@@ -253,6 +254,20 @@ async function processClaimedJob(
   generation: number,
 ): Promise<void> {
   const stopHeartbeat = startHeartbeat(claim)
+  try {
+    return await withProjectLock(projectPath, () => processClaimedJobUnlocked(projectPath, claim, generation))
+  } finally {
+    stopHeartbeat()
+  }
+}
+
+// Split so withProjectLock covers the claimed read/write/finalize window;
+// heartbeat stays outside the lock to avoid lease expiry. Do not make this reentrant.
+async function processClaimedJobUnlocked(
+  projectPath: string,
+  claim: RuntimeJobClaim,
+  generation: number,
+): Promise<void> {
   let payload: DerivedRebuildJobPayload | null = null
   try {
     try {
@@ -353,8 +368,6 @@ async function processClaimedJob(
   } catch (err) {
     if (err instanceof ConsumerGenerationStaleError) throw err
     await safeFailClaim(claim, payload?.markerIds ?? [], errorMessage(err))
-  } finally {
-    stopHeartbeat()
   }
 }
 

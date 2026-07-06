@@ -10,6 +10,7 @@ import type { WikiProject } from "@/types/wiki"
 import { DERIVED_REBUILD_JOB_KIND } from "@/core-runtime/derived-rebuild"
 import { JOB_RUNTIME_DEFAULTS } from "@/core-runtime/contract"
 import type { TagTaxonomyOperationReport } from "@/lib/agent/tag-taxonomy"
+import { withProjectLock, __resetProjectLocksForTesting } from "@/lib/project-mutex"
 
 const mocks = vi.hoisted(() => ({
   getQueueSummary: vi.fn(),
@@ -47,6 +48,22 @@ import { startTaxonomyConsumer, stopTaxonomyConsumer } from "./taxonomy-consumer
 
 const PROJECT: WikiProject = { id: "p1", name: "P", path: "/proj" }
 const NO_QUEUED_JOB = new Error("no-queued-job: no queued runtime job is available")
+
+function defer<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
+  let resolve!: (value: T) => void
+  let reject!: (err: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+// Taxonomy needs a deeper drain than embedding's 5 because its tick has
+// claimBatch grouping, a claim loop, and then the locked growth call.
+async function drainMicrotasks(times = 20): Promise<void> {
+  for (let i = 0; i < times; i += 1) await Promise.resolve()
+}
 
 function emptyJobList() {
   return { enabled: true, status: "healthy" as const, jobs: [], leases: [] }
@@ -110,6 +127,7 @@ function successReport(overrides: Partial<TagTaxonomyOperationReport> = {}): Tag
 }
 
 beforeEach(() => {
+  __resetProjectLocksForTesting()
   vi.clearAllMocks()
   mocks.getQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, completed: 0, total: 0 })
   mocks.getDedupQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, total: 0 })
@@ -122,6 +140,7 @@ beforeEach(() => {
 
 afterEach(() => {
   stopTaxonomyConsumer()
+  __resetProjectLocksForTesting()
   vi.useRealTimers()
 })
 
@@ -270,6 +289,127 @@ describe("taxonomy-consumer — cross-affectedPath aggregation (SPEC-6 PR3+4 dec
     )
     expect(warnSpy).toHaveBeenCalled()
     warnSpy.mockRestore()
+  })
+})
+
+describe("taxonomy-consumer — project lock serialization", () => {
+  it("holds the project lock across growth and marker completion, so a concurrent delete waits", async () => {
+    const order: string[] = []
+    const claim = claimFor("job-tax-lock-consumer-first", taxonomyPayload("wiki/racy.md", ["m-lock"]))
+    const growthEntered = defer()
+    const releaseGrowth = defer<TagTaxonomyOperationReport>()
+    mocks.runtimeJobClaimByKind.mockResolvedValueOnce(claim)
+    mocks.applyTagTaxonomyGrowth.mockImplementationOnce(async () => {
+      order.push("consumer:growth:start")
+      growthEntered.resolve(undefined)
+      return releaseGrowth.promise
+    })
+    mocks.runtimeDerivedMarkerCompleteBatch.mockImplementationOnce(async () => {
+      order.push("consumer:complete")
+      return { job: {}, markers: [] }
+    })
+
+    startTaxonomyConsumer(PROJECT)
+    await growthEntered.promise
+
+    const deleteEntered = defer()
+    const deleteCall = withProjectLock(PROJECT.path, async () => {
+      order.push("delete:entered")
+      deleteEntered.resolve(undefined)
+    })
+
+    const preCompleteRace = await Promise.race([
+      deleteEntered.promise.then(() => "delete-entered" as const),
+      new Promise<"still-blocked">((resolve) => setTimeout(() => resolve("still-blocked"), 50)),
+    ])
+    expect(preCompleteRace).toBe("still-blocked")
+    expect(order).toEqual(["consumer:growth:start"])
+
+    releaseGrowth.resolve(successReport())
+    await deleteCall
+
+    expect(order).toEqual(["consumer:growth:start", "consumer:complete", "delete:entered"])
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalledWith({
+      jobId: "job-tax-lock-consumer-first",
+      leaseId: "job-tax-lock-consumer-first-lease",
+      markerIds: ["m-lock"],
+    })
+  })
+
+  it("waits behind an existing project lock after claiming jobs, before running taxonomy growth", async () => {
+    const claim = claimFor("job-tax-lock-delete-first", taxonomyPayload("wiki/wait.md", ["m-wait"]))
+    const holderEntered = defer()
+    const releaseHolder = defer()
+    const holder = withProjectLock(PROJECT.path, async () => {
+      holderEntered.resolve(undefined)
+      await releaseHolder.promise
+    })
+    await holderEntered.promise
+
+    mocks.runtimeJobClaimByKind.mockResolvedValueOnce(claim)
+    mocks.applyTagTaxonomyGrowth.mockResolvedValueOnce(successReport())
+
+    startTaxonomyConsumer(PROJECT)
+    await vi.waitFor(() => expect(mocks.runtimeJobClaimByKind).toHaveBeenCalled())
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mocks.applyTagTaxonomyGrowth).not.toHaveBeenCalled()
+
+    releaseHolder.resolve(undefined)
+    await holder
+    await vi.waitFor(() => expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalled())
+
+    expect(mocks.applyTagTaxonomyGrowth).toHaveBeenCalledWith("/proj")
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalledWith({
+      jobId: "job-tax-lock-delete-first",
+      leaseId: "job-tax-lock-delete-first-lease",
+      markerIds: ["m-wait"],
+    })
+  })
+
+  it("keeps safeFailClaim under the project lock and releases the lock afterward when growth throws", async () => {
+    const order: string[] = []
+    const claim = claimFor("job-tax-lock-fail", taxonomyPayload("wiki/fail.md", ["m-fail"]))
+    const growthEntered = defer()
+    const releaseGrowthFailure = defer<TagTaxonomyOperationReport>()
+    mocks.runtimeJobClaimByKind.mockResolvedValueOnce(claim)
+    mocks.applyTagTaxonomyGrowth.mockImplementationOnce(async () => {
+      order.push("consumer:growth:start")
+      growthEntered.resolve(undefined)
+      return releaseGrowthFailure.promise
+    })
+    mocks.runtimeJobFail.mockImplementationOnce(async () => {
+      order.push("consumer:fail")
+      return { state: "retry-wait" }
+    })
+
+    startTaxonomyConsumer(PROJECT)
+    await growthEntered.promise
+
+    const deleteEntered = defer()
+    const deleteCall = withProjectLock(PROJECT.path, async () => {
+      order.push("delete:entered")
+      deleteEntered.resolve(undefined)
+    })
+
+    const preFailRace = await Promise.race([
+      deleteEntered.promise.then(() => "delete-entered" as const),
+      new Promise<"still-blocked">((resolve) => setTimeout(() => resolve("still-blocked"), 50)),
+    ])
+    expect(preFailRace).toBe("still-blocked")
+
+    releaseGrowthFailure.reject(new Error("growth boom"))
+    await deleteCall
+
+    expect(order).toEqual(["consumer:growth:start", "consumer:fail", "delete:entered"])
+    expect(mocks.runtimeJobFail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: "job-tax-lock-fail",
+        leaseId: "job-tax-lock-fail-lease",
+        error: "taxonomy-growth-failed: growth boom",
+      }),
+    )
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).not.toHaveBeenCalled()
   })
 })
 
@@ -664,8 +804,8 @@ describe("taxonomy-consumer — project switch / generation lifecycle (SPEC-11 P
     await vi.advanceTimersByTimeAsync(0)
     expect(mocks.applyTagTaxonomyGrowth).toHaveBeenCalledTimes(1)
 
-    // Generation 2 (new, same project): claims a DIFFERENT job and ALSO
-    // stalls on its own growth call, independently of generation 1.
+    // Generation 2 (new, same project): claims a DIFFERENT job, then waits
+    // behind generation 1's still-held project lock before growth.
     stopTaxonomyConsumer()
     const newClaim = claimFor("job-new", taxonomyPayload("wiki/new.md", ["m-new"]))
     mocks.runtimeJobClaimByKind.mockReset()
@@ -680,16 +820,19 @@ describe("taxonomy-consumer — project switch / generation lifecycle (SPEC-11 P
     startTaxonomyConsumer(PROJECT)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
-    expect(mocks.applyTagTaxonomyGrowth).toHaveBeenCalledTimes(2)
-    const claimCallsAfterGen2Start = mocks.runtimeJobClaimByKind.mock.calls.length
+    await drainMicrotasks()
+    expect(mocks.runtimeJobClaimByKind).toHaveBeenCalledTimes(2)
+    expect(mocks.applyTagTaxonomyGrowth).toHaveBeenCalledTimes(1)
 
     // Let generation 1's stalled growth resolve now — its tick hits
-    // assertCurrentRun and self-aborts, running ITS OWN finally block.
+    // assertCurrentRun, self-aborts, and releases the project lock.
     // Under the pre-fix single shared boolean, this finally would have
     // cleared generation 2's reentrancy flag too.
     resolveOldGrowth(successReport())
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
+    await drainMicrotasks()
+    expect(mocks.applyTagTaxonomyGrowth).toHaveBeenCalledTimes(2)
     expect(mocks.runtimeDerivedMarkerCompleteBatch).not.toHaveBeenCalled()
     expect(mocks.runtimeJobFail).not.toHaveBeenCalled()
 
@@ -699,7 +842,7 @@ describe("taxonomy-consumer — project switch / generation lifecycle (SPEC-11 P
     // second overlapping claim call for generation 2).
     await vi.advanceTimersByTimeAsync(3_000)
     await vi.advanceTimersByTimeAsync(0)
-    expect(mocks.runtimeJobClaimByKind.mock.calls.length).toBe(claimCallsAfterGen2Start)
+    expect(mocks.runtimeJobClaimByKind.mock.calls.length).toBe(2)
 
     // Generation 2 finishes normally once its own growth resolves.
     resolveNewGrowth(successReport())
@@ -723,6 +866,12 @@ describe("taxonomy-consumer — nested failure resilience (Tester items 7a/7b pa
     startTaxonomyConsumer(PROJECT)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
+    await drainMicrotasks()
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalledWith({
+      jobId: "job-nest-1",
+      leaseId: "job-nest-1-lease",
+      markerIds: ["mn1"],
+    })
 
     const claim2 = claimFor("job-nest-2", taxonomyPayload("wiki/nest2.md", ["mn2"]))
     mocks.runtimeJobClaimByKind.mockReset()
