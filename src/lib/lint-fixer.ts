@@ -15,7 +15,8 @@ import type { LlmConfig } from "@/stores/wiki-store";
 /**
  * Can this lint result be auto-fixed via the single-item / bulk "Auto Fix"
  * UI paths (handleAutoFix, handleFixAll in lint-view.tsx)?
- * All types except "suggestion" (too vague) and "orphan" are fixable.
+ * All types except "suggestion" (too vague), "orphan", and source health
+ * indicators are fixable.
  *
  * Orphan is deliberately excluded (SPEC-11 D6 bug1 follow-up): fixOrphan
  * calls cascadeDeleteWikiPagesWithRefs with zero confirmation, so routing
@@ -27,6 +28,7 @@ import type { LlmConfig } from "@/stores/wiki-store";
  */
 export function isFixable(result: LintResult): boolean {
 	if (result.type === "orphan") return false;
+	if (result.type === "source-unlinked") return false;
 	if (result.type === "broken-link") return true;
 	if (result.type === "no-outlinks") return true;
 	if (result.type === "semantic") {
@@ -55,6 +57,8 @@ export async function fixLintResult(
 			return fixBrokenLink(pp, result, llmConfig);
 		case "no-outlinks":
 			return fixNoOutlinks(pp, result, llmConfig);
+		case "source-unlinked":
+			return false;
 		case "semantic":
 			return fixSemantic(pp, result, llmConfig);
 		default:

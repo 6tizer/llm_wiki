@@ -103,7 +103,7 @@ describe("DerivedStatusSection", () => {
     unmount(root)
   })
 
-  it("renders one card per visible layer, in order, all ready with no markers", async () => {
+  it("renders one card per visible layer, in order, all uninitialized with no markers", async () => {
     const { container, root } = renderSection({ project })
     await flush()
 
@@ -118,7 +118,40 @@ describe("DerivedStatusSection", () => {
       expect(container.querySelector(`[data-testid='${id}']`)).not.toBeNull()
     }
     expect(container.querySelector("[data-testid='derived-status-card-graph']")).toBeNull()
-    expect(container.querySelector("[data-testid='derived-status-badge-ready']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-badge-uninitialized']")).not.toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-badge-ready']")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("shows ready, not uninitialized, after a successful rebuild marker exists", async () => {
+    mocks.runtimeDerivedStaleMarkerList.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      markers: [
+        {
+          markerId: "m1",
+          layer: "embedding",
+          affectedPath: "wiki/a.md",
+          baseVersion: "b",
+          inputHash: "h",
+          markedAtMs: 0,
+          reason: "commit",
+          sourceEventId: "e1",
+          status: "done",
+          updatedAtMs: 123,
+          lastError: null,
+        },
+      ],
+      nextCursor: null,
+    })
+
+    const { container, root } = renderSection({ project })
+    await flush()
+
+    const embeddingCard = container.querySelector("[data-testid='derived-status-card-embedding']")!
+    expect(embeddingCard.querySelector("[data-testid='derived-status-badge-ready']")).not.toBeNull()
+    expect(embeddingCard.querySelector("[data-testid='derived-status-badge-uninitialized']")).toBeNull()
 
     unmount(root)
   })
@@ -241,7 +274,7 @@ describe("DerivedStatusSection", () => {
     expect(container.querySelector("[data-testid='derived-status-section']")).toBeNull()
     expect(container.querySelector("[data-testid='derived-status-error']")).toBeNull()
     expect(container.querySelector("[data-testid='derived-status-card-embedding']")).toBeNull()
-    expect(container.querySelector("[data-testid='derived-status-badge-ready']")).toBeNull()
+    expect(container.querySelector("[data-testid='derived-status-badge-uninitialized']")).toBeNull()
 
     unmount(root)
   })
@@ -279,7 +312,7 @@ describe("DerivedStatusSection", () => {
     await flush()
 
     const embeddingCard = container.querySelector("[data-testid='derived-status-card-embedding']")!
-    expect(embeddingCard.querySelector("[data-testid='derived-status-badge-ready']")).not.toBeNull()
+    expect(embeddingCard.querySelector("[data-testid='derived-status-badge-uninitialized']")).not.toBeNull()
 
     const button = container.querySelector<HTMLButtonElement>("[data-testid='derived-status-rebuild-embedding']")!
     await click(button)

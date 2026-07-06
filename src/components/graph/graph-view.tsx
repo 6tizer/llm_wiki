@@ -770,6 +770,7 @@ export function GraphView() {
 		async (nodeId: string) => {
 			const node = nodes.find((n) => n.id === nodeId);
 			if (!node) return;
+			setHighlightedNodes(new Set([nodeId]));
 			try {
 				const content = await readFile(node.path);
 				setSelectedFile(node.path);
@@ -778,7 +779,7 @@ export function GraphView() {
 				console.error("Failed to open wiki page:", err);
 			}
 		},
-		[nodes, setSelectedFile, setFileContent],
+		[nodes, setSelectedFile, setFileContent, setHighlightedNodes],
 	);
 
 	const handleNodeContextMenu = useCallback(

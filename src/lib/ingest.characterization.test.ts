@@ -46,6 +46,9 @@ let generationResponse = ""
 let chatGenerationResponse = ""
 let reviewResponse = ""
 let mergeMode: MergeMode = "success"
+const notifierMocks = vi.hoisted(() => ({
+  notifyWikiPathsChanged: vi.fn(),
+}))
 
 vi.mock("./llm-client", () => ({
   streamChat: vi.fn(async (_cfg, messages, cb) => {
@@ -124,6 +127,8 @@ vi.mock("./llm-client", () => ({
     cb.onDone()
   }),
 }))
+
+vi.mock("@/lib/wiki-change-notifier", () => notifierMocks)
 
 vi.mock("@/lib/embedding", () => ({
   embedPage: vi.fn(async () => ({ indexed: 0, failed: 0 })),
@@ -282,6 +287,7 @@ beforeEach(() => {
   // doesn't leak into later tests.
   mockRecordEmbeddingStaleMarker.mockReset()
   mockRecordEmbeddingStaleMarker.mockResolvedValue("recorded")
+  notifierMocks.notifyWikiPathsChanged.mockReset()
 })
 
 const cleanups: Array<() => Promise<void>> = []
@@ -1112,6 +1118,23 @@ describe("C. executeIngestWrites vs writeFileBlocks", () => {
     const chatWritten = await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
     expect(chatWritten.every((p) => !p.startsWith(tmp.path))).toBe(true)
     expect(chatWritten).toContain("wiki/concepts/shape-b.md")
+  })
+
+  it("18b: executeIngestWrites notifies the lint rescan pipeline with written wiki paths", async () => {
+    const tmp = track(await seedProject("c18b"))
+    await setupChatIngest(tmp)
+    chatGenerationResponse = fileBlock(
+      "wiki/concepts/notified.md",
+      ["type: concept", 'title: "Notified"', "created: 2026-05-01", "updated: 2026-05-01", "sources: []", "tags: []", "related: []"],
+      ["# Notified", "", "Written through executeIngestWrites for notifier coverage."],
+    )
+
+    await executeIngestWrites(tmp.path, useWikiStore.getState().llmConfig)
+
+    expect(notifierMocks.notifyWikiPathsChanged).toHaveBeenCalledWith(
+      tmp.path,
+      ["wiki/concepts/notified.md"],
+    )
   })
 
   it("19: both writeFileBlocks and executeIngestWrites append to wiki/log.md rather than overwrite (shared invariant)", async () => {

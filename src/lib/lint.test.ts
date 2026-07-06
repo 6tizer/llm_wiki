@@ -199,6 +199,71 @@ describe("runStructuralLint — broken-link detection (baseline coverage)", () =
   })
 })
 
+describe("runStructuralLint — directory-scoped structural metrics", () => {
+  it("does not report sources pages as orphan, but reports source-unlinked for source pages without outlinks", async () => {
+    const pages = [
+      {
+        node: {
+          name: "sources",
+          path: "/project/wiki/sources",
+          is_dir: true,
+          children: [
+            makeFileNode("sources/doc.md", "# Source Doc\n\nNo outbound wiki links.").node,
+          ],
+        } as FileNode,
+        content: "",
+      },
+      makeFileNode("concept.md", "# Concept\n\nSee [[other]]."),
+      makeFileNode("other.md", "# Other\n\nSee [[concept]]."),
+    ]
+    mockListDirectory.mockResolvedValue(pages.map((p) => p.node))
+    mockReadFile.mockImplementation(async (path) => {
+      if (path === "/project/wiki/sources/doc.md") return "# Source Doc\n\nNo outbound wiki links."
+      const match = pages.find((p) => p.node.path === path)
+      return match?.content ?? ""
+    })
+
+    const results = await runStructuralLint("/project")
+
+    expect(results).toContainEqual(expect.objectContaining({
+      type: "source-unlinked",
+      page: "sources/doc.md",
+    }))
+    expect(results).not.toContainEqual(expect.objectContaining({
+      type: "orphan",
+      page: "sources/doc.md",
+    }))
+    expect(results).not.toContainEqual(expect.objectContaining({
+      type: "no-outlinks",
+      page: "sources/doc.md",
+    }))
+  })
+
+  it("continues reporting orphan and no-outlinks for knowledge pages", async () => {
+    const pages = [
+      makeFileNode("linked.md", "# Linked\n\nSee [[leaf]]."),
+      makeFileNode("leaf.md", "# Leaf\n\nNo outbound wiki links."),
+      makeFileNode("orphan.md", "# Orphan\n\nSee [[linked]]."),
+    ]
+    mockListDirectory.mockResolvedValue(pages.map((p) => p.node))
+    mockReadFile.mockImplementation(async (path) => {
+      const match = pages.find((p) => p.node.path === path)
+      return match?.content ?? ""
+    })
+
+    const results = await runStructuralLint("/project")
+
+    expect(results).toContainEqual(expect.objectContaining({
+      type: "orphan",
+      page: "orphan.md",
+    }))
+    expect(results).toContainEqual(expect.objectContaining({
+      type: "no-outlinks",
+      page: "leaf.md",
+    }))
+  })
+})
+
 describe("runStructuralLint — S5 self-heal characterization (SPEC-11 reference-sweep crash → dead link)", () => {
   it("flags the dangling wikilink left behind when the cross-file reference sweep crashes after deleting the target page but before it could scrub a surviving page's link to it", async () => {
     // Simulates the exact SPEC-11 chain-B scenario (see

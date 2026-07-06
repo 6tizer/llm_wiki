@@ -103,7 +103,25 @@ export const lintScenarios: LintScenario[] = [
     },
   },
 
-  // 5. semantic-contradiction (LLM-backed)
+  // 5. directory-scoped metrics — sources get source-unlinked, not orphan/no-outlinks
+  {
+    name: "structural/directory-scoped-metrics",
+    description:
+      "Knowledge pages still get structural graph metrics, source pages get " +
+      "source-unlinked when they do not point into knowledge, and queries are ignored.",
+    initialWiki: {
+      "wiki/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
+      "wiki/attention.md": page("Attention", "Related: [[transformer]]."),
+      "wiki/transformer.md": page("Transformer", "Built on [[attention]]."),
+      "wiki/sources/doc.md": page("Doc Source", "Imported source summary with no wikilinks."),
+      "wiki/queries/search.md": page("Search Query", "A saved query with no wikilinks."),
+    },
+    expected: {
+      structural: [{ type: "source-unlinked", page: "sources/doc.md" }],
+    },
+  },
+
+  // 6. semantic-contradiction (LLM-backed)
   {
     name: "semantic/contradiction-found",
     description:

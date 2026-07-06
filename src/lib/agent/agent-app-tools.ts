@@ -437,7 +437,7 @@ function lintResultArg(args: ToolArgs): LintResult {
   }
   const result = value as Partial<LintResult>
   if (
-    !["orphan", "broken-link", "no-outlinks", "semantic"].includes(String(result.type)) ||
+    !["orphan", "broken-link", "no-outlinks", "source-unlinked", "semantic"].includes(String(result.type)) ||
     !["warning", "info"].includes(String(result.severity)) ||
     typeof result.page !== "string" ||
     typeof result.detail !== "string"

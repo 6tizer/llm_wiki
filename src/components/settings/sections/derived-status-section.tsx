@@ -166,7 +166,7 @@ function LayerCard({
           <h3 className="text-sm font-medium">{t(`settings.sections.derivedStatus.layers.${layer}`)}</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">{formatLastRebuilt(t, bucket.lastRebuiltAtMs)}</p>
         </div>
-        <StatusBadge status={bucket.status} stale={bucket.stale} />
+        <StatusBadge status={bucket.status} stale={bucket.stale} lastRebuiltAtMs={bucket.lastRebuiltAtMs} />
       </div>
 
       {canRebuild && (
@@ -213,9 +213,18 @@ function LayerCard({
   )
 }
 
-function StatusBadge({ status, stale }: { status: DerivedLayerBucketStatus; stale: boolean }) {
+function StatusBadge({
+  status,
+  stale,
+  lastRebuiltAtMs,
+}: {
+  status: DerivedLayerBucketStatus
+  stale: boolean
+  lastRebuiltAtMs: number | null
+}) {
   const { t } = useTranslation()
-  const displayKey = stale ? "stale" : status
+  const neverBuilt = status === "ready" && lastRebuiltAtMs === null
+  const displayKey = neverBuilt ? "uninitialized" : stale ? "stale" : status
   const Icon = iconForStatus(status)
   return (
     <span

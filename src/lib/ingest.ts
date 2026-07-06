@@ -32,6 +32,7 @@ import {
   type WikiSchemaRouting,
 } from "@/lib/wiki-schema"
 import { isWikiListingPath } from "@/lib/wiki-cleanup"
+import { notifyWikiPathsChanged } from "@/lib/wiki-change-notifier"
 
 
 function appendSavedImageRefsForCaption(content: string, images: SavedImage[]): string {
@@ -2569,6 +2570,7 @@ export async function executeIngestWrites(
   if (writtenPaths.length > 0) {
     const fileList = writtenPaths.map((p) => `- ${p}`).join("\n")
     getStore().addMessage("system", `Files written to wiki:\n${fileList}`)
+    notifyWikiPathsChanged(pp, writtenPaths)
   } else {
     getStore().addMessage("system", "No files were written. The LLM response did not contain valid FILE blocks.")
   }

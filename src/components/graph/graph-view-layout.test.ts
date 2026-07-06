@@ -33,4 +33,18 @@ describe("GraphView layout key", () => {
     expect(source).toContain('className="h-4 w-4 shrink-0 text-muted-foreground"')
     expect(source).toContain('className="truncate text-sm font-medium"')
   })
+
+  it("highlights a clicked node while preserving the existing click-to-open path", () => {
+    const source = readFileSync("src/components/graph/graph-view.tsx", "utf8")
+    const handler = source.slice(
+      source.indexOf("const handleNodeClick = useCallback"),
+      source.indexOf("const handleNodeContextMenu = useCallback"),
+    )
+
+    expect(handler).toContain("setHighlightedNodes(new Set([nodeId]))")
+    expect(handler.indexOf("setHighlightedNodes(new Set([nodeId]))")).toBeLessThan(
+      handler.indexOf("readFile(node.path)"),
+    )
+    expect(handler).toContain("setSelectedFile(node.path)")
+  })
 })

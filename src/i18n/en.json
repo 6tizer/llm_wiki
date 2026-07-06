@@ -572,6 +572,7 @@
       "orphan": "Orphan Page",
       "broken-link": "Broken Link",
       "no-outlinks": "No Outbound Links",
+      "source-unlinked": "Source Without Links",
       "semantic": "Semantic Issue"
     },
     "issues": "{{count}} issue",
@@ -1197,6 +1198,7 @@
           "failed": "Failed",
           "dirty": "Dirty",
           "stale": "Stale",
+          "uninitialized": "Uninitialized",
           "ready": "Ready"
         }
       },
