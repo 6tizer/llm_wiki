@@ -7,7 +7,7 @@
 //!
 //! This module ports `api_server.rs::safe_join` into a reusable helper that
 //! the fs command layer calls. The project root is obtained from
-//! `FileSyncState` (set when the project file watcher starts).
+//! `ProjectRootState` (set when a project is opened).
 //!
 //! Policy when the project root is unknown (watcher not started):
 //!   - read commands: allow (degrade to legacy behavior — the app may need to
@@ -22,6 +22,60 @@
 //! to canonicalize-based sandboxing.
 
 use std::path::{Component, Path, PathBuf};
+
+use tauri::State;
+
+use super::file_sync::ProjectRootState;
+
+#[derive(Clone, Copy)]
+pub(crate) enum SandboxMode {
+    Read,
+    ReadRequiresRootButAllowsExternal,
+    Write,
+}
+
+/// Validate a command path against the active project root using the requested
+/// read/write policy.
+pub(crate) fn sandbox_path(
+    state: &State<'_, ProjectRootState>,
+    path: &str,
+    mode: SandboxMode,
+) -> Result<PathBuf, String> {
+    sandbox_path_for_root(state.get(), path, mode)
+}
+
+/// Validate a command path against an optional project root.
+///
+/// Write-like commands fail closed when no root is known. Legacy read commands
+/// keep the pre-sandbox behavior and allow the path when no root is known.
+/// `ReadRequiresRootButAllowsExternal` is for scheduled import hash reads:
+/// it requires an active project but preserves external absolute-file reads.
+pub(crate) fn sandbox_path_for_root(
+    root: Option<PathBuf>,
+    path: &str,
+    mode: SandboxMode,
+) -> Result<PathBuf, String> {
+    match root {
+        Some(_)
+            if matches!(mode, SandboxMode::ReadRequiresRootButAllowsExternal)
+                && Path::new(path).is_absolute() =>
+        {
+            Ok(PathBuf::from(path))
+        }
+        Some(root) => validate_within_project(&root, path),
+        None => match mode {
+            SandboxMode::Write => Err(format!(
+                "Cannot write to '{path}': no active project root (no project open). \
+                 Open a project first."
+            )),
+            SandboxMode::ReadRequiresRootButAllowsExternal => Err(format!(
+                "Cannot read '{path}': no active project root (no project open). \
+                 Open a project first."
+            )),
+            SandboxMode::Read => Ok(PathBuf::from(path)),
+        },
+    }
+}
 
 /// Validate that `target` resolves to a path inside `project_root`.
 ///
@@ -57,9 +111,7 @@ pub fn validate_within_project(project_root: &Path, target: &str) -> Result<Path
                 component,
                 Component::ParentDir | Component::Prefix(_) | Component::RootDir
             ) {
-                return Err(format!(
-                    "Path traversal is not allowed: '{target}'"
-                ));
+                return Err(format!("Path traversal is not allowed: '{target}'"));
             }
         }
         project_root.join(rel_path)
@@ -96,10 +148,16 @@ pub fn validate_within_project(project_root: &Path, target: &str) -> Result<Path
             .skip(1) // skip `joined` itself; start from its parent
             .find(|p| p.exists())
             .ok_or_else(|| {
-                format!("Cannot resolve any existing ancestor of '{}'", joined.display())
+                format!(
+                    "Cannot resolve any existing ancestor of '{}'",
+                    joined.display()
+                )
             })?;
         let ancestor_canon = existing_ancestor.canonicalize().map_err(|e| {
-            format!("Failed to resolve ancestor '{}': {e}", existing_ancestor.display())
+            format!(
+                "Failed to resolve ancestor '{}': {e}",
+                existing_ancestor.display()
+            )
         })?;
         if !ancestor_canon.starts_with(&root_canon) {
             return Err(format!(
@@ -120,8 +178,8 @@ pub fn validate_within_project(project_root: &Path, target: &str) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::env;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     // Unique per-call counter so parallel tests don't share the same temp dir
     // (which caused flaky canonicalize/remove_dir_all races — P1-A).
@@ -156,8 +214,54 @@ mod tests {
         // comparing a non-canonical root against a canonicalized abs path fails.
         let root_canon = root.canonicalize().unwrap();
         let result = validate_within_project(&root_canon, abs.to_str().unwrap());
-        assert!(result.is_ok(), "absolute path inside root should be allowed");
+        assert!(
+            result.is_ok(),
+            "absolute path inside root should be allowed"
+        );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sandbox_read_without_root_keeps_legacy_allow_behavior() {
+        let result = sandbox_path_for_root(None, "/tmp/source.pdf", SandboxMode::Read);
+        assert_eq!(result.unwrap(), PathBuf::from("/tmp/source.pdf"));
+    }
+
+    #[test]
+    fn sandbox_write_without_root_fails_closed() {
+        let result = sandbox_path_for_root(None, "wiki/media/img.png", SandboxMode::Write);
+        assert!(result.is_err(), "write without project root must be denied");
+        let err = result.unwrap_err();
+        assert!(err.contains("no active project root"), "{err}");
+    }
+
+    #[test]
+    fn sandbox_requires_root_but_allows_external_absolute_read() {
+        let root = tmp_root();
+        let target = env::temp_dir().join(format!(
+            "llm-wiki-external-read-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let result = sandbox_path_for_root(
+            Some(root.clone()),
+            target.to_str().unwrap(),
+            SandboxMode::ReadRequiresRootButAllowsExternal,
+        );
+        assert_eq!(result.unwrap(), target);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sandbox_requires_root_but_allows_external_read_fails_without_root() {
+        let result = sandbox_path_for_root(
+            None,
+            "/tmp/source.pdf",
+            SandboxMode::ReadRequiresRootButAllowsExternal,
+        );
+        assert!(result.is_err(), "root-required read must fail without root");
+        let err = result.unwrap_err();
+        assert!(err.contains("no active project root"), "{err}");
     }
 
     #[test]
@@ -173,7 +277,10 @@ mod tests {
         let root = tmp_root();
         // /etc/passwd is absolute and outside the temp root
         let result = validate_within_project(&root, "/etc/passwd");
-        assert!(result.is_err(), "absolute path outside root should be rejected");
+        assert!(
+            result.is_err(),
+            "absolute path outside root should be rejected"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -266,7 +373,10 @@ mod tests {
         // A path under the symlink resolves outside root once canonicalized.
         let target = link.join("evil.md");
         let result = validate_within_project(&root_canon, target.to_str().unwrap());
-        assert!(result.is_err(), "path under a symlink escaping root must be rejected");
+        assert!(
+            result.is_err(),
+            "path under a symlink escaping root must be rejected"
+        );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
     }

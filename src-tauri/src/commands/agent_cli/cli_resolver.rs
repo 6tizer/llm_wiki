@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+use serde::Serialize;
+use tokio::task::JoinHandle;
 
 const LOGIN_SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(3);
 const PATH_MARKER: char = '\x1e';
@@ -11,6 +14,42 @@ static RESOLVED_COMMANDS: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::
 
 #[cfg(not(windows))]
 static RESOLVED_SHELL_PATH: OnceLock<Option<String>> = OnceLock::new();
+
+pub(crate) type TimeoutTaskMap = Arc<tokio::sync::Mutex<HashMap<String, JoinHandle<()>>>>;
+
+/// Common CLI detection payload returned by provider-specific detect commands.
+#[derive(Serialize)]
+pub struct DetectResult {
+    pub(crate) installed: bool,
+    pub(crate) version: Option<String>,
+    pub(crate) path: Option<String>,
+    /// When !installed, a short human-readable reason rendered by the UI.
+    pub(crate) error: Option<String>,
+}
+
+pub(crate) fn suppress_windows_console(_cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        _cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+pub(crate) async fn apply_child_path_env(cmd: &mut tokio::process::Command) {
+    let (path_key, path_value) = child_path_env_override(child_path_env().await);
+    cmd.env(path_key, path_value);
+}
+
+pub(crate) async fn abort_timeout_task(timeout_tasks: &TimeoutTaskMap, stream_id: &str) -> bool {
+    if let Some(task) = timeout_tasks.lock().await.remove(stream_id) {
+        task.abort();
+        true
+    } else {
+        false
+    }
+}
 
 /// PATH to hand a spawned CLI so its interpreter resolves.
 ///
@@ -566,7 +605,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(
             envs.get(key).map(String::as_str),
@@ -622,7 +666,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(
             envs.get(key).map(String::as_str),
@@ -654,7 +703,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(
             envs.get(key).map(String::as_str),
@@ -686,7 +740,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(
             envs.get(key).map(String::as_str),
@@ -718,7 +777,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(
             envs.get(key).map(String::as_str),
@@ -748,7 +812,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(
             envs.get(key).map(String::as_str),
@@ -818,7 +887,12 @@ mod env_allowlist_tests {
         let envs: std::collections::HashMap<String, String> = cmd
             .as_std()
             .get_envs()
-            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
             .collect();
         assert_eq!(envs.get("PATH").map(String::as_str), Some("/custom/bin"));
     }
@@ -889,8 +963,8 @@ mod tests {
 #[cfg(all(test, unix))]
 mod process_group_tests {
     use super::{
-        graceful_kill_process_group, kill_all_tracked_children, kill_process_group,
-        GRACEFUL_KILL_GRACE_PERIOD, KillSignal,
+        graceful_kill_process_group, kill_all_tracked_children, kill_process_group, KillSignal,
+        GRACEFUL_KILL_GRACE_PERIOD,
     };
     use std::collections::HashMap;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -957,7 +1031,10 @@ mod process_group_tests {
         let _ = std::fs::remove_file(&marker_path);
         let mut child = spawn_leader_with_group_grandchild(&marker_path);
         let grandchild_pid = read_grandchild_pid(&marker_path, Duration::from_secs(2)).await;
-        assert!(pid_is_alive(grandchild_pid), "grandchild should be alive before kill");
+        assert!(
+            pid_is_alive(grandchild_pid),
+            "grandchild should be alive before kill"
+        );
 
         kill_process_group(&mut child, KillSignal::Kill).expect("kill process group");
         let _ = child.wait().await;
@@ -1139,8 +1216,8 @@ mod process_group_tests {
     /// cleaned up within ~one grace period, not one grace period *per*
     /// child — and none of their descendants may be left as orphans.
     #[tokio::test]
-    async fn kill_all_tracked_children_kills_multiple_wedged_leaders_concurrently_without_orphans(
-    ) {
+    async fn kill_all_tracked_children_kills_multiple_wedged_leaders_concurrently_without_orphans()
+    {
         const WEDGED_CHILD_COUNT: usize = 3;
         let children: tokio::sync::Mutex<HashMap<String, tokio::process::Child>> =
             tokio::sync::Mutex::new(HashMap::new());
@@ -1172,10 +1249,7 @@ mod process_group_tests {
             descendant_pids.push(descendant_pid);
             marker_paths.push(marker_path);
 
-            children
-                .lock()
-                .await
-                .insert(format!("stream-{i}"), child);
+            children.lock().await.insert(format!("stream-{i}"), child);
         }
 
         let start = Instant::now();
