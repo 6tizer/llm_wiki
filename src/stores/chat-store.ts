@@ -14,6 +14,7 @@ import type {
 import i18n from "@/i18n"
 import type { AgentErrorKind } from "@/lib/agent/agent-run-state"
 import { isCompactOnlyAgentMessage } from "@/lib/agent/agent-summary"
+import { normalizeConversationPermissionPolicyOverride } from "@/lib/agent/permission-policy-resolver"
 import type { ChatAgentStep } from "@/lib/chat-agent"
 
 export interface Conversation {
@@ -465,28 +466,13 @@ function fallbackPermissionDecision(decision?: AgentPermissionDecision): AgentPe
   )
 }
 
-const CONVERSATION_AGENT_PERMISSION_POLICIES = new Set<AgentPermissionPolicy>([
-  "default",
-  "restricted",
-  "bypassPermissions",
-])
-
-function normalizeConversationAgentPermissionPolicy(
-  value: unknown
-): AgentPermissionPolicy | undefined {
-  return typeof value === "string" &&
-    CONVERSATION_AGENT_PERMISSION_POLICIES.has(value as AgentPermissionPolicy)
-    ? (value as AgentPermissionPolicy)
-    : undefined
-}
-
 function normalizeConversation(conversation: Conversation): Conversation {
   const profileId =
     typeof conversation.agentProfileIdOverride === "string" &&
     conversation.agentProfileIdOverride.trim()
       ? conversation.agentProfileIdOverride.trim()
       : undefined
-  const permissionPolicy = normalizeConversationAgentPermissionPolicy(
+  const permissionPolicy = normalizeConversationPermissionPolicyOverride(
     conversation.agentPermissionPolicyOverride
   )
   const {

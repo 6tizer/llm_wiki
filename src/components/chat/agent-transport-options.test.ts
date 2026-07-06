@@ -135,6 +135,30 @@ describe("buildAgentTransportOptionsFromState", () => {
     expect(options?.agentProfileId).toBeUndefined()
   })
 
+  it("treats a persisted default conversation override as inheriting the project default", () => {
+    const options = buildAgentTransportOptionsFromState({
+      project: { id: "project-1", name: "Wiki", path: "/wiki" },
+      llmConfig: baseLlmConfig,
+      apiConfig,
+      conversations: [
+        {
+          id: "c1",
+          title: "Agent",
+          createdAt: 1,
+          updatedAt: 1,
+          agentPermissionPolicyOverride: "default",
+        },
+      ],
+      activeConversationId: "c1",
+      resourceConfig: {
+        ...DEFAULT_AGENT_RESOURCE_CONFIG,
+        defaultPermissionPolicy: "restricted",
+      },
+    })
+
+    expect(options?.permissionPolicy).toBe("restricted")
+  })
+
   it("threads disallowed tools through to transport options", () => {
     const options = buildAgentTransportOptionsFromState({
       project: { id: "project-1", name: "Wiki", path: "/wiki" },

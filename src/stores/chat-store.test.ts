@@ -253,6 +253,33 @@ describe("chat store agent data model", () => {
     })
   })
 
+  it("clears an inherited fork permission override when following the global default", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      conversations: [
+        {
+          id: convId,
+          title: "Agent work",
+          createdAt: 0,
+          updatedAt: 1,
+          agentSessionId: "session-1",
+          agentPermissionPolicyOverride: "restricted",
+        },
+      ],
+      activeConversationId: convId,
+    })
+
+    const forkId = useChatStore.getState().forkAgentConversation(convId)
+    if (!forkId) throw new Error("expected fork id")
+
+    useChatStore
+      .getState()
+      .setConversationAgentPermissionPolicyOverride(forkId, undefined)
+
+    const fork = useChatStore.getState().conversations.find((conv) => conv.id === forkId)
+    expect(fork?.agentPermissionPolicyOverride).toBeUndefined()
+  })
+
   it("does not add agent overrides when forking a conversation without them", () => {
     const convId = useChatStore.getState().createConversation()
     useChatStore.setState({
@@ -353,10 +380,19 @@ describe("chat store agent data model", () => {
     useChatStore.getState().setConversationAgentProfileOverride(convId, undefined)
     useChatStore.getState().setConversationAgentPermissionPolicyOverride(
       convId,
-      "bypass" as never,
+      "default",
     )
 
     expect(useChatStore.getState().conversations[0].agentProfileIdOverride).toBeUndefined()
+    expect(
+      useChatStore.getState().conversations[0].agentPermissionPolicyOverride,
+    ).toBeUndefined()
+
+    useChatStore.getState().setConversationAgentPermissionPolicyOverride(
+      convId,
+      "bypass" as never,
+    )
+
     expect(
       useChatStore.getState().conversations[0].agentPermissionPolicyOverride,
     ).toBeUndefined()

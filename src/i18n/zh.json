@@ -278,6 +278,17 @@
       "profileAuto": "自动（推荐）",
       "policy": "权限策略",
       "policyScopeHint": "仅作用于本对话",
+      "policyEffective": "当前：{{policy}} · {{source}}",
+      "policyFollowGlobal": {
+        "label": "默认（继承全局）",
+        "description": "跟随全局默认。当前：{{policy}}。"
+      },
+      "policyOverrideLabel": "{{policy}}（本对话覆盖）",
+      "policySources": {
+        "conversation": "本对话覆盖",
+        "global": "继承全局默认",
+        "fallback": "内置默认"
+      },
       "policyOptions": {
         "default": {
           "label": "默认",

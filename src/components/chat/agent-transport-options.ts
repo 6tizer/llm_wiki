@@ -4,6 +4,7 @@ import type { WikiProject } from "@/types/wiki"
 import type { AgentResourceConfig } from "@/lib/agent/agent-settings"
 import type { AgentTransportOptions } from "@/lib/agent/agent-types"
 import { API_SERVER_PORT } from "@/lib/api-server-constants"
+import { resolveConversationPermissionPolicy } from "@/lib/agent/permission-policy-resolver"
 
 function agentBaseUrl(config: LlmConfig): string | undefined {
   if (config.provider === "custom") return config.customEndpoint || undefined
@@ -14,8 +15,6 @@ function agentBaseUrl(config: LlmConfig): string | undefined {
 function agentApiServerBaseUrl(): string {
   return `http://127.0.0.1:${API_SERVER_PORT}`
 }
-
-const FALLBACK_AGENT_PERMISSION_POLICY = "default"
 
 export function buildAgentTransportOptionsFromState({
   project,
@@ -53,10 +52,10 @@ export function buildAgentTransportOptionsFromState({
       "[agent-transport-options] agentResumeSessionAt set without a pending fork — ignoring",
     )
   }
-  const permissionPolicy =
-    activeConversation?.agentPermissionPolicyOverride ??
-    resourceConfig.defaultPermissionPolicy ??
-    FALLBACK_AGENT_PERMISSION_POLICY
+  const { policy: permissionPolicy } = resolveConversationPermissionPolicy(
+    activeConversation,
+    resourceConfig,
+  )
 
   return {
     cwd: project.path,

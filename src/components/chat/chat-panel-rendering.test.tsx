@@ -712,6 +712,24 @@ describe("ChatPanel agent mode rendering", () => {
         lng: "zh",
       }),
     ).toBe("不再询问直接执行——包括 shell 命令与任意文件修改。")
+    expect(i18n.t("chat.agentRouting.policyFollowGlobal.label", { lng: "en" })).toBe(
+      "Default (inherits global)",
+    )
+    expect(i18n.t("chat.agentRouting.policyFollowGlobal.label", { lng: "zh" })).toBe(
+      "默认（继承全局）",
+    )
+    expect(
+      i18n.t("chat.agentRouting.policyOverrideLabel", {
+        lng: "en",
+        policy: "Restricted",
+      }),
+    ).toBe("Restricted (this conversation override)")
+    expect(
+      i18n.t("chat.agentRouting.policyOverrideLabel", {
+        lng: "zh",
+        policy: "受限",
+      }),
+    ).toBe("受限（本对话覆盖）")
   })
 
   it("renders explicit Save QA when a project conversation is active", () => {
@@ -1779,6 +1797,77 @@ describe("ChatPanel agent mode rendering", () => {
     if (!routeButton) throw new Error("route button not found")
 
     expect(routeButton.textContent).toContain("Agent Beta")
+    expect(routeButton.textContent).toContain("Restricted")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("writes a restricted conversation override from the route menu", async () => {
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const routeButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${i18n.t("chat.modelIndicator")}"]`,
+    )
+    if (!routeButton) throw new Error("route button not found")
+    await act(async () => {
+      routeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      findButtonByText(container, "Restricted (this conversation override)").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(
+      useChatStore.getState().conversations[0].agentPermissionPolicyOverride,
+    ).toBe("restricted")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("clears a conversation permission override when default is selected", async () => {
+    useAgentSettingsStore
+      .getState()
+      .setResourceConfig({ defaultPermissionPolicy: "restricted" })
+    setupActiveProjectConversation()
+    useChatStore
+      .getState()
+      .setConversationAgentPermissionPolicyOverride("conv-1", "bypassPermissions")
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const routeButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${i18n.t("chat.modelIndicator")}"]`,
+    )
+    if (!routeButton) throw new Error("route button not found")
+    expect(routeButton.textContent).toContain("Skip confirmation")
+
+    await act(async () => {
+      routeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain("Current: Skip confirmation · this conversation override")
+
+    await act(async () => {
+      findButtonByText(container, "Default (inherits global)").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(
+      useChatStore.getState().conversations[0].agentPermissionPolicyOverride,
+    ).toBeUndefined()
     expect(routeButton.textContent).toContain("Restricted")
 
     act(() => root.unmount())
