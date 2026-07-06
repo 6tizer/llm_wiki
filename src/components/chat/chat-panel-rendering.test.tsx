@@ -29,6 +29,7 @@ const runtimeJobCancelMock = vi.hoisted(() => vi.fn())
 const startIngestMock = vi.hoisted(() => vi.fn())
 const executeIngestWritesMock = vi.hoisted(() => vi.fn())
 const dialogOpenMock = vi.hoisted(() => vi.fn())
+const notifyWikiPathsChangedMock = vi.hoisted(() => vi.fn())
 
 const PNG_BASE64 = "iVBORw0KGgo="
 
@@ -79,6 +80,10 @@ vi.mock("@/lib/agent/agent-transport", async (importOriginal) => {
 vi.mock("@/lib/ingest", () => ({
   startIngest: startIngestMock,
   executeIngestWrites: executeIngestWritesMock,
+}))
+
+vi.mock("@/lib/wiki-change-notifier", () => ({
+  notifyWikiPathsChanged: notifyWikiPathsChangedMock,
 }))
 
 vi.mock("@/commands/runtime-db", async (importOriginal) => {
@@ -1308,6 +1313,7 @@ describe("ChatPanel agent mode rendering", () => {
       "撤销此写入",
       "接受",
     ])
+    expect(notifyWikiPathsChangedMock).toHaveBeenCalledWith("/project", ["wiki/page.md"])
 
     act(() => root.unmount())
     container.remove()

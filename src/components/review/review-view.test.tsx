@@ -28,10 +28,15 @@ const lintMocks = vi.hoisted(() => ({
   enqueueAgentStructuralLint: vi.fn(),
 }))
 
+const notifierMocks = vi.hoisted(() => ({
+  notifyWikiPathsChanged: vi.fn(),
+}))
+
 vi.mock("@/lib/deep-research", () => researchMocks)
 vi.mock("@/commands/fs", () => fsMocks)
 vi.mock("@/lib/agent/agent-wiki-snapshot-restore", () => snapshotMocks)
 vi.mock("@/lib/agent/agent-lint-queue", () => lintMocks)
+vi.mock("@/lib/wiki-change-notifier", () => notifierMocks)
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -61,6 +66,12 @@ function deferred<T>(): {
     resolve = res
   })
   return { promise, resolve }
+}
+
+async function flushPromises(count = 5): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    await Promise.resolve()
+  }
 }
 
 beforeEach(() => {
@@ -135,6 +146,161 @@ describe("ReviewView deep research action", () => {
       ["alpha query"],
     )
     expect(useWikiStore.getState().activeView).toBe("research")
+
+    unmount(root)
+  })
+})
+
+describe("ReviewView create page action", () => {
+  function setCreatePageReviewItem(): void {
+    useReviewStore.setState({
+      items: [
+        {
+          id: "review-create-1",
+          type: "missing-page",
+          title: "Missing page: Alpha",
+          description: "Alpha needs a page",
+          options: [{ label: "Create Page", action: "Create Page" }],
+          resolved: false,
+          createdAt: 1,
+        },
+      ],
+    })
+  }
+
+  it("skips writing when the page already exists by title", async () => {
+    setCreatePageReviewItem()
+    fsMocks.listDirectory.mockImplementation(async (path: string) => {
+      if (path === "/project/wiki") {
+        return [
+          {
+            name: "alpha-existing.md",
+            path: "/project/wiki/concepts/alpha-existing.md",
+            is_dir: false,
+          },
+        ]
+      }
+      return []
+    })
+    fsMocks.readFile.mockImplementation(async (path: string) => {
+      if (path === "/project/wiki/concepts/alpha-existing.md") {
+        return '---\ntitle: "Alpha"\n---\n\n# Alpha\n'
+      }
+      return "restored content"
+    })
+
+    const { container, root } = renderReviewView()
+    const createButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Create Page"),
+    )
+    if (!createButton) throw new Error("Create Page button not found")
+
+    await act(async () => {
+      createButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await flushPromises()
+    })
+
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
+    expect(notifierMocks.notifyWikiPathsChanged).not.toHaveBeenCalled()
+    expect(useReviewStore.getState().items[0]).toMatchObject({
+      resolved: true,
+      resolvedAction: "已存在，跳过创建",
+    })
+
+    unmount(root)
+  })
+
+  it("creates a missing page and notifies wiki change consumers", async () => {
+    setCreatePageReviewItem()
+    fsMocks.listDirectory.mockImplementation(async (path: string) => {
+      if (path === "/project/wiki") return []
+      return []
+    })
+    fsMocks.readFile.mockImplementation(async (path: string) => {
+      if (path === "/project/schema.md") throw new Error("no schema")
+      if (path === "/project/wiki/index.md") throw new Error("no index")
+      if (path === "/project/wiki/log.md") throw new Error("no log")
+      return "restored content"
+    })
+
+    const { container, root } = renderReviewView()
+    const createButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Create Page"),
+    )
+    if (!createButton) throw new Error("Create Page button not found")
+
+    await act(async () => {
+      createButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await flushPromises()
+    })
+
+    const pageWrite = fsMocks.writeFile.mock.calls.find(([path]) =>
+      String(path).startsWith("/project/wiki/concepts/"),
+    )
+    expect(pageWrite?.[0]).toMatch(/\/project\/wiki\/concepts\/alpha-\d{4}-\d{2}-\d{2}-\d{6}\.md$/)
+    expect(notifierMocks.notifyWikiPathsChanged).toHaveBeenCalledWith(
+      "/project",
+      expect.arrayContaining(["wiki/index.md", "wiki/log.md"]),
+    )
+    expect(useReviewStore.getState().items[0]?.resolvedAction).toMatch(/^Created: wiki\/concepts\/alpha-/)
+
+    unmount(root)
+  })
+
+  it("creates only missing drafts when some requested pages already exist", async () => {
+    useReviewStore.setState({
+      items: [
+        {
+          id: "review-create-2",
+          type: "missing-page",
+          title: "Missing pages",
+          description: "Missing pages: Alpha, Beta",
+          options: [{ label: "Create Page", action: "Create Page" }],
+          resolved: false,
+          createdAt: 1,
+        },
+      ],
+    })
+    fsMocks.listDirectory.mockImplementation(async (path: string) => {
+      if (path === "/project/wiki") {
+        return [
+          {
+            name: "alpha-existing.md",
+            path: "/project/wiki/concepts/alpha-existing.md",
+            is_dir: false,
+          },
+        ]
+      }
+      return []
+    })
+    fsMocks.readFile.mockImplementation(async (path: string) => {
+      if (path === "/project/wiki/concepts/alpha-existing.md") {
+        return '---\ntitle: "Alpha"\n---\n\n# Alpha\n'
+      }
+      if (path === "/project/schema.md") throw new Error("no schema")
+      if (path === "/project/wiki/index.md") throw new Error("no index")
+      if (path === "/project/wiki/log.md") throw new Error("no log")
+      return "restored content"
+    })
+
+    const { container, root } = renderReviewView()
+    const createButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Create Page"),
+    )
+    if (!createButton) throw new Error("Create Page button not found")
+
+    await act(async () => {
+      createButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await flushPromises()
+    })
+
+    const pageWrites = fsMocks.writeFile.mock.calls
+      .map(([path]) => String(path))
+      .filter((path) => path.startsWith("/project/wiki/concepts/"))
+    expect(pageWrites).toHaveLength(1)
+    expect(pageWrites[0]).toMatch(/\/project\/wiki\/concepts\/beta-\d{4}-\d{2}-\d{2}-\d{6}\.md$/)
+    expect(pageWrites[0]).not.toContain("alpha")
+    expect(useReviewStore.getState().items[0]?.resolvedAction).toContain("skipped existing: Alpha")
 
     unmount(root)
   })

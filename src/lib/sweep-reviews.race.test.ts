@@ -226,6 +226,26 @@ describe("sweep — rule-based auto-resolution", () => {
 })
 
 describe("sweep — LLM batch loop", () => {
+  it("serializes overlapping sweep triggers so LLM judging does not run concurrently", async () => {
+    setProject("/project")
+    addPending([{ title: "Concurrent suggestion", type: "suggestion" }])
+
+    const firstSweep = sweepResolvedReviews("/project")
+    await waitUntil(() => harness.pending.length === 1)
+
+    const secondSweep = sweepResolvedReviews("/project")
+    await flushMicrotasks(5)
+    expect(harness.pending).toHaveLength(1)
+
+    await harness.complete(JSON.stringify({ resolved: [] }))
+    await firstSweep
+    await waitUntil(() => harness.pending.length === 2)
+
+    await harness.complete(JSON.stringify({ resolved: [] }))
+    await secondSweep
+    expect(harness.pending).toHaveLength(2)
+  })
+
   it("processes pending items in batches of JUDGE_BATCH_SIZE=40 and breaks when a batch resolves nothing", async () => {
     setProject("/project")
     // 80 pending items, none rule-resolvable (suggestion bypasses rule stage)

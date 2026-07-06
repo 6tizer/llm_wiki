@@ -109,6 +109,12 @@ function pageExists(name: string, index: WikiIndex): boolean {
   return false
 }
 
+/** Check whether a page title/name already exists in a project's wiki index. */
+export async function pageExistsInWiki(projectPath: string, name: string): Promise<boolean> {
+  const index = await buildWikiIndex(projectPath)
+  return pageExists(name, index)
+}
+
 /**
  * Extract a JSON object from an LLM response.
  *
@@ -319,16 +325,9 @@ function matchesCurrentProject(projectPath: string): boolean {
   return normalizePath(current) === normalizePath(projectPath)
 }
 
-/**
- * Scan pending review items and auto-resolve those whose condition
- * no longer holds. Called when the ingest queue drains.
- *
- * Guards against two races:
- *   - `signal` aborted mid-flight (e.g. project switch triggered clearQueueState)
- *   - The current project changed while we were awaiting I/O — the wiki index
- *     we built is for the wrong project and must not be applied.
- */
-export async function sweepResolvedReviews(
+let sweepQueue: Promise<void> = Promise.resolve()
+
+async function runSweepResolvedReviews(
   projectPath: string,
   signal?: AbortSignal,
 ): Promise<number> {
@@ -448,4 +447,39 @@ export async function sweepResolvedReviews(
   if (total > 0) console.log(`[Sweep Reviews] ${detail}`)
 
   return total
+}
+
+/**
+ * Scan pending review items and auto-resolve those whose condition
+ * no longer holds. Called when the ingest queue drains or wiki writes land.
+ *
+ * Guards against three races:
+ *   - `signal` aborted mid-flight (e.g. project switch triggered clearQueueState)
+ *   - The current project changed while we were awaiting I/O — the wiki index
+ *     we built is for the wrong project and must not be applied.
+ *   - Multiple trigger sources firing at once — sweeps are serialized so the
+ *     LLM semantic judge cannot run concurrently for the same in-memory stores.
+ */
+export async function sweepResolvedReviews(
+  projectPath: string,
+  signal?: AbortSignal,
+): Promise<number> {
+  let releaseQueue: () => void = () => undefined
+  const previousSweep = sweepQueue
+  sweepQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve
+  })
+
+  try {
+    try {
+      await previousSweep
+    } catch {
+      // A previous caller still releases the queue in its finally block; do
+      // not let its failure poison later sweep triggers.
+    }
+    if (signal?.aborted) return 0
+    return await runSweepResolvedReviews(projectPath, signal)
+  } finally {
+    releaseQueue()
+  }
 }
