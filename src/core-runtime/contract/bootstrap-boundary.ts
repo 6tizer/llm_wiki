@@ -175,8 +175,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     targetBoundary: "platform-adapter",
     currentResponsibilities: ["Notify clip server of current project", "Notify clip server of recent projects"],
     currentCallSites: [
-      'fetch("http://127.0.0.1:19827/project"',
-      'fetch("http://127.0.0.1:19827/projects"',
+      "CLIP_SERVER_BASE_URL}/project",
+      "CLIP_SERVER_BASE_URL}/projects",
       "getRecentProjects",
     ],
     migrationNote: "Clip server notification is shell/platform integration, not core project truth.",

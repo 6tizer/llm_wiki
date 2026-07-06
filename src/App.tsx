@@ -14,6 +14,7 @@ import { loadAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { cleanExpiredAgentSessions, loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
+import { CLIP_SERVER_BASE_URL } from "@/lib/clip-server-constants"
 import { normalizeMineruConfig } from "@/lib/mineru-config"
 import { createSerialQueue } from "@/lib/serial-queue"
 import { UPDATE_REPO } from "@/lib/update-check"
@@ -529,7 +530,7 @@ function App() {
       // Notify local clip server of the current project + all recent projects
       void (async () => {
         if (isStale()) return
-        await fetch("http://127.0.0.1:19827/project", {
+        await fetch(`${CLIP_SERVER_BASE_URL}/project`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: proj.path }),
@@ -542,7 +543,7 @@ function App() {
           const recents = await getRecentProjects()
           if (isStale()) return
           const projects = recents.map((p) => ({ name: p.name, path: p.path }))
-          await fetch("http://127.0.0.1:19827/projects", {
+          await fetch(`${CLIP_SERVER_BASE_URL}/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ projects }),
