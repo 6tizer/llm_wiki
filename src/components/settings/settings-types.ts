@@ -53,6 +53,7 @@ export interface SettingsDraft {
 
   // Per-project Agent resource limits
   agentMaxTurns: number
+  agentMaxFilesChangedEnabled: boolean
   agentMaxFilesChanged: number
   agentMaxWriteKiB: number
   agentDefaultPermissionPolicy: AgentPermissionPolicy

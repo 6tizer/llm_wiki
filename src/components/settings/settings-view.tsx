@@ -221,6 +221,7 @@ export function initialDraft(
     apiMcpEnabled: apiConfig.mcpEnabled ?? false,
     apiToken: apiConfig.token,
     agentMaxTurns: agentConfig.maxTurns,
+    agentMaxFilesChangedEnabled: agentConfig.maxFilesChangedEnabled,
     agentMaxFilesChanged: agentConfig.maxFilesChanged,
     agentMaxWriteKiB: Math.max(1, Math.round(agentConfig.maxWriteBytes / 1024)),
     agentDefaultPermissionPolicy: agentConfig.defaultPermissionPolicy,
@@ -696,10 +697,7 @@ export function SettingsView() {
               maxFilesChanged: draft.agentMaxFilesChanged,
               maxWriteBytes: draft.agentMaxWriteKiB * 1024,
               defaultPermissionPolicy: draft.agentDefaultPermissionPolicy,
-              // The preflight toggle has no UI control yet (plumbing only, see
-              // #119 P0-3). Preserve the current value so saving unrelated
-              // settings doesn't silently reset a hand-edited flag to false.
-              maxFilesChangedEnabled: agentConfig.maxFilesChangedEnabled,
+              maxFilesChangedEnabled: draft.agentMaxFilesChangedEnabled,
             })
             setAgentResourceConfig(newAgentConfig)
             return true

@@ -255,9 +255,9 @@ export interface AgentAppToolBudget {
 	maxWriteBytes?: number;
 	/** Distinct wiki-relative paths already changed in the current Agent run. */
 	changedPaths: string[];
-	/** Plumbing-only toggle threaded from the resource config for future
-	 * stricter file-count preflight. Current fan-out tools still use the
-	 * unknown-write guard plus postflight enforcement. */
+	/** When true, budget preflight/postflight enforce the maxFilesChanged
+	 * cap (including the fan-out unknown-write guard). When false or absent,
+	 * file-count limits are disabled; changedPaths tracking stays on. */
 	maxFilesChangedEnabled?: boolean;
 }
 

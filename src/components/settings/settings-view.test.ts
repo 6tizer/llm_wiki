@@ -496,6 +496,7 @@ describe("settings MinerU polling draft", () => {
     expect(Object.keys(draft).some((key) => key.toLowerCase().includes("synthesis"))).toBe(false)
     const allowedAgentDraftKeys = new Set([
       "agentMaxTurns",
+      "agentMaxFilesChangedEnabled",
       "agentMaxFilesChanged",
       "agentMaxWriteKiB",
       "agentDefaultPermissionPolicy",
@@ -520,6 +521,26 @@ describe("settings MinerU polling draft", () => {
     )
 
     expect(draft.agentDefaultPermissionPolicy).toBe("restricted")
+    expect(draft.agentMaxFilesChangedEnabled).toBe(false)
+  })
+
+  it("hydrates Agent max files changed enforcement from config", () => {
+    const draft = initialDraft(
+      "auto" as never,
+      proxy,
+      scheduledImport,
+      sourceWatch,
+      { enabled: false, token: "", modelVersion: "vlm" },
+      apiConfig,
+      {
+        ...agent,
+        maxFilesChangedEnabled: true,
+      },
+      20,
+      "en",
+    )
+
+    expect(draft.agentMaxFilesChangedEnabled).toBe(true)
   })
 
   it("hydrates MinerU polling fields from config and falls back for legacy configs", () => {
@@ -616,7 +637,7 @@ describe("SettingsView handleSave step isolation", () => {
     unmount(root)
   })
 
-  it("saves the Agent default permission policy and preserves hidden file-count enforcement", async () => {
+  it("saves the Agent default permission policy and file-count enforcement toggle", async () => {
     useAgentSettingsStore.setState({
       resourceConfig: {
         maxTurns: 25,
@@ -639,6 +660,11 @@ describe("SettingsView handleSave step isolation", () => {
     if (!bypass) throw new Error("bypass policy button not found")
     await click(bypass)
 
+    const maxFilesToggle = container.querySelector<HTMLInputElement>('[data-testid="agent-max-files-changed-enabled"]')
+    if (!maxFilesToggle) throw new Error("max files changed toggle not found")
+    expect(maxFilesToggle.checked).toBe(true)
+    await click(maxFilesToggle)
+
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent === "Save",
     )
@@ -653,7 +679,7 @@ describe("SettingsView handleSave step isolation", () => {
         maxFilesChanged: 20,
         maxWriteBytes: 256 * 1024,
         defaultPermissionPolicy: "bypassPermissions",
-        maxFilesChangedEnabled: true,
+        maxFilesChangedEnabled: false,
       }),
     )
 

@@ -1050,6 +1050,7 @@
         "defaultPermissionPolicyHint": "Conversations can temporarily override this.",
         "maxTurns": "Max turns",
         "maxTurnsHint": "Maximum SDK turns per Agent run. Higher values allow longer multi-step tasks.",
+        "maxFilesChangedEnabled": "Limit changed files per run",
         "maxFilesChanged": "Max files changed",
         "maxFilesChangedHint": "Maximum distinct wiki files the Agent may change in one run.",
         "maxWriteKiB": "Max write size (KiB)",

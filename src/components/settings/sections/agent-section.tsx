@@ -118,6 +118,17 @@ export function AgentSection({ draft, setDraft, projectReady }: Props) {
         </div>
 
         <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+						data-testid="agent-max-files-changed-enabled"
+              checked={draft.agentMaxFilesChangedEnabled}
+              onChange={(event) => setDraft("agentMaxFilesChangedEnabled", event.target.checked)}
+              className="h-3.5 w-3.5"
+              disabled={disabled}
+            />
+            {t("settings.sections.agent.maxFilesChangedEnabled")}
+          </label>
           <Label htmlFor="agent-max-files-changed">
             {t("settings.sections.agent.maxFilesChanged")}
           </Label>
@@ -138,7 +149,7 @@ export function AgentSection({ draft, setDraft, projectReady }: Props) {
                 ),
               )
             }
-            disabled={disabled}
+            disabled={disabled || !draft.agentMaxFilesChangedEnabled}
           />
           <p className="text-xs text-muted-foreground">
             {t("settings.sections.agent.maxFilesChangedHint")}
