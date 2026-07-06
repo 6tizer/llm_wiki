@@ -135,6 +135,12 @@ function App() {
   // Dev-only QA fixture registry.
   // Open dev tools and run:
   //   __llmwiki_fixtures.agent("permission")
+  // Scenarios:
+  //   permission, profileUnavailable, modelRejected, resourceLimit, compact,
+  //   timeline, pendingCorrection, activeRewind, doneRewind, rewindLocked,
+  //   rewindCrossFork, rewindWikiWrite, agentWriteReview
+  // rewindLocked leaves the conversation lock engaged (composer disabled);
+  // running any other fixture scenario clears it.
   // to inject SPEC-7 Agent QA states through real store actions.
   // Fixture shell owner=SPEC-8; Agent scenarios owner=SPEC-7.
   useEffect(() => {

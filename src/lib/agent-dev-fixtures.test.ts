@@ -7,6 +7,7 @@ import {
 } from "./agent-dev-fixtures"
 import { registerDevFixture } from "./dev-fixtures"
 import { computeAgentRewindGateDecision } from "@/lib/agent/agent-rewind-gate"
+import { classifyAgentError } from "@/lib/agent/agent-run-state"
 import {
   useChatStore,
   type AgentRewindRequestRecord,
@@ -80,15 +81,20 @@ afterEach(() => {
 })
 
 describe("agent dev fixtures", () => {
-  it("keeps the fixture name list exactly aligned with SPEC-7 PR7", () => {
+  it("keeps the fixture name list aligned with registered Agent scenarios", () => {
     expect(AGENT_DEV_FIXTURE_SCENARIOS).toEqual([
       "permission",
+      "profileUnavailable",
+      "modelRejected",
       "resourceLimit",
       "compact",
       "timeline",
       "pendingCorrection",
       "activeRewind",
       "doneRewind",
+      "rewindLocked",
+      "rewindCrossFork",
+      "rewindWikiWrite",
       "agentWriteReview",
     ])
   })
@@ -120,6 +126,34 @@ describe("agent dev fixtures", () => {
     expect(
       state.agentPermissionRequestsByConversation[state.activeConversationId ?? ""]?.[0],
     ).toBe(active)
+  })
+
+  it("injects profile_unavailable with classifier-recognized detail", () => {
+    const result = runAgentDevFixture("profileUnavailable")
+    const item = message(result.messageId)
+
+    expect(item).toMatchObject({
+      content: "",
+      agentErrorKind: "profile_unavailable",
+      agentErrorDetail:
+        "profile-unavailable: no-eligible-profile: no profile pool capacity is available",
+    })
+    expect(classifyAgentError(item.agentErrorDetail ?? "")).toBe("profile_unavailable")
+    expect(useChatStore.getState().isStreaming).toBe(false)
+  })
+
+  it("injects an independent model_not_found error card", () => {
+    const result = runAgentDevFixture("modelRejected")
+
+    expect(message(result.messageId)).toMatchObject({
+      content: "",
+      agentErrorKind: "model_not_found",
+      agentErrorDetail: "model not found: Dev QA simulated rejected model.",
+    })
+    expect(classifyAgentError(message(result.messageId).agentErrorDetail ?? "")).toBe(
+      "model_not_found",
+    )
+    expect(useChatStore.getState().isStreaming).toBe(false)
   })
 
   it("injects the resource limit card fields through updateAgentStreamMessage", () => {
@@ -190,6 +224,65 @@ describe("agent dev fixtures", () => {
       agentErrorDetail: "Dev QA simulated model_not_found.",
     })
     expect(rewindGate(result.messageId)).toEqual({ allowed: true })
+  })
+
+  it("injects a rewind target blocked by an active rewind lock", () => {
+    const result = runAgentDevFixture("rewindLocked")
+    const rewindTarget = target(result.messageId)
+
+    expect(rewindTarget).toMatchObject({
+      streamId: "dev-fixture-stream-rewind-locked",
+      agentSessionId: "dev-fixture-session-rewind-locked",
+    })
+    expect(useChatStore.getState().agentRewindLocks[result.conversationId]).toBe(true)
+    expect(rewindGate(result.messageId)).toEqual({ allowed: false, reason: "locked" })
+  })
+
+  it("clears a leftover rewind lock when running the next fixture scenario", () => {
+    const locked = runAgentDevFixture("rewindLocked")
+    expect(useChatStore.getState().agentRewindLocks[locked.conversationId]).toBe(true)
+
+    const next = runAgentDevFixture("activeRewind")
+    expect(next.conversationId).toBe(locked.conversationId)
+    expect(useChatStore.getState().agentRewindLocks[locked.conversationId]).toBeFalsy()
+    expect(rewindGate(next.messageId)).not.toEqual({ allowed: false, reason: "locked" })
+  })
+
+  it("injects a rewind target blocked after a session fork", () => {
+    const result = runAgentDevFixture("rewindCrossFork")
+    const rewindTarget = target(result.messageId)
+    const conversation = useChatStore
+      .getState()
+      .conversations.find((item) => item.id === result.conversationId)
+
+    expect(rewindTarget.agentSessionId).toBe("dev-fixture-session-rewind-before-fork")
+    expect(conversation?.agentSessionId).toBe("dev-fixture-session-rewind-after-fork")
+    expect(rewindGate(result.messageId)).toEqual({ allowed: false, reason: "cross_fork" })
+  })
+
+  it("injects a rewind target blocked by an uncovered wiki write after target", () => {
+    const result = runAgentDevFixture("rewindWikiWrite")
+    const laterWrite = useChatStore
+      .getState()
+      .messages.find((item) =>
+        item.toolCalls?.some(
+          (call) => call.toolUseId === "dev-fixture-tool-rewind-wiki-write",
+        ),
+      )
+
+    expect(laterWrite?.id).not.toBe(result.messageId)
+    expect(laterWrite?.toolCalls?.[0]).toMatchObject({
+      toolName: "mcp__llm_wiki__update_page",
+      toolUseId: "dev-fixture-tool-rewind-wiki-write",
+      phase: "post",
+      ok: true,
+    })
+    expect(laterWrite?.wikiChanges).toBeUndefined()
+    expect(rewindGate(result.messageId)).toEqual({
+      allowed: false,
+      reason: "wiki_write_after_target",
+      detail: "uncovered",
+    })
   })
 
   it("injects agent write review state through appendAgentWikiChange and addItem", () => {

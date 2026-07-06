@@ -8,12 +8,17 @@ import { registerDevFixture } from "./dev-fixtures"
 
 export const AGENT_DEV_FIXTURE_SCENARIOS = [
   "permission",
+  "profileUnavailable",
+  "modelRejected",
   "resourceLimit",
   "compact",
   "timeline",
   "pendingCorrection",
   "activeRewind",
   "doneRewind",
+  "rewindLocked",
+  "rewindCrossFork",
+  "rewindWikiWrite",
   "agentWriteReview",
 ] as const
 
@@ -77,6 +82,20 @@ function startAgentMessage(agentSessionId?: string): string {
   return messageId
 }
 
+function finishAgentErrorMessage(
+  messageId: string,
+  agentErrorKind: NonNullable<DisplayMessage["agentErrorKind"]>,
+  agentErrorDetail: string,
+  agentSessionId?: string,
+): void {
+  useChatStore.getState().finishAgentStreamMessage(
+    messageId,
+    "",
+    agentSessionId ? { agentSessionId } : undefined,
+    { agentErrorKind, agentErrorDetail },
+  )
+}
+
 function permissionScenario(ctx: FixtureContext): AgentDevFixtureResult {
   const requestId = crypto.randomUUID()
   const toolUseID = `tool-${requestId}`
@@ -93,6 +112,26 @@ function permissionScenario(ctx: FixtureContext): AgentDevFixtureResult {
     conversationId: ctx.conversationId,
   })
   return { scenario: "permission", conversationId: ctx.conversationId }
+}
+
+function profileUnavailableScenario(ctx: FixtureContext): AgentDevFixtureResult {
+  const messageId = startAgentMessage()
+  finishAgentErrorMessage(
+    messageId,
+    "profile_unavailable",
+    "profile-unavailable: no-eligible-profile: no profile pool capacity is available",
+  )
+  return { scenario: "profileUnavailable", conversationId: ctx.conversationId, messageId }
+}
+
+function modelRejectedScenario(ctx: FixtureContext): AgentDevFixtureResult {
+  const messageId = startAgentMessage()
+  finishAgentErrorMessage(
+    messageId,
+    "model_not_found",
+    "model not found: Dev QA simulated rejected model.",
+  )
+  return { scenario: "modelRejected", conversationId: ctx.conversationId, messageId }
 }
 
 function resourceLimitScenario(ctx: FixtureContext): AgentDevFixtureResult {
@@ -180,46 +219,103 @@ function pendingCorrectionScenario(ctx: FixtureContext): AgentDevFixtureResult {
 function activeRewindScenario(ctx: FixtureContext): AgentDevFixtureResult {
   const agentSessionId = "dev-fixture-session-active-rewind"
   const streamId = "dev-fixture-stream-active-rewind"
-  const messageId = startAgentMessage(agentSessionId)
-  useChatStore.getState().finishAgentStreamMessage(
-    messageId,
-    "Dev QA rewind target without wiki writes.",
-    { agentSessionId },
-  )
-  useChatStore.getState().markAgentMessageRewindable(messageId, {
-    streamId,
+  const messageId = createRewindTarget(ctx, {
     agentSessionId,
-    userMessageId: ctx.userMessageId,
+    streamId,
+    content: "Dev QA rewind target without wiki writes.",
   })
   return { scenario: "activeRewind", conversationId: ctx.conversationId, messageId }
+}
+
+function createRewindTarget(
+  ctx: FixtureContext,
+  args: {
+    agentSessionId: string
+    streamId: string
+    content: string
+    assistantMessageId?: string
+  },
+): string {
+  const messageId = startAgentMessage(args.agentSessionId)
+  useChatStore.getState().finishAgentStreamMessage(
+    messageId,
+    args.content,
+    { agentSessionId: args.agentSessionId },
+  )
+  useChatStore.getState().markAgentMessageRewindable(messageId, {
+    streamId: args.streamId,
+    agentSessionId: args.agentSessionId,
+    userMessageId: ctx.userMessageId,
+    assistantMessageId: args.assistantMessageId,
+  })
+  return messageId
 }
 
 function doneRewindScenario(ctx: FixtureContext): AgentDevFixtureResult {
   const agentSessionId = "dev-fixture-session-done-rewind"
   const streamId = "dev-fixture-stream-done-rewind"
   const assistantMessageId = "dev-fixture-assistant-done-rewind"
-  const messageId = startAgentMessage(agentSessionId)
-  useChatStore.getState().finishAgentStreamMessage(
-    messageId,
-    "Dev QA rewind target with completed assistant uuid.",
-    { agentSessionId },
-  )
-  useChatStore.getState().markAgentMessageRewindable(messageId, {
+  const messageId = createRewindTarget(ctx, {
     streamId,
     agentSessionId,
-    userMessageId: ctx.userMessageId,
+    content: "Dev QA rewind target with completed assistant uuid.",
     assistantMessageId,
   })
-  useChatStore.getState().finishAgentStreamMessage(
+  finishAgentErrorMessage(
     messageId,
-    "",
-    { agentSessionId },
-    {
-      agentErrorKind: "model_not_found",
-      agentErrorDetail: "Dev QA simulated model_not_found.",
-    },
+    "model_not_found",
+    "Dev QA simulated model_not_found.",
+    agentSessionId,
   )
   return { scenario: "doneRewind", conversationId: ctx.conversationId, messageId }
+}
+
+function rewindLockedScenario(ctx: FixtureContext): AgentDevFixtureResult {
+  const messageId = createRewindTarget(ctx, {
+    agentSessionId: "dev-fixture-session-rewind-locked",
+    streamId: "dev-fixture-stream-rewind-locked",
+    content: "Dev QA rewind target blocked by an active rewind lock.",
+  })
+  useChatStore.getState().setAgentRewindLock(ctx.conversationId, true)
+  return { scenario: "rewindLocked", conversationId: ctx.conversationId, messageId }
+}
+
+function rewindCrossForkScenario(ctx: FixtureContext): AgentDevFixtureResult {
+  const messageId = createRewindTarget(ctx, {
+    agentSessionId: "dev-fixture-session-rewind-before-fork",
+    streamId: "dev-fixture-stream-rewind-cross-fork",
+    content: "Dev QA rewind target captured before a session fork.",
+  })
+  const forkMessageId = startAgentMessage("dev-fixture-session-rewind-after-fork")
+  useChatStore.getState().finishAgentStreamMessage(
+    forkMessageId,
+    "Dev QA later session fork blocks the earlier rewind target.",
+    { agentSessionId: "dev-fixture-session-rewind-after-fork" },
+  )
+  return { scenario: "rewindCrossFork", conversationId: ctx.conversationId, messageId }
+}
+
+function rewindWikiWriteScenario(ctx: FixtureContext): AgentDevFixtureResult {
+  const agentSessionId = "dev-fixture-session-rewind-wiki-write"
+  const messageId = createRewindTarget(ctx, {
+    agentSessionId,
+    streamId: "dev-fixture-stream-rewind-wiki-write",
+    content: "Dev QA rewind target before an uncovered wiki write.",
+  })
+  const writeMessageId = startAgentMessage(agentSessionId)
+  useChatStore.getState().updateAgentProgress(writeMessageId, {
+    toolName: "mcp__llm_wiki__update_page",
+    toolUseId: "dev-fixture-tool-rewind-wiki-write",
+    phase: "post",
+    ok: true,
+    inputPreview: { path: "wiki/entities/demo.md", operation: "update" },
+  })
+  useChatStore.getState().finishAgentStreamMessage(
+    writeMessageId,
+    "Dev QA later uncovered wiki write blocks rewind.",
+    { agentSessionId },
+  )
+  return { scenario: "rewindWikiWrite", conversationId: ctx.conversationId, messageId }
 }
 
 function agentWriteReviewScenario(ctx: FixtureContext): AgentDevFixtureResult {
@@ -263,6 +359,33 @@ function assertRewindGateAllowed(messageId: string): void {
   }
 }
 
+function assertRewindGateBlocked(
+  messageId: string,
+  expectedReason: Exclude<
+    ReturnType<typeof computeAgentRewindGateDecision>,
+    { allowed: true }
+  >["reason"],
+): void {
+  const state = useChatStore.getState()
+  const target = state.agentRewindTargets[messageId]
+  if (!target) throw new Error("agent rewind fixture did not create a rewind target")
+  const decision = computeAgentRewindGateDecision({
+    target,
+    conversation: state.conversations.find((conversation) => conversation.id === target.conversationId),
+    messages: state.messages,
+    isStreaming: state.isStreaming,
+    streamingConversationId: state.streamingConversationId,
+    rewindLocked: Boolean(state.agentRewindLocks[target.conversationId]),
+  })
+  if (decision.allowed || decision.reason !== expectedReason) {
+    throw new Error(
+      `agent rewind fixture gate expected ${expectedReason}, got ${
+        decision.allowed ? "allowed" : decision.reason
+      }`,
+    )
+  }
+}
+
 /**
  * Inject one SPEC-7 Agent QA scenario into the live chat store.
  *
@@ -278,10 +401,21 @@ export function runAgentDevFixture(scenario: unknown): AgentDevFixtureResult {
     throw new Error(`Unknown agent dev fixture scenario: ${String(scenario)}`)
   }
   const ctx = ensureFixtureConversation()
+  // rewindLocked leaves the conversation lock engaged on purpose (that IS the scenario);
+  // clear it here so the next fixture run — or normal dev chat use — is not permanently blocked.
+  // Note: fixtures reuse the active conversation, so this also clears a genuine in-flight
+  // rewind lock if one exists — acceptable for a dev-only console entry point.
+  useChatStore.getState().setAgentRewindLock(ctx.conversationId, false)
   let result: AgentDevFixtureResult
   switch (scenario) {
     case "permission":
       result = permissionScenario(ctx)
+      break
+    case "profileUnavailable":
+      result = profileUnavailableScenario(ctx)
+      break
+    case "modelRejected":
+      result = modelRejectedScenario(ctx)
       break
     case "resourceLimit":
       result = resourceLimitScenario(ctx)
@@ -301,6 +435,15 @@ export function runAgentDevFixture(scenario: unknown): AgentDevFixtureResult {
     case "doneRewind":
       result = doneRewindScenario(ctx)
       break
+    case "rewindLocked":
+      result = rewindLockedScenario(ctx)
+      break
+    case "rewindCrossFork":
+      result = rewindCrossForkScenario(ctx)
+      break
+    case "rewindWikiWrite":
+      result = rewindWikiWriteScenario(ctx)
+      break
     case "agentWriteReview":
       result = agentWriteReviewScenario(ctx)
       break
@@ -308,6 +451,15 @@ export function runAgentDevFixture(scenario: unknown): AgentDevFixtureResult {
 
   if (scenario === "activeRewind" || scenario === "doneRewind") {
     assertRewindGateAllowed(result.messageId ?? "")
+  }
+  if (scenario === "rewindLocked") {
+    assertRewindGateBlocked(result.messageId ?? "", "locked")
+  }
+  if (scenario === "rewindCrossFork") {
+    assertRewindGateBlocked(result.messageId ?? "", "cross_fork")
+  }
+  if (scenario === "rewindWikiWrite") {
+    assertRewindGateBlocked(result.messageId ?? "", "wiki_write_after_target")
   }
   return result
 }
