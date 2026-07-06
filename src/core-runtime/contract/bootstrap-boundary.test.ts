@@ -33,6 +33,23 @@ function expectTokenBefore(source: string, beforeToken: string, afterToken: stri
   expect(before, `${beforeToken} before ${afterToken}`).toBeLessThan(after)
 }
 
+const migratedCandidateSourceByCallSite = new Map<string, string>([
+  ["setupAutoSave", "src/lib/hooks/use-app-mount-services.ts"],
+  ["startClipWatcher", "src/lib/hooks/use-app-mount-services.ts"],
+  ["setTimeout", "src/lib/hooks/use-update-check-bootstrap.ts"],
+  ["cancelled", "src/lib/hooks/use-update-check-bootstrap.ts"],
+  ["loadUpdateCheckState", "src/lib/hooks/use-update-check-bootstrap.ts"],
+  ["saveUpdateCheckState", "src/lib/hooks/use-update-check-bootstrap.ts"],
+  ["checkForUpdates", "src/lib/hooks/use-update-check-bootstrap.ts"],
+  ["setChecking", "src/lib/hooks/use-update-check-bootstrap.ts"],
+  ["setResult", "src/lib/hooks/use-update-check-bootstrap.ts"],
+])
+
+function sourceForCallSite(appSource: string, callSite: string): string {
+  const migratedPath = migratedCandidateSourceByCallSite.get(callSite)
+  return migratedPath ? repoFile(migratedPath) : appSource
+}
+
 describe("SPEC-1 bootstrap boundary inventory", () => {
   it("keeps the inventory pure and outside the public contract index", () => {
     const sourceText = repoFile("src/core-runtime/contract/bootstrap-boundary.ts")
@@ -84,11 +101,11 @@ describe("SPEC-1 bootstrap boundary inventory", () => {
     )
 
     for (const callSite of [...requiredCallSites, ...invariantCallSites]) {
-      expect(appSource, callSite).toContain(callSite)
+      expect(sourceForCallSite(appSource, callSite), callSite).toContain(callSite)
       expect(inventoryCallSites.has(callSite), callSite).toBe(true)
     }
     for (const callSite of inventoryCallSites) {
-      expect(appSource, callSite).toContain(callSite)
+      expect(sourceForCallSite(appSource, callSite), callSite).toContain(callSite)
     }
   })
 
@@ -119,11 +136,7 @@ describe("SPEC-1 bootstrap boundary inventory", () => {
       "async function handleSwitchProject",
       "if (loading)",
     )
-    const updateCheckSource = sourceBetween(
-      appSource,
-      "Background update check",
-      "Auto-open last project on startup",
-    )
+    const updateCheckSource = repoFile("src/lib/hooks/use-update-check-bootstrap.ts")
 
     for (const token of [
       "loadAgentResourceConfig",

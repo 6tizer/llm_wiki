@@ -57,7 +57,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     targetBoundary: "runtime-bootstrap-service",
     currentResponsibilities: ["Start global auto-save", "Start local clip watcher"],
     currentCallSites: ["setupAutoSave", "startClipWatcher"],
-    migrationNote: "Keep mount-only startup semantics until runtime bootstrap extraction.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-app-mount-services.ts; keep mount-only startup semantics until runtime bootstrap extraction.",
   },
   {
     id: "update-check-bootstrap",
@@ -80,7 +81,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
       "setChecking",
       "setResult",
     ],
-    migrationNote: "Preserve the 1.5s delay and cancellation guard before extracting.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-update-check-bootstrap.ts; preserve the 1.5s delay and cancellation guard.",
   },
   {
     id: "settings-hydration",
