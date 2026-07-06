@@ -157,6 +157,7 @@ export type AgentPermissionDecision =
 			updatedInput?: Record<string, unknown>;
 			updatedPermissions?: unknown[];
 			decisionClassification?: "user_temporary" | "user_permanent" | "user_reject";
+			scope?: "run";
 	  }
 	| {
 			behavior: "deny";
@@ -164,6 +165,7 @@ export type AgentPermissionDecision =
 			reason?: string;
 			interrupt?: boolean;
 			decisionClassification?: "user_temporary" | "user_permanent" | "user_reject";
+			autoTimeout?: boolean;
 	  };
 
 export interface AgentRewindFilesResult {

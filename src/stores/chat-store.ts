@@ -139,6 +139,7 @@ export interface AgentPermissionRequestRecord extends AgentPermissionRequestPayl
   receivedAt: number
   expiresAt: number
   timeoutMs: number
+  pausedRemainingMs?: number
 }
 
 /** Runtime-only rewind target; live stream ids are intentionally not persisted. */
@@ -295,6 +296,10 @@ interface ChatState {
   ) => Promise<AgentPermissionDecision>
   /** Resolve one pending Agent permission request and promote the next queued request. */
   resolveAgentPermission: (requestId: string, decision: AgentPermissionDecision) => void
+  /** Pause the active Agent permission countdown while the user is interacting with it. */
+  pauseAgentPermissionTimer: (requestId: string) => void
+  /** Resume a paused active Agent permission countdown. */
+  resumeAgentPermissionTimer: (requestId: string) => void
   /** Deny and clear all active/queued Agent permission requests. */
   clearAgentPermissionRequests: (decision?: AgentPermissionDecision) => void
   /** Deny and clear pending Agent permission requests for one conversation. */
@@ -333,12 +338,18 @@ function generateConversationId(): string {
 }
 
 const DEFAULT_AGENT_PERMISSION_TIMEOUT_MS = 60_000
+const AGENT_PERMISSION_SIDECAR_TIMEOUT_MS = 120_000
+const AGENT_PERMISSION_PAUSE_SAFETY_MARGIN_MS = 30_000
+const AGENT_PERMISSION_PAUSE_DEADLINE_MS =
+  AGENT_PERMISSION_SIDECAR_TIMEOUT_MS - AGENT_PERMISSION_PAUSE_SAFETY_MARGIN_MS
 
 const pendingAgentPermissionResolvers = new Map<
   string,
   {
     resolve: (decision: AgentPermissionDecision) => void
     timer: ReturnType<typeof setTimeout> | null
+    pauseTimer: ReturnType<typeof setTimeout> | null
+    remainingMs: number
   }
 >()
 
@@ -347,23 +358,65 @@ function defaultDenyPermissionDecision(message: string): AgentPermissionDecision
     behavior: "deny",
     message,
     decisionClassification: "user_reject",
+    autoTimeout: true,
   }
 }
 
-function startAgentPermissionTimer(request: AgentPermissionRequestRecord): AgentPermissionRequestRecord {
-  const pending = pendingAgentPermissionResolvers.get(request.requestId)
-  if (pending?.timer) clearTimeout(pending.timer)
-  const expiresAt = Date.now() + request.timeoutMs
-  const activeRequest = { ...request, expiresAt }
+function activateAgentPermissionRequest(
+  request: AgentPermissionRequestRecord,
+  timeoutMs = request.timeoutMs
+): AgentPermissionRequestRecord {
+  const expiresAt = Date.now() + timeoutMs
+  return { ...request, expiresAt, pausedRemainingMs: undefined }
+}
+
+function scheduleAgentPermissionTimer(requestId: string, timeoutMs: number): void {
+  const pending = pendingAgentPermissionResolvers.get(requestId)
   if (pending) {
+    if (pending.timer) clearTimeout(pending.timer)
+    if (pending.pauseTimer) clearTimeout(pending.pauseTimer)
+    pending.remainingMs = timeoutMs
+    pending.pauseTimer = null
     pending.timer = setTimeout(() => {
       useChatStore.getState().resolveAgentPermission(
-        request.requestId,
+        requestId,
         defaultDenyPermissionDecision(i18n.t("agent.permission.timeoutDenied"))
       )
-    }, request.timeoutMs)
+    }, timeoutMs)
   }
-  return activeRequest
+}
+
+function isRunAllowDecision(decision: AgentPermissionDecision): boolean {
+  return decision.behavior === "allow" && decision.scope === "run"
+}
+
+function runAllowQueuedDecision(): AgentPermissionDecision {
+  return {
+    behavior: "allow",
+    decisionClassification: "user_permanent",
+    scope: "run",
+  }
+}
+
+function resolvePendingAgentPermission(
+  requestId: string,
+  decision: AgentPermissionDecision
+): void {
+  const pending = pendingAgentPermissionResolvers.get(requestId)
+  if (!pending) return
+  pendingAgentPermissionResolvers.delete(requestId)
+  if (pending.timer) clearTimeout(pending.timer)
+  if (pending.pauseTimer) clearTimeout(pending.pauseTimer)
+  pending.resolve(decision)
+}
+
+function remainingPauseBudgetMs(request: AgentPermissionRequestRecord, remainingMs: number): number {
+  const elapsedMs = Math.max(0, Date.now() - request.receivedAt)
+  const sidecarSafeBudgetMs = Math.max(
+    0,
+    AGENT_PERMISSION_PAUSE_DEADLINE_MS - elapsedMs - remainingMs
+  )
+  return Math.min(remainingMs, sidecarSafeBudgetMs)
 }
 
 function permissionPresentationFor(
@@ -405,7 +458,7 @@ function fallbackPermissionDecision(decision?: AgentPermissionDecision): AgentPe
     decision ??
     {
       behavior: "deny" as const,
-      message: i18n.t("agent.permission.timeoutDenied"),
+      message: i18n.t("agent.permission.stopped"),
       interrupt: true,
       decisionClassification: "user_reject" as const,
     }
@@ -1111,12 +1164,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         expiresAt: 0,
         timeoutMs,
       }
-      pendingAgentPermissionResolvers.set(request.requestId, { resolve, timer: null })
+      pendingAgentPermissionResolvers.set(request.requestId, {
+        resolve,
+        timer: null,
+        pauseTimer: null,
+        remainingMs: timeoutMs,
+      })
+      const shouldStartTimer =
+        (get().agentPermissionRequestsByConversation[conversationId] ?? []).length === 0
       set((state) => {
         const existingRequests =
           state.agentPermissionRequestsByConversation[conversationId] ?? []
         const queuedRequest = existingRequests.length === 0
-          ? startAgentPermissionTimer(request)
+          ? activateAgentPermissionRequest(request)
           : request
         const nextByConversation = {
           ...state.agentPermissionRequestsByConversation,
@@ -1129,41 +1189,166 @@ export const useChatStore = create<ChatState>((set, get) => ({
           agentPermissionRequestsByConversation: nextByConversation,
         })
       })
+      if (shouldStartTimer) {
+        scheduleAgentPermissionTimer(request.requestId, timeoutMs)
+      }
     }),
 
   resolveAgentPermission: (requestId, decision) => {
-    const pending = pendingAgentPermissionResolvers.get(requestId)
-    if (pending) {
-      pendingAgentPermissionResolvers.delete(requestId)
-      if (pending.timer) clearTimeout(pending.timer)
-      pending.resolve(decision)
+    const pendingResolutions: Array<{
+      requestId: string
+      decision: AgentPermissionDecision
+    }> = [{ requestId, decision }]
+    const timerStarts: Array<{ requestId: string; timeoutMs: number }> = []
+    const current = get()
+    const runAllow = isRunAllowDecision(decision)
+    const nextByConversation = Object.fromEntries(
+      Object.entries(current.agentPermissionRequestsByConversation)
+        .map(([conversationId, requests]) => {
+          const requestIndex = requests.findIndex(
+            (request) => request.requestId === requestId
+          )
+          if (requestIndex === -1) return [conversationId, requests] as const
+          const resolvedRequest = requests[requestIndex]
+          const remaining = requests.filter(
+            (request) => request.requestId !== requestId
+          )
+          if (runAllow && resolvedRequest?.streamId) {
+            const allowDecision = runAllowQueuedDecision()
+            const nextRemaining = remaining.filter((request) => {
+              const shouldAllow =
+                request.conversationId === resolvedRequest.conversationId &&
+                request.streamId === resolvedRequest.streamId
+              if (shouldAllow) {
+                pendingResolutions.push({
+                  requestId: request.requestId,
+                  decision: allowDecision,
+                })
+              }
+              return !shouldAllow
+            })
+            const previousActiveRequestId = requests[0]?.requestId
+            if (
+              nextRemaining[0] &&
+              nextRemaining[0].requestId !== previousActiveRequestId
+            ) {
+              const nextActive = activateAgentPermissionRequest(nextRemaining[0])
+              timerStarts.push({
+                requestId: nextActive.requestId,
+                timeoutMs: nextActive.timeoutMs,
+              })
+              return [
+                conversationId,
+                [nextActive, ...nextRemaining.slice(1)],
+              ] as const
+            }
+            return [conversationId, nextRemaining] as const
+          }
+          if (requestIndex === 0 && remaining[0]) {
+            const nextActive = activateAgentPermissionRequest(remaining[0])
+            timerStarts.push({
+              requestId: nextActive.requestId,
+              timeoutMs: nextActive.timeoutMs,
+            })
+            return [
+              conversationId,
+              [nextActive, ...remaining.slice(1)],
+            ] as const
+          }
+          return [conversationId, remaining] as const
+        })
+        .filter(([, requests]) => requests.length > 0)
+    )
+
+    set((state) => {
+      return withPresentations(state, {
+        agentPermissionRequestsByConversation: nextByConversation,
+      })
+    })
+    for (const pending of pendingResolutions) {
+      resolvePendingAgentPermission(pending.requestId, pending.decision)
     }
+    for (const timer of timerStarts) {
+      scheduleAgentPermissionTimer(timer.requestId, timer.timeoutMs)
+    }
+  },
+
+  pauseAgentPermissionTimer: (requestId) => {
+    const pending = pendingAgentPermissionResolvers.get(requestId)
+    if (!pending?.timer) return
+    const timer = pending.timer
+    const activeRequest = Object.values(get().agentPermissionRequestsByConversation)
+      .map((requests) => requests[0])
+      .find((request) => request?.requestId === requestId)
+    if (!activeRequest) return
+    const remainingMs = Math.max(0, activeRequest.expiresAt - Date.now())
+    const pauseBudgetMs = remainingPauseBudgetMs(activeRequest, remainingMs)
+    if (pauseBudgetMs <= 0) return
+
+    clearTimeout(timer)
+    pending.timer = null
+    pending.remainingMs = remainingMs
+    pending.pauseTimer = setTimeout(() => {
+      useChatStore.getState().resumeAgentPermissionTimer(requestId)
+    }, pauseBudgetMs)
 
     set((current) => {
       const nextByConversation = Object.fromEntries(
-        Object.entries(current.agentPermissionRequestsByConversation)
-          .map(([conversationId, requests]) => {
-            const requestIndex = requests.findIndex(
-              (request) => request.requestId === requestId
-            )
-            if (requestIndex === -1) return [conversationId, requests] as const
-            const remaining = requests.filter(
-              (request) => request.requestId !== requestId
-            )
-            if (requestIndex === 0 && remaining[0]) {
-              return [
-                conversationId,
-                [startAgentPermissionTimer(remaining[0]), ...remaining.slice(1)],
-              ] as const
+        Object.entries(current.agentPermissionRequestsByConversation).map(
+          ([conversationId, requests]) => {
+            if (requests[0]?.requestId !== requestId) {
+              return [conversationId, requests] as const
             }
-            return [conversationId, remaining] as const
-          })
-          .filter(([, requests]) => requests.length > 0)
+            return [
+              conversationId,
+              [
+                {
+                  ...requests[0],
+                  pausedRemainingMs: remainingMs,
+                },
+                ...requests.slice(1),
+              ],
+            ] as const
+          }
+        )
       )
       return withPresentations(current, {
         agentPermissionRequestsByConversation: nextByConversation,
       })
     })
+  },
+
+  resumeAgentPermissionTimer: (requestId) => {
+    const pending = pendingAgentPermissionResolvers.get(requestId)
+    if (!pending || pending.timer) return
+    if (pending.pauseTimer) {
+      clearTimeout(pending.pauseTimer)
+      pending.pauseTimer = null
+    }
+    const remainingMs = pending.remainingMs
+
+    set((current) => {
+      const nextByConversation = Object.fromEntries(
+        Object.entries(current.agentPermissionRequestsByConversation).map(
+          ([conversationId, requests]) => {
+            if (requests[0]?.requestId !== requestId) {
+              return [conversationId, requests] as const
+            }
+            return [
+              conversationId,
+              [
+                activateAgentPermissionRequest(requests[0], remainingMs),
+                ...requests.slice(1),
+              ],
+            ] as const
+          }
+        )
+      )
+      return withPresentations(current, {
+        agentPermissionRequestsByConversation: nextByConversation,
+      })
+    })
+    scheduleAgentPermissionTimer(requestId, remainingMs)
   },
 
   clearAgentPermissionRequests: (decision) => {
@@ -1172,6 +1357,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     for (const [requestId, pending] of pendingAgentPermissionResolvers) {
       pendingAgentPermissionResolvers.delete(requestId)
       if (pending.timer) clearTimeout(pending.timer)
+      if (pending.pauseTimer) clearTimeout(pending.pauseTimer)
       pending.resolve(fallbackDecision)
     }
     set({
@@ -1189,6 +1375,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (!pending) continue
       pendingAgentPermissionResolvers.delete(request.requestId)
       if (pending.timer) clearTimeout(pending.timer)
+      if (pending.pauseTimer) clearTimeout(pending.pauseTimer)
       pending.resolve(fallbackDecision)
     }
     set((state) => {

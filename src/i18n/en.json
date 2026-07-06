@@ -523,9 +523,10 @@
       "expiresIn": "Auto-denies in {{seconds}}s",
       "allowTemporary": "Allow Temporary",
       "allowPermanent": "Allow Permanent",
+      "allowRun": "Allow All This Run",
       "deny": "Deny",
       "denyInterrupt": "Deny + Interrupt",
-      "timeoutDenied": "Permission request timed out",
+      "timeoutDenied": "[permission_denied:timeout] Permission gate timed out without a response. The write was not executed because the permission gate did not respond, not because validation failed. Switch permission mode or ask the user to retry.",
       "stopped": "Agent run was stopped",
       "keyboardHint": "Enter allows temporarily. Escape denies.",
       "noDescription": "Review the requested tool call before allowing it."

@@ -129,8 +129,43 @@ test("permission bridge auto-denies timed out requests", async () => {
 
 	assert.deepEqual(result, {
 		behavior: "deny",
-		message: "Permission request timed out: Bash",
+		message: "[permission_denied:timeout] Permission gate timed out without a response. The write was not executed because the permission gate did not respond, not because validation failed. Switch permission mode or ask the user to retry. Tool: Bash",
 		toolUseID: "tool-4",
+		decisionClassification: "user_reject",
+		autoTimeout: true,
+	});
+});
+
+test("permission bridge passes the run-allow app scope for core to consume", async () => {
+	const sent: AgentMessage[] = [];
+	const bridge = createPermissionBridge({
+		send: (msg) => sent.push(msg),
+	});
+
+	const pending = bridge.requestPermission(
+		"stream-1",
+		"Edit",
+		{ file_path: "/tmp/wiki.md" },
+		{
+			signal: new AbortController().signal,
+			toolUseID: "tool-run-1",
+			requestId: "req-run-1",
+		},
+	);
+	const payload = sent[0]?.data as { requestId: string };
+	bridge.handleResponse(
+		response(payload.requestId, {
+			behavior: "allow",
+			decisionClassification: "user_permanent",
+			scope: "run",
+		}),
+	);
+
+	assert.deepEqual(await pending, {
+		behavior: "allow",
+		toolUseID: "tool-run-1",
+		decisionClassification: "user_permanent",
+		scope: "run",
 	});
 });
 

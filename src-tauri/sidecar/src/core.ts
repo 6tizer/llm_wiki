@@ -244,6 +244,7 @@ export function createRequestHandler({
 				ambiguousWikiToolNames,
 				send,
 			});
+			let runAllowGranted = false;
 
 			const canUseTool: CanUseTool | undefined = permissionBridge
 				? async (toolName, input, options) => {
@@ -284,12 +285,29 @@ export function createRequestHandler({
 							// an agent_permission_request prompt before the write
 							// proceeds.
 						}
-						return permissionBridge.requestPermission(
+						if (runAllowGranted) {
+							return {
+								behavior: "allow" as const,
+								toolUseID: options.toolUseID,
+								decisionClassification: "user_permanent" as const,
+							};
+						}
+						const decision = await permissionBridge.requestPermission(
 							req.streamId,
 							toolName,
 							input,
 							options,
 						);
+						if (decision.behavior === "allow" && decision.scope === "run") {
+							runAllowGranted = true;
+							return {
+								behavior: "allow" as const,
+								toolUseID: options.toolUseID,
+								decisionClassification: "user_permanent" as const,
+							};
+						}
+						const { scope: _scope, autoTimeout: _autoTimeout, ...sdkDecision } = decision;
+						return sdkDecision;
 					}
 				: undefined;
 			const rawOptions: Record<string, unknown> = {

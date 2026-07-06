@@ -30,6 +30,7 @@ export type AgentPermissionDecision =
 			updatedInput?: Record<string, unknown>;
 			updatedPermissions?: PermissionUpdate[];
 			decisionClassification?: PermissionDecisionClassification;
+			scope?: "run";
 	  }
 	| {
 			behavior: "deny";
@@ -37,7 +38,16 @@ export type AgentPermissionDecision =
 			reason?: string;
 			interrupt?: boolean;
 			decisionClassification?: PermissionDecisionClassification;
+			autoTimeout?: boolean;
 	  };
+
+type PermissionResultWithAppScope = PermissionResult & {
+	scope?: "run";
+	autoTimeout?: boolean;
+};
+
+const PERMISSION_TIMEOUT_DENIED_MESSAGE =
+	"[permission_denied:timeout] Permission gate timed out without a response. The write was not executed because the permission gate did not respond, not because validation failed. Switch permission mode or ask the user to retry.";
 
 export interface AgentPermissionResponseMessage {
 	type: "permission_response";
@@ -54,7 +64,7 @@ export interface PermissionBridge {
 		toolName: string,
 		input: Record<string, unknown>,
 		options: CanUseToolOptions,
-	): Promise<PermissionResult>;
+	): Promise<PermissionResultWithAppScope>;
 	handleResponse(response: AgentPermissionResponseMessage): void;
 	rejectStream(streamId: string, reason: string): void;
 	/** True if any permission request is awaiting a host response. The
@@ -66,7 +76,7 @@ export interface PermissionBridge {
 interface PendingPermission {
 	streamId: string;
 	toolUseID: string;
-	resolve: (value: PermissionResult) => void;
+	resolve: (value: PermissionResultWithAppScope) => void;
 	reject: (err: Error) => void;
 	timer: NodeJS.Timeout;
 }
@@ -74,8 +84,16 @@ interface PendingPermission {
 function toPermissionResult(
 	decision: AgentPermissionDecision,
 	toolUseID: string,
-): PermissionResult {
+): PermissionResultWithAppScope {
 	if (decision.behavior === "allow") {
+		if (decision.scope === "run") {
+			return {
+				behavior: "allow",
+				toolUseID,
+				decisionClassification: "user_permanent",
+				scope: "run",
+			};
+		}
 		return {
 			behavior: "allow",
 			updatedInput: decision.updatedInput,
@@ -90,6 +108,7 @@ function toPermissionResult(
 		interrupt: decision.interrupt,
 		toolUseID,
 		decisionClassification: decision.decisionClassification,
+		...(decision.autoTimeout ? { autoTimeout: true } : {}),
 	};
 }
 
@@ -103,13 +122,15 @@ export function createPermissionBridge(args: {
 	return {
 		requestPermission(streamId, toolName, input, options) {
 			const requestId = randomUUID();
-			return new Promise<PermissionResult>((resolve, reject) => {
+			return new Promise<PermissionResultWithAppScope>((resolve, reject) => {
 				const timer = setTimeout(() => {
 					pending.delete(requestId);
 					resolve({
 						behavior: "deny",
-						message: `Permission request timed out: ${toolName}`,
+						message: `${PERMISSION_TIMEOUT_DENIED_MESSAGE} Tool: ${toolName}`,
 						toolUseID: options.toolUseID,
+						decisionClassification: "user_reject",
+						autoTimeout: true,
 					});
 				}, timeoutMs);
 				pending.set(requestId, {

@@ -1264,6 +1264,264 @@ describe("chat store agent data model", () => {
     await expect(second).resolves.toMatchObject({ behavior: "deny" })
   })
 
+  it("allow_run resolves queued requests for the same stream and starts the next stream timer", async () => {
+    vi.useFakeTimers()
+    const convId = useChatStore.getState().createConversation()
+    const first = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      conversationId: convId,
+      streamId: "stream-a",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 60_000)
+    const second = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-2",
+      conversationId: convId,
+      streamId: "stream-a",
+      toolName: "Edit",
+      inputPreview: {},
+      toolUseID: "tool-2",
+    }, 60_000)
+    const other = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-3",
+      conversationId: convId,
+      streamId: "stream-b",
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-3",
+    }, 60_000)
+
+    useChatStore.getState().resolveAgentPermission("permission-1", {
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+      scope: "run",
+    })
+
+    await expect(first).resolves.toMatchObject({ behavior: "allow", scope: "run" })
+    await expect(second).resolves.toMatchObject({ behavior: "allow", scope: "run" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-3")
+
+    await vi.advanceTimersByTimeAsync(59_999)
+    let otherResolved = false
+    other.then(() => {
+      otherResolved = true
+    })
+    await flushMicrotasks()
+    expect(otherResolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(other).resolves.toMatchObject({ behavior: "deny" })
+  })
+
+  it("non-head allow_run clears only the same conversation and stream", async () => {
+    vi.useFakeTimers()
+    const convId = useChatStore.getState().createConversation()
+    const active = useChatStore.getState().requestAgentPermission({
+      requestId: "active",
+      conversationId: convId,
+      streamId: "stream-a",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-active",
+    }, 60_000)
+    const runAllowed = useChatStore.getState().requestAgentPermission({
+      requestId: "queued-run",
+      conversationId: convId,
+      streamId: "stream-b",
+      toolName: "Edit",
+      inputPreview: {},
+      toolUseID: "tool-run",
+    }, 60_000)
+    const sameStream = useChatStore.getState().requestAgentPermission({
+      requestId: "queued-same-stream",
+      conversationId: convId,
+      streamId: "stream-b",
+      toolName: "Write",
+      inputPreview: {},
+      toolUseID: "tool-same",
+    }, 60_000)
+    const otherStream = useChatStore.getState().requestAgentPermission({
+      requestId: "queued-other-stream",
+      conversationId: convId,
+      streamId: "stream-c",
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-other",
+    }, 60_000)
+
+    useChatStore.getState().resolveAgentPermission("queued-run", {
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+      scope: "run",
+    })
+
+    await expect(runAllowed).resolves.toMatchObject({ behavior: "allow", scope: "run" })
+    await expect(sameStream).resolves.toMatchObject({ behavior: "allow", scope: "run" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("active")
+    expect(useChatStore.getState().queuedAgentPermissionRequests.map((request) => request.requestId))
+      .toEqual(["queued-other-stream"])
+
+    useChatStore.getState().resolveAgentPermission("active", { behavior: "deny" })
+    await expect(active).resolves.toMatchObject({ behavior: "deny" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("queued-other-stream")
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    await expect(otherStream).resolves.toMatchObject({ behavior: "deny" })
+  })
+
+  it("allow_run while paused clears same-stream queue and starts the promoted request timer", async () => {
+    vi.useFakeTimers()
+    const convId = useChatStore.getState().createConversation()
+    const first = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      conversationId: convId,
+      streamId: "stream-a",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 60_000)
+    const second = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-2",
+      conversationId: convId,
+      streamId: "stream-a",
+      toolName: "Edit",
+      inputPreview: {},
+      toolUseID: "tool-2",
+    }, 60_000)
+    const other = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-3",
+      conversationId: convId,
+      streamId: "stream-b",
+      toolName: "Read",
+      inputPreview: {},
+      toolUseID: "tool-3",
+    }, 60_000)
+
+    useChatStore.getState().pauseAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(60_000)
+    useChatStore.getState().resolveAgentPermission("permission-1", {
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+      scope: "run",
+    })
+
+    await expect(first).resolves.toMatchObject({ behavior: "allow", scope: "run" })
+    await expect(second).resolves.toMatchObject({ behavior: "allow", scope: "run" })
+    expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-3")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    await expect(other).resolves.toMatchObject({ behavior: "deny" })
+  })
+
+  it("pauses and resumes the active permission timeout with the remaining time", async () => {
+    vi.useFakeTimers()
+    useChatStore.getState().createConversation()
+    const promise = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 1_000)
+
+    await vi.advanceTimersByTimeAsync(400)
+    useChatStore.getState().pauseAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(600)
+
+    let resolved = false
+    promise.then(() => {
+      resolved = true
+    })
+    await vi.advanceTimersByTimeAsync(500)
+    await flushMicrotasks()
+    expect(resolved).toBe(false)
+
+    useChatStore.getState().resumeAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(599)
+    await flushMicrotasks()
+    expect(resolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(promise).resolves.toMatchObject({
+      behavior: "deny",
+      autoTimeout: true,
+    })
+  })
+
+  it("automatically resumes a long pause before the sidecar failsafe window", async () => {
+    vi.useFakeTimers()
+    useChatStore.getState().createConversation()
+    const promise = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 60_000)
+
+    useChatStore.getState().pauseAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(60_000)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBeUndefined()
+
+    let resolved = false
+    promise.then(() => {
+      resolved = true
+    })
+    await vi.advanceTimersByTimeAsync(59_999)
+    await flushMicrotasks()
+    expect(resolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(promise).resolves.toMatchObject({
+      behavior: "deny",
+      autoTimeout: true,
+    })
+  })
+
+  it("shrinks the pause budget across multiple pause and resume cycles", async () => {
+    vi.useFakeTimers()
+    useChatStore.getState().createConversation()
+    const promise = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    }, 60_000)
+
+    useChatStore.getState().pauseAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(60_000)
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(60_000)
+
+    useChatStore.getState().resumeAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    useChatStore.getState().pauseAgentPermissionTimer("permission-1")
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(55_000)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBe(55_000)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(useChatStore.getState().activeAgentPermissionRequest?.pausedRemainingMs).toBeUndefined()
+
+    let resolved = false
+    promise.then(() => {
+      resolved = true
+    })
+    await vi.advanceTimersByTimeAsync(54_999)
+    await flushMicrotasks()
+    expect(resolved).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(promise).resolves.toMatchObject({
+      behavior: "deny",
+      autoTimeout: true,
+    })
+  })
+
   it("auto-denies an active agent permission request after the timeout", async () => {
     vi.useFakeTimers()
     const promise = useChatStore.getState().requestAgentPermission({
@@ -1278,6 +1536,8 @@ describe("chat store agent data model", () => {
     await expect(promise).resolves.toMatchObject({
       behavior: "deny",
       decisionClassification: "user_reject",
+      autoTimeout: true,
+      message: expect.stringContaining("[permission_denied:timeout]"),
     })
     expect(useChatStore.getState().activeAgentPermissionRequest).toBeNull()
   })
@@ -1336,6 +1596,28 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().messages[0]).toMatchObject({
       role: "user",
       content: "hello",
+    })
+  })
+
+  it("uses stopped fallback copy when clearing pending permissions without an explicit decision", async () => {
+    useChatStore.getState().createConversation()
+    const pending = useChatStore.getState().requestAgentPermission({
+      requestId: "permission-1",
+      toolName: "Bash",
+      inputPreview: {},
+      toolUseID: "tool-1",
+    })
+
+    useChatStore.getState().clearAgentPermissionRequests()
+
+    await expect(pending).resolves.toMatchObject({
+      behavior: "deny",
+      interrupt: true,
+      decisionClassification: "user_reject",
+      message: "Agent run was stopped",
+    })
+    await expect(pending).resolves.not.toMatchObject({
+      autoTimeout: true,
     })
   })
 
