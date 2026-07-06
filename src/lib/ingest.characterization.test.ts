@@ -422,6 +422,32 @@ describe("A. autoIngestImpl", () => {
     }
   })
 
+  it("A2a: matching cache with a missing cached file falls through to the full pipeline", async () => {
+    const tmp = track(await seedProject("a2a"))
+    await writeFileRaw(`${tmp.path}/raw/sources/doc.md`, SUBSTANTIVE_SOURCE)
+    await writeFileRaw(`${tmp.path}/wiki/sources/doc.md`, "# stale cached summary\n")
+    await saveIngestCache(tmp.path, "doc.md", SUBSTANTIVE_SOURCE, [
+      "wiki/sources/doc.md",
+      "wiki/concepts/missing-cached-topic.md",
+    ])
+    generationResponse = [
+      sourceSummaryBlock("doc.md"),
+      fileBlock(
+        "wiki/concepts/topic-a2a.md",
+        ["type: concept", 'title: "Topic A2a"', "created: 2026-05-01", "updated: 2026-05-01", 'sources: ["doc.md"]', "tags: []", "related: []"],
+        ["# Topic A2a", "", "Body content generated after a partial cache-hit miss."],
+      ),
+    ].join("\n\n")
+
+    const written = await autoIngest(tmp.path, `${tmp.path}/raw/sources/doc.md`, useWikiStore.getState().llmConfig)
+
+    expect(mockStreamChat.mock.calls.length).toBeGreaterThan(0)
+    expect(written).toContain("wiki/concepts/topic-a2a.md")
+    for (const p of written) {
+      expect(await fileExists(`${tmp.path}/${p}`)).toBe(true)
+    }
+  })
+
   it("A2b (SPEC-6 PR2): with embedding enabled, ingest marks each written page's embedding stale instead of embedding inline, and skips structural pages", async () => {
     const tmp = track(await seedProject("a2b"))
     useWikiStore.setState({
