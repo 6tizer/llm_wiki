@@ -236,6 +236,13 @@ interface ApiConfig {
 	token: string;
 }
 
+export const DEFAULT_API_CONFIG: ApiConfig = {
+	enabled: true,
+	allowUnauthenticated: false,
+	mcpEnabled: false,
+	token: "",
+}
+
 interface SourceWatchConfig {
 	enabled: boolean;
 	autoIngest: boolean;
@@ -539,12 +546,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	// hand-edited keeps their working API. New users land in
 	// "enabled + no token = 401 on every endpoint" — fail-closed by
 	// virtue of the token being empty.
-		apiConfig: {
-			enabled: true,
-			allowUnauthenticated: false,
-			mcpEnabled: false,
-			token: "",
-		},
+	apiConfig: { ...DEFAULT_API_CONFIG },
 
 	setLlmConfig: (llmConfig) => set({ llmConfig }),
 	setProviderConfigs: (providerConfigs) => set({ providerConfigs }),

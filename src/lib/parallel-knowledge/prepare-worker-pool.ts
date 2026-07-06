@@ -44,6 +44,8 @@ import {
   type RuntimeStagingArtifactRecord,
   type RuntimeStagingArtifactStoreRequest,
 } from "@/commands/runtime-db"
+import { isDuplicateRuntimeJobError } from "@/lib/parallel-knowledge/runtime-job-errors"
+import { buildRuntimeProgressAppendRequest } from "@/lib/parallel-knowledge/runtime-progress"
 
 export const PREPARE_PROFILE_TASK_FAMILY = "ingest"
 export const DEFAULT_PREPARE_WORKER_CONCURRENCY = 2
@@ -459,7 +461,7 @@ async function createMapReduceRepairJobs(
       })
       context.result.mapReduceRepairJobs += 1
     } catch (err) {
-      if (!isDuplicateRuntimeJobError(err)) throw err
+      if (!isDuplicateRuntimeJobError(errorMessage(err), { requireRuntimeJobIdConstraint: true })) throw err
     }
   }
   await appendWorkerProgress(context, claim, "bulk-prepare:map-reduce-repair-routed", {
@@ -682,18 +684,6 @@ function mapReduceRepairJobId(
   ].join("\n"))}`
 }
 
-function isDuplicateRuntimeJobError(err: unknown): boolean {
-  const message = errorMessage(err).toLowerCase()
-  const isJobIdConstraint = message.includes("runtime_jobs.job_id")
-    || message.includes("runtime_jobs_job_id")
-    || message.includes("runtime_jobs_pkey")
-    || message.includes("runtime_jobs.primary")
-    || message.includes("for key 'primary'")
-  const isConstraintFailure = message.includes("unique constraint")
-    || message.includes("duplicate")
-  return isJobIdConstraint && isConstraintFailure
-}
-
 async function appendWorkerProgress(
   context: PrepareWorkerContext,
   claim: RuntimeJobClaim,
@@ -701,17 +691,16 @@ async function appendWorkerProgress(
   details: Record<string, unknown> = {},
 ): Promise<void> {
   await safeCall(context, "progress-append-failed", () =>
-    context.runtime.progressAppend({
+    context.runtime.progressAppend(buildRuntimeProgressAppendRequest({
       jobId: claim.job.jobId,
       progressKey: `bulk-prepare:worker:${context.workerId}`,
-      payload: JSON.stringify({
-        type,
+      type,
+      payload: {
         workerId: context.workerId,
         jobId: claim.job.jobId,
         ...details,
-      }),
-      durable: true,
-    }),
+      },
+    })),
   )
 }
 

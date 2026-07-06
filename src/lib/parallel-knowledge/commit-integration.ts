@@ -42,6 +42,7 @@ import {
   type RuntimeStagingArtifactReadBody,
   type RuntimeStagingArtifactRecord,
 } from "@/commands/runtime-db"
+import { buildRuntimeProgressAppendRequest } from "@/lib/parallel-knowledge/runtime-progress"
 
 const DEFAULT_COMMIT_LIMIT = 100
 const DEFAULT_COMMIT_CONCURRENCY = 1
@@ -554,18 +555,17 @@ async function appendProgress(
   payload: Record<string, unknown>,
 ): Promise<void> {
   try {
-    await context.runtime.appendProgress({
+    await context.runtime.appendProgress(buildRuntimeProgressAppendRequest({
       jobId: artifact.jobId,
       progressKey: `${COMMIT_PROGRESS_PREFIX}:${artifact.artifactId}`,
-      durable: true,
-      payload: JSON.stringify({
-        type: `${COMMIT_PROGRESS_PREFIX}:${status}`,
+      type: `${COMMIT_PROGRESS_PREFIX}:${status}`,
+      payload: {
         artifactId: artifact.artifactId,
         targetPath: artifact.targetPath,
         status,
         ...payload,
-      }),
-    })
+      },
+    }))
     context.result.progressEvents += 1
   } catch (error) {
     context.result.errors.push(`progress-append-failed: ${describeError(error)}`)

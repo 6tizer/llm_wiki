@@ -795,6 +795,43 @@ export interface CaptionSourceImagesResult {
   embeddingRecommended: boolean
 }
 
+interface AutoIngestSourceReady {
+  status: "ready"
+  schema: string
+  purpose: string
+  schemaRouting: WikiSchemaRouting
+  sourceContent: string
+  sourceParser: string
+  sourceCacheContent: string
+}
+
+interface AutoIngestSourceDone {
+  status: "done"
+  files: string[]
+}
+
+type AutoIngestSourceLoadResult = AutoIngestSourceReady | AutoIngestSourceDone
+
+interface AutoIngestPreparedSource {
+  savedImages: SavedImage[]
+  multimodalConfig: MultimodalConfig
+  sourceContext: string
+  precomputedAnalysis: string
+  longSourceCheckpointPath?: string
+}
+
+interface AutoIngestLlmStagesResult {
+  analysis: string
+  generation: string
+  reviewSuggestionOutput: string
+}
+
+interface AutoIngestWriteResult {
+  writtenPaths: string[]
+  writeWarningDetail: string
+  hardFailures: string[]
+}
+
 /**
  * Run the existing source-image cascade for one raw source without running
  * full text ingest. This keeps Agent-triggered captioning on the same
@@ -872,43 +909,27 @@ async function captionSourceImagesImpl(
   }
 }
 
-async function autoIngestImpl(
-  projectPath: string,
-  sourcePath: string,
-  llmConfig: LlmConfig,
-  signal?: AbortSignal,
-  folderContext?: string,
-  onPageWritten?: (record: WrittenPageRecord) => void,
-): Promise<string[]> {
-  const pp = normalizePath(projectPath)
-  const sp = normalizePath(sourcePath)
+async function loadAutoIngestSource(args: {
+  projectPath: string
+  sourcePath: string
+  sourceIdentity: string
+  sourceSummarySlug: string
+  fileName: string
+  llmConfig: LlmConfig
+  activityId: string
+  signal?: AbortSignal
+}): Promise<AutoIngestSourceLoadResult> {
+  const {
+    projectPath: pp,
+    sourcePath: sp,
+    sourceIdentity,
+    sourceSummarySlug,
+    fileName,
+    llmConfig,
+    activityId,
+    signal,
+  } = args
   const activity = useActivityStore.getState()
-  const fileName = getFileName(sp)
-  const sourceIdentity = sourceIdentityForPath(pp, sp)
-  const sourceSummarySlug = sourceSummarySlugFromIdentity(sourceIdentity)
-  const sourceSummaryPath = `wiki/sources/${sourceSummarySlug}.md`
-  console.log(`[ingest:diag] autoIngestImpl ENTRY for "${fileName}" (project="${pp}", source="${sp}")`)
-  const activityId = activity.addItem({
-    type: "ingest",
-    title: fileName,
-    status: "running",
-    detail: "Reading source...",
-    filesWritten: [],
-  })
-
-  // Own copy of every page-write record from this run, independent of
-  // whatever the caller's `onPageWritten` does with it. Used below (see
-  // the self-undo note after the Step 3 write) to undo this run's own
-  // writes BEFORE releasing the per-project lock — closing a TOCTOU
-  // window where the ingest queue's external abort-guard cleanup (which
-  // necessarily runs AFTER the lock has already been released) could
-  // race a second task's legitimate read-merge-write of the same page.
-  const selfMeta = new Map<string, WrittenPageRecord>()
-  const trackedOnPageWritten = (record: WrittenPageRecord) => {
-    recordWrittenPageFirstSnapshot(selfMeta, record)
-    onPageWritten?.(record)
-  }
-
   const [sourcePlanInitial, schemaContent, purposeContent] = await Promise.all([
     planSourceForIngestCache(sp),
     tryReadFile(`${pp}/schema.md`),
@@ -955,7 +976,7 @@ async function autoIngestImpl(
           detail: `Skipped (unchanged) — ${cachedFiles.length} files from previous ingest; MinerU parsed cache missing, skipped media repair`,
           filesWritten: cachedFiles,
         })
-        return cachedFiles
+        return { status: "done", files: cachedFiles }
       }
     }
   }
@@ -976,7 +997,7 @@ async function autoIngestImpl(
   if (lqCheck.skip) {
     console.log(`[ingest:dedup] skipping low-quality source "${fileName}": ${lqCheck.reason}`)
     activity.updateItem(activityId, { status: "done", detail: `Skipped: ${lqCheck.reason}` })
-    return []
+    return { status: "done", files: [] }
   }
 
   // ── Cache check: skip re-ingest if source content hasn't changed ──
@@ -1057,8 +1078,51 @@ async function autoIngestImpl(
       detail: `Skipped (unchanged) — ${cachedFiles.length} files from previous ingest`,
       filesWritten: cachedFiles,
     })
-    return cachedFiles
+    return { status: "done", files: cachedFiles }
   }
+
+  return {
+    status: "ready",
+    schema,
+    purpose,
+    schemaRouting,
+    sourceContent,
+    sourceParser,
+    sourceCacheContent,
+  }
+}
+
+async function prepareAutoIngestSourceContext(args: {
+  projectPath: string
+  sourcePath: string
+  sourceIdentity: string
+  sourceSummarySlug: string
+  fileName: string
+  sourceContent: string
+  sourceParser: string
+  schema: string
+  purpose: string
+  llmConfig: LlmConfig
+  activityId: string
+  folderContext?: string
+  signal?: AbortSignal
+}): Promise<AutoIngestPreparedSource> {
+  const {
+    projectPath: pp,
+    sourcePath: sp,
+    sourceIdentity,
+    sourceSummarySlug,
+    fileName,
+    sourceContent,
+    sourceParser,
+    schema,
+    purpose,
+    llmConfig,
+    activityId,
+    folderContext,
+    signal,
+  } = args
+  const activity = useActivityStore.getState()
 
   // ── Step 0.5: Extract embedded images ─────────────────────────
   // Pulls every embedded image out of PDF / PPTX / DOCX into
@@ -1173,6 +1237,41 @@ async function autoIngestImpl(
       longSourceCheckpointPath = longSourcePlan.checkpointPath
     }
   }
+
+  return {
+    savedImages,
+    multimodalConfig: mmCfg,
+    sourceContext,
+    precomputedAnalysis,
+    longSourceCheckpointPath,
+  }
+}
+
+async function runAutoIngestLlmStages(args: {
+  sourceIdentity: string
+  sourceSummaryPath: string
+  schema: string
+  purpose: string
+  sourceContext: string
+  precomputedAnalysis: string
+  llmConfig: LlmConfig
+  activityId: string
+  folderContext?: string
+  signal?: AbortSignal
+}): Promise<AutoIngestLlmStagesResult> {
+  const {
+    sourceIdentity,
+    sourceSummaryPath,
+    schema,
+    purpose,
+    sourceContext,
+    precomputedAnalysis,
+    llmConfig,
+    activityId,
+    folderContext,
+    signal,
+  } = args
+  const activity = useActivityStore.getState()
 
   // ── Step 1: Analysis ──────────────────────────────────────────
   // LLM reads the source and produces a structured analysis:
@@ -1320,6 +1419,43 @@ async function autoIngestImpl(
     if (reviewStageHadError) reviewSuggestionOutput = ""
   }
 
+  return { analysis, generation, reviewSuggestionOutput }
+}
+
+async function writeAutoIngestOutputs(args: {
+  projectPath: string
+  sourceIdentity: string
+  sourceSummarySlug: string
+  sourceSummaryPath: string
+  generation: string
+  analysis: string
+  schemaRouting: WikiSchemaRouting
+  savedImages: SavedImage[]
+  multimodalConfig: MultimodalConfig
+  llmConfig: LlmConfig
+  activityId: string
+  signal?: AbortSignal
+  selfMeta: Map<string, WrittenPageRecord>
+  onPageWritten: (record: WrittenPageRecord) => void
+}): Promise<AutoIngestWriteResult> {
+  const {
+    projectPath: pp,
+    sourceIdentity,
+    sourceSummarySlug,
+    sourceSummaryPath,
+    generation,
+    analysis,
+    schemaRouting,
+    savedImages,
+    multimodalConfig: mmCfg,
+    llmConfig,
+    activityId,
+    signal,
+    selfMeta,
+    onPageWritten,
+  } = args
+  const activity = useActivityStore.getState()
+
   // ── Step 3: Write files ───────────────────────────────────────
   activity.updateItem(activityId, { detail: "Writing files..." })
   await migrateLegacySourceSummaryIfSafe(pp, sourceIdentity, sourceSummaryPath)
@@ -1331,7 +1467,7 @@ async function autoIngestImpl(
     sourceSummaryPath,
     signal,
     Object.keys(schemaRouting.typeDirs).length > 0 ? schemaRouting : null,
-    trackedOnPageWritten,
+    onPageWritten,
   )
 
   // Surface parser / writer warnings to the activity panel so users
@@ -1381,7 +1517,7 @@ async function autoIngestImpl(
     try {
       await writeFile(sourceSummaryFullPath, fallbackContent)
       writtenPaths.push(sourceSummaryPath)
-      trackedOnPageWritten({
+      onPageWritten({
         path: sourceSummaryPath,
         wasCreated: existing === null,
         previousContent: existing,
@@ -1467,6 +1603,41 @@ async function autoIngestImpl(
       // ignore
     }
   }
+
+  return { writtenPaths, writeWarningDetail, hardFailures }
+}
+
+async function finalizeAutoIngestOutputs(args: {
+  projectPath: string
+  sourcePath: string
+  sourceIdentity: string
+  sourceCacheContent: string
+  sourceParser: string
+  generation: string
+  reviewSuggestionOutput: string
+  writtenPaths: string[]
+  hardFailures: string[]
+  writeWarningDetail: string
+  longSourceCheckpointPath?: string
+  activityId: string
+  signal?: AbortSignal
+}): Promise<string[]> {
+  const {
+    projectPath: pp,
+    sourcePath: sp,
+    sourceIdentity,
+    sourceCacheContent,
+    sourceParser,
+    generation,
+    reviewSuggestionOutput,
+    writtenPaths,
+    hardFailures,
+    writeWarningDetail,
+    longSourceCheckpointPath,
+    activityId,
+    signal,
+  } = args
+  const activity = useActivityStore.getState()
 
   // ── Step 4: Parse review items ────────────────────────────────
   const reviewItems = [
@@ -1561,6 +1732,141 @@ async function autoIngestImpl(
   })
 
   return writtenPaths
+}
+
+async function autoIngestImpl(
+  projectPath: string,
+  sourcePath: string,
+  llmConfig: LlmConfig,
+  signal?: AbortSignal,
+  folderContext?: string,
+  onPageWritten?: (record: WrittenPageRecord) => void,
+): Promise<string[]> {
+  const pp = normalizePath(projectPath)
+  const sp = normalizePath(sourcePath)
+  const activity = useActivityStore.getState()
+  const fileName = getFileName(sp)
+  const sourceIdentity = sourceIdentityForPath(pp, sp)
+  const sourceSummarySlug = sourceSummarySlugFromIdentity(sourceIdentity)
+  const sourceSummaryPath = `wiki/sources/${sourceSummarySlug}.md`
+  console.log(`[ingest:diag] autoIngestImpl ENTRY for "${fileName}" (project="${pp}", source="${sp}")`)
+  const activityId = activity.addItem({
+    type: "ingest",
+    title: fileName,
+    status: "running",
+    detail: "Reading source...",
+    filesWritten: [],
+  })
+
+  // Own copy of every page-write record from this run, independent of
+  // whatever the caller's `onPageWritten` does with it. Used below (see
+  // the self-undo note after the Step 3 write) to undo this run's own
+  // writes BEFORE releasing the per-project lock — closing a TOCTOU
+  // window where the ingest queue's external abort-guard cleanup (which
+  // necessarily runs AFTER the lock has already been released) could
+  // race a second task's legitimate read-merge-write of the same page.
+  const selfMeta = new Map<string, WrittenPageRecord>()
+  const trackedOnPageWritten = (record: WrittenPageRecord) => {
+    recordWrittenPageFirstSnapshot(selfMeta, record)
+    onPageWritten?.(record)
+  }
+
+  const sourceLoad = await loadAutoIngestSource({
+    projectPath: pp,
+    sourcePath: sp,
+    sourceIdentity,
+    sourceSummarySlug,
+    fileName,
+    llmConfig,
+    activityId,
+    signal,
+  })
+  if (sourceLoad.status === "done") return sourceLoad.files
+  const {
+    schema,
+    purpose,
+    schemaRouting,
+    sourceContent,
+    sourceParser,
+    sourceCacheContent,
+  } = sourceLoad
+
+  const preparedSource = await prepareAutoIngestSourceContext({
+    projectPath: pp,
+    sourcePath: sp,
+    sourceIdentity,
+    sourceSummarySlug,
+    fileName,
+    sourceContent,
+    sourceParser,
+    schema,
+    purpose,
+    llmConfig,
+    activityId,
+    folderContext,
+    signal,
+  })
+  const {
+    savedImages,
+    multimodalConfig: mmCfg,
+    sourceContext,
+    precomputedAnalysis,
+    longSourceCheckpointPath,
+  } = preparedSource
+
+  const {
+    analysis,
+    generation,
+    reviewSuggestionOutput,
+  } = await runAutoIngestLlmStages({
+    sourceIdentity,
+    sourceSummaryPath,
+    schema,
+    purpose,
+    sourceContext,
+    precomputedAnalysis,
+    llmConfig,
+    activityId,
+    folderContext,
+    signal,
+  })
+
+  const {
+    writtenPaths,
+    writeWarningDetail,
+    hardFailures,
+  } = await writeAutoIngestOutputs({
+    projectPath: pp,
+    sourceIdentity,
+    sourceSummarySlug,
+    sourceSummaryPath,
+    generation,
+    analysis,
+    schemaRouting,
+    savedImages,
+    multimodalConfig: mmCfg,
+    llmConfig,
+    activityId,
+    signal,
+    selfMeta,
+    onPageWritten: trackedOnPageWritten,
+  })
+
+  return finalizeAutoIngestOutputs({
+    projectPath: pp,
+    sourcePath: sp,
+    sourceIdentity,
+    sourceCacheContent,
+    sourceParser,
+    generation,
+    reviewSuggestionOutput,
+    writtenPaths,
+    hardFailures,
+    longSourceCheckpointPath,
+    writeWarningDetail,
+    activityId,
+    signal,
+  })
 }
 
 /**

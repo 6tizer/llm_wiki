@@ -18,7 +18,7 @@ import { hasConfiguredDeepResearchSources } from "@/lib/web-search"
 import { isImeComposing } from "@/lib/keyboard-utils"
 import { detectLanguage } from "@/lib/detect-language"
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
-import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
+import { createMarkdownComponents } from "@/components/markdown/markdown-components"
 import { useTranslation } from "react-i18next"
 
 export function ResearchPanel() {
@@ -173,33 +173,7 @@ function SynthesisBlock({ synthesis, isStreaming }: { synthesis: string; isStrea
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={[rehypeKatex]}
-            components={{
-              table: ({ children, ...props }) => (
-                <div className="my-2 overflow-x-auto rounded border border-border">
-                  <table className="w-full border-collapse text-xs" {...props}>{children}</table>
-                </div>
-              ),
-              thead: ({ children, ...props }) => (
-                <thead className="bg-muted" {...props}>{children}</thead>
-              ),
-              th: ({ children, ...props }) => (
-                <th className="border border-border/80 px-3 py-1.5 text-start font-semibold bg-muted" {...props}>{children}</th>
-              ),
-              td: ({ children, ...props }) => (
-                <td className="border border-border/60 px-3 py-1.5" {...props}>{children}</td>
-              ),
-              pre: ({ children, ...props }) => {
-                const mermaid = unwrapMermaidPre(children)
-                if (mermaid) return <>{mermaid}</>
-                return <pre dir="ltr" style={{ textAlign: "left" }} {...props}>{children}</pre>
-              },
-              code: ({ className, children, ...props }) => {
-                const lang = className?.replace("language-", "")
-                const codeText = String(children).replace(/\n$/, "")
-                if (lang === "mermaid") return <MermaidDiagram code={codeText} />
-                return <code dir="ltr" className={className} {...props}>{children}</code>
-              },
-            }}
+            components={createMarkdownComponents()}
           >
             {answer}
           </ReactMarkdown>

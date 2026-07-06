@@ -6,7 +6,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
-import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram";
+import { createMarkdownComponents } from "@/components/markdown/markdown-components";
 import { detectLanguage } from "@/lib/detect-language";
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata";
 import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver";
@@ -75,7 +75,8 @@ export function WikiReader({ body }: WikiReaderProps) {
 			<ReactMarkdown
 				remarkPlugins={[remarkGfm, remarkMath]}
 				rehypePlugins={[rehypeKatex]}
-				components={{
+				components={createMarkdownComponents({
+					overrides: {
 					a: ({ href, children, ...props }) => {
 						const h = typeof href === "string" ? href : "";
 						const isWikilink = h.startsWith("#");
@@ -133,51 +134,8 @@ export function WikiReader({ body }: WikiReaderProps) {
 							{...props}
 						/>
 					),
-					table: ({ children, ...props }) => (
-						<div className="my-2 overflow-x-auto rounded border border-border">
-							<table className="w-full border-collapse text-xs" {...props}>
-								{children}
-							</table>
-						</div>
-					),
-					thead: ({ children, ...props }) => (
-						<thead className="bg-muted" {...props}>
-							{children}
-						</thead>
-					),
-					th: ({ children, ...props }) => (
-						<th
-							className="border border-border/80 bg-muted px-3 py-1.5 text-start font-semibold"
-							{...props}
-						>
-							{children}
-						</th>
-					),
-					td: ({ children, ...props }) => (
-						<td className="border border-border/60 px-3 py-1.5" {...props}>
-							{children}
-						</td>
-					),
-					pre: ({ children, ...props }) => {
-						const mermaid = unwrapMermaidPre(children);
-						if (mermaid) return <>{mermaid}</>;
-						return (
-							<pre dir="ltr" style={{ textAlign: "left" }} {...props}>
-								{children}
-							</pre>
-						);
 					},
-					code: ({ className, children, ...props }) => {
-						const lang = className?.replace("language-", "");
-						const codeText = String(children).replace(/\n$/, "");
-						if (lang === "mermaid") return <MermaidDiagram code={codeText} />;
-						return (
-							<code dir="ltr" className={className} {...props}>
-								{children}
-							</code>
-						);
-					},
-				}}
+				})}
 			>
 				{transformed}
 			</ReactMarkdown>

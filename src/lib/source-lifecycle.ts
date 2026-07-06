@@ -14,6 +14,7 @@ import type { LlmConfig } from "@/stores/wiki-store"
 import { enqueueBatch } from "@/lib/ingest-queue"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils"
+import { flattenMdFiles } from "@/lib/wiki-utils"
 import {
   sourceIdentityForPath,
   sourceReferenceIdentity,
@@ -317,7 +318,7 @@ async function deleteSourceFilesUnlocked(
 
   let allMd: FileNode[] = []
   try {
-    allMd = flattenMd(await listDirectory(`${pp}/wiki`))
+    allMd = flattenMdFiles(await listDirectory(`${pp}/wiki`))
   } catch (err) {
     console.warn("[source-lifecycle] failed to scan wiki sources during delete:", err)
   }
@@ -472,7 +473,7 @@ async function cleanupDeletedWikiPagesUnlocked(
 
   const deletedKeys = buildDeletedKeys(deletedInfos)
   const wikiTree = await listDirectory(`${pp}/wiki`)
-  const allMd = flattenMd(wikiTree)
+  const allMd = flattenMdFiles(wikiTree)
 
   for (const file of allMd) {
     let content: string
@@ -549,21 +550,6 @@ async function appendSourceDeleteLog(
   } catch (err) {
     console.warn("[source-lifecycle] failed to append delete log:", err)
   }
-}
-
-function flattenMd(nodes: readonly FileNode[]): FileNode[] {
-  const out: FileNode[] = []
-  function walk(items: readonly FileNode[]): void {
-    for (const item of items) {
-      if (item.is_dir) {
-        if (item.children) walk(item.children)
-      } else if (item.name.endsWith(".md")) {
-        out.push(item)
-      }
-    }
-  }
-  walk(nodes)
-  return out
 }
 
 function sourceNameMatchesAny(
