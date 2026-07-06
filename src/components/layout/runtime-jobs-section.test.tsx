@@ -565,7 +565,7 @@ describe("RuntimeJobsSection", () => {
           reason: "rate-limit",
           error: null,
           openedAtMs: 1,
-          openUntilMs: 2,
+          openUntilMs: Date.now() + 30_000,
           updatedAtMs: 1,
         },
       ],
@@ -578,6 +578,8 @@ describe("RuntimeJobsSection", () => {
     expect(container.textContent).toContain("1/2 prepare jobs")
     expect(container.textContent).toContain("3 sources")
     expect(container.textContent).toContain("1 profile claims / 1 backoff")
+    expect(container.querySelector("[data-testid='runtime-diagnostics-profiles']")?.getAttribute("title"))
+      .toContain("profile-2: rate-limit · 30s remaining")
     expect(container.textContent).toContain("1 pending / 1 failed / 1 committed artifacts")
     expect(container.textContent).toContain("Latest: bulk-prepare:job-completed")
 

@@ -7,6 +7,7 @@ import {
   runtimeProfileCreate,
   runtimeProfileDelete,
   runtimeProfileList,
+  runtimeProfilePoolList,
   runtimeProfileProbe,
   runtimeProfileUpdate,
   type RuntimeProfileApiMode,
@@ -14,6 +15,7 @@ import {
   type RuntimeProfileCreateRequest,
   type RuntimeDbHealthState,
   type RuntimeProfileKind,
+  type RuntimeProfileCircuitBreakerRecord,
   type RuntimeProfileProbeDraftRequest,
   type RuntimeProfileProbeResult,
   type RuntimeProfileRecord,
@@ -30,6 +32,8 @@ import { LLM_PRESETS } from "@/lib/llm-presets"
 import { ProviderAccessWizard } from "./provider-access-wizard"
 import { ProfileCapabilityBadge, capabilityBadgeMeta } from "./profile-capability-badge"
 import { groupProfilesByConnection } from "@/lib/profile-connections"
+import { useCountdown } from "@/lib/hooks/use-countdown"
+import { breakerDisplayReason, countdownSeconds } from "@/lib/hooks/breaker-display"
 
 const MAX_PROFILE_CONCURRENCY = 128
 // Keep these version strings aligned with src-tauri/src/commands/runtime_db.rs.
@@ -394,11 +398,13 @@ export async function saveProfileDraft(
 interface ModelProfilesSectionProps {
   refreshToken?: number
   onProfilesChanged?: () => void
+  onNavigateFallback?: () => void
 }
 
 export function ModelProfilesSection({
   refreshToken = 0,
   onProfilesChanged,
+  onNavigateFallback,
 }: ModelProfilesSectionProps = {}) {
   const { t } = useTranslation()
   const [profiles, setProfiles] = useState<RuntimeProfileRecord[]>([])
@@ -407,6 +413,7 @@ export function ModelProfilesSection({
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null)
   const [probeState, setProbeState] = useState<ProbeState>({ kind: "idle" })
+  const [poolBreakers, setPoolBreakers] = useState<RuntimeProfileCircuitBreakerRecord[]>([])
   const [secretBackendState, setSecretBackendState] = useState<SecretBackendState>({
     kind: "loading",
     backend: "file",
@@ -421,6 +428,10 @@ export function ModelProfilesSection({
     [draft.profileId, profiles],
   )
   const profileGroups = useMemo(() => groupProfilesByConnection(profiles), [profiles])
+  const breakersByProfileId = useMemo(
+    () => new Map(poolBreakers.map((breaker) => [breaker.profileId, breaker])),
+    [poolBreakers],
+  )
 
   async function loadProfiles(shouldApply = () => true) {
     const isInitialLoad = !loadedOnceRef.current
@@ -428,12 +439,16 @@ export function ModelProfilesSection({
       setLoadState({ kind: "loading" })
     }
     try {
-      const result = await runtimeProfileList()
+      const [result, poolResult] = await Promise.all([
+        runtimeProfileList(),
+        runtimeProfilePoolList().catch(() => null),
+      ])
       if (!shouldApply()) return
       const nextProfiles = Array.isArray(result.profiles) ? result.profiles : []
       const previousProfiles = profilesRef.current
       profilesRef.current = nextProfiles
       setProfiles(nextProfiles)
+      setPoolBreakers(poolResult?.circuitBreakers ?? [])
       setDraft((current) => reconcileDraftAfterProfileLoad(
         current,
         nextProfiles,
@@ -805,6 +820,11 @@ export function ModelProfilesSection({
                           onClick={() => setCapabilityDetailProfileId(detailOpen ? null : profile.profileId)}
                         />
                       </div>
+                      <ProfileBreakerStatus
+                        breaker={breakersByProfileId.get(profile.profileId)}
+                        onNavigateFallback={onNavigateFallback}
+                        variant="list"
+                      />
                       {detailOpen && (
                         <div
                           className="border-t px-3 py-2 text-[11px] text-muted-foreground"
@@ -1043,6 +1063,11 @@ export function ModelProfilesSection({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{t("settings.sections.modelConfig.profiles.capability")}</span>
                 <ProfileCapabilityBadge status={capabilityStatus} t={t} />
+                <ProfileBreakerStatus
+                  breaker={selectedProfile ? breakersByProfileId.get(selectedProfile.profileId) : undefined}
+                  onNavigateFallback={onNavigateFallback}
+                  variant="inline"
+                />
                 {!selectedCapabilityIsFresh && (
                   <span className="text-muted-foreground">
                     {t("settings.sections.modelConfig.profiles.capabilityStale")}
@@ -1128,5 +1153,49 @@ export function ModelProfilesSection({
         </div>
       )}
     </div>
+  )
+}
+
+function ProfileBreakerStatus({
+  breaker,
+  onNavigateFallback,
+  variant = "inline",
+  className = "",
+}: {
+  breaker?: RuntimeProfileCircuitBreakerRecord
+  onNavigateFallback?: () => void
+  variant?: "inline" | "list"
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const remainingMs = useCountdown(breaker?.openUntilMs)
+  if (!breaker) return null
+
+  const reason = breakerDisplayReason(breaker)
+  const cooled = remainingMs === 0
+  const label = cooled
+    ? t("settings.sections.modelConfig.profiles.breakerCooled")
+    : t("settings.sections.modelConfig.profiles.breakerCooling", {
+        seconds: countdownSeconds(remainingMs),
+      })
+  const spacingClassName = variant === "list" ? "px-3 pb-2" : ""
+
+  return (
+    <span
+      className={`inline-flex flex-wrap items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 ${spacingClassName} ${className}`.trim()}
+      title={reason || undefined}
+      data-testid={`profile-breaker-status-${breaker.profileId}`}
+    >
+      <span>{label}</span>
+      {onNavigateFallback && (
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={onNavigateFallback}
+        >
+          {t("settings.sections.modelConfig.profiles.breakerOpenFallback")}
+        </button>
+      )}
+    </span>
   )
 }

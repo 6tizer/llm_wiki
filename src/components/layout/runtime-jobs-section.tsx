@@ -18,6 +18,7 @@ import {
   type RuntimeJobList,
   type RuntimeJobRecord,
   type RuntimeJobState,
+  type RuntimeProfileCircuitBreakerRecord,
 } from "@/commands/runtime-db"
 import { DERIVED_REBUILD_JOB_KIND, parseDerivedRebuildJobPayload } from "@/core-runtime/derived-rebuild"
 import {
@@ -41,6 +42,8 @@ import {
 } from "@/lib/agent/agent-chat-run-job"
 import { useWikiStore } from "@/stores/wiki-store"
 import { usePolling } from "@/lib/hooks/use-polling"
+import { useCountdown } from "@/lib/hooks/use-countdown"
+import { breakerDisplayReason, countdownSeconds } from "@/lib/hooks/breaker-display"
 
 const ACTIVE_POLL_INTERVAL_MS = 2_000
 const IDLE_POLL_INTERVAL_MS = 10_000
@@ -112,6 +115,7 @@ export interface RuntimeJobsDiagnostics {
   etaMs: number | null
   activeProfileClaims: number
   circuitBreakers: number
+  circuitBreakerDetails: readonly RuntimeProfileCircuitBreakerRecord[]
   stagingPending: number
   stagingFailed: number
   stagingCommitted: number
@@ -132,6 +136,7 @@ export const EMPTY_RUNTIME_JOBS_DIAGNOSTICS: RuntimeJobsDiagnostics = {
   etaMs: null,
   activeProfileClaims: 0,
   circuitBreakers: 0,
+  circuitBreakerDetails: [],
   stagingPending: 0,
   stagingFailed: 0,
   stagingCommitted: 0,
@@ -358,6 +363,21 @@ export function RuntimeJobsSection({ state }: { state: RuntimeJobsState }) {
 
 function RuntimeDiagnosticsBlock({ diagnostics }: { diagnostics: RuntimeJobsDiagnostics }) {
   const { t } = useTranslation()
+  const nextBreakerDeadlineMs = diagnostics.circuitBreakerDetails.length > 0
+    ? Math.min(...diagnostics.circuitBreakerDetails.map((breaker) => breaker.openUntilMs))
+    : null
+  const breakerCountdownMs = useCountdown(nextBreakerDeadlineMs)
+  const breakerTooltip = diagnostics.circuitBreakerDetails
+    .map((breaker) => {
+      const remainingMs = Math.max(0, breaker.openUntilMs - Date.now())
+      return t("runtimeJobs.diagnostics.breakerTooltip", {
+        profile: breaker.profileId,
+        reason: breakerDisplayReason(breaker),
+        seconds: countdownSeconds(remainingMs),
+      })
+    })
+    .join("\n")
+  void breakerCountdownMs
   return (
     <div className="mt-1 space-y-0.5 border-t border-border/40 pt-1 text-[10px] text-muted-foreground">
       <div className="flex items-center justify-between gap-2">
@@ -378,7 +398,7 @@ function RuntimeDiagnosticsBlock({ diagnostics }: { diagnostics: RuntimeJobsDiag
               eta: formatDuration(diagnostics.etaMs),
             })}
         </span>
-        <span>
+        <span title={breakerTooltip || undefined} data-testid="runtime-diagnostics-profiles">
           {t("runtimeJobs.diagnostics.profiles", {
             claims: diagnostics.activeProfileClaims,
             breakers: diagnostics.circuitBreakers,
@@ -593,7 +613,8 @@ function summarizeRuntimeDiagnosticsView(
   const stagingArtifacts = snapshot.stagingArtifacts.data?.artifacts ?? []
   const sectionError = firstSectionError(snapshot)
   const activeProfileClaims = snapshot.profilePool.data?.activeClaims.length ?? 0
-  const circuitBreakers = snapshot.profilePool.data?.circuitBreakers.length ?? 0
+  const circuitBreakerDetails = snapshot.profilePool.data?.circuitBreakers ?? []
+  const circuitBreakers = circuitBreakerDetails.length
   const prepareWaitingForWorker = prepareJobs.some((job) =>
     isAwaitingWorker(job, leasesByJobId.get(job.jobId) ?? []),
   )
@@ -617,6 +638,7 @@ function summarizeRuntimeDiagnosticsView(
     etaMs: estimatePrepareEtaMs(prepareJobs, prepareTotal, prepareCompleted),
     activeProfileClaims,
     circuitBreakers,
+    circuitBreakerDetails,
     stagingPending: stagingArtifacts.filter((artifact) => artifact.status === "pending").length,
     stagingFailed: stagingArtifacts.filter((artifact) => artifact.status === "failed").length,
     stagingCommitted: stagingArtifacts.filter((artifact) => artifact.status === "committed").length,
