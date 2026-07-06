@@ -110,6 +110,14 @@ const DOCUMENT_DIALOG_EXTENSIONS = [
 	...new Set(SOURCE_WATCH_FILE_TYPE_GROUPS.flatMap((group) => group.extensions)),
 ];
 
+type ActiveAbortRun = {
+	controller: AbortController;
+	conversationId: string;
+};
+
+const localStreamId = (kind: "agent" | "chat" | "ingest") =>
+	`${kind}:${crypto.randomUUID()}`;
+
 function formatDate(timestamp: number): string {
 	const d = new Date(timestamp);
 	const now = new Date();
@@ -597,14 +605,41 @@ export function ChatPanel() {
 	const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt);
 	const setFileTree = useWikiStore((s) => s.setFileTree);
 	const setActiveView = useWikiStore((s) => s.setActiveView);
-	const abortRef = useRef<AbortController | null>(null);
+	const activeAbortRunsRef = useRef<Map<string, ActiveAbortRun>>(new Map());
 	const agentRunJobRef = useRef<AgentChatRunJobController | null>(null);
+	const registerAbortRun = useCallback(
+		(streamId: string, controller: AbortController, conversationId: string) => {
+			activeAbortRunsRef.current.set(streamId, { controller, conversationId });
+		},
+		[],
+	);
+	const moveAbortRun = useCallback((fromStreamId: string, toStreamId: string) => {
+		if (fromStreamId === toStreamId) return;
+		const run = activeAbortRunsRef.current.get(fromStreamId);
+		if (!run) return;
+		activeAbortRunsRef.current.delete(fromStreamId);
+		activeAbortRunsRef.current.set(toStreamId, run);
+	}, []);
+	const deleteAbortRun = useCallback((streamId: string) => {
+		activeAbortRunsRef.current.delete(streamId);
+	}, []);
+	const abortRunsForConversation = useCallback((conversationId: string | null) => {
+		if (!conversationId) return;
+		for (const [streamId, run] of activeAbortRunsRef.current) {
+			if (run.conversationId !== conversationId) continue;
+			run.controller.abort();
+			activeAbortRunsRef.current.delete(streamId);
+		}
+	}, []);
 	// Abort any in-flight agent/LLM stream on unmount to prevent stale callbacks
 	useEffect(() => {
 		return () => {
 			agentRunJobRef.current?.cancel("unmount");
 			agentRunJobRef.current = null;
-			abortRef.current?.abort();
+			for (const run of activeAbortRunsRef.current.values()) {
+				run.controller.abort();
+			}
+			activeAbortRunsRef.current.clear();
 		};
 	}, []);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -747,6 +782,7 @@ export function ChatPanel() {
 			let streamId: string | undefined;
 			let sawSessionCompact = false;
 			let runJob: AgentChatRunJobController | null = null;
+			let abortRunStreamId = localStreamId("agent");
 
 			const finishAgentError = (kind: AgentErrorKind, detail?: string) => {
 				if (settled) return;
@@ -768,8 +804,8 @@ export function ChatPanel() {
 						agentErrorDetail: detail,
 					},
 				);
+				deleteAbortRun(abortRunStreamId);
 				if (finishesCurrent) {
-					abortRef.current = null;
 					if (agentRunJobRef.current === runJob) {
 						agentRunJobRef.current = null;
 					}
@@ -795,7 +831,7 @@ export function ChatPanel() {
 			}
 
 			const controller = new AbortController();
-			abortRef.current = controller;
+			registerAbortRun(abortRunStreamId, controller, convId);
 			setAgentRunPhase("connecting");
 
 			const finishAgentMessage = (
@@ -809,8 +845,8 @@ export function ChatPanel() {
 				// SPEC-7 PR2 (fixes #60): see comment in finishAgentError — the
 				// rewind target must survive normal completion too.
 				finishAgentStreamMessage(messageId, content, stats);
+				deleteAbortRun(abortRunStreamId);
 				if (finishesCurrent) {
-					abortRef.current = null;
 					if (agentRunJobRef.current === runJob) {
 						agentRunJobRef.current = null;
 					}
@@ -818,28 +854,30 @@ export function ChatPanel() {
 				}
 			};
 
-				const markAgentRunning = () => {
-					setAgentRunPhase((phase) => (phase === "idle" ? phase : "running"));
-				};
-				const heartbeatRunJob = () => {
-					const job = runJob;
-					if (job) job.heartbeat();
-				};
-				const completeRunJob = () => {
-					const job = runJob;
-					if (job) job.complete();
-				};
-				const failRunJob = (error: unknown) => {
-					const job = runJob;
-					if (job) job.fail(error);
-				};
+			const markAgentRunning = () => {
+				setAgentRunPhase((phase) => (phase === "idle" ? phase : "running"));
+			};
+			const heartbeatRunJob = () => {
+				const job = runJob;
+				if (job) job.heartbeat();
+			};
+			const completeRunJob = () => {
+				const job = runJob;
+				if (job) job.complete();
+			};
+			const failRunJob = (error: unknown) => {
+				const job = runJob;
+				if (job) job.fail(error);
+			};
 
-				try {
+			try {
 				await streamAgent(
 					text,
 					transportOptions,
 					{
 						onStreamStart: (id) => {
+							moveAbortRun(abortRunStreamId, id);
+							abortRunStreamId = id;
 							streamId = id;
 							runJob = startAgentChatRunJob({
 								conversationId: convId,
@@ -847,16 +885,16 @@ export function ChatPanel() {
 								title: text,
 							});
 							agentRunJobRef.current = runJob;
-							},
-							onToken: (token) => {
-								markAgentRunning();
-								heartbeatRunJob();
-								accumulated += token;
-								updateAgentStreamMessage(messageId, { content: accumulated });
-							},
-							onMessage: (message) => {
-								markAgentRunning();
-								heartbeatRunJob();
+						},
+						onToken: (token) => {
+							markAgentRunning();
+							heartbeatRunJob();
+							accumulated += token;
+							updateAgentStreamMessage(messageId, { content: accumulated });
+						},
+						onMessage: (message) => {
+							markAgentRunning();
+							heartbeatRunJob();
 							if (isSdkUserMessage(message) && message.uuid) {
 								markAgentMessageRewindable(messageId, {
 									streamId,
@@ -875,33 +913,33 @@ export function ChatPanel() {
 								agentSessionId: message.session_id,
 								assistantMessageId: message.uuid,
 							});
-							},
-							onProfileResolved: (payload) => {
-								markAgentRunning();
-								setActiveRunProfile(convId, payload);
-								if (
-									payload.requestedProfileId &&
-									payload.requestedProfileId !== payload.profileId
-								) {
-									appendAgentProgressSummary(messageId, {
-										text: t("agent.timeline.profileFallback", {
-											profile: payload.profileId,
-										}),
-										timestamp: Date.now(),
-									});
-								}
-							},
-							onDone: (result) => {
-								markAgentRunning();
-								completeRunJob();
-								const stats = agentResultToStats(result);
+						},
+						onProfileResolved: (payload) => {
+							markAgentRunning();
+							setActiveRunProfile(convId, payload);
+							if (
+								payload.requestedProfileId &&
+								payload.requestedProfileId !== payload.profileId
+							) {
+								appendAgentProgressSummary(messageId, {
+									text: t("agent.timeline.profileFallback", {
+										profile: payload.profileId,
+									}),
+									timestamp: Date.now(),
+								});
+							}
+						},
+						onDone: (result) => {
+							markAgentRunning();
+							completeRunJob();
+							const stats = agentResultToStats(result);
 							const finalContent =
 								accumulated || (sawSessionCompact ? "" : result?.result || "");
 							finishAgentMessage(finalContent, stats);
-							},
-							onError: (err) => {
-								failRunJob(err);
-								const kind = agentErrorKindFromError(err);
+						},
+						onError: (err) => {
+							failRunJob(err);
+							const kind = agentErrorKindFromError(err);
 							finishAgentError(kind, err.message);
 						},
 						onToolEvent: (event) => {
@@ -1012,10 +1050,10 @@ export function ChatPanel() {
 					},
 					controller.signal,
 				);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					failRunJob(err);
-					const kind = agentErrorKindFromError(err);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				failRunJob(err);
+				const kind = agentErrorKindFromError(err);
 				finishAgentError(kind, message);
 			}
 		},
@@ -1026,10 +1064,13 @@ export function ChatPanel() {
 			appendAgentWikiChange,
 			clearAgentMessageRewindable,
 			createConversation,
+			deleteAbortRun,
 			finishAgentStreamMessage,
 			llmConfig,
 			markAgentMessageRewindable,
+			moveAbortRun,
 			project,
+			registerAbortRun,
 			requestAgentPermission,
 			setActiveRunProfile,
 			setActiveRunModel,
@@ -1151,10 +1192,11 @@ export function ChatPanel() {
 			const poolSummaryTargetSinceMs = Date.now();
 			setStreaming(true);
 			const poolProgressSummaries: AgentProgressSummaryRecord[] = [];
+			const abortRunStreamId = localStreamId("chat");
 			try {
 				setChatAgentEvents([]);
 				const controller = new AbortController();
-				abortRef.current = controller;
+				registerAbortRun(abortRunStreamId, controller, convId);
 				const activeConvMessages = useChatStore
 					.getState()
 					.getActiveMessages()
@@ -1265,10 +1307,10 @@ export function ChatPanel() {
 					appendAgentProgressSummary,
 				);
 				setChatAgentEvents([]);
-				abortRef.current = null;
+				deleteAbortRun(abortRunStreamId);
 			} catch (err) {
 				setChatAgentEvents([]);
-				abortRef.current = null;
+				deleteAbortRun(abortRunStreamId);
 				if (isAbortLikeError(err)) {
 					useChatStore.setState({
 						isStreaming: false,
@@ -1310,7 +1352,9 @@ export function ChatPanel() {
 			setStreaming,
 			appendStreamToken,
 			appendAgentProgressSummary,
+			deleteAbortRun,
 			finalizeStream,
+			registerAbortRun,
 			createConversation,
 			maxHistoryMessages,
 			t,
@@ -1321,8 +1365,7 @@ export function ChatPanel() {
 			useChatStore.getState().streamingConversationId;
 		agentRunJobRef.current?.cancel("stopped");
 		agentRunJobRef.current = null;
-		abortRef.current?.abort();
-		abortRef.current = null;
+		abortRunsForConversation(streamingConversationId);
 		setAgentRunPhase("idle");
 		setChatAgentEvents([]);
 		setStreaming(false);
@@ -1334,11 +1377,19 @@ export function ChatPanel() {
 				decisionClassification: "user_reject",
 			});
 		}
-	}, [clearAgentPermissionRequestsForConversation, setStreaming, t]);
+	}, [
+		abortRunsForConversation,
+		clearAgentPermissionRequestsForConversation,
+		setStreaming,
+		t,
+	]);
 	const handleDocumentDiscussion = useCallback(async (sourcePath: string) => {
 		if (!project || isStreaming) return;
 		const controller = new AbortController();
-		abortRef.current = controller;
+		const abortRunStreamId = localStreamId("ingest");
+		const conversationId =
+			useChatStore.getState().activeConversationId ?? localStreamId("ingest");
+		registerAbortRun(abortRunStreamId, controller, conversationId);
 		setActiveView("wiki");
 		try {
 			await startIngest(project.path, sourcePath, llmConfig, controller.signal);
@@ -1347,11 +1398,16 @@ export function ChatPanel() {
 				console.error("Failed to start document discussion:", err);
 			}
 		} finally {
-			if (abortRef.current === controller) {
-				abortRef.current = null;
-			}
+			deleteAbortRun(abortRunStreamId);
 		}
-	}, [isStreaming, llmConfig, project, setActiveView]);
+	}, [
+		deleteAbortRun,
+		isStreaming,
+		llmConfig,
+		project,
+		registerAbortRun,
+		setActiveView,
+	]);
 	const handlePickDocument = useCallback(async () => {
 		if (!project || isStreaming) return;
 		const selected = await open({

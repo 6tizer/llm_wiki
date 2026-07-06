@@ -215,6 +215,34 @@ function mockModelCallSuccess(content = "model answer"): void {
   })
 }
 
+type PendingModelCallStream = {
+  callbacks: { onToken: (token: string) => void; onDone: () => void }
+  signal?: AbortSignal
+  resolve: () => void
+}
+
+function mockPendingModelCallStreams(): PendingModelCallStream[] {
+  const streams: PendingModelCallStream[] = []
+  buildChatAgentMessagesMock.mockResolvedValue({
+    messages: [{ role: "user", content: "prompt" }],
+    references: [],
+    queryPages: [],
+    steps: [],
+  })
+  streamChatMock.mockImplementation(async (
+    _config: unknown,
+    _messages: unknown,
+    callbacks: { onToken: (token: string) => void; onDone: () => void },
+    signal?: AbortSignal,
+  ) => {
+    const pending = deferred<void>()
+    streams.push({ callbacks, signal, resolve: pending.resolve })
+    signal?.addEventListener("abort", () => pending.resolve(), { once: true })
+    return pending.promise
+  })
+  return streams
+}
+
 function agentRunProfileRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     profileId: "agent-profile",
@@ -1159,6 +1187,112 @@ describe("ChatPanel agent mode rendering", () => {
     expect(useChatStore.getState().activeAgentPermissionRequest?.requestId).toBe("permission-b")
     useChatStore.getState().resolveAgentPermission("permission-b", { behavior: "allow" })
     await expect(permissionB).resolves.toMatchObject({ behavior: "allow" })
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("keeps a newer model-call abort run after an older bypassed run finishes", async () => {
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-1", title: "Research chat", createdAt: 1, updatedAt: 1 },
+      ],
+      activeConversationId: "conv-1",
+      messages: [],
+    })
+    const streams = mockPendingModelCallStreams()
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "first")
+    await pressEnter(container)
+    await flushPromises()
+    await act(async () => {
+      useChatStore.setState({
+        isStreaming: false,
+        streamingConversationId: null,
+        streamingAgentMessageId: null,
+      })
+      await Promise.resolve()
+    })
+    await typeText(container, "second")
+    await pressEnter(container)
+    await flushPromises()
+
+    expect(streams).toHaveLength(2)
+    await act(async () => {
+      streams[0].callbacks.onToken("first answer")
+      streams[0].callbacks.onDone()
+      streams[0].resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(streams[0].signal?.aborted).toBe(false)
+    expect(streams[1].signal?.aborted).toBe(false)
+
+    await act(async () => {
+      useChatStore.setState({
+        isStreaming: true,
+        streamingConversationId: "conv-1",
+      })
+      await Promise.resolve()
+    })
+    const stopButton = findButtonByText(container, i18n.t("chat.stopGeneration"))
+    await act(async () => {
+      stopButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(streams[0].signal?.aborted).toBe(false)
+    expect(streams[1].signal?.aborted).toBe(true)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("stops only abort runs for the streaming conversation", async () => {
+    useChatStore.setState({
+      conversations: [
+        { id: "conv-a", title: "A", createdAt: 1, updatedAt: 1 },
+        { id: "conv-b", title: "B", createdAt: 2, updatedAt: 2 },
+      ],
+      activeConversationId: "conv-a",
+      messages: [],
+    })
+    const streams = mockPendingModelCallStreams()
+    const { container, root } = renderChatPanel()
+
+    await typeText(container, "run a")
+    await pressEnter(container)
+    await flushPromises()
+    await act(async () => {
+      useChatStore.setState({
+        activeConversationId: "conv-b",
+        isStreaming: false,
+        streamingConversationId: null,
+        streamingAgentMessageId: null,
+      })
+      await Promise.resolve()
+    })
+    await typeText(container, "run b")
+    await pressEnter(container)
+    await flushPromises()
+
+    expect(streams).toHaveLength(2)
+    await act(async () => {
+      useChatStore.setState({
+        isStreaming: true,
+        streamingConversationId: "conv-b",
+      })
+      await Promise.resolve()
+    })
+    const stopButton = findButtonByText(container, i18n.t("chat.stopGeneration"))
+    await act(async () => {
+      stopButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(streams[0].signal?.aborted).toBe(false)
+    expect(streams[1].signal?.aborted).toBe(true)
 
     act(() => root.unmount())
     container.remove()
