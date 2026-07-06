@@ -13,7 +13,8 @@
 import { describe, it, expect } from "vitest"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync, statSync } from "node:fs"
+import * as ts from "typescript"
 import en from "./en.json"
 import zh from "./zh.json"
 
@@ -32,8 +33,128 @@ function flattenKeys(obj: unknown, prefix = ""): string[] {
   return out
 }
 
+interface TranslationReference {
+  key: string
+  file: string
+  line: number
+}
+
+interface DynamicTranslationReference {
+  expression: string
+  prefix: string
+  file: string
+  line: number
+}
+
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"])
+
+function sourceFiles(root: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(root)) {
+    const path = join(root, entry)
+    const stat = statSync(path)
+    if (stat.isDirectory()) {
+      out.push(...sourceFiles(path))
+      continue
+    }
+    if ([...SOURCE_EXTENSIONS].some((extension) => path.endsWith(extension))) {
+      out.push(path)
+    }
+  }
+  return out
+}
+
+function translationCallArg(node: ts.CallExpression): ts.Expression | undefined {
+  if (ts.isIdentifier(node.expression) && node.expression.text === "t") return node.arguments[0]
+  if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "t") {
+    return node.arguments[0]
+  }
+  return undefined
+}
+
+function sourceFileKind(file: string): ts.ScriptKind {
+  return file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+}
+
+function lineNumberForNode(sourceFile: ts.SourceFile, node: ts.Node): number {
+  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
+}
+
+function collectStaticTranslationReferences(srcDir: string): TranslationReference[] {
+  const refs: TranslationReference[] = []
+  for (const file of sourceFiles(srcDir)) {
+    const text = readFileSync(file, "utf8")
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, sourceFileKind(file))
+    const visit = (node: ts.Node) => {
+      if (!ts.isCallExpression(node)) {
+        ts.forEachChild(node, visit)
+        return
+      }
+      const arg = translationCallArg(node)
+      if (arg && ts.isStringLiteral(arg)) {
+        refs.push({
+          key: arg.text,
+          file,
+          line: lineNumberForNode(sourceFile, node),
+        })
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+  }
+  return refs
+}
+
+function collectDynamicTranslationReferences(srcDir: string): DynamicTranslationReference[] {
+  const refs: DynamicTranslationReference[] = []
+  for (const file of sourceFiles(srcDir)) {
+    const text = readFileSync(file, "utf8")
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, sourceFileKind(file))
+    const visit = (node: ts.Node) => {
+      if (!ts.isCallExpression(node)) {
+        ts.forEachChild(node, visit)
+        return
+      }
+      const arg = translationCallArg(node)
+      if (!arg || !ts.isTemplateExpression(arg)) {
+        ts.forEachChild(node, visit)
+        return
+      }
+      const prefix = arg.head.text.replace(/\.+$/, "")
+      if (!prefix) {
+        ts.forEachChild(node, visit)
+        return
+      }
+      refs.push({
+        expression: arg.getText(sourceFile),
+        prefix,
+        file,
+        line: lineNumberForNode(sourceFile, node),
+      })
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+  }
+  return refs
+}
+
+function formatReferences(refs: TranslationReference[]): string {
+  return refs
+    .map((ref) => `${ref.key} (${ref.file}:${ref.line})`)
+    .sort()
+    .join("\n  ")
+}
+
+function formatDynamicReferences(refs: DynamicTranslationReference[]): string {
+  return refs
+    .map((ref) => `${ref.expression} -> ${ref.prefix}.* (${ref.file}:${ref.line})`)
+    .sort()
+    .join("\n  ")
+}
+
 describe("i18n bundle parity (en.json ↔ zh.json)", () => {
   const i18nDir = dirname(fileURLToPath(import.meta.url))
+  const srcDir = join(i18nDir, "..")
   const enKeys = new Set(flattenKeys(en))
   const zhKeys = new Set(flattenKeys(zh))
 
@@ -104,5 +225,35 @@ describe("i18n bundle parity (en.json ↔ zh.json)", () => {
     }
     check(en, "en.json")
     check(zh, "zh.json")
+  })
+
+  it("every static t(\"...\") key referenced from src exists in both bundles", () => {
+    const refs = collectStaticTranslationReferences(srcDir)
+    const missingInEn = refs.filter((ref) => !enKeys.has(ref.key))
+    const missingInZh = refs.filter((ref) => !zhKeys.has(ref.key))
+
+    expect(
+      missingInEn,
+      `Static translation keys referenced from src but missing in en.json:\n  ${formatReferences(missingInEn)}`,
+    ).toEqual([])
+    expect(
+      missingInZh,
+      `Static translation keys referenced from src but missing in zh.json:\n  ${formatReferences(missingInZh)}`,
+    ).toEqual([])
+  })
+
+  it("dynamic template translation keys referenced from src have bundle prefixes", () => {
+    const refs = collectDynamicTranslationReferences(srcDir)
+    const enPrefixes = refs.filter((ref) => ![...enKeys].some((key) => key.startsWith(`${ref.prefix}.`)))
+    const zhPrefixes = refs.filter((ref) => ![...zhKeys].some((key) => key.startsWith(`${ref.prefix}.`)))
+
+    expect(
+      enPrefixes,
+      `Dynamic translation key prefixes referenced from src but missing in en.json:\n  ${formatDynamicReferences(enPrefixes)}`,
+    ).toEqual([])
+    expect(
+      zhPrefixes,
+      `Dynamic translation key prefixes referenced from src but missing in zh.json:\n  ${formatDynamicReferences(zhPrefixes)}`,
+    ).toEqual([])
   })
 })

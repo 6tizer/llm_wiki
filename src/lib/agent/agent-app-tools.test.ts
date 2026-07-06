@@ -239,6 +239,11 @@ describe("runAgentAppTool ingest parity tools", () => {
     ])
   })
 
+  it("uses a dedicated handler for each supported app tool", () => {
+    const handlers = Object.values(AGENT_APP_TOOL_DESCRIPTORS).map((descriptor) => descriptor.handler)
+    expect(new Set(handlers).size).toBe(handlers.length)
+  })
+
   beforeEach(() => {
     fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true }]
     fsMock.canonical = new Map([["/project/raw/sources", "/project/raw/sources"]])

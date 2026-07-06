@@ -6,6 +6,7 @@
   "common": {
     "back": "上一步",
     "cancel": "取消",
+    "dismiss": "关闭",
     "next": "下一步"
   },
   "fallbackPolicy": {
@@ -1287,7 +1288,9 @@
     "clearCompleted": "清除已完成"
   },
   "fileTree": {
-    "noProject": "未打开项目"
+    "noProject": "未打开项目",
+    "openProjectFolder": "打开项目文件夹",
+    "openProjectFolderFailed": "无法打开项目文件夹。"
   },
   "graph": {
     "openProject": "打开项目以查看关系图",

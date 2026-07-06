@@ -70,9 +70,11 @@ interface AgentAppToolContext {
   budget: AgentAppToolBudget | undefined
 }
 
+type AgentAppToolHandler = (toolContext: AgentAppToolContext) => Promise<AgentAppToolResponse>
+
 interface AgentAppToolDescriptor {
   name: string
-  handler: (context: AgentAppToolContext) => Promise<AgentAppToolResponse>
+  handler: AgentAppToolHandler
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -547,15 +549,9 @@ export async function runAgentAppTool(
   return descriptor.handler({ toolName, args, options, project, state, projectPath, budget })
 }
 
-async function runAgentAppToolHandler({
-  toolName,
-  args,
-  project,
-  state,
-  projectPath,
-  budget,
-}: AgentAppToolContext): Promise<AgentAppToolResponse> {
-  if (toolName === "build_answer_context") {
+async function handleBuildAnswerContext(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, project, state } = toolContext
+
     const maxContextSize =
       typeof args.maxContextSize === "number" ? args.maxContextSize : state.llmConfig.maxContextSize
     const context = await buildWikiAnswerContext({
@@ -565,9 +561,11 @@ async function runAgentAppToolHandler({
       dataVersion: state.dataVersion,
     })
     return { ok: true, result: context }
-  }
+}
 
-  if (toolName === "save_query_page") {
+async function handleSaveQueryPage(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath } = toolContext
+
     const result = await saveQueryPage({
       projectPath,
       content: stringArg(args, "content"),
@@ -590,9 +588,11 @@ async function runAgentAppToolHandler({
       },
       wikiChanged: [{ path: result.relativePath, operation: "create" }],
     }
-  }
+}
 
-  if (toolName === "run_lint") {
+async function handleRunLint(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath } = toolContext
+
     const includeStructural = args.includeStructural !== false
     const includeSemantic = args.includeSemantic === true
     const structural = includeStructural ? await runStructuralLint(projectPath) : []
@@ -609,9 +609,11 @@ async function runAgentAppToolHandler({
         semanticSkipped: includeSemantic && !hasUsableLlm(state.llmConfig),
       },
     }
-  }
+}
 
-  if (toolName === "collect_research_sources") {
+async function handleCollectResearchSources(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath } = toolContext
+
     const queries = searchQueriesArg(args)
     const searchConfig = searchConfigWithSourceMode(state.searchApiConfig, args.sourceMode)
     const resolved = resolveSearchConfig(searchConfig)
@@ -642,9 +644,11 @@ async function runAgentAppToolHandler({
         errors: redactErrors(collected.errors, state),
       },
     }
-  }
+}
 
-  if (toolName === "run_deep_research") {
+async function handleRunDeepResearch(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath } = toolContext
+
     const { topic, searchQueries } = researchRequestArg(args)
     const searchConfig = searchConfigWithSourceMode(state.searchApiConfig, args.sourceMode)
     if (!hasConfiguredDeepResearchSources(searchConfig)) {
@@ -674,9 +678,11 @@ async function runAgentAppToolHandler({
         sourceMode: resolveSearchConfig(searchConfig).deepResearchSource ?? "web",
       },
     }
-  }
+}
 
-  if (toolName === "get_agent_task_status") {
+async function handleGetAgentTaskStatus(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state } = toolContext
+
     const taskId = stringArg(args, "taskId")
     const task = useResearchStore.getState().tasks.find((item) => item.id === taskId)
     if (!task) {
@@ -703,9 +709,11 @@ async function runAgentAppToolHandler({
         createdAt: task.createdAt,
       },
     }
-  }
+}
 
-  if (toolName === "detect_duplicates") {
+async function handleDetectDuplicates(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath } = toolContext
+
     const limit = typeof args.limit === "number" ? Math.max(1, Math.min(50, Math.floor(args.limit))) : 20
     const groups = await runDuplicateDetection(projectPath, state.llmConfig)
     return {
@@ -715,9 +723,11 @@ async function runAgentAppToolHandler({
         totalGroups: groups.length,
       },
     }
-  }
+}
 
-  if (toolName === "merge_duplicate_group") {
+async function handleMergeDuplicateGroup(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const group = duplicateGroupArg(args)
     const canonicalSlug = stringArg(args, "canonicalSlug")
     const dryRun = args.dryRun !== false
@@ -739,9 +749,11 @@ async function runAgentAppToolHandler({
       result: summarizeMergeResult(result, dryRun),
       wikiChanged: dryRun ? [] : mergeWikiChanged(result),
     }
-  }
+}
 
-  if (toolName === "optimize_research_topic") {
+async function handleOptimizeResearchTopic(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath } = toolContext
+
     const pp = normalizePath(projectPath)
     const overview = typeof args.overview === "string"
       ? args.overview
@@ -758,9 +770,11 @@ async function runAgentAppToolHandler({
       purpose,
     )
     return { ok: true, result }
-  }
+}
 
-  if (toolName === "sweep_reviews") {
+async function handleSweepReviews(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { projectPath } = toolContext
+
     const before = useReviewStore.getState().items
     const pendingBefore = before.filter((item) => !item.resolved).length
     const resolvedCount = await sweepResolvedReviews(projectPath)
@@ -774,9 +788,11 @@ async function runAgentAppToolHandler({
         totalReviews: after.length,
       },
     }
-  }
+}
 
-  if (toolName === "test_provider_connection") {
+async function handleTestProviderConnection(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { state } = toolContext
+
     const result = await testLlmConnection(state.llmConfig)
     return {
       ok: true,
@@ -785,9 +801,11 @@ async function runAgentAppToolHandler({
         message: redactConfiguredSecrets(result.message, state),
       },
     }
-  }
+}
 
-  if (toolName === "ingest_source") {
+async function handleIngestSource(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const blocked = preflightUnknownWriteBudget(toolName, budget)
     if (blocked) return blocked
     const sourcePath = await normalizeSourcePath(projectPath, stringArg(args, "sourcePath"))
@@ -813,9 +831,11 @@ async function runAgentAppToolHandler({
       },
       wikiChanged,
     }
-  }
+}
 
-  if (toolName === "caption_source_images") {
+async function handleCaptionSourceImages(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const blocked = preflightUnknownWriteBudget(toolName, budget)
     if (blocked) return blocked
     const sourcePath = await normalizeSourcePath(projectPath, stringArg(args, "sourcePath"))
@@ -838,9 +858,11 @@ async function runAgentAppToolHandler({
       result,
       wikiChanged,
     }
-  }
+}
 
-  if (toolName === "fix_lint_result") {
+async function handleFixLintResult(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const result = lintResultArg(args)
     const changedPath = wikiPathForPage(result.page)
     const blocked = preflightBudget(toolName, budget, [changedPath])
@@ -855,12 +877,11 @@ async function runAgentAppToolHandler({
       result: { fixed: ok, result },
       wikiChanged: ok ? [{ path: changedPath, operation: "update" }] : [],
     }
-  }
+}
 
+async function handleRunLintAndReport(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
 
-  // ── Phase 3.65-B: lint report loop ──
-
-  if (toolName === "run_lint_and_report") {
     const blocked = preflightUnknownWriteBudget(toolName, budget)
     if (blocked) return blocked
     const fileTree = state.fileTree
@@ -881,9 +902,11 @@ async function runAgentAppToolHandler({
       result: { report, reportPath },
       wikiChanged,
     }
-  }
+}
 
-  if (toolName === "fix_lint_report") {
+async function handleFixLintReport(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const release = await lintFixMutex.acquire()
     try {
       const report = args.report as LintReport
@@ -910,9 +933,11 @@ async function runAgentAppToolHandler({
     } finally {
       release()
     }
-  }
+}
 
-  if (toolName === "enrich_wikilinks") {
+async function handleEnrichWikilinks(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const filePath = normalizePagePath(projectPath, stringArg(args, "path"))
     const relativePath = filePath.replace(`${normalizePath(projectPath)}/`, "")
     const blocked = preflightBudget(toolName, budget, [relativePath])
@@ -924,9 +949,11 @@ async function runAgentAppToolHandler({
       result: { path: relativePath },
       wikiChanged: [{ path: relativePath, operation: "update" }],
     }
-  }
+}
 
-  if (toolName === "autofill_properties") {
+async function handleAutofillProperties(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const taxonomyAware = args.taxonomyAware === true
     const autoWriteHighConfidence = args.autoWriteHighConfidence === true
     const previewOptions = taxonomyAware
@@ -955,17 +982,23 @@ async function runAgentAppToolHandler({
       result,
       wikiChanged,
     }
-  }
+}
 
-  if (toolName === "okf_validate") {
+async function handleOkfValidate(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { projectPath } = toolContext
+
     return { ok: true, result: await validateOkfBundle(projectPath) }
-  }
+}
 
-  if (toolName === "okf_export") {
+async function handleOkfExport(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { projectPath } = toolContext
+
     return { ok: true, result: await buildOkfExportBundle(projectPath) }
-  }
+}
 
-  if (toolName === "okf_import") {
+async function handleOkfImport(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const sourceDir = sourceDirArg(args)
     const apply = args.apply === true
     const preview = await previewOkfImport(sourceDir, projectPath)
@@ -990,17 +1023,21 @@ async function runAgentAppToolHandler({
       result,
       wikiChanged: writtenPaths.map((path) => ({ path, operation: "create" as const })),
     }
-  }
+}
 
-  if (toolName === "taxonomy_preview") {
+async function handleTaxonomyPreview(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, projectPath } = toolContext
+
     const action = taxonomyActionArg(args)
     const result = action === "bootstrap"
       ? await previewTagTaxonomyBootstrap(projectPath)
       : await previewTagTaxonomyGrowth(projectPath)
     return { ok: true, result }
-  }
+}
 
-  if (toolName === "taxonomy_apply") {
+async function handleTaxonomyApply(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const sidecarPath = ".llm-wiki/tag-taxonomy.json"
     const blocked = preflightBudget(toolName, budget, [sidecarPath])
     if (blocked) return blocked
@@ -1017,9 +1054,11 @@ async function runAgentAppToolHandler({
       result,
       changedPaths: result.wrote ? [sidecarPath] : [],
     }
-  }
+}
 
-  if (toolName === "taxonomy_rollback") {
+async function handleTaxonomyRollback(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, state, projectPath, budget } = toolContext
+
     const sidecarPath = ".llm-wiki/tag-taxonomy.json"
     const blocked = preflightBudget(toolName, budget, [sidecarPath])
     if (blocked) return blocked
@@ -1033,20 +1072,26 @@ async function runAgentAppToolHandler({
       result,
       changedPaths: result.wrote && result.removed > 0 ? [sidecarPath] : [],
     }
-  }
+}
 
-  if (toolName === "synthesis_preview") {
+async function handleSynthesisPreview(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, projectPath } = toolContext
+
     return {
       ok: true,
       result: await discoverSynthesisCandidates(projectPath, synthesisDiscoveryOptions(args)),
     }
-  }
+}
 
-  if (toolName === "get_knowledge_agents_config") {
+async function handleGetKnowledgeAgentsConfig(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { projectPath } = toolContext
+
     return { ok: true, result: await loadKnowledgeAgentsConfig(projectPath) }
-  }
+}
 
-  if (toolName === "run_pipeline") {
+async function handleRunPipeline(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { args, state, projectPath, budget } = toolContext
+
     const pipelineName = stringArg(args, "pipeline")
     const schema = BUILTIN_PIPELINES[pipelineName]
     if (!schema) throw new Error(`Unknown pipeline: ${pipelineName}. Available: ${Object.keys(BUILTIN_PIPELINES).join(", ")}`)
@@ -1088,9 +1133,11 @@ async function runAgentAppToolHandler({
       changedPaths: result.changedPaths,
       wikiChanged: result.wikiChanged ?? [],
     }
-  }
+}
 
-  if (toolName === "wiki_synthesis") {
+async function handleWikiSynthesis(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
+  const { toolName, args, state, projectPath, budget } = toolContext
+
     const blocked = preflightUnknownWriteBudget(toolName, budget)
     if (blocked) return blocked
     const targetTag = typeof args.targetTag === "string" ? args.targetTag : undefined
@@ -1118,41 +1165,39 @@ async function runAgentAppToolHandler({
       result,
       wikiChanged,
     }
-  }
-
-  // Dispatcher lookup should reject unknown names before reaching the
-  // shared handler. Keep a guard here so descriptor/handler drift fails
-  // loudly during development.
-  throw new Error(`Unregistered app tool handler reached: ${toolName}`)
 }
 
-export const AGENT_APP_TOOL_DESCRIPTORS: Record<string, AgentAppToolDescriptor> = {
-  build_answer_context: { name: "build_answer_context", handler: runAgentAppToolHandler },
-  save_query_page: { name: "save_query_page", handler: runAgentAppToolHandler },
-  run_lint: { name: "run_lint", handler: runAgentAppToolHandler },
-  collect_research_sources: { name: "collect_research_sources", handler: runAgentAppToolHandler },
-  run_deep_research: { name: "run_deep_research", handler: runAgentAppToolHandler },
-  get_agent_task_status: { name: "get_agent_task_status", handler: runAgentAppToolHandler },
-  detect_duplicates: { name: "detect_duplicates", handler: runAgentAppToolHandler },
-  merge_duplicate_group: { name: "merge_duplicate_group", handler: runAgentAppToolHandler },
-  optimize_research_topic: { name: "optimize_research_topic", handler: runAgentAppToolHandler },
-  sweep_reviews: { name: "sweep_reviews", handler: runAgentAppToolHandler },
-  test_provider_connection: { name: "test_provider_connection", handler: runAgentAppToolHandler },
-  ingest_source: { name: "ingest_source", handler: runAgentAppToolHandler },
-  caption_source_images: { name: "caption_source_images", handler: runAgentAppToolHandler },
-  fix_lint_result: { name: "fix_lint_result", handler: runAgentAppToolHandler },
-  run_lint_and_report: { name: "run_lint_and_report", handler: runAgentAppToolHandler },
-  fix_lint_report: { name: "fix_lint_report", handler: runAgentAppToolHandler },
-  enrich_wikilinks: { name: "enrich_wikilinks", handler: runAgentAppToolHandler },
-  autofill_properties: { name: "autofill_properties", handler: runAgentAppToolHandler },
-  okf_validate: { name: "okf_validate", handler: runAgentAppToolHandler },
-  okf_export: { name: "okf_export", handler: runAgentAppToolHandler },
-  okf_import: { name: "okf_import", handler: runAgentAppToolHandler },
-  taxonomy_preview: { name: "taxonomy_preview", handler: runAgentAppToolHandler },
-  taxonomy_apply: { name: "taxonomy_apply", handler: runAgentAppToolHandler },
-  taxonomy_rollback: { name: "taxonomy_rollback", handler: runAgentAppToolHandler },
-  synthesis_preview: { name: "synthesis_preview", handler: runAgentAppToolHandler },
-  get_knowledge_agents_config: { name: "get_knowledge_agents_config", handler: runAgentAppToolHandler },
-  run_pipeline: { name: "run_pipeline", handler: runAgentAppToolHandler },
-  wiki_synthesis: { name: "wiki_synthesis", handler: runAgentAppToolHandler },
+const AGENT_APP_TOOL_HANDLERS: Record<string, AgentAppToolHandler> = {
+  build_answer_context: handleBuildAnswerContext,
+  save_query_page: handleSaveQueryPage,
+  run_lint: handleRunLint,
+  collect_research_sources: handleCollectResearchSources,
+  run_deep_research: handleRunDeepResearch,
+  get_agent_task_status: handleGetAgentTaskStatus,
+  detect_duplicates: handleDetectDuplicates,
+  merge_duplicate_group: handleMergeDuplicateGroup,
+  optimize_research_topic: handleOptimizeResearchTopic,
+  sweep_reviews: handleSweepReviews,
+  test_provider_connection: handleTestProviderConnection,
+  ingest_source: handleIngestSource,
+  caption_source_images: handleCaptionSourceImages,
+  fix_lint_result: handleFixLintResult,
+  run_lint_and_report: handleRunLintAndReport,
+  fix_lint_report: handleFixLintReport,
+  enrich_wikilinks: handleEnrichWikilinks,
+  autofill_properties: handleAutofillProperties,
+  okf_validate: handleOkfValidate,
+  okf_export: handleOkfExport,
+  okf_import: handleOkfImport,
+  taxonomy_preview: handleTaxonomyPreview,
+  taxonomy_apply: handleTaxonomyApply,
+  taxonomy_rollback: handleTaxonomyRollback,
+  synthesis_preview: handleSynthesisPreview,
+  get_knowledge_agents_config: handleGetKnowledgeAgentsConfig,
+  run_pipeline: handleRunPipeline,
+  wiki_synthesis: handleWikiSynthesis,
 }
+
+export const AGENT_APP_TOOL_DESCRIPTORS: Record<string, AgentAppToolDescriptor> = Object.fromEntries(
+  Object.entries(AGENT_APP_TOOL_HANDLERS).map(([name, handler]) => [name, { name, handler }]),
+) as Record<string, AgentAppToolDescriptor>
