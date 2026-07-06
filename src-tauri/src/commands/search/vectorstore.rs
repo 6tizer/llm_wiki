@@ -2,11 +2,12 @@ use arrow_array::{
     ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray, UInt32Array,
 };
 use arrow_schema::{DataType, Field, Schema};
-use lancedb::connect;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::optimize::OptimizeAction;
+use lancedb::{connect, Connection, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -114,6 +115,37 @@ async fn project_vector_lock(project_path: &str) -> Arc<Mutex<()>> {
         .clone()
 }
 
+// Behavior-preserving extraction: identical lock key + acquire/release scope as the
+// former per-site boilerplate.
+async fn with_project_lock<T, Fut>(
+    project_path: &str,
+    body: impl FnOnce() -> Fut,
+) -> Result<T, String>
+where
+    Fut: Future<Output = Result<T, String>>,
+{
+    let lock = project_vector_lock(project_path).await;
+    let _guard = lock.lock().await;
+    body().await
+}
+
+// Behavior-preserving extraction: callers keep their own missing-table (None) semantics.
+async fn open_table_if_exists(db: &Connection, table_name: &str) -> Result<Option<Table>, String> {
+    let tables = db
+        .table_names()
+        .execute()
+        .await
+        .map_err(|e| format!("List tables error: {e}"))?;
+    if !tables.contains(&table_name.to_string()) {
+        return Ok(None);
+    }
+    db.open_table(table_name)
+        .execute()
+        .await
+        .map(Some)
+        .map_err(|e| format!("Open table error: {e}"))
+}
+
 fn validate_page_id_chars(page_id: &str) -> Result<(), String> {
     if page_id.is_empty() || page_id.len() > MAX_PAGE_ID_LEN {
         return Err("Invalid page_id: empty or too long".to_string());
@@ -171,53 +203,41 @@ pub async fn vector_upsert(
 ) -> Result<(), String> {
     run_guarded_async("vector_upsert", async move {
         validate_page_id(&page_id)?;
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
-
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
-
-        let dim = embedding.len() as i32;
-        let schema = make_schema(dim);
-        let batch = make_batch(schema.clone(), &page_id, embedding, dim)?;
-        let data = vec![batch];
-
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
-
-        if tables.contains(&TABLE_V1.to_string()) {
-            let table = db
-                .open_table(TABLE_V1)
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
                 .execute()
                 .await
-                .map_err(|e| format!("Open table error: {e}"))?;
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-            // Delete existing entry then add new one
-            if let Err(e) = table.delete(&format!("page_id = '{}'", page_id)).await {
-                eprintln!(
-                    "[vectorstore] Warning: delete before upsert failed for '{}': {}",
-                    page_id, e
-                );
+            let dim = embedding.len() as i32;
+            let schema = make_schema(dim);
+            let batch = make_batch(schema.clone(), &page_id, embedding, dim)?;
+            let data = vec![batch];
+
+            if let Some(table) = open_table_if_exists(&db, TABLE_V1).await? {
+                // Delete existing entry then add new one
+                if let Err(e) = table.delete(&format!("page_id = '{}'", page_id)).await {
+                    eprintln!(
+                        "[vectorstore] Warning: delete before upsert failed for '{}': {}",
+                        page_id, e
+                    );
+                }
+
+                table
+                    .add(data)
+                    .execute()
+                    .await
+                    .map_err(|e| format!("Add error: {e}"))?;
+            } else {
+                db.create_table(TABLE_V1, data)
+                    .execute()
+                    .await
+                    .map_err(|e| format!("Create table error: {e}"))?;
             }
 
-            table
-                .add(data)
-                .execute()
-                .await
-                .map_err(|e| format!("Add error: {e}"))?;
-        } else {
-            db.create_table(TABLE_V1, data)
-                .execute()
-                .await
-                .map_err(|e| format!("Create table error: {e}"))?;
-        }
-
-        Ok(())
+            Ok(())
+        })
+        .await
     })
     .await
 }
@@ -230,66 +250,54 @@ pub async fn vector_search(
     top_k: usize,
 ) -> Result<Vec<VectorSearchResult>, String> {
     run_guarded_async("vector_search", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V1).await? else {
+                return Ok(vec![]);
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            let results_stream = table
+                .vector_search(query_embedding)
+                .map_err(|e| format!("Search error: {e}"))?
+                .limit(top_k)
+                .execute()
+                .await
+                .map_err(|e| format!("Execute search error: {e}"))?;
 
-        if !tables.contains(&TABLE_V1.to_string()) {
-            return Ok(vec![]);
-        }
+            let mut search_results = Vec::new();
 
-        let table = db
-            .open_table(TABLE_V1)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
+            use futures::TryStreamExt;
+            let batches: Vec<RecordBatch> = results_stream
+                .try_collect()
+                .await
+                .map_err(|e| format!("Collect error: {e}"))?;
 
-        let results_stream = table
-            .vector_search(query_embedding)
-            .map_err(|e| format!("Search error: {e}"))?
-            .limit(top_k)
-            .execute()
-            .await
-            .map_err(|e| format!("Execute search error: {e}"))?;
+            for batch in &batches {
+                let ids = batch
+                    .column_by_name("page_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .ok_or("Missing page_id column")?;
 
-        let mut search_results = Vec::new();
+                let distances = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
+                    .ok_or("Missing _distance column")?;
 
-        use futures::TryStreamExt;
-        let batches: Vec<RecordBatch> = results_stream
-            .try_collect()
-            .await
-            .map_err(|e| format!("Collect error: {e}"))?;
-
-        for batch in &batches {
-            let ids = batch
-                .column_by_name("page_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or("Missing page_id column")?;
-
-            let distances = batch
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
-                .ok_or("Missing _distance column")?;
-
-            for i in 0..batch.num_rows() {
-                let page_id = ids.value(i).to_string();
-                let distance = distances.value(i);
-                let score = 1.0 / (1.0 + distance);
-                search_results.push(VectorSearchResult { page_id, score });
+                for i in 0..batch.num_rows() {
+                    let page_id = ids.value(i).to_string();
+                    let distance = distances.value(i);
+                    let score = 1.0 / (1.0 + distance);
+                    search_results.push(VectorSearchResult { page_id, score });
+                }
             }
-        }
 
-        Ok(search_results)
+            Ok(search_results)
+        })
+        .await
     })
     .await
 }
@@ -299,36 +307,24 @@ pub async fn vector_search(
 pub async fn vector_delete(project_path: String, page_id: String) -> Result<(), String> {
     run_guarded_async("vector_delete", async move {
         validate_page_id(&page_id)?;
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V1).await? else {
+                return Ok(());
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            table
+                .delete(&format!("page_id = '{}'", page_id))
+                .await
+                .map_err(|e| format!("Delete error: {e}"))?;
 
-        if !tables.contains(&TABLE_V1.to_string()) {
-            return Ok(());
-        }
-
-        let table = db
-            .open_table(TABLE_V1)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
-
-        table
-            .delete(&format!("page_id = '{}'", page_id))
-            .await
-            .map_err(|e| format!("Delete error: {e}"))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     })
     .await
 }
@@ -337,36 +333,24 @@ pub async fn vector_delete(project_path: String, page_id: String) -> Result<(), 
 #[tauri::command]
 pub async fn vector_count(project_path: String) -> Result<usize, String> {
     run_guarded_async("vector_count", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V1).await? else {
+                return Ok(0);
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            let count = table
+                .count_rows(None)
+                .await
+                .map_err(|e| format!("Count error: {e}"))?;
 
-        if !tables.contains(&TABLE_V1.to_string()) {
-            return Ok(0);
-        }
-
-        let table = db
-            .open_table(TABLE_V1)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
-
-        let count = table
-            .count_rows(None)
-            .await
-            .map_err(|e| format!("Count error: {e}"))?;
-
-        Ok(count)
+            Ok(count)
+        })
+        .await
     })
     .await
 }
@@ -491,60 +475,48 @@ pub async fn vector_upsert_chunks(
 ) -> Result<(), String> {
     run_guarded_async("vector_upsert_chunks", async move {
         validate_page_id_for_v2(&page_id)?;
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
-
-        if chunks.is_empty() {
-            return Ok(());
-        }
-
-        let dim = chunks[0].embedding.len() as i32;
-        if dim == 0 {
-            return Err("Chunk #0 has empty embedding".to_string());
-        }
-
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
-
-        let schema = make_schema_v2(dim);
-        let batch = make_batch_v2(schema.clone(), &page_id, &chunks, dim)?;
-        let data = vec![batch];
-
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
-
-        if tables.contains(&TABLE_V2.to_string()) {
-            let table = db
-                .open_table(TABLE_V2)
-                .execute()
-                .await
-                .map_err(|e| format!("Open table error: {e}"))?;
-
-            if let Err(e) = table.delete(&format!("page_id = '{}'", page_id)).await {
-                eprintln!(
-                    "[vectorstore v2] Warning: delete before upsert failed for page '{}': {}",
-                    page_id, e
-                );
+        with_project_lock(&project_path, || async {
+            if chunks.is_empty() {
+                return Ok(());
             }
 
-            table
-                .add(data)
-                .execute()
-                .await
-                .map_err(|e| format!("Add error: {e}"))?;
-        } else {
-            db.create_table(TABLE_V2, data)
-                .execute()
-                .await
-                .map_err(|e| format!("Create table error: {e}"))?;
-        }
+            let dim = chunks[0].embedding.len() as i32;
+            if dim == 0 {
+                return Err("Chunk #0 has empty embedding".to_string());
+            }
 
-        Ok(())
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
+
+            let schema = make_schema_v2(dim);
+            let batch = make_batch_v2(schema.clone(), &page_id, &chunks, dim)?;
+            let data = vec![batch];
+
+            if let Some(table) = open_table_if_exists(&db, TABLE_V2).await? {
+                if let Err(e) = table.delete(&format!("page_id = '{}'", page_id)).await {
+                    eprintln!(
+                        "[vectorstore v2] Warning: delete before upsert failed for page '{}': {}",
+                        page_id, e
+                    );
+                }
+
+                table
+                    .add(data)
+                    .execute()
+                    .await
+                    .map_err(|e| format!("Add error: {e}"))?;
+            } else {
+                db.create_table(TABLE_V2, data)
+                    .execute()
+                    .await
+                    .map_err(|e| format!("Create table error: {e}"))?;
+            }
+
+            Ok(())
+        })
+        .await
     })
     .await
 }
@@ -668,9 +640,11 @@ pub async fn vector_replace_all_chunks(
     pages: Vec<PageChunksReplaceInput>,
 ) -> Result<(), String> {
     run_guarded_async("vector_replace_all_chunks", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
-        vector_replace_all_chunks_locked(project_path, pages, None).await
+        let lock_project_path = project_path.clone();
+        with_project_lock(&lock_project_path, || async move {
+            vector_replace_all_chunks_locked(project_path, pages, None).await
+        })
+        .await
     })
     .await
 }
@@ -685,85 +659,73 @@ pub async fn vector_search_chunks(
     top_k: usize,
 ) -> Result<Vec<ChunkSearchResult>, String> {
     run_guarded_async("vector_search_chunks", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V2).await? else {
+                return Ok(vec![]);
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            let results_stream = table
+                .vector_search(query_embedding)
+                .map_err(|e| format!("Search error: {e}"))?
+                .limit(top_k)
+                .execute()
+                .await
+                .map_err(|e| format!("Execute search error: {e}"))?;
 
-        if !tables.contains(&TABLE_V2.to_string()) {
-            return Ok(vec![]);
-        }
+            use futures::TryStreamExt;
+            let batches: Vec<RecordBatch> = results_stream
+                .try_collect()
+                .await
+                .map_err(|e| format!("Collect error: {e}"))?;
 
-        let table = db
-            .open_table(TABLE_V2)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
+            let mut out: Vec<ChunkSearchResult> = Vec::new();
+            for batch in &batches {
+                let chunk_ids = batch
+                    .column_by_name("chunk_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .ok_or("Missing chunk_id column")?;
+                let page_ids = batch
+                    .column_by_name("page_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .ok_or("Missing page_id column")?;
+                let chunk_indexes = batch
+                    .column_by_name("chunk_index")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+                    .ok_or("Missing chunk_index column")?;
+                let chunk_texts = batch
+                    .column_by_name("chunk_text")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .ok_or("Missing chunk_text column")?;
+                let heading_paths = batch
+                    .column_by_name("heading_path")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .ok_or("Missing heading_path column")?;
+                let distances = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
+                    .ok_or("Missing _distance column")?;
 
-        let results_stream = table
-            .vector_search(query_embedding)
-            .map_err(|e| format!("Search error: {e}"))?
-            .limit(top_k)
-            .execute()
-            .await
-            .map_err(|e| format!("Execute search error: {e}"))?;
-
-        use futures::TryStreamExt;
-        let batches: Vec<RecordBatch> = results_stream
-            .try_collect()
-            .await
-            .map_err(|e| format!("Collect error: {e}"))?;
-
-        let mut out: Vec<ChunkSearchResult> = Vec::new();
-        for batch in &batches {
-            let chunk_ids = batch
-                .column_by_name("chunk_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or("Missing chunk_id column")?;
-            let page_ids = batch
-                .column_by_name("page_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or("Missing page_id column")?;
-            let chunk_indexes = batch
-                .column_by_name("chunk_index")
-                .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
-                .ok_or("Missing chunk_index column")?;
-            let chunk_texts = batch
-                .column_by_name("chunk_text")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or("Missing chunk_text column")?;
-            let heading_paths = batch
-                .column_by_name("heading_path")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .ok_or("Missing heading_path column")?;
-            let distances = batch
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
-                .ok_or("Missing _distance column")?;
-
-            for i in 0..batch.num_rows() {
-                let distance = distances.value(i);
-                out.push(ChunkSearchResult {
-                    chunk_id: chunk_ids.value(i).to_string(),
-                    page_id: page_ids.value(i).to_string(),
-                    chunk_index: chunk_indexes.value(i),
-                    chunk_text: chunk_texts.value(i).to_string(),
-                    heading_path: heading_paths.value(i).to_string(),
-                    score: 1.0 / (1.0 + distance),
-                });
+                for i in 0..batch.num_rows() {
+                    let distance = distances.value(i);
+                    out.push(ChunkSearchResult {
+                        chunk_id: chunk_ids.value(i).to_string(),
+                        page_id: page_ids.value(i).to_string(),
+                        chunk_index: chunk_indexes.value(i),
+                        chunk_text: chunk_texts.value(i).to_string(),
+                        heading_path: heading_paths.value(i).to_string(),
+                        score: 1.0 / (1.0 + distance),
+                    });
+                }
             }
-        }
 
-        Ok(out)
+            Ok(out)
+        })
+        .await
     })
     .await
 }
@@ -774,36 +736,24 @@ pub async fn vector_search_chunks(
 pub async fn vector_delete_page(project_path: String, page_id: String) -> Result<(), String> {
     run_guarded_async("vector_delete_page", async move {
         validate_page_id_for_v2(&page_id)?;
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V2).await? else {
+                return Ok(());
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            table
+                .delete(&format!("page_id = '{}'", page_id))
+                .await
+                .map_err(|e| format!("Delete error: {e}"))?;
 
-        if !tables.contains(&TABLE_V2.to_string()) {
-            return Ok(());
-        }
-
-        let table = db
-            .open_table(TABLE_V2)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
-
-        table
-            .delete(&format!("page_id = '{}'", page_id))
-            .await
-            .map_err(|e| format!("Delete error: {e}"))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     })
     .await
 }
@@ -813,36 +763,24 @@ pub async fn vector_delete_page(project_path: String, page_id: String) -> Result
 #[tauri::command]
 pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> {
     run_guarded_async("vector_count_chunks", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V2).await? else {
+                return Ok(0);
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            let count = table
+                .count_rows(None)
+                .await
+                .map_err(|e| format!("Count error: {e}"))?;
 
-        if !tables.contains(&TABLE_V2.to_string()) {
-            return Ok(0);
-        }
-
-        let table = db
-            .open_table(TABLE_V2)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
-
-        let count = table
-            .count_rows(None)
-            .await
-            .map_err(|e| format!("Count error: {e}"))?;
-
-        Ok(count)
+            Ok(count)
+        })
+        .await
     })
     .await
 }
@@ -854,36 +792,24 @@ pub async fn vector_count_chunks(project_path: String) -> Result<usize, String> 
 #[tauri::command]
 pub async fn vector_legacy_row_count(project_path: String) -> Result<usize, String> {
     run_guarded_async("vector_legacy_row_count", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V1).await? else {
+                return Ok(0);
+            };
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            let count = table
+                .count_rows(None)
+                .await
+                .map_err(|e| format!("Count error: {e}"))?;
 
-        if !tables.contains(&TABLE_V1.to_string()) {
-            return Ok(0);
-        }
-
-        let table = db
-            .open_table(TABLE_V1)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
-
-        let count = table
-            .count_rows(None)
-            .await
-            .map_err(|e| format!("Count error: {e}"))?;
-
-        Ok(count)
+            Ok(count)
+        })
+        .await
     })
     .await
 }
@@ -894,31 +820,31 @@ pub async fn vector_legacy_row_count(project_path: String) -> Result<usize, Stri
 #[tauri::command]
 pub async fn vector_drop_legacy(project_path: String) -> Result<(), String> {
     run_guarded_async("vector_drop_legacy", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let tables = db
+                .table_names()
+                .execute()
+                .await
+                .map_err(|e| format!("List tables error: {e}"))?;
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            if !tables.contains(&TABLE_V1.to_string()) {
+                return Ok(());
+            }
 
-        if !tables.contains(&TABLE_V1.to_string()) {
-            return Ok(());
-        }
+            // LanceDB 0.27's drop_table takes (name, namespace) — we keep
+            // the default namespace by passing an empty slice.
+            db.drop_table(TABLE_V1, &[])
+                .await
+                .map_err(|e| format!("Drop table error: {e}"))?;
 
-        // LanceDB 0.27's drop_table takes (name, namespace) — we keep
-        // the default namespace by passing an empty slice.
-        db.drop_table(TABLE_V1, &[])
-            .await
-            .map_err(|e| format!("Drop table error: {e}"))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     })
     .await
 }
@@ -928,29 +854,29 @@ pub async fn vector_drop_legacy(project_path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn vector_clear_chunks(project_path: String) -> Result<(), String> {
     run_guarded_async("vector_clear_chunks", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let tables = db
+                .table_names()
+                .execute()
+                .await
+                .map_err(|e| format!("List tables error: {e}"))?;
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
+            if !tables.contains(&TABLE_V2.to_string()) {
+                return Ok(());
+            }
 
-        if !tables.contains(&TABLE_V2.to_string()) {
-            return Ok(());
-        }
+            db.drop_table(TABLE_V2, &[])
+                .await
+                .map_err(|e| format!("Clear chunks error: {e}"))?;
 
-        db.drop_table(TABLE_V2, &[])
-            .await
-            .map_err(|e| format!("Clear chunks error: {e}"))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     })
     .await
 }
@@ -959,35 +885,23 @@ pub async fn vector_clear_chunks(project_path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn vector_optimize_chunks(project_path: String) -> Result<(), String> {
     run_guarded_async("vector_optimize_chunks", async move {
-        let lock = project_vector_lock(&project_path).await;
-        let _guard = lock.lock().await;
+        with_project_lock(&project_path, || async {
+            let db = connect(&db_path(&project_path))
+                .execute()
+                .await
+                .map_err(|e| format!("DB connect error: {e}"))?;
 
-        let db = connect(&db_path(&project_path))
-            .execute()
-            .await
-            .map_err(|e| format!("DB connect error: {e}"))?;
+            let Some(table) = open_table_if_exists(&db, TABLE_V2).await? else {
+                return Ok(());
+            };
+            table
+                .optimize(OptimizeAction::All)
+                .await
+                .map_err(|e| format!("Optimize chunks error: {e}"))?;
 
-        let tables = db
-            .table_names()
-            .execute()
-            .await
-            .map_err(|e| format!("List tables error: {e}"))?;
-
-        if !tables.contains(&TABLE_V2.to_string()) {
-            return Ok(());
-        }
-
-        let table = db
-            .open_table(TABLE_V2)
-            .execute()
-            .await
-            .map_err(|e| format!("Open table error: {e}"))?;
-        table
-            .optimize(OptimizeAction::All)
-            .await
-            .map_err(|e| format!("Optimize chunks error: {e}"))?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     })
     .await
 }

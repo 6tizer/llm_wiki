@@ -1,5 +1,4 @@
 use crate::commands::file_sync::ProjectRootState;
-use crate::panic_guard::run_guarded;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, ToSql, Transaction};
 use std::path::Path;
 use tauri::State;
@@ -13,17 +12,13 @@ pub fn runtime_derived_stale_marker_record(
     request: RuntimeDerivedStaleMarkerRecordRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeDerivedStaleMarkerRecord, String> {
-    run_guarded("runtime_derived_stale_marker_record", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_derived_stale_marker_record_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_derived_stale_marker_record",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_derived_stale_marker_record_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// List derived stale markers for the currently-open project.
@@ -32,20 +27,24 @@ pub fn runtime_derived_stale_marker_list(
     request: Option<RuntimeDerivedStaleMarkerListRequest>,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeDerivedStaleMarkerList, String> {
-    run_guarded("runtime_derived_stale_marker_list", || {
-        runtime_derived_stale_marker_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-            request.unwrap_or(RuntimeDerivedStaleMarkerListRequest {
-                layer: None,
-                affected_path: None,
-                status: None,
-                limit: None,
-                since_marked_at_ms: None,
-                since_marker_id: None,
-            }),
-        )
-    })
+    run_project_read(
+        "runtime_derived_stale_marker_list",
+        root_state,
+        |project_root, enabled| {
+            runtime_derived_stale_marker_list_for_project(
+                project_root,
+                enabled,
+                request.unwrap_or(RuntimeDerivedStaleMarkerListRequest {
+                    layer: None,
+                    affected_path: None,
+                    status: None,
+                    limit: None,
+                    since_marked_at_ms: None,
+                    since_marker_id: None,
+                }),
+            )
+        },
+    )
 }
 
 /// Atomically fold every pending derived stale marker for one
@@ -56,17 +55,13 @@ pub fn runtime_derived_marker_claim_batch(
     request: RuntimeDerivedMarkerClaimBatchRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeDerivedMarkerBatchTransition, String> {
-    run_guarded("runtime_derived_marker_claim_batch", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_derived_marker_claim_batch_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_derived_marker_claim_batch",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_derived_marker_claim_batch_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Complete a derived-rebuild job's claimed marker batch (`claimed` ->
@@ -76,17 +71,13 @@ pub fn runtime_derived_marker_complete_batch(
     request: RuntimeDerivedMarkerCompleteBatchRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeDerivedMarkerBatchTransition, String> {
-    run_guarded("runtime_derived_marker_complete_batch", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_derived_marker_complete_batch_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_derived_marker_complete_batch",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_derived_marker_complete_batch_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Release a derived-rebuild job's claimed marker batch back to
@@ -97,17 +88,13 @@ pub fn runtime_derived_marker_release_batch(
     request: RuntimeDerivedMarkerReleaseBatchRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeDerivedMarkerBatchTransition, String> {
-    run_guarded("runtime_derived_marker_release_batch", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_derived_marker_release_batch_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_derived_marker_release_batch",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_derived_marker_release_batch_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 fn runtime_derived_stale_marker_record_for_project(

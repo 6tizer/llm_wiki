@@ -1,5 +1,4 @@
 use crate::commands::file_sync::ProjectRootState;
-use crate::panic_guard::run_guarded;
 use rusqlite::{
     params, params_from_iter, Connection, OpenFlags, OptionalExtension, ToSql, Transaction,
 };
@@ -15,12 +14,13 @@ pub fn runtime_job_create(
     request: RuntimeJobCreateRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_create", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_create_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_create",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_create_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Claim the next queued runtime job for the currently-open project.
@@ -29,12 +29,13 @@ pub fn runtime_job_claim(
     request: RuntimeJobClaimRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobClaim, String> {
-    run_guarded("runtime_job_claim", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_claim_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_claim",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_claim_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Claim the next queued runtime job for a specific job kind.
@@ -43,17 +44,13 @@ pub fn runtime_job_claim_by_kind(
     request: RuntimeJobClaimByKindRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobClaim, String> {
-    run_guarded("runtime_job_claim_by_kind", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_claim_by_kind_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_job_claim_by_kind",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_claim_by_kind_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Renew the active lease for a running runtime job.
@@ -62,12 +59,13 @@ pub fn runtime_job_heartbeat(
     request: RuntimeJobLeaseRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobClaim, String> {
-    run_guarded("runtime_job_heartbeat", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_heartbeat_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_heartbeat",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_heartbeat_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Complete a running runtime job and release its active lease.
@@ -76,12 +74,13 @@ pub fn runtime_job_complete(
     request: RuntimeJobLeaseRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_complete", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_complete_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_complete",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_complete_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Fail a running runtime job and release its active lease.
@@ -90,12 +89,13 @@ pub fn runtime_job_fail(
     request: RuntimeJobFailRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_fail", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_fail_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_fail",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_fail_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Retry a failed or retry-ready runtime job.
@@ -104,12 +104,13 @@ pub fn runtime_job_retry(
     request: RuntimeJobRetryRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_retry", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_retry_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_retry",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_retry_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Cancel a non-terminal runtime job.
@@ -118,12 +119,13 @@ pub fn runtime_job_cancel(
     request: RuntimeJobCancelRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_cancel", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_cancel_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_cancel",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_cancel_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Pause a queued or running runtime job.
@@ -132,12 +134,13 @@ pub fn runtime_job_pause(
     request: RuntimeJobPauseRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_pause", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_pause_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_pause",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_pause_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Resume a paused runtime job back to the queued state.
@@ -146,22 +149,20 @@ pub fn runtime_job_resume(
     request: RuntimeJobResumeRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeJobRecord, String> {
-    run_guarded("runtime_job_resume", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_job_resume_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_job_resume",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_job_resume_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// List runtime jobs and leases for the currently-open project.
 #[tauri::command]
 pub fn runtime_job_list(root_state: State<'_, ProjectRootState>) -> Result<RuntimeJobList, String> {
-    run_guarded("runtime_job_list", || {
-        runtime_job_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-        )
+    run_project_read("runtime_job_list", root_state, |project_root, enabled| {
+        runtime_job_list_for_project(project_root, enabled)
     })
 }
 
@@ -792,8 +793,7 @@ fn read_jobs(connection: &Connection) -> Result<Vec<RuntimeJobRecord>, String> {
     let rows = statement
         .query_map([], map_job_row)
         .map_err(|err| format!("jobs-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("jobs-read-failed: {err}"))
+    collect_mapped_rows(rows, "jobs-read-failed")
 }
 
 fn read_leases(connection: &Connection) -> Result<Vec<RuntimeJobLeaseRecord>, String> {
@@ -805,8 +805,7 @@ fn read_leases(connection: &Connection) -> Result<Vec<RuntimeJobLeaseRecord>, St
     let rows = statement
         .query_map([], map_lease_row)
         .map_err(|err| format!("leases-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("leases-read-failed: {err}"))
+    collect_mapped_rows(rows, "leases-read-failed")
 }
 
 fn job_select_sql(suffix: &str) -> String {

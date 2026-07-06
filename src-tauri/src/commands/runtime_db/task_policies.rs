@@ -1,5 +1,4 @@
 use crate::commands::file_sync::ProjectRootState;
-use crate::panic_guard::run_guarded;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use std::path::Path;
 use tauri::State;
@@ -11,12 +10,11 @@ use super::*;
 pub fn runtime_task_policy_list(
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeTaskPolicyList, String> {
-    run_guarded("runtime_task_policy_list", || {
-        runtime_task_policy_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-        )
-    })
+    run_project_read(
+        "runtime_task_policy_list",
+        root_state,
+        |project_root, enabled| runtime_task_policy_list_for_project(project_root, enabled),
+    )
 }
 
 /// Upsert one task-family fallback policy for the currently-open project.
@@ -25,12 +23,13 @@ pub fn runtime_task_policy_set(
     request: RuntimeTaskPolicySetRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeTaskPolicySetResult, String> {
-    run_guarded("runtime_task_policy_set", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_task_policy_set_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_task_policy_set",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_task_policy_set_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 pub(crate) fn runtime_task_policy_list_for_project(
