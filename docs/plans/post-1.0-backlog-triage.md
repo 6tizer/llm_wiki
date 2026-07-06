@@ -3,6 +3,8 @@
 > 类型：triage / 单一入口 | owner：LLM Wiki commander
 >
 > 1.0 门槛达成（[release-1.0-final-acceptance.md](./release-1.0-final-acceptance.md)）后，对全部 open issues、验收发现、真机根因追查结论做一次性归位。**本文档是 post-1.0 工作的唯一入口**：每个 open issue 都能在下面四个池子之一找到；不在池子里的 issue 应当已关闭（见 §5 关闭清单）。
+>
+> **⚡ 三轨清仓 GOAL 已达成（2026-07-06）**：四池全部清空——池 A=SPEC-15 completed（[closeout](./SPEC-15/closeout-report.md)，11 PR）、池 B=SPEC-16 completed（[closeout](./SPEC-16/closeout-report.md)，5 PR）、池 C=10 issue 全合并（#286/#287/#289/#350/#351/#353/#313/#314/#311/#309）、池 D=#183 收口关闭。27 PR（#380–#406）。backlog 仅剩 **SPEC-9（Swift，deferred）** + 三个新拆 follow-up（#405/#407）。总报告见 [three-track-cleanup-final.md](./three-track-cleanup-final.md)。
 
 ## 0. 触发背景
 
@@ -39,28 +41,26 @@
 | #378 | P3 | 三件套：图谱单击无反馈 / lint 不随内容重扫 / 派生状态口径矛盾 |
 | #335 | P3 | lint orphan 指标错配（按目录区分指标） |
 
-## 3. 池子 C：Runtime 数据与生命周期长尾（暂不立 SPEC，按 P2 波次穿插）
+## 3. 池子 C：Runtime 数据与生命周期长尾 —— ✅ 全部合并（2026-07-06 三轨清仓 GOAL 轨3）
 
-主题：closeout 深审留下的 crash-window / 竞态 / 生命周期治理，均无用户可感知的日常影响，适合作为功能间隙的加固波次。凑齐一个执行波次时再立 SPEC 或直接按 issue 串行。
+| Issue | 来源 | PR | 一句话 |
+|---|---|---|---|
+| #286 | SPEC-6 closeout | #381 | marker 消费纳入 withProjectLock（processClaimedJobUnlocked 拆分，关闭 ghost embedding 竞态） |
+| #287 | SPEC-6 closeout | #385 | 孤儿 queued/终态 marker reconcile tick + (layer,path) 诊断 + 7 天 GC |
+| #289 | SPEC-6 closeout | #387 | dedup executeMerge 接入 embedding marker + removePageEmbedding |
+| #350 | SPEC-13 closeout | #389 | secret 惰性迁移写回成功后清理旧后端副本（best-effort，零明文日志） |
+| #351 | SPEC-13 closeout | #392 | 启动 legacy 重解析加可用 profile 守卫（同源谓词）退役 |
+| #353 | CI | #393 | App.test.tsx/banner 固定轮次 flush → wall-clock waitFor 稳定化 |
+| #313 | SPEC-7 follow-up | #397 | rewind 会话纳入 job ledger（新 kind agent-rewind-session） |
+| #314 | SPEC-7 follow-up | #401 | rewind-snapshots 目录纯 TTL GC（mtime 判据，per-project 节流） |
+| #311 | SPEC-7 follow-up | #403 | abortRef 单槽 → per-run Map 隔离（跨会话/新旧 run 不互踩） |
+| #309 | SPEC-7 follow-up | #404+#406 | appTool 通道 wiki 写快照阶段二（15+1 工具 + delete 语义 + cascade 全量 + gate per-path 覆盖） |
 
-| Issue | 来源 | 一句话 |
+## 4. 池子 D：维护性长尾 —— ✅ 收口关闭（2026-07-06）
+
+| Issue | PR | 一句话 |
 |---|---|---|
-| #286 | SPEC-6 closeout | marker 消费未被 withProjectLock 覆盖，可与项目/源删除竞态 |
-| #287 | SPEC-6 closeout | 孤儿 claimed marker / anchor job 崩溃窗口 reconcile + 诊断 |
-| #289 | SPEC-6 closeout | dedup 合并写入绕过 derived-rebuild marker，向量索引漂移 |
-| #309 | SPEC-7 follow-up | appTool 通道 wiki 写快照（15+1 工具，#292 阶段二） |
-| #311 | SPEC-7 follow-up | abortRef 全局单槽按 run 隔离 |
-| #313 | SPEC-7 follow-up | rewind 会话纳入 job ledger |
-| #314 | SPEC-7 follow-up | rewind-snapshots 目录生命周期治理 |
-| #350 | SPEC-13 closeout | secret 后端切换不清理旧副本 |
-| #351 | SPEC-13 closeout | App.tsx legacy 重解析路径退役 |
-| #353 | CI | App.test.tsx 时序套件 macos runner flake |
-
-## 4. 池子 D：维护性长尾（既有轨道，不变）
-
-| Issue | 一句话 |
-|---|---|
-| #183 | #119 P2-8~P2-12 纯重构 + 测试覆盖（autoIngestImpl 拆分等），随功能开发穿插 |
+| #183 | #399 | P2-8/9/10/11 主体经核实已被 SPEC-8 消化；本 PR 收 P2-11 缺口测试 + P2-12 方案 A（鉴权链纯函数化 + 6 组合链路测试）。方案 B（tauri test feature）留待用户批准 |
 
 Swift/native（SPEC-9 + native-architecture.md）按用户裁定继续 deferred，不入本对账的执行池。
 
