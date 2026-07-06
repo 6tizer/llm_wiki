@@ -38,14 +38,20 @@ vi.mock("./derived-rebuild/taxonomy-consumer", () => ({
   stopTaxonomyConsumer: vi.fn(),
 }))
 
+vi.mock("./wiki-change-notifier", () => ({
+  clearWikiChangeNotifications: vi.fn(),
+}))
+
 import { clearGraphCache } from "./graph-relevance"
 import { stopEmbeddingConsumer } from "./derived-rebuild/embedding-consumer"
 import { stopTaxonomyConsumer } from "./derived-rebuild/taxonomy-consumer"
+import { clearWikiChangeNotifications } from "./wiki-change-notifier"
 
 const mockPauseQueue = vi.mocked(pauseQueue)
 const mockClearGraphCache = vi.mocked(clearGraphCache)
 const mockStopEmbeddingConsumer = vi.mocked(stopEmbeddingConsumer)
 const mockStopTaxonomyConsumer = vi.mocked(stopTaxonomyConsumer)
+const mockClearWikiChangeNotifications = vi.mocked(clearWikiChangeNotifications)
 
 beforeEach(() => {
   mockPauseQueue.mockReset()
@@ -53,6 +59,7 @@ beforeEach(() => {
   mockClearGraphCache.mockReset()
   mockStopEmbeddingConsumer.mockReset()
   mockStopTaxonomyConsumer.mockReset()
+  mockClearWikiChangeNotifications.mockReset()
 })
 
 describe("resetProjectState — Zustand stores", () => {
@@ -211,6 +218,11 @@ describe("resetProjectState — module-level caches are awaited", () => {
     expect(mockStopTaxonomyConsumer).toHaveBeenCalledOnce()
   })
 
+  it("clears pending wiki-change notifications before the returned promise resolves", async () => {
+    await resetProjectState()
+    expect(mockClearWikiChangeNotifications).toHaveBeenCalledOnce()
+  })
+
   it("ordering: when resolve() fires, ALL module-level pollers/caches are already cleared", async () => {
     // This is the regression guard against fire-and-forget resets.
     // By the time the outer await returns, every one of these must be done.
@@ -219,6 +231,7 @@ describe("resetProjectState — module-level caches are awaited", () => {
     expect(mockClearGraphCache).toHaveBeenCalledOnce()
     expect(mockStopEmbeddingConsumer).toHaveBeenCalledOnce()
     expect(mockStopTaxonomyConsumer).toHaveBeenCalledOnce()
+    expect(mockClearWikiChangeNotifications).toHaveBeenCalledOnce()
   })
 
   it("does not throw when stopEmbeddingConsumer itself throws — logs and continues", async () => {

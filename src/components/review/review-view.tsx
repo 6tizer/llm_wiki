@@ -23,6 +23,8 @@ import { createReviewPageDrafts, reviewPageDestinationDir } from "@/lib/review-c
 import { loadProjectWikiSchemaRouting } from "@/lib/wiki-schema"
 import { enqueueAgentStructuralLint } from "@/lib/agent/agent-lint-queue"
 import { restoreSingleAgentWikiSnapshot } from "@/lib/agent/agent-wiki-snapshot-restore"
+import { pageExistsInWiki } from "@/lib/sweep-reviews"
+import { notifyWikiPathsChanged } from "@/lib/wiki-change-notifier"
 import { useTranslation } from "react-i18next"
 import { useChatStore } from "@/stores/chat-store"
 
@@ -220,26 +222,46 @@ export function ReviewView() {
       if (item) {
         try {
           const drafts = createReviewPageDrafts(item, realAction)
+          const toCreate: typeof drafts = []
+          const skippedExisting: string[] = []
+          for (const draft of drafts) {
+            // makeQueryFileName adds a timestamp, so a duplicate title will not
+            // reliably match by generated filename. Use the same wiki index /
+            // frontmatter-title existence check that review sweeping uses.
+            if (await pageExistsInWiki(pp, draft.title)) {
+              skippedExisting.push(draft.title)
+            } else {
+              toCreate.push(draft)
+            }
+          }
+
+          if (toCreate.length === 0) {
+            resolveItem(id, "已存在，跳过创建")
+            return
+          }
+
           const schemaRouting = await loadProjectWikiSchemaRouting(pp)
           const created: Array<{
             title: string
             dir: string
             fileName: string
+            relativePath: string
             filePath: string
             pageContent: string
             pageType: string
             date: string
           }> = []
 
-          for (const draft of drafts) {
+          for (const draft of toCreate) {
             const { date, fileName } = makeQueryFileName(draft.title)
             const dir = reviewPageDestinationDir(draft, schemaRouting)
             const filePath = [pp, "wiki", dir, fileName].filter(Boolean).join("/")
+            const relativePath = ["wiki", dir, fileName].filter(Boolean).join("/")
             const frontmatter = `---\ntype: ${draft.pageType}\ntitle: "${draft.title.replace(/"/g, '\\"')}"\ncreated: ${date}\ntags: []\nrelated: []\n---\n\n`
             const body = `# ${draft.title}\n\n${item.description}\n`
             const pageContent = frontmatter + body
             await writeFile(filePath, pageContent)
-            created.push({ title: draft.title, dir, fileName, filePath, pageContent, pageType: draft.pageType, date })
+            created.push({ title: draft.title, dir, fileName, relativePath, filePath, pageContent, pageType: draft.pageType, date })
           }
 
           // Update index
@@ -277,10 +299,18 @@ export function ReviewView() {
             useWikiStore.getState().setFileContent(first.pageContent)
           }
           useWikiStore.getState().bumpDataVersion()
+          notifyWikiPathsChanged(pp, [
+            ...created.map((page) => page.relativePath),
+            "wiki/index.md",
+            "wiki/log.md",
+          ])
 
+          const skipSuffix = skippedExisting.length > 0
+            ? `; skipped existing: ${skippedExisting.join(", ")}`
+            : ""
           resolveItem(id, created.length === 1
-            ? `Created: ${["wiki", created[0].dir, created[0].fileName].filter(Boolean).join("/")}`
-            : `Created ${created.length} pages`)
+            ? `Created: ${["wiki", created[0].dir, created[0].fileName].filter(Boolean).join("/")}${skipSuffix}`
+            : `Created ${created.length} pages${skipSuffix}`)
         } catch (err) {
           console.error("Failed to create page from review:", err)
           resolveItem(id, "Create failed")

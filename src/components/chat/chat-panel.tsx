@@ -64,6 +64,7 @@ import { executeIngestWrites, startIngest } from "@/lib/ingest";
 import { hasModelCallProfileCandidate, streamChatRouted } from "@/lib/pool-chat";
 import { normalizePath } from "@/lib/path-utils";
 import { groupProfilesByConnection } from "@/lib/profile-connections";
+import { notifyWikiPathsChanged } from "@/lib/wiki-change-notifier";
 import { SOURCE_WATCH_FILE_TYPE_GROUPS } from "@/lib/source-watch-config";
 import { buildChatAgentMessages, type ChatAgentEvent } from "@/lib/chat-agent";
 import {
@@ -905,6 +906,7 @@ export function ChatPanel() {
 							});
 							const projectPath =
 								transportOptions.projectPath ?? transportOptions.cwd ?? project?.path;
+							notifyWikiPathsChanged(projectPath, [payload.path]);
 							refreshAgentFileTree(projectPath).catch((err) => {
 								console.warn("[agent] failed to refresh file tree:", err);
 							});

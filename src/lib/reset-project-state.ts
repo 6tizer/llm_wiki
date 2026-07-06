@@ -91,13 +91,24 @@ export async function resetProjectState(): Promise<void> {
 
   // Module-level caches — load in parallel and clear each, surfacing any
   // failure instead of swallowing it.
-  const [queueMod, dedupQueueMod, graphMod, fileSyncMod, scheduledImportMod, agentLintQueueMod, embeddingConsumerMod, taxonomyConsumerMod] = await Promise.allSettled([
+  const [
+    queueMod,
+    dedupQueueMod,
+    graphMod,
+    fileSyncMod,
+    scheduledImportMod,
+    agentLintQueueMod,
+    wikiChangeNotifierMod,
+    embeddingConsumerMod,
+    taxonomyConsumerMod,
+  ] = await Promise.allSettled([
     import("@/lib/ingest-queue"),
     import("@/lib/dedup-queue"),
     import("@/lib/graph-relevance"),
     import("@/lib/project-file-sync"),
     import("@/lib/scheduled-import"),
     import("@/lib/agent/agent-lint-queue"),
+    import("@/lib/wiki-change-notifier"),
     import("@/lib/derived-rebuild/embedding-consumer"),
     import("@/lib/derived-rebuild/taxonomy-consumer"),
   ])
@@ -191,6 +202,16 @@ export async function resetProjectState(): Promise<void> {
     }
   } else {
     console.warn("[Reset Project State] Failed to load agent-lint-queue:", agentLintQueueMod.reason)
+  }
+
+  if (wikiChangeNotifierMod.status === "fulfilled") {
+    try {
+      wikiChangeNotifierMod.value.clearWikiChangeNotifications()
+    } catch (err) {
+      console.warn("[Reset Project State] clearWikiChangeNotifications failed:", err)
+    }
+  } else {
+    console.warn("[Reset Project State] Failed to load wiki-change-notifier:", wikiChangeNotifierMod.reason)
   }
 
 }
