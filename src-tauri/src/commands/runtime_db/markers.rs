@@ -97,6 +97,30 @@ pub fn runtime_derived_marker_release_batch(
     )
 }
 
+/// Return per `(layer, affectedPath)` marker status counts for diagnostics.
+#[tauri::command]
+pub fn runtime_derived_marker_status_counts(
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeDerivedMarkerStatusCounts, String> {
+    run_project_read(
+        "runtime_derived_marker_status_counts",
+        root_state,
+        runtime_derived_marker_status_counts_for_project,
+    )
+}
+
+/// Delete terminal derived marker rows after the configured retention TTL.
+#[tauri::command]
+pub fn runtime_derived_marker_gc(
+    root_state: State<'_, ProjectRootState>,
+) -> Result<RuntimeDerivedMarkerGc, String> {
+    run_project_write(
+        "runtime_derived_marker_gc",
+        root_state,
+        runtime_derived_marker_gc_for_project,
+    )
+}
+
 fn runtime_derived_stale_marker_record_for_project(
     project_root: Option<&Path>,
     enabled: bool,
@@ -177,6 +201,7 @@ fn runtime_derived_stale_marker_list_for_project(
             status: RuntimeDbHealthState::Disabled,
             markers: Vec::new(),
             next_cursor: None,
+            truncated: false,
         });
     }
     let Some(project_root) = project_root else {
@@ -185,6 +210,7 @@ fn runtime_derived_stale_marker_list_for_project(
             status: RuntimeDbHealthState::NoProject,
             markers: Vec::new(),
             next_cursor: None,
+            truncated: false,
         });
     };
     let limit = normalize_list_limit(
@@ -216,6 +242,7 @@ fn runtime_derived_stale_marker_list_for_project(
             status: RuntimeDbHealthState::Healthy,
             markers: Vec::new(),
             next_cursor: None,
+            truncated: false,
         });
     }
     let connection = Connection::open_with_flags(
@@ -229,6 +256,7 @@ fn runtime_derived_stale_marker_list_for_project(
             status: RuntimeDbHealthState::Healthy,
             markers: Vec::new(),
             next_cursor: None,
+            truncated: false,
         });
     }
     let markers = read_derived_markers(
@@ -252,11 +280,124 @@ fn runtime_derived_stale_marker_list_for_project(
     } else {
         None
     };
+    let truncated = next_cursor.is_some();
     Ok(RuntimeDerivedStaleMarkerList {
         enabled: true,
         status: RuntimeDbHealthState::Healthy,
         markers,
         next_cursor,
+        truncated,
+    })
+}
+
+fn runtime_derived_marker_status_counts_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+) -> Result<RuntimeDerivedMarkerStatusCounts, String> {
+    if !enabled {
+        return Ok(RuntimeDerivedMarkerStatusCounts {
+            enabled: false,
+            status: RuntimeDbHealthState::Disabled,
+            groups: Vec::new(),
+        });
+    }
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeDerivedMarkerStatusCounts {
+            enabled: true,
+            status: RuntimeDbHealthState::NoProject,
+            groups: Vec::new(),
+        });
+    };
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(RuntimeDerivedMarkerStatusCounts {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            groups: Vec::new(),
+        });
+    }
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("derived-marker-status-counts-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_derived_stale_markers")? {
+        return Ok(RuntimeDerivedMarkerStatusCounts {
+            enabled: true,
+            status: RuntimeDbHealthState::Healthy,
+            groups: Vec::new(),
+        });
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT layer,
+                    affected_path,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
+                    SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+                    COUNT(*) AS total
+             FROM runtime_derived_stale_markers
+             GROUP BY layer, affected_path
+             ORDER BY claimed DESC, pending DESC, layer ASC, affected_path ASC",
+        )
+        .map_err(|err| format!("derived-marker-status-counts-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(RuntimeDerivedMarkerStatusCount {
+                layer: row.get(0)?,
+                affected_path: row.get(1)?,
+                pending: row.get(2)?,
+                claimed: row.get(3)?,
+                done: row.get(4)?,
+                failed: row.get(5)?,
+                cancelled: row.get(6)?,
+                total: row.get(7)?,
+            })
+        })
+        .map_err(|err| format!("derived-marker-status-counts-query-failed: {err}"))?;
+    let groups = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("derived-marker-status-counts-query-failed: {err}"))?;
+    Ok(RuntimeDerivedMarkerStatusCounts {
+        enabled: true,
+        status: RuntimeDbHealthState::Healthy,
+        groups,
+    })
+}
+
+pub(crate) fn runtime_derived_marker_gc_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    now: i64,
+) -> Result<RuntimeDerivedMarkerGc, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    with_runtime_writer(|| {
+        let mut connection = open_derived_stale_markers_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let cutoff = now.saturating_sub(DEFAULT_DERIVED_MARKER_TERMINAL_TTL_MS);
+        let mut statement = tx
+            .prepare(&derived_marker_select_sql(
+                "WHERE status IN ('done', 'failed', 'cancelled') AND updated_at_ms <= ?1
+                 ORDER BY updated_at_ms ASC, marker_id ASC",
+            ))
+            .map_err(|err| format!("derived-marker-gc-read-prepare-failed: {err}"))?;
+        let rows = statement
+            .query_map(params![cutoff], map_derived_marker_row)
+            .map_err(|err| format!("derived-marker-gc-read-failed: {err}"))?;
+        let deleted = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("derived-marker-gc-read-failed: {err}"))?;
+        drop(statement);
+        tx.execute(
+            "DELETE FROM runtime_derived_stale_markers
+             WHERE status IN ('done', 'failed', 'cancelled') AND updated_at_ms <= ?1",
+            params![cutoff],
+        )
+        .map_err(|err| format!("derived-marker-gc-delete-failed: {err}"))?;
+        tx.commit().map_err(tx_err)?;
+        Ok(RuntimeDerivedMarkerGc { deleted })
     })
 }
 
@@ -527,7 +668,7 @@ fn runtime_derived_marker_release_batch_for_project(
     })
 }
 
-fn normalize_marker_layer(raw: &str) -> Result<&'static str, String> {
+pub(crate) fn normalize_marker_layer(raw: &str) -> Result<&'static str, String> {
     match raw.trim() {
         "embedding" => Ok("embedding"),
         "graph" => Ok("graph"),
@@ -990,6 +1131,138 @@ mod tests {
         )
         .expect("list filtered markers");
         assert_eq!(filtered.markers, vec![marker]);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_marker_status_counts_group_by_layer_and_affected_path() {
+        let project = setup_marker_project("derived-marker-status-counts");
+        seed_pending_marker(
+            &project,
+            "marker-1",
+            "embedding",
+            "wiki/a.md",
+            "event-1",
+            Some("sha256:hash1"),
+            "hash1",
+            "commit",
+            100,
+        );
+        seed_pending_marker(
+            &project,
+            "marker-2",
+            "embedding",
+            "wiki/a.md",
+            "event-2",
+            Some("sha256:hash2"),
+            "hash2",
+            "commit",
+            110,
+        );
+        seed_pending_marker(
+            &project,
+            "marker-3",
+            "taxonomy",
+            "wiki/b.md",
+            "event-3",
+            Some("sha256:hash3"),
+            "hash3",
+            "commit",
+            120,
+        );
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_derived_stale_markers SET status = 'claimed' WHERE marker_id = 'marker-1'",
+                [],
+            )
+            .expect("mark claimed");
+        connection
+            .execute(
+                "UPDATE runtime_derived_stale_markers SET status = 'failed' WHERE marker_id = 'marker-3'",
+                [],
+            )
+            .expect("mark failed");
+        drop(connection);
+
+        let counts = runtime_derived_marker_status_counts_for_project(Some(&project), true)
+            .expect("status counts");
+
+        let embedding = counts
+            .groups
+            .iter()
+            .find(|group| group.layer == "embedding" && group.affected_path == "wiki/a.md")
+            .expect("embedding group");
+        assert_eq!(embedding.pending, 1);
+        assert_eq!(embedding.claimed, 1);
+        assert_eq!(embedding.total, 2);
+        let taxonomy = counts
+            .groups
+            .iter()
+            .find(|group| group.layer == "taxonomy" && group.affected_path == "wiki/b.md")
+            .expect("taxonomy group");
+        assert_eq!(taxonomy.failed, 1);
+        assert_eq!(taxonomy.total, 1);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_marker_gc_deletes_terminal_rows_after_ttl_only() {
+        let project = setup_marker_project("derived-marker-gc");
+        for (marker_id, event_id, marked_at_ms) in [
+            ("old-done", "event-1", 100),
+            ("recent-failed", "event-2", 110),
+            ("pending", "event-3", 120),
+        ] {
+            seed_pending_marker(
+                &project,
+                marker_id,
+                "embedding",
+                &format!("wiki/{marker_id}.md"),
+                event_id,
+                Some("sha256:hash"),
+                "hash",
+                "commit",
+                marked_at_ms,
+            );
+        }
+        let now = DEFAULT_DERIVED_MARKER_TERMINAL_TTL_MS + 1_000;
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_derived_stale_markers
+                 SET status = 'done', updated_at_ms = 100
+                 WHERE marker_id = 'old-done'",
+                [],
+            )
+            .expect("old done");
+        connection
+            .execute(
+                "UPDATE runtime_derived_stale_markers
+                 SET status = 'failed', updated_at_ms = ?1
+                 WHERE marker_id = 'recent-failed'",
+                params![now],
+            )
+            .expect("recent failed");
+        drop(connection);
+
+        let gc =
+            runtime_derived_marker_gc_for_project(Some(&project), true, now).expect("marker gc");
+
+        assert_eq!(gc.deleted.len(), 1);
+        assert_eq!(gc.deleted[0].marker_id, "old-done");
+        let remaining = runtime_derived_stale_marker_list_for_project(
+            Some(&project),
+            true,
+            marker_list_request(None, None, None),
+        )
+        .expect("list remaining");
+        let remaining_ids: Vec<String> = remaining
+            .markers
+            .into_iter()
+            .map(|marker| marker.marker_id)
+            .collect();
+        assert_eq!(remaining_ids, vec!["recent-failed", "pending"]);
         let _ = fs::remove_dir_all(project);
     }
 
@@ -2531,6 +2804,7 @@ mod tests {
         )
         .expect("page 1");
         assert_eq!(page1.markers.len(), 2);
+        assert!(page1.truncated);
         let cursor1 = page1
             .next_cursor
             .clone()
@@ -2547,6 +2821,7 @@ mod tests {
         )
         .expect("page 2");
         assert_eq!(page2.markers.len(), 2);
+        assert!(page2.truncated);
         let cursor2 = page2
             .next_cursor
             .clone()
@@ -2563,6 +2838,7 @@ mod tests {
         )
         .expect("page 3");
         assert_eq!(page3.markers.len(), 1);
+        assert!(!page3.truncated);
         assert!(
             page3.next_cursor.is_none(),
             "a short page must not claim there is more"

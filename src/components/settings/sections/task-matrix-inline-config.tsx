@@ -11,6 +11,7 @@ import {
   getLastEmbeddingError,
   legacyVectorRowCount,
 } from "@/lib/embedding"
+import { runtimeDerivedMarkerReconcileTerminalJobs } from "@/commands/runtime-db"
 import { testEmbeddingConnection, testEmbeddingFunction, type ProviderTestResult } from "@/lib/connection-tests"
 import { persistSetting } from "@/lib/store-helpers"
 
@@ -156,6 +157,11 @@ export function EmbeddingInlineConfig() {
     const count = await embedAllPages(project.path, embeddingConfig, (done, total) => {
       setReindex({ kind: "running", done, total })
     }, { clearExisting: true })
+    try {
+      await runtimeDerivedMarkerReconcileTerminalJobs({})
+    } catch (err) {
+      setLastError(err instanceof Error ? err.message : String(err))
+    }
     setReindex({ kind: "done", count })
     await refreshStats()
   }, [project, embeddingConfig, refreshStats])

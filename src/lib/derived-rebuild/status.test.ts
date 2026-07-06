@@ -209,7 +209,7 @@ describe("bucketDerivedLayerStatus", () => {
 
 describe("fetchAllDerivedStaleMarkers", () => {
   function list(markers: RuntimeDerivedStaleMarkerRecord[], nextCursor: { markedAtMs: number; markerId: string } | null = null) {
-    return { enabled: true, status: "healthy" as const, markers, nextCursor }
+    return { enabled: true, status: "healthy" as const, markers, nextCursor, truncated: nextCursor !== null }
   }
 
   it("returns everything from a single page when there is no cursor", async () => {
@@ -220,7 +220,19 @@ describe("fetchAllDerivedStaleMarkers", () => {
     }
     const result = await fetchAllDerivedStaleMarkers({ list: listFn })
     expect(result.markers).toHaveLength(1)
+    expect(result.truncated).toBe(false)
     expect(calls).toBe(1)
+  })
+
+  it("treats missing truncated from older runtimes as false", async () => {
+    const listFn = async () => ({
+      enabled: true,
+      status: "healthy" as const,
+      markers: [marker({ layer: "embedding" })],
+      nextCursor: null,
+    })
+    const result = await fetchAllDerivedStaleMarkers({ list: listFn })
+    expect(result.truncated).toBe(false)
   })
 
   it("follows the cursor across multiple pages until nextCursor is null", async () => {
@@ -251,6 +263,7 @@ describe("fetchAllDerivedStaleMarkers", () => {
     const result = await fetchAllDerivedStaleMarkers({ list: listFn, maxPages: 3 })
     expect(call).toBe(3)
     expect(result.markers).toHaveLength(3)
+    expect(result.truncated).toBe(true)
   })
 
   it("surfaces enabled:true/status:healthy from the first page alongside the markers", async () => {
@@ -264,12 +277,13 @@ describe("fetchAllDerivedStaleMarkers", () => {
     let calls = 0
     const listFn = async () => {
       calls += 1
-      return { enabled: false, status: "disabled" as const, markers: [], nextCursor: null }
+      return { enabled: false, status: "disabled" as const, markers: [], nextCursor: null, truncated: false }
     }
     const result = await fetchAllDerivedStaleMarkers({ list: listFn })
     expect(result.enabled).toBe(false)
     expect(result.status).toBe("disabled")
     expect(result.markers).toEqual([])
+    expect(result.truncated).toBe(false)
     expect(calls).toBe(1)
   })
 })

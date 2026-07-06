@@ -293,6 +293,33 @@ export interface RuntimeDerivedStaleMarkerList {
   status: RuntimeDbHealthState
   markers: RuntimeDerivedStaleMarkerRecord[]
   nextCursor?: RuntimeDerivedMarkerCursor | null
+  truncated?: boolean
+}
+
+export interface RuntimeDerivedMarkerStatusCount {
+  layer: string
+  affectedPath: string
+  pending: number
+  claimed: number
+  done: number
+  failed: number
+  cancelled: number
+  total: number
+}
+
+export interface RuntimeDerivedMarkerStatusCounts {
+  enabled: boolean
+  status: RuntimeDbHealthState
+  groups: RuntimeDerivedMarkerStatusCount[]
+}
+
+export interface RuntimeDerivedMarkerGc {
+  deleted: RuntimeDerivedStaleMarkerRecord[]
+}
+
+export interface RuntimeDerivedMarkerReconcileRequest {
+  layer?: string | null
+  affectedPath?: string | null
 }
 
 /**
@@ -791,6 +818,20 @@ export function runtimeDerivedStaleMarkerList(
   return invoke<RuntimeDerivedStaleMarkerList>("runtime_derived_stale_marker_list", {
     request,
   })
+}
+
+export function runtimeDerivedMarkerStatusCounts(): Promise<RuntimeDerivedMarkerStatusCounts> {
+  return invoke<RuntimeDerivedMarkerStatusCounts>("runtime_derived_marker_status_counts")
+}
+
+export function runtimeDerivedMarkerGc(): Promise<RuntimeDerivedMarkerGc> {
+  return invoke<RuntimeDerivedMarkerGc>("runtime_derived_marker_gc")
+}
+
+export function runtimeDerivedMarkerReconcileTerminalJobs(
+  request: RuntimeDerivedMarkerReconcileRequest = {},
+): Promise<number> {
+  return invoke<number>("runtime_derived_marker_reconcile_terminal_jobs", { request })
 }
 
 export function runtimeDerivedMarkerClaimBatch(

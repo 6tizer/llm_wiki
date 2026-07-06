@@ -135,6 +135,23 @@ describe("runWikiSynthesis", () => {
     expect(report.candidates.map((candidate) => candidate.topic)).not.toContain("alpha + gamma")
   })
 
+  it("excludes pages that fall out of every cluster under the selected minimum", async () => {
+    const children: Array<{ name: string; path: string; is_dir: boolean }> = []
+    addPage(children, "a", ["alpha"])
+    addPage(children, "b", ["alpha"])
+    addPage(children, "orphan", ["beta"])
+    fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children }]
+
+    const report = await discoverSynthesisCandidates("/project", {
+      dimension: 1,
+      minClusterSize: 2,
+      maxCandidates: 10,
+    })
+
+    expect(report.candidates.map((candidate) => candidate.topic)).toEqual(["alpha"])
+    expect(report.candidates.flatMap((candidate) => candidate.pages.map((page) => page.slug))).not.toContain("orphan")
+  })
+
   it("applies min pages, maxCandidates truncation, and deterministic ordering", async () => {
     const children: Array<{ name: string; path: string; is_dir: boolean }> = []
     addPage(children, "z", ["beta", "alpha"])

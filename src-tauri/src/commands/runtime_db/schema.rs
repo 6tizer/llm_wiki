@@ -745,6 +745,15 @@ fn initialize_derived_stale_markers_schema(connection: &Connection) -> Result<()
         .map_err(|err| format!("Failed to initialize runtime derived marker path index: {err}"))?;
     connection
         .execute(
+            "CREATE INDEX IF NOT EXISTS runtime_derived_markers_layer_path_status_idx
+             ON runtime_derived_stale_markers(layer, affected_path, status)",
+            [],
+        )
+        .map_err(|err| {
+            format!("Failed to initialize runtime derived marker layer/path/status index: {err}")
+        })?;
+    connection
+        .execute(
             "CREATE INDEX IF NOT EXISTS runtime_derived_markers_event_idx
              ON runtime_derived_stale_markers(source_event_id)",
             [],

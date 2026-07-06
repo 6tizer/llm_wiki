@@ -69,7 +69,7 @@ function emptyJobList() {
   return { enabled: true, status: "healthy" as const, jobs: [], leases: [] }
 }
 function emptyMarkerList() {
-  return { enabled: true, status: "healthy" as const, markers: [] }
+  return { enabled: true, status: "healthy" as const, markers: [], nextCursor: null, truncated: false }
 }
 
 function claimFor(jobId: string, payload: Record<string, unknown>) {
@@ -152,6 +152,8 @@ describe("taxonomy-consumer — single group happy path", () => {
       markers: [
         { markerId: "m1", layer: "taxonomy", affectedPath: "wiki/foo.md", baseVersion: "h1", markedAtMs: 1, reason: "commit", sourceEventId: "e1", status: "pending", updatedAtMs: 1 },
       ],
+      nextCursor: null,
+      truncated: false,
     })
     mocks.runtimeDerivedMarkerClaimBatch.mockResolvedValueOnce({ job: {}, markers: [] })
     const claim = claimFor("job-1", taxonomyPayload("wiki/foo.md", ["m1"]))
@@ -190,6 +192,56 @@ describe("taxonomy-consumer — single group happy path", () => {
       markerIds: ["m-noop"],
     })
     expect(mocks.runtimeJobFail).not.toHaveBeenCalled()
+  })
+
+  it("pages through pending marker list before claiming all groups", async () => {
+    mocks.runtimeDerivedStaleMarkerList
+      .mockResolvedValueOnce({
+        enabled: true,
+        status: "healthy",
+        markers: [
+          { markerId: "m1", layer: "taxonomy", affectedPath: "wiki/a.md", baseVersion: "h1", markedAtMs: 1, reason: "commit", sourceEventId: "e1", status: "pending", updatedAtMs: 1 },
+        ],
+        nextCursor: { markedAtMs: 1, markerId: "m1" },
+        truncated: true,
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        status: "healthy",
+        markers: [
+          { markerId: "m2", layer: "taxonomy", affectedPath: "wiki/b.md", baseVersion: "h2", markedAtMs: 2, reason: "commit", sourceEventId: "e2", status: "pending", updatedAtMs: 2 },
+        ],
+        nextCursor: null,
+        truncated: false,
+      })
+    mocks.runtimeDerivedMarkerClaimBatch.mockResolvedValue({ job: {}, markers: [] })
+    mocks.runtimeJobClaimByKind.mockRejectedValue(NO_QUEUED_JOB)
+
+    startTaxonomyConsumer(PROJECT)
+    await vi.waitFor(() => expect(mocks.runtimeDerivedMarkerClaimBatch).toHaveBeenCalledTimes(2))
+
+    expect(mocks.runtimeDerivedStaleMarkerList).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ layer: "taxonomy", status: "pending", limit: 100 }),
+    )
+    expect(mocks.runtimeDerivedStaleMarkerList).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        layer: "taxonomy",
+        status: "pending",
+        limit: 100,
+        sinceMarkedAtMs: 1,
+        sinceMarkerId: "m1",
+      }),
+    )
+    expect(mocks.runtimeDerivedMarkerClaimBatch).toHaveBeenNthCalledWith(1, {
+      layer: "taxonomy",
+      affectedPath: "wiki/a.md",
+    })
+    expect(mocks.runtimeDerivedMarkerClaimBatch).toHaveBeenNthCalledWith(2, {
+      layer: "taxonomy",
+      affectedPath: "wiki/b.md",
+    })
   })
 })
 

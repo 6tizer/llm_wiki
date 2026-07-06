@@ -73,6 +73,12 @@ const DEFAULT_PRIORITY: i64 = 0;
 const DEFAULT_LEASE_TTL_MS: i64 = 120_000;
 const DEFAULT_RETRY_BACKOFF_MS: i64 = 30_000;
 const DEFAULT_HEARTBEAT_MIN_INTERVAL_MS: i64 = 5_000;
+// Independent from the running-lease TTL: this is a backlog/crash-window
+// tolerance for jobs that never acquired a lease. Keep it long enough for
+// several scheduler ticks and normal burst backlog drain, while still
+// bounding true mint/fold crash windows.
+const ORPHAN_QUEUED_JOB_THRESHOLD_MS: i64 = 360_000;
+const DERIVED_MARKER_GC_INTERVAL_MS: i64 = 86_400_000;
 // How often the core-runtime background scheduler (see
 // `start_lease_reclaim_scheduler`) scans for `running` jobs whose active
 // lease has expired. Comfortably below DEFAULT_LEASE_TTL_MS so a crashed
@@ -95,6 +101,7 @@ const MIN_COMMIT_BUDGET_TTL_MS: i64 = 1_000;
 const MAX_COMMIT_BUDGET_TTL_MS: i64 = 1_200_000;
 const DEFAULT_FAILED_ARTIFACT_TTL_MS: i64 = 604_800_000;
 const MAX_FAILED_ARTIFACT_TTL_MS: i64 = 2_592_000_000;
+const DEFAULT_DERIVED_MARKER_TERMINAL_TTL_MS: i64 = DEFAULT_FAILED_ARTIFACT_TTL_MS;
 const MAX_STAGING_ARTIFACT_PATH_BYTES: usize = 1024;
 const MAX_STAGING_ARTIFACT_HASH_BYTES: usize = 128;
 const MAX_STAGING_ARTIFACT_ERROR_BYTES: usize = 4096;
@@ -672,6 +679,45 @@ pub struct RuntimeDerivedStaleMarkerList {
     status: RuntimeDbHealthState,
     markers: Vec<RuntimeDerivedStaleMarkerRecord>,
     next_cursor: Option<RuntimeDerivedMarkerCursor>,
+    truncated: bool,
+}
+
+/// Per `(layer, affectedPath)` derived marker counts for diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDerivedMarkerStatusCount {
+    layer: String,
+    affected_path: String,
+    pending: i64,
+    claimed: i64,
+    done: i64,
+    failed: i64,
+    cancelled: i64,
+    total: i64,
+}
+
+/// Snapshot response for grouped derived marker status diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDerivedMarkerStatusCounts {
+    enabled: bool,
+    status: RuntimeDbHealthState,
+    groups: Vec<RuntimeDerivedMarkerStatusCount>,
+}
+
+/// Response payload for a derived marker terminal-row GC pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeDerivedMarkerGc {
+    deleted: Vec<RuntimeDerivedStaleMarkerRecord>,
+}
+
+/// Optional filter for targeted terminal derived marker reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeDerivedMarkerReconcileRequest {
+    layer: Option<String>,
+    affected_path: Option<String>,
 }
 
 /// Request payload for atomically folding every pending derived stale marker
