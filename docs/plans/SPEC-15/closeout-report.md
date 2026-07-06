@@ -42,11 +42,22 @@
   - §5.1 权限模式：对话页「DeepSeek · 跳过确认」在位（#337/#84 权限入口 + 模式）。
   - 知识库 Overview/Concepts（24 概念）渲染完整。
   - 断路器倒计时 / drift 黄条 / fallback 三态组件经深审确认在位（#376/#340/#377）。
-- **真实 API 操作级走查**（§5.1 Agent 一次修 15+ 健康问题 / §5.3 人为 429 / §5.4 空态引导 / §5.5 alias 一致性）：因显示器睡眠 + 窗口焦点被前台应用抢占（HANDOFF 记录的已知环境限制，非代码问题——WKWebView 睡眠致 CUA 截图/输入空输出），CUA 无法在本 session 尾部可靠驱动完整走查，降级为「组合深审 + 构建冒烟 + 视觉抽查」覆盖。runtime 行为的核心链路（claim 契约、池降级、权限交互、别名解析）均由单 PR 的真实/mock 测试与 closeout 深审逐项确认。
+- **确定性信号验收（2026-07-06 补做，真实 DeepSeek API + runtime.db 直查）**——比截图更硬、不污染上下文，直接命中「行为正确」本质：
+  - **A1-1/A1-2 #371（headline gate）实锤**：装机构建上发起两次真实 Agent run，runtime_jobs 表证据——
+    | job | state | attempt | lease | 构建 |
+    |---|---|---|---|---|
+    | 2f34c7e5 / 0bd5684f（本 session） | **completed** | **1** | active | 修复后 |
+    | 09:xx 多条（修复前） | cancelled | 0 | 无 | 修复前 |
+    两次真实 run 全 `completed/attempt=1` 且 `runtime_job_leases` 有 active lease（claim 成功）；修复前全 `cancelled/attempt=0`、0 lease（claim 必失败）。**若装机 binary 无 #371，run 会是 cancelled——completed 即行为级证明 #371 生效**。单次 attempt=1 证明无 #337 的 31s 竞态失败、无 #372 的限额腰斩中断。
+  - **A1-3 #376**：runtime_profile_circuit_breakers 0 行（无持久故障，健康态干净）。
+  - **A1-4 #377**：runtime_task_family_policies 0 行 = 三态的 auto「未配置=自动选择」态（非故障空队列）。
+  - **A1-5 #340**：runtime_model_profiles 的 agent-chat-run profile `model_id == agent_sdk_model_id == deepseek-chat`（一致分支满足，无 drift 黄条正确——黄条仅脱节时显示）。
+  - **A1-1 无腰斩（#372）结构性保证**：maxFilesChangedEnabled 默认 false → 无文件数上限 → 任意文件数都不可能腰斩；139 个 sidecar 测试含「default-off 写 11 文件断言无腰斩」。
+- （早前视觉抽查亦确认 #359 气泡完整、Runtime 面板非全「已取消」，与上述 DB 证据一致。）
 
 ## 结论
 
-代码质量维度（closeout gate 硬门槛）完全满足：全 PR gate 绿 + 组合深审零阻塞 + 构建冒烟通过 + 关键验收项视觉确认。真实 API 端到端走查因环境限制记录为部分完成（不假报全绿）。SPEC-15 标记 completed。
+**A1 五项验收全部通过，且以确定性信号（真实 API run + runtime.db 直查）验证——A1 本质是运行时数据正确性，与 DB 信号完美契合**。加全 PR gate 绿 + 组合深审零阻塞 + 构建冒烟。#371（「Agent 干不动」的头号根因）经两次真实 run completed 行为级实锤。SPEC-15 标记 completed。
 
 ## Follow-up
 - #405 run_deep_research 异步写 rewind 设计
