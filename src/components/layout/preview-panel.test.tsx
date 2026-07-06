@@ -13,7 +13,12 @@ const fsMocks = vi.hoisted(() => ({
   writeFile: vi.fn(),
 }))
 
+const notifierMocks = vi.hoisted(() => ({
+  notifyWikiPathsChanged: vi.fn(),
+}))
+
 vi.mock("@/commands/fs", () => fsMocks)
+vi.mock("@/lib/wiki-change-notifier", () => notifierMocks)
 
 // WikiEditor pulls in the real Milkdown/ProseMirror stack, which isn't
 // meaningful to exercise here — this test is about PreviewPanel's own
@@ -64,6 +69,7 @@ vi.mock("@/components/editor/file-preview", () => ({
 
 function resetStore(): void {
   useWikiStore.setState({
+    project: { id: "project-1", name: "Project", path: "/proj" },
     selectedFile: null,
     fileContent: "",
     externalPreview: null,
@@ -277,6 +283,22 @@ describe("PreviewPanel per-file debounced save", () => {
 
     expect(fsMocks.writeFile).toHaveBeenCalledTimes(1)
     expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/a.md", "content:/proj/a.md-edited")
+
+    unmount(root)
+  })
+
+  it("notifies wiki path changes after a successful manual save", async () => {
+    const { container, root } = renderPanel()
+    selectFile("/proj/wiki/a.md")
+    await flush()
+
+    await click(container.querySelector("[data-testid='save-now']"))
+    await flush()
+
+    expect(notifierMocks.notifyWikiPathsChanged).toHaveBeenCalledWith(
+      "/proj",
+      ["wiki/a.md"],
+    )
 
     unmount(root)
   })

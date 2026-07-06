@@ -55,7 +55,7 @@ export interface LintScenario {
   expected: {
     /** Expected structural lint findings. Order-independent. */
     structural: Array<{
-      type: "orphan" | "broken-link" | "no-outlinks"
+      type: "orphan" | "broken-link" | "no-outlinks" | "source-unlinked"
       /** Page path relative to wiki/ (e.g. "attention.md") */
       page: string
       /** For broken-link, the substring that should appear in the detail */

@@ -7,7 +7,8 @@ import { readFile, writeFile } from "@/commands/fs"
 import { getFileCategory, isBinary } from "@/lib/file-types"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
-import { getFileName } from "@/lib/path-utils"
+import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils"
+import { notifyWikiPathsChanged } from "@/lib/wiki-change-notifier"
 
 /**
  * Per-file debounced-save bookkeeping. This component is mounted once for
@@ -35,6 +36,7 @@ interface FileSaveEntry {
 
 export function PreviewPanel() {
   const { t } = useTranslation()
+  const project = useWikiStore((s) => s.project)
   const selectedFile = useWikiStore((s) => s.selectedFile)
   const fileContent = useWikiStore((s) => s.fileContent)
   const externalPreview = useWikiStore((s) => s.externalPreview)
@@ -55,6 +57,13 @@ export function PreviewPanel() {
     writeFile(path, markdown)
       .then(() => {
         getEntry(path).lastLoaded = markdown
+        const projectPath = project?.path
+        const wikiRelativePath = projectPath
+          ? wikiRelativePathForProject(projectPath, path)
+          : null
+        if (projectPath && wikiRelativePath) {
+          notifyWikiPathsChanged(normalizePath(projectPath), [wikiRelativePath])
+        }
         // Only push the write into the display store if this file is
         // still the one on screen — writeFile is async, and the user may
         // have switched to a different file while it was in flight. Doing
@@ -74,7 +83,7 @@ export function PreviewPanel() {
           filesWritten: [],
         })
       })
-  }, [getEntry, setFileContent])
+  }, [getEntry, project, setFileContent])
 
   useEffect(() => {
     const path = selectedFile
@@ -212,6 +221,14 @@ export function PreviewPanel() {
       </div>
     </div>
   )
+}
+
+function wikiRelativePathForProject(projectPath: string, path: string): string | null {
+  const pp = normalizePath(projectPath)
+  const absolutePath = normalizePath(path)
+  const wikiRoot = `${pp}/wiki`
+  if (!absolutePath.startsWith(`${wikiRoot}/`)) return null
+  return `wiki/${getRelativePath(absolutePath, wikiRoot)}`
 }
 
 function ExternalReferencePreview({

@@ -8,7 +8,7 @@ import { buildLanguageDirective } from "@/lib/output-language"
 import { flattenMdFiles } from "@/lib/wiki-utils"
 
 export interface LintResult {
-  type: "orphan" | "broken-link" | "no-outlinks" | "semantic"
+  type: "orphan" | "broken-link" | "no-outlinks" | "source-unlinked" | "semantic"
   severity: "warning" | "info"
   page: string
   detail: string
@@ -30,6 +30,17 @@ function extractWikilinks(content: string): string[] {
 function relativeToSlug(relativePath: string): string {
   // relativePath relative to wiki/ dir, e.g. "entities/foo-bar" or "queries/my-page-2024-01-01"
   return relativePath.replace(/\.md$/, "")
+}
+
+// queries/ pages are saved queries, not knowledge — they get no structural
+// metrics at all (excluded here and not covered by isSourcePage below).
+function isKnowledgePage(relativePath: string): boolean {
+  const [firstSegment] = relativePath.split("/")
+  return firstSegment !== "sources" && firstSegment !== "queries"
+}
+
+function isSourcePage(relativePath: string): boolean {
+  return relativePath.split("/")[0] === "sources"
 }
 
 /**
@@ -104,10 +115,11 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
 
   for (const p of pages) {
     const shortName = getRelativePath(p.path, wikiRoot)
+    const knowledgePage = isKnowledgePage(shortName)
 
     // Orphan: no inbound links (lowercased slug for case-insensitive match)
     const inbound = inboundCounts.get(p.slug.toLowerCase()) ?? 0
-    if (inbound === 0) {
+    if (knowledgePage && inbound === 0) {
       results.push({
         type: "orphan",
         severity: "info",
@@ -117,12 +129,21 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
     }
 
     // No outbound links
-    if (p.outlinks.length === 0) {
+    if (knowledgePage && p.outlinks.length === 0) {
       results.push({
         type: "no-outlinks",
         severity: "info",
         page: shortName,
         detail: "This page has no [[wikilink]] references to other pages.",
+      })
+    }
+
+    if (isSourcePage(shortName) && p.outlinks.length === 0) {
+      results.push({
+        type: "source-unlinked",
+        severity: "info",
+        page: shortName,
+        detail: "This source page has no [[wikilink]] references to knowledge pages.",
       })
     }
 
@@ -302,6 +323,7 @@ export interface LintReport {
     orphanCount: number
     brokenLinkCount: number
     noOutlinksCount: number
+    sourceUnlinkedCount: number
     semanticCount: number
   }
   autoFixItems: LintResult[]
@@ -324,6 +346,7 @@ function classifyFixability(result: LintResult): "auto" | "human" {
   // the explicit orphan filter fixAllLintResults already applies before its
   // own auto-fix pass.
   if (result.type === "orphan") return "human"
+  if (result.type === "source-unlinked") return "human"
   if (result.type === "semantic") {
     const detail = result.detail.toLowerCase()
     if (detail.startsWith("[suggestion]")) return "human"
@@ -339,6 +362,7 @@ function computeHealthScore(results: LintResult[]): number {
     if (r.type === "orphan") score -= 5
     else if (r.type === "broken-link") score -= 3
     else if (r.type === "no-outlinks") score -= 2
+    else if (r.type === "source-unlinked") score -= 2
     else if (r.type === "semantic") {
       const detail = r.detail.toLowerCase()
       if (detail.startsWith("[contradiction]") || detail.startsWith("[stale]")) score -= 10
@@ -359,6 +383,7 @@ export function generateLintReport(
     orphanCount: results.filter((r) => r.type === "orphan").length,
     brokenLinkCount: results.filter((r) => r.type === "broken-link").length,
     noOutlinksCount: results.filter((r) => r.type === "no-outlinks").length,
+    sourceUnlinkedCount: results.filter((r) => r.type === "source-unlinked").length,
     semanticCount: results.filter((r) => r.type === "semantic").length,
   }
 
@@ -407,6 +432,7 @@ runId: ${runId}
 | Orphan pages | ${report.stats.orphanCount} |
 | Broken links | ${report.stats.brokenLinkCount} |
 | No outbound links | ${report.stats.noOutlinksCount} |
+| Source pages without links | ${report.stats.sourceUnlinkedCount} |
 | Semantic issues | ${report.stats.semanticCount} |
 
 ---

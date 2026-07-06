@@ -568,6 +568,7 @@
       "orphan": "孤立页面",
       "broken-link": "失效链接",
       "no-outlinks": "无出站链接",
+      "source-unlinked": "来源页未链接",
       "semantic": "语义问题"
     },
     "issues": "{{count}} 个问题",
@@ -1188,6 +1189,7 @@
           "failed": "失败",
           "dirty": "待更新",
           "stale": "已过期",
+          "uninitialized": "未初始化",
           "ready": "已就绪"
         }
       },

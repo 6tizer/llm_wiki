@@ -6,6 +6,7 @@ import { lintFixMutex } from "@/lib/lint-fix-mutex"
 import { normalizePath } from "@/lib/path-utils"
 import { useLintStore, type LintItem } from "@/stores/lint-store"
 import { useWikiStore } from "@/stores/wiki-store"
+import { notifyWikiPathsChanged } from "@/lib/wiki-change-notifier"
 
 interface FixLintItemOptions {
   busyId?: string
@@ -74,6 +75,7 @@ export function useLintFixActions() {
       if (ok) {
         removeLintItem(item.id)
         await refreshTree()
+        notifyWikiPathsChanged(pp, [item.page])
       }
       return ok
     } catch (err) {
@@ -100,6 +102,7 @@ export function useLintFixActions() {
         const fixedPages = new Set(fixed.map((result) => `${result.type}:${result.page}`))
         setLintItems(items.filter((item) => !fixedPages.has(`${item.type}:${item.page}`)))
         await refreshTree()
+        notifyWikiPathsChanged(pp, fixed.map((result) => result.page))
       }
     } catch (err) {
       console.error(options.errorLabel ?? "Fix all failed:", err)

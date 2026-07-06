@@ -10,7 +10,8 @@ import { useWikiStore } from "@/stores/wiki-store"
 const mocks = vi.hoisted(() => ({
   listDirectory: vi.fn(async () => []),
   fixLintResult: vi.fn(),
-  fixAllLintResults: vi.fn(async () => ({ fixed: [], failed: [] })),
+  fixAllLintResults: vi.fn(async () => ({ fixed: [] as unknown[], failed: [] as unknown[] })),
+  notifyWikiPathsChanged: vi.fn(),
 }))
 
 vi.mock("@/commands/fs", () => ({
@@ -21,6 +22,10 @@ vi.mock("@/lib/lint-fixer", () => ({
   fixLintResult: mocks.fixLintResult,
   fixAllLintResults: mocks.fixAllLintResults,
   isFixable: () => true,
+}))
+
+vi.mock("@/lib/wiki-change-notifier", () => ({
+  notifyWikiPathsChanged: mocks.notifyWikiPathsChanged,
 }))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -40,6 +45,15 @@ function Harness({ label }: { label: string }) {
   return (
     <button type="button" data-testid={label} onClick={() => void fixLintItem(lintItem)}>
       {fixingId ?? "idle"}
+    </button>
+  )
+}
+
+function FixAllHarness() {
+  const { fixAllLintItems } = useLintFixActions()
+  return (
+    <button type="button" data-testid="fix-all" onClick={() => void fixAllLintItems()}>
+      fix all
     </button>
   )
 }
@@ -109,6 +123,36 @@ describe("useLintFixActions", () => {
 
     expect(container.querySelector("[data-testid='a']")?.textContent).toBe("idle")
     expect(container.querySelector("[data-testid='b']")?.textContent).toBe("idle")
+    expect(mocks.notifyWikiPathsChanged).toHaveBeenCalledWith("/project", ["wiki/a.md"])
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("notifies all fixed pages after bulk lint fix", async () => {
+    const secondItem: LintItem = { ...lintItem, id: "lint-2", page: "wiki/b.md" }
+    useLintStore.setState({ items: [lintItem, secondItem] })
+    mocks.fixAllLintResults.mockResolvedValueOnce({ fixed: [lintItem, secondItem], failed: [] })
+
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => {
+      root.render(<FixAllHarness />)
+    })
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-testid='fix-all']")?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.notifyWikiPathsChanged).toHaveBeenCalledWith(
+      "/project",
+      ["wiki/a.md", "wiki/b.md"],
+    )
 
     act(() => root.unmount())
     container.remove()
