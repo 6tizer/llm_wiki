@@ -227,6 +227,54 @@ describe("chat store agent data model", () => {
     expect(useChatStore.getState().activeConversationId).toBe(forkId)
   })
 
+  it("inherits conversation-level agent overrides when forking", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      conversations: [
+        {
+          id: convId,
+          title: "Agent work",
+          createdAt: 0,
+          updatedAt: 1,
+          agentSessionId: "session-1",
+          agentProfileIdOverride: "profile-agent",
+          agentPermissionPolicyOverride: "bypassPermissions",
+        },
+      ],
+      activeConversationId: convId,
+    })
+
+    const forkId = useChatStore.getState().forkAgentConversation(convId)
+
+    const fork = useChatStore.getState().conversations.find((conv) => conv.id === forkId)
+    expect(fork).toMatchObject({
+      agentProfileIdOverride: "profile-agent",
+      agentPermissionPolicyOverride: "bypassPermissions",
+    })
+  })
+
+  it("does not add agent overrides when forking a conversation without them", () => {
+    const convId = useChatStore.getState().createConversation()
+    useChatStore.setState({
+      conversations: [
+        {
+          id: convId,
+          title: "Agent work",
+          createdAt: 0,
+          updatedAt: 1,
+          agentSessionId: "session-1",
+        },
+      ],
+      activeConversationId: convId,
+    })
+
+    const forkId = useChatStore.getState().forkAgentConversation(convId)
+
+    const fork = useChatStore.getState().conversations.find((conv) => conv.id === forkId)
+    expect(fork?.agentProfileIdOverride).toBeUndefined()
+    expect(fork?.agentPermissionPolicyOverride).toBeUndefined()
+  })
+
   it("starts an agent stream placeholder message and returns its id", () => {
     const convId = useChatStore.getState().createConversation()
 

@@ -555,6 +555,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       updatedAt: now,
       agentSessionId: source.agentSessionId,
       agentForkSessionPending: true,
+      ...(source.agentProfileIdOverride
+        ? { agentProfileIdOverride: source.agentProfileIdOverride }
+        : {}),
+      ...(source.agentPermissionPolicyOverride
+        ? { agentPermissionPolicyOverride: source.agentPermissionPolicyOverride }
+        : {}),
     }
     set((state) =>
       withPresentations(state, {

@@ -458,6 +458,7 @@ export const STORE_BOUNDARY_ENTRIES: readonly StoreBoundaryEntry[] = [
       "chatExpanded",
       "pendingExploreTab",
       "pendingWikiHealthTab",
+      "pendingSettingsCategory",
       "activeView",
     ],
     owner: "ui-shell",
