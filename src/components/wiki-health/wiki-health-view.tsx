@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Gauge, RefreshCw, Wrench, Zap } from "lucide-react"
+import { AlertTriangle, BrainCircuit, CheckCircle2, ClipboardCheck, Gauge, RefreshCw, Wrench, Zap } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,7 @@ import { MaintenanceSection } from "@/components/settings/sections/maintenance-s
 import { SynthesisSection } from "@/components/settings/sections/synthesis-section"
 import { TagTaxonomySection } from "@/components/settings/sections/tag-taxonomy-section"
 import { isRebuildableLayer, mintManualRebuildForLayer } from "@/lib/derived-rebuild/manual-rebuild-marker"
+import { loadKnowledgeAgentsConfig } from "@/lib/agent/knowledge-agents-config"
 import { VISIBLE_DERIVED_LAYERS, type DerivedLayerBucketStatus } from "@/lib/derived-rebuild/status"
 import { isFixable } from "@/lib/lint-fixer"
 import { computeWikiHealthScore } from "@/lib/wiki-health-score"
@@ -71,6 +72,8 @@ export function WikiHealthView() {
   const fileTree = useWikiStore((state) => state.fileTree)
   const pendingWikiHealthTab = useWikiStore((state) => state.pendingWikiHealthTab)
   const setPendingWikiHealthTab = useWikiStore((state) => state.setPendingWikiHealthTab)
+  const setPendingSettingsCategory = useWikiStore((state) => state.setPendingSettingsCategory)
+  const setActiveView = useWikiStore((state) => state.setActiveView)
   const lintItems = useLintStore((state) => state.items)
   const reviewItems = useReviewStore((state) => state.items)
   const derivedBuckets = useDerivedLayerStore((state) => state.buckets)
@@ -82,6 +85,7 @@ export function WikiHealthView() {
     fixAllLintItems,
   } = useLintFixActions()
   const projectId = project?.id ?? null
+  const [knowledgeAgentsAllDisabled, setKnowledgeAgentsAllDisabled] = useState(false)
 
   useEffect(() => {
     if (!projectId) {
@@ -90,6 +94,25 @@ export function WikiHealthView() {
     }
     void loadDerivedSnapshot()
   }, [projectId, loadDerivedSnapshot])
+
+  useEffect(() => {
+    if (!project) {
+      setKnowledgeAgentsAllDisabled(false)
+      return
+    }
+    let active = true
+    loadKnowledgeAgentsConfig(project.path)
+      .then((result) => {
+        if (!active) return
+        setKnowledgeAgentsAllDisabled(Object.values(result.config.agents).every((agent) => !agent.enabled))
+      })
+      .catch(() => {
+        if (active) setKnowledgeAgentsAllDisabled(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [project])
 
   useEffect(() => {
     if (!pendingWikiHealthTab) return
@@ -121,6 +144,11 @@ export function WikiHealthView() {
     }
     await fixAllLintItems({ errorLabel: "Dashboard lint fix all failed:" })
   }, [fixAllLintItems, fixableLintCount])
+
+  const handleEnableKnowledgeAgents = useCallback(() => {
+    setPendingSettingsCategory("knowledge-agents")
+    setActiveView("settings")
+  }, [setActiveView, setPendingSettingsCategory])
 
   const handleRebuildLayer = useCallback(async (layer: DerivedStaleMarkerLayer) => {
     if (!project || !isRebuildableLayer(layer)) {
@@ -243,8 +271,10 @@ export function WikiHealthView() {
               infoIssues={groupedIssues.info}
               fixingAll={fixingAllLint}
               fixableLintCount={fixableLintCount}
+              knowledgeAgentsAllDisabled={knowledgeAgentsAllDisabled}
               onFixAllLint={() => void handleFixAllLint()}
               onGoLint={() => setActiveTab("lint")}
+              onEnableKnowledgeAgents={handleEnableKnowledgeAgents}
               t={t}
             />
           )}
@@ -290,8 +320,10 @@ function DashboardPanel({
   infoIssues,
   fixingAll,
   fixableLintCount,
+  knowledgeAgentsAllDisabled,
   onFixAllLint,
   onGoLint,
+  onEnableKnowledgeAgents,
   t,
 }: {
   score: number
@@ -304,8 +336,10 @@ function DashboardPanel({
   infoIssues: DashboardIssue[]
   fixingAll: boolean
   fixableLintCount: number
+  knowledgeAgentsAllDisabled: boolean
   onFixAllLint: () => void
   onGoLint: () => void
+  onEnableKnowledgeAgents: () => void
   t: (key: string, options?: Record<string, unknown>) => string
 }) {
   return (
@@ -334,6 +368,35 @@ function DashboardPanel({
           <MetricCard label={t("wikiHealth.dashboard.reviewPenalty")} value={reviewPenalty} />
         </div>
       </section>
+
+      {knowledgeAgentsAllDisabled && (
+        <section className="rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3" data-testid="wiki-health-ka-guide">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <BrainCircuit className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                  {t("wikiHealth.dashboard.knowledgeAgentsDisabledTitle")}
+                </h2>
+                <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                  {t("wikiHealth.dashboard.knowledgeAgentsDisabledDetail")}
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 gap-1 border-amber-500/50 bg-background/80 text-xs"
+              onClick={onEnableKnowledgeAgents}
+              data-testid="wiki-health-enable-knowledge-agents"
+            >
+              <BrainCircuit className="h-3.5 w-3.5" />
+              {t("wikiHealth.dashboard.enableKnowledgeAgents")}
+            </Button>
+          </div>
+        </section>
+      )}
 
       <section className="rounded-md border border-border/70">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">

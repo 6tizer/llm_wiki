@@ -15,8 +15,28 @@ const mocks = vi.hoisted(() => ({
   fixLintResult: vi.fn(async () => true),
   fixAllLintResults: vi.fn(async (_projectPath: string, results: unknown[]) => ({ fixed: results, failed: [] })),
   mintManualRebuildForLayer: vi.fn(async () => ({ mintedCount: 1, failedCount: 0, runtimeDisabled: false })),
+  loadKnowledgeAgentsConfig: vi.fn(),
 }))
 const originalLoadSnapshot = useDerivedLayerStore.getState().loadSnapshot
+
+function knowledgeAgentsConfig(firstEnabled: boolean) {
+  return {
+    config: {
+      schemaVersion: 2,
+      updatedAt: 0,
+      agents: {
+        compiler: { enabled: firstEnabled, autoRun: false, guidance: "" },
+        linter: { enabled: false, autoRun: false, guidance: "" },
+        fixer: { enabled: false, autoRun: false, guidance: "" },
+        synthesizer: { enabled: false, autoRun: false, guidance: "" },
+        tagger: { enabled: false, autoRun: false, guidance: "" },
+        "qa-saver": { enabled: false, autoRun: false, guidance: "" },
+      },
+    },
+    issues: [],
+    conflict: false,
+  }
+}
 
 vi.mock("@/commands/fs", () => ({ listDirectory: mocks.listDirectory }))
 vi.mock("@/lib/lint-fixer", () => ({
@@ -31,6 +51,9 @@ vi.mock("@/lib/lint-fixer", () => ({
 vi.mock("@/lib/derived-rebuild/manual-rebuild-marker", () => ({
   mintManualRebuildForLayer: mocks.mintManualRebuildForLayer,
   isRebuildableLayer: (layer: string) => layer === "embedding" || layer === "taxonomy",
+}))
+vi.mock("@/lib/agent/knowledge-agents-config", () => ({
+  loadKnowledgeAgentsConfig: mocks.loadKnowledgeAgentsConfig,
 }))
 vi.mock("@/components/settings/sections/derived-status-section", () => ({
   DerivedStatusSection: ({ onNavigate }: { onNavigate?: () => void }) => (
@@ -81,6 +104,7 @@ async function flush(): Promise<void> {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.loadKnowledgeAgentsConfig.mockResolvedValue(knowledgeAgentsConfig(false))
   resetReviewIdCounterForTest()
   useWikiStore.setState({
     project: { id: "p1", name: "Project", path: "/project" },
@@ -150,7 +174,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  useWikiStore.setState({ project: null, fileTree: [] })
+  useWikiStore.setState({ project: null, fileTree: [], pendingSettingsCategory: null, activeView: "wiki" })
   useLintStore.setState({ items: [] })
   useReviewStore.setState({ items: [] })
   useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false, loadSnapshot: originalLoadSnapshot })
@@ -167,6 +191,34 @@ describe("WikiHealthView", () => {
     expect(container.textContent).toContain("4 issues found")
     expect(container.querySelector("[data-testid='wiki-health-tab-lint']")?.textContent).toContain("2")
     expect(container.querySelector("[data-testid='wiki-health-tab-review']")?.textContent).toContain("1")
+
+    unmount(root)
+  })
+
+  it("shows the Knowledge Agents opt-in guide when all agents are disabled", async () => {
+    const { container, root } = renderWikiHealthView()
+    await flush()
+
+    expect(container.querySelector("[data-testid='wiki-health-ka-guide']")?.textContent)
+      .toContain("Knowledge Agents are not enabled")
+
+    const enable = container.querySelector("[data-testid='wiki-health-enable-knowledge-agents']")
+    if (!enable) throw new Error("enable knowledge agents button not found")
+    await click(enable)
+
+    expect(useWikiStore.getState().activeView).toBe("settings")
+    expect(useWikiStore.getState().pendingSettingsCategory).toBe("knowledge-agents")
+
+    unmount(root)
+  })
+
+  it("hides the Knowledge Agents guide when any agent is enabled", async () => {
+    mocks.loadKnowledgeAgentsConfig.mockResolvedValueOnce(knowledgeAgentsConfig(true))
+
+    const { container, root } = renderWikiHealthView()
+    await flush()
+
+    expect(container.querySelector("[data-testid='wiki-health-ka-guide']")).toBeNull()
 
     unmount(root)
   })

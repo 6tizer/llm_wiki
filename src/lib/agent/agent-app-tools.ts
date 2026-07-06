@@ -75,6 +75,7 @@ type AgentAppToolHandler = (toolContext: AgentAppToolContext) => Promise<AgentAp
 interface AgentAppToolDescriptor {
   name: string
   handler: AgentAppToolHandler
+  description?: string
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -1085,7 +1086,23 @@ async function handleSynthesisPreview(toolContext: AgentAppToolContext): Promise
 async function handleGetKnowledgeAgentsConfig(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
   const { projectPath } = toolContext
 
-    return { ok: true, result: await loadKnowledgeAgentsConfig(projectPath) }
+    const loaded = await loadKnowledgeAgentsConfig(projectPath)
+    return {
+      ok: true,
+      result: {
+        ...loaded,
+        optIn: true,
+        agents: Object.fromEntries(
+          Object.entries(loaded.config.agents).map(([id, settings]) => [
+            id,
+            {
+              enabled: settings.enabled,
+              status: settings.enabled ? "enabled" : "opt-in-disabled",
+            },
+          ]),
+        ),
+      },
+    }
 }
 
 async function handleRunPipeline(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
@@ -1198,5 +1215,11 @@ const AGENT_APP_TOOL_HANDLERS: Record<string, AgentAppToolHandler> = {
 }
 
 export const AGENT_APP_TOOL_DESCRIPTORS: Record<string, AgentAppToolDescriptor> = Object.fromEntries(
-  Object.entries(AGENT_APP_TOOL_HANDLERS).map(([name, handler]) => [name, { name, handler }]),
+  Object.entries(AGENT_APP_TOOL_HANDLERS).map(([name, handler]) => [name, {
+    name,
+    handler,
+    ...(name === "get_knowledge_agents_config"
+      ? { description: "Read Knowledge Agents config, issues, and conflict status. enabled:false is the designed opt-in default, not a fault." }
+      : {}),
+  }]),
 ) as Record<string, AgentAppToolDescriptor>

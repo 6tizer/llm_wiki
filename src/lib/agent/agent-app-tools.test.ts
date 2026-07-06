@@ -104,7 +104,18 @@ const tagTaxonomyMock = vi.hoisted(() => ({
 
 const knowledgeAgentsConfigMock = vi.hoisted(() => ({
   loadKnowledgeAgentsConfig: vi.fn(async () => ({
-    config: { schemaVersion: 1, updatedAt: "1970-01-01T00:00:00.000Z", agents: [] },
+    config: {
+      schemaVersion: 2,
+      updatedAt: 0,
+      agents: {
+        compiler: { enabled: false, autoRun: false, guidance: "" },
+        linter: { enabled: false, autoRun: false, guidance: "" },
+        fixer: { enabled: false, autoRun: false, guidance: "" },
+        synthesizer: { enabled: false, autoRun: false, guidance: "" },
+        tagger: { enabled: false, autoRun: false, guidance: "" },
+        "qa-saver": { enabled: false, autoRun: false, guidance: "" },
+      },
+    },
     issues: [],
     conflict: false,
   })),
@@ -244,6 +255,11 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(new Set(handlers).size).toBe(handlers.length)
   })
 
+  it("documents Knowledge Agents opt-in defaults in the descriptor", () => {
+    expect(AGENT_APP_TOOL_DESCRIPTORS.get_knowledge_agents_config.description)
+      .toContain("enabled:false is the designed opt-in default")
+  })
+
   beforeEach(() => {
     fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true }]
     fsMock.canonical = new Map([["/project/raw/sources", "/project/raw/sources"]])
@@ -286,7 +302,18 @@ describe("runAgentAppTool ingest parity tools", () => {
     wikiSynthesisMock.discoverSynthesisCandidates.mockResolvedValue({ dimension: 1, minClusterSize: 3, candidates: [] as Array<Record<string, unknown>>, totalCandidates: 0 })
     knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig.mockClear()
     knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig.mockResolvedValue({
-      config: { schemaVersion: 1, updatedAt: "1970-01-01T00:00:00.000Z", agents: [] },
+      config: {
+        schemaVersion: 2,
+        updatedAt: 0,
+        agents: {
+          compiler: { enabled: false, autoRun: false, guidance: "" },
+          linter: { enabled: false, autoRun: false, guidance: "" },
+          fixer: { enabled: false, autoRun: false, guidance: "" },
+          synthesizer: { enabled: false, autoRun: false, guidance: "" },
+          tagger: { enabled: false, autoRun: false, guidance: "" },
+          "qa-saver": { enabled: false, autoRun: false, guidance: "" },
+        },
+      },
       issues: [],
       conflict: false,
     })
@@ -1209,10 +1236,49 @@ describe("runAgentAppTool ingest parity tools", () => {
 
     expect(response.ok).toBe(true)
     expect(knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig).toHaveBeenCalledWith("/project")
-    expect(response.result).toEqual({
-      config: { schemaVersion: 1, updatedAt: "1970-01-01T00:00:00.000Z", agents: [] },
+    expect(response.result).toMatchObject({
+      config: {
+        schemaVersion: 2,
+        updatedAt: 0,
+        agents: expect.objectContaining({
+          compiler: { enabled: false, autoRun: false, guidance: "" },
+        }),
+      },
       issues: [],
       conflict: false,
+      optIn: true,
+      agents: expect.objectContaining({
+        compiler: { enabled: false, status: "opt-in-disabled" },
+      }),
+    })
+  })
+
+  it("marks enabled Knowledge Agents as enabled in the read-only config response", async () => {
+    knowledgeAgentsConfigMock.loadKnowledgeAgentsConfig.mockResolvedValueOnce({
+      config: {
+        schemaVersion: 2,
+        updatedAt: 1,
+        agents: {
+          compiler: { enabled: true, autoRun: false, guidance: "" },
+          linter: { enabled: false, autoRun: false, guidance: "" },
+          fixer: { enabled: false, autoRun: false, guidance: "" },
+          synthesizer: { enabled: false, autoRun: false, guidance: "" },
+          tagger: { enabled: false, autoRun: false, guidance: "" },
+          "qa-saver": { enabled: false, autoRun: false, guidance: "" },
+        },
+      },
+      issues: [],
+      conflict: false,
+    })
+
+    const response = await runAgentAppTool("get_knowledge_agents_config", {})
+
+    expect(response.result).toMatchObject({
+      optIn: true,
+      agents: expect.objectContaining({
+        compiler: { enabled: true, status: "enabled" },
+        linter: { enabled: false, status: "opt-in-disabled" },
+      }),
     })
   })
 

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { DEFAULT_SOURCE_WATCH_CONFIG } from "@/lib/source-watch-config";
+import type { CategoryId } from "@/components/settings/settings-category";
 import type { FileNode, WikiProject } from "@/types/wiki";
 
 /** localStorage key for the right-side knowledge/files panel collapsed state. */
@@ -369,6 +370,7 @@ interface WikiState {
 	sidebarCollapsed: boolean
 	pendingExploreTab: ExploreTab | null
 	pendingWikiHealthTab: WikiHealthTab | null
+	pendingSettingsCategory: CategoryId | null
 	activeView: "wiki" | "sources" | "explore" | "wiki-health" | "research" | "settings"
 	llmConfig: LlmConfig
 	/** Per-provider-preset stored overrides (API key, model, endpoint, …). */
@@ -407,6 +409,7 @@ interface WikiState {
 	setSidebarCollapsed: (collapsed: boolean) => void
 	setPendingExploreTab: (tab: ExploreTab | null) => void
 	setPendingWikiHealthTab: (tab: WikiHealthTab | null) => void
+	setPendingSettingsCategory: (category: CategoryId | null) => void
 	setActiveView: (view: WikiState["activeView"]) => void
 	setLlmConfig: (config: LlmConfig) => void
 	setProviderConfigs: (configs: ProviderConfigs) => void
@@ -436,6 +439,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	sidebarCollapsed: readSidebarCollapsed(),
 	pendingExploreTab: null,
 	pendingWikiHealthTab: null,
+	pendingSettingsCategory: null,
 	activeView: "wiki",
 	llmConfig: {
 		provider: "openai",
@@ -468,6 +472,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	},
 	setPendingExploreTab: (pendingExploreTab) => set({ pendingExploreTab }),
 	setPendingWikiHealthTab: (pendingWikiHealthTab) => set({ pendingWikiHealthTab }),
+	setPendingSettingsCategory: (pendingSettingsCategory) => set({ pendingSettingsCategory }),
 	setActiveView: (activeView) => {
 		// "research" remains an internal view alias that opens Explore's Research tab.
 		// Leaving Explore/Research owns graph previews; callers that need to
