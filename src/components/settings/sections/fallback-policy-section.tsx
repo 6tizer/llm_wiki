@@ -15,6 +15,8 @@ import {
   type RuntimeProfileRecord,
   type RuntimeTaskFamilyPolicyRecord,
 } from "@/commands/runtime-db"
+import { useCountdown } from "@/lib/hooks/use-countdown"
+import { breakerDisplayReason, countdownSeconds } from "@/lib/hooks/breaker-display"
 import { PROFILE_TASK_FAMILY_OPTIONS } from "./model-profiles-section"
 
 type LoadState =
@@ -124,6 +126,21 @@ function parsePoolEvent(event: RuntimeEventRecord): ParsedPoolEvent {
   }
 }
 
+function latestSuccessByProfileId(events: RuntimeEventRecord[]): Map<string, number> {
+  const latest = new Map<string, number>()
+  for (const event of events) {
+    let payload: Record<string, unknown> = {}
+    try {
+      payload = JSON.parse(event.payload) as Record<string, unknown>
+    } catch {
+      payload = {}
+    }
+    if (payload.outcome !== "success" || typeof payload.profileId !== "string") continue
+    latest.set(payload.profileId, Math.max(latest.get(payload.profileId) ?? 0, event.createdAtMs))
+  }
+  return latest
+}
+
 export function FallbackPolicySection({ refreshToken = 0 }: Props) {
   const { t } = useTranslation()
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" })
@@ -211,6 +228,15 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
 
   const profilesById = useMemo(() => new Map(profiles.map((profile) => [profile.profileId, profile])), [profiles])
   const parsedEvents = useMemo(() => events.map(parsePoolEvent), [events])
+  const latestSuccessAtByProfileId = useMemo(() => latestSuccessByProfileId(events), [events])
+  const nextBreakerDeadlineMs = useMemo(() => {
+    const deadlines = poolSnapshot.circuitBreakers.map((breaker) => breaker.openUntilMs)
+    return deadlines.length > 0 ? Math.min(...deadlines) : null
+  }, [poolSnapshot.circuitBreakers])
+
+  useCountdown(nextBreakerDeadlineMs, {
+    onExpire: () => void refreshObservability(),
+  })
 
   function updateDraft(family: string, updater: (draft: PolicyDraft) => PolicyDraft) {
     dirtyFamiliesRef.current = new Set([...dirtyFamiliesRef.current, family])
@@ -456,6 +482,7 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
 
           <section className="space-y-3 rounded-md border p-3">
             <h4 className="text-sm font-semibold">{t("fallbackPolicy.breakersTitle")}</h4>
+            <p className="text-[11px] text-muted-foreground">{t("fallbackPolicy.breakersSource")}</p>
             {poolSnapshot.activeClaims.length === 0 && poolSnapshot.circuitBreakers.length === 0 && (
               <div className="text-xs text-muted-foreground">{t("fallbackPolicy.noPoolState")}</div>
             )}
@@ -469,22 +496,13 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
               </div>
             ))}
             {poolSnapshot.circuitBreakers.map((breaker) => (
-              <div key={breaker.profileId} className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs">
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">{profilesById.get(breaker.profileId)?.displayName ?? breaker.profileId}</div>
-                  <div className="text-muted-foreground">
-                    {breaker.status} · {breaker.reason ?? t("fallbackPolicy.noReason")} · {new Date(breaker.openUntilMs).toLocaleString()}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="rounded-md border px-2 py-1 hover:bg-accent"
-                  onClick={() => void clearBreaker(breaker.profileId)}
-                  data-testid={`fallback-clear-breaker-${breaker.profileId}`}
-                >
-                  {t("fallbackPolicy.clearBreaker")}
-                </button>
-              </div>
+              <FallbackBreakerRow
+                key={breaker.profileId}
+                breaker={breaker}
+                profileName={profilesById.get(breaker.profileId)?.displayName ?? breaker.profileId}
+                lastSuccessAtMs={latestSuccessAtByProfileId.get(breaker.profileId)}
+                onClear={clearBreaker}
+              />
             ))}
           </section>
 
@@ -518,6 +536,50 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
         </>
       )}
       {message && <p className="text-xs text-muted-foreground">{message}</p>}
+    </div>
+  )
+}
+
+function FallbackBreakerRow({
+  breaker,
+  profileName,
+  lastSuccessAtMs,
+  onClear,
+}: {
+  breaker: RuntimeProfileCircuitBreakerRecord
+  profileName: string
+  lastSuccessAtMs?: number
+  onClear: (profileId: string) => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const remainingMs = useCountdown(breaker.openUntilMs)
+  const reason = breakerDisplayReason(breaker) || t("fallbackPolicy.noReason")
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs">
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">{profileName}</div>
+        <div className="text-muted-foreground">
+          {breaker.status} · {reason} · {t("fallbackPolicy.breakerRemaining", {
+            seconds: countdownSeconds(remainingMs),
+          })}
+        </div>
+        {lastSuccessAtMs && (
+          <div className="text-[11px] text-muted-foreground/80">
+            {t("fallbackPolicy.breakerLastSuccessfulCall", {
+              time: new Date(lastSuccessAtMs).toLocaleString(),
+            })}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        className="rounded-md border px-2 py-1 hover:bg-accent"
+        onClick={() => void onClear(breaker.profileId)}
+        data-testid={`fallback-clear-breaker-${breaker.profileId}`}
+      >
+        {t("fallbackPolicy.clearBreaker")}
+      </button>
     </div>
   )
 }

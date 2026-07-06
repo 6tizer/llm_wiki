@@ -2,7 +2,7 @@
 
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
 import {
   addProfileToOrder,
@@ -119,6 +119,7 @@ describe("FallbackPolicySection helpers", () => {
 
 describe("FallbackPolicySection", () => {
   beforeEach(() => {
+    vi.useRealTimers()
     vi.clearAllMocks()
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
@@ -164,6 +165,10 @@ describe("FallbackPolicySection", () => {
     }))
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it("saves the reordered queue for one task family", async () => {
     const { container, root } = renderSection()
     await flush()
@@ -180,6 +185,48 @@ describe("FallbackPolicySection", () => {
       profileOrder: ["profile-2", "profile-1"],
       autoFailover: true,
     })
+
+    unmount(root)
+  })
+
+  it("refreshes observability when a breaker countdown expires", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    runtimeDbMocks.runtimeProfilePoolList
+      .mockResolvedValueOnce({
+        enabled: true,
+        status: "healthy",
+        activeClaims: [],
+        circuitBreakers: [{
+          profileId: "profile-1",
+          status: "rate-limited",
+          reason: "429",
+          error: null,
+          openedAtMs: 1_000,
+          openUntilMs: 2_000,
+          updatedAtMs: 1_000,
+        }],
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        status: "healthy",
+        activeClaims: [],
+        circuitBreakers: [],
+      })
+
+    const { container, root } = renderSection()
+    await flush()
+
+    expect(container.textContent).toContain("1s remaining")
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(runtimeDbMocks.runtimeProfilePoolList).toHaveBeenCalledTimes(2)
+    expect(container.textContent).not.toContain("429")
 
     unmount(root)
   })

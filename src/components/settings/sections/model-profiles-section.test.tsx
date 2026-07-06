@@ -23,6 +23,7 @@ const runtimeDbMocks = vi.hoisted(() => ({
   runtimeProfileCreate: vi.fn(),
   runtimeProfileDelete: vi.fn(),
   runtimeProfileList: vi.fn(),
+  runtimeProfilePoolList: vi.fn(),
   runtimeProfileModelsList: vi.fn(),
   runtimeProfileProbe: vi.fn(),
   runtimeProfileUpdate: vi.fn(),
@@ -513,6 +514,12 @@ describe("ModelProfilesSection UI", () => {
       status: "healthy",
       profiles: [runtimeProfile({ taskFamilies: ["chat", "future-family"] })],
     })
+    runtimeDbMocks.runtimeProfilePoolList.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      activeClaims: [],
+      circuitBreakers: [],
+    })
     runtimeDbMocks.runtimeProfileCreate.mockResolvedValue(runtimeProfile({ profileId: "profile-new" }))
     runtimeDbMocks.runtimeProfileDelete.mockResolvedValue({
       profileId: "profile-1",
@@ -547,6 +554,48 @@ describe("ModelProfilesSection UI", () => {
 
     expect(container.textContent).toContain("Primary profile")
     expect(container.querySelector<HTMLInputElement>("[data-testid='profile-task-future-family']")?.checked).toBe(true)
+
+    unmount(root)
+  })
+
+  it("renders circuit breaker status next to a profile and navigates to fallback policy", async () => {
+    const onNavigateFallback = vi.fn()
+    runtimeDbMocks.runtimeProfilePoolList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      activeClaims: [],
+      circuitBreakers: [{
+        profileId: "profile-1",
+        status: "rate-limited",
+        reason: "429 from provider",
+        error: null,
+        openedAtMs: Date.now(),
+        openUntilMs: Date.now() + 30_000,
+        updatedAtMs: Date.now(),
+      }],
+    })
+
+    const { container, root } = renderProfiles({ onNavigateFallback })
+    await flush()
+
+    const status = container.querySelector("[data-testid='profile-breaker-status-profile-1']")
+    expect(status?.textContent).toContain("Circuit breaker: rate limited, cooling")
+    expect(status?.getAttribute("title")).toBe("429 from provider")
+
+    const link = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Open Fallback Policy")
+    if (!link) throw new Error("fallback navigation link not found")
+    await click(link)
+    expect(onNavigateFallback).toHaveBeenCalledTimes(1)
+
+    unmount(root)
+  })
+
+  it("does not render circuit breaker status when no breaker is open", async () => {
+    const { container, root } = renderProfiles()
+    await flush()
+
+    expect(container.querySelector("[data-testid='profile-breaker-status-profile-1']")).toBeNull()
 
     unmount(root)
   })
