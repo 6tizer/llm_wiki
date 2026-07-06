@@ -604,7 +604,6 @@
       "modelConfig": {
         "title": "Model Configuration",
         "description": "Manage external information sources, runtime model profiles, task assignments, and one-time imports from legacy provider settings.",
-        "connections": "Connections",
         "profiles": {
           "title": "Model profiles",
           "description": "Profiles are runtime records for model-call and agent-run routing. Secrets are stored by reference.",
@@ -698,7 +697,6 @@
             }
           }
         },
-        "taskMatrixHeading": "Task assignment matrix",
         "tabs": {
           "navLabel": "Model configuration sections",
           "sources": "External Information Sources",
@@ -709,6 +707,7 @@
         "migration": {
           "title": "Import legacy provider settings",
           "description": "Create {{count}} runtime Model Profile(s) from legacy provider settings: {{presets}}. This does not change current fallback behavior.",
+          "matrixHint": "Adjust usage later in the task assignment matrix.",
           "templateCorrected": "Some endpoints, API modes, or auth styles will be corrected from the provider template library.",
           "keepResolvedEndpoint": "Keep original endpoint when a template suggests a correction",
           "create": "Import legacy settings",
@@ -723,7 +722,12 @@
           "empty": "No profiles yet. Create a Profile above before assigning task families.",
           "taskFamily": "Task family",
           "effective": "Effective",
+          "inlineOnly": "Global config",
           "notWired": "Not wired to runtime selection yet — currently has no effect",
+          "inlineConfigHint": {
+            "embedding": "Embedding inline settings use the global embedding config, not the profile pool.",
+            "vision": "Vision profile assignments are used by the pool; multimodal inline settings remain a fallback direct config."
+          },
           "configure": "Configure inline",
           "toggle": "Toggle {{family}} for {{profile}}",
           "saved": "Task assignments saved.",

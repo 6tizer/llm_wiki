@@ -28,7 +28,7 @@ import {
 } from "@/commands/profile-secrets"
 import { LLM_PRESETS } from "../llm-presets"
 import { ProviderAccessWizard } from "./provider-access-wizard"
-import { ProfileCapabilityBadge } from "./profile-capability-badge"
+import { ProfileCapabilityBadge, capabilityBadgeMeta } from "./profile-capability-badge"
 
 const MAX_PROFILE_CONCURRENCY = 128
 // Keep these version strings aligned with src-tauri/src/commands/runtime_db.rs.
@@ -394,6 +394,14 @@ function agentRunSupported(profile: RuntimeProfileRecord | undefined): boolean |
   }
 }
 
+async function deleteStaleProfileSecretRef(secretRef: string) {
+  try {
+    await profileSecretDelete({ secretRef })
+  } catch (error) {
+    console.warn("[model-profiles] failed to delete stale profile secretRef", { secretRef, error })
+  }
+}
+
 /** Saves a profile draft and applies best-effort secret cleanup for failed writes or replacement. */
 export async function saveProfileDraft(
   draft: ModelProfileDraft,
@@ -406,19 +414,23 @@ export async function saveProfileDraft(
   }
 
   try {
-    const saved = existing
-      ? await runtimeProfileUpdate(toUpdateRequest(draft, existing, newRef))
-      : await runtimeProfileCreate(toCreateRequest(draft, newRef))
-    if (newRef && oldRef) {
-      await profileSecretDelete({ secretRef: oldRef }).catch(() => undefined)
+    if (existing) {
+      const result = await runtimeProfileUpdate(toUpdateRequest(draft, existing, newRef))
+      if (!result.profile) {
+        console.warn("[model-profiles] runtime profile update omitted profile; keeping secrets untouched")
+        return existing
+      }
+      if (result.staleSecretRef) {
+        await deleteStaleProfileSecretRef(result.staleSecretRef)
+      } else if ((newRef || draft.clearSecret) && oldRef && result.staleSecretRef === undefined) {
+        console.warn("[model-profiles] runtime profile update omitted staleSecretRef; keeping old secretRef")
+      }
+      return result.profile
     }
-    if (!newRef && draft.clearSecret && oldRef) {
-      await profileSecretDelete({ secretRef: oldRef }).catch(() => undefined)
-    }
-    return saved
+    return await runtimeProfileCreate(toCreateRequest(draft, newRef))
   } catch (error) {
     if (newRef) {
-      await profileSecretDelete({ secretRef: newRef }).catch(() => undefined)
+      await deleteStaleProfileSecretRef(newRef)
     }
     throw error
   }
@@ -609,7 +621,7 @@ export function ModelProfilesSection({
     try {
       const result = await runtimeProfileDelete({ profileId: selectedProfile.profileId })
       if (result.secretRef) {
-        await profileSecretDelete({ secretRef: result.secretRef }).catch(() => undefined)
+        await deleteStaleProfileSecretRef(result.secretRef)
       }
       const nextProfiles = profilesRef.current.filter((profile) => profile.profileId !== result.profileId)
       profilesRef.current = nextProfiles
@@ -1122,17 +1134,15 @@ export function ModelProfilesSection({
                 {probeState.message}
               </div>
             )}
-            {probeState.kind === "done" && (
-              <div
-                className={`rounded-md border px-3 py-2 text-xs ${
-                  probeState.result.status !== "error"
-                    ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-                    : "border-destructive/40 bg-destructive/5 text-destructive"
-                }`}
-              >
-                {probeState.result.message}
-              </div>
-            )}
+            {probeState.kind === "done" && (() => {
+              const meta = capabilityBadgeMeta(probeState.result.status, t)
+              return (
+                <div className={`rounded-md border px-3 py-2 text-xs ${meta.className}`}>
+                  <span className="font-medium">{meta.label}</span>
+                  {probeState.result.message && <span>: {probeState.result.message}</span>}
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}

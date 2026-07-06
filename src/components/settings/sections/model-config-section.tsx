@@ -17,7 +17,7 @@ const MODEL_CONFIG_TABS: Array<{ id: ModelConfigTab; labelKey: string }> = [
 
 export function ModelConfigSection() {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState<ModelConfigTab>("sources")
+  const [activeTab, setActiveTab] = useState<ModelConfigTab>("profiles")
   const [profilesRefreshToken, setProfilesRefreshToken] = useState(0)
   const bumpProfilesRefreshToken = useCallback(() => {
     setProfilesRefreshToken((current) => current + 1)

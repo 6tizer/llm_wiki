@@ -177,7 +177,7 @@ describe("TaskMatrixSection", () => {
     connectionTestMocks.testEmbeddingFunction.mockResolvedValue({ ok: true, message: "functional" })
   })
 
-  it("labels effective and not-yet-wired task families and expands embedding and vision configuration inline", async () => {
+  it("labels effective and not-yet-wired task families and explains inline-only configuration rows", async () => {
     runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
       enabled: true,
       status: "healthy",
@@ -189,7 +189,16 @@ describe("TaskMatrixSection", () => {
 
     expect(container.querySelector("[data-testid='task-matrix-status-agent']")?.textContent).toContain("Effective")
     expect(container.querySelector("[data-testid='task-matrix-status-ingest']")?.textContent).toContain("Effective")
-    expect(container.querySelector("[data-testid='task-matrix-status-review']")?.textContent).toContain("Not wired")
+    expect(container.querySelector("[data-testid='task-matrix-status-chat']")?.textContent).toContain("Effective")
+    expect(container.querySelector("[data-testid='task-matrix-status-review']")?.textContent).toContain("Effective")
+    expect(container.querySelector("[data-testid='task-matrix-status-synthesis']")?.textContent).toContain("Effective")
+    expect(container.querySelector("[data-testid='task-matrix-status-vision']")?.textContent).toContain("Effective")
+    expect(container.querySelector("[data-testid='task-matrix-status-taxonomy']")?.textContent).toContain("Not wired")
+    expect(container.querySelector("[data-testid='task-matrix-status-embedding']")?.textContent).toContain("Global config")
+    expect(container.querySelector("[data-testid='task-matrix-inline-note-embedding']")?.textContent)
+      .toContain("global embedding config")
+    expect(container.querySelector("[data-testid='task-matrix-inline-note-vision']")?.textContent)
+      .toContain("fallback direct config")
 
     const embeddingLink = container.querySelector("[data-testid='task-matrix-config-embedding']")
     const visionLink = container.querySelector("[data-testid='task-matrix-config-vision']")
@@ -518,7 +527,7 @@ describe("TaskMatrixSection", () => {
       status: "healthy",
       profiles: [runtimeProfile()],
     })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(updated)
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce({ profile: updated, staleSecretRef: null })
 
     const { container, root } = renderSection()
     await flush()
@@ -537,7 +546,7 @@ describe("TaskMatrixSection", () => {
   })
 
   it("disables every cell for the same profile while a toggle update is in flight", async () => {
-    const pending = deferred<RuntimeProfileRecord>()
+    const pending = deferred<{ profile: RuntimeProfileRecord; staleSecretRef: string | null }>()
     runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
       enabled: true,
       status: "healthy",
@@ -559,7 +568,7 @@ describe("TaskMatrixSection", () => {
     expect(runtimeDbMocks.runtimeProfileUpdate).toHaveBeenCalledTimes(1)
 
     await act(async () => {
-      pending.resolve(runtimeProfile({ taskFamilies: ["chat", "ingest"] }))
+      pending.resolve({ profile: runtimeProfile({ taskFamilies: ["chat", "ingest"] }), staleSecretRef: null })
       await Promise.resolve()
     })
 
@@ -588,13 +597,16 @@ describe("TaskMatrixSection", () => {
     unmount(root)
   })
 
-  it("keeps not-yet-wired labels visible and only updates taskFamilies", async () => {
+  it("keeps matrix labels visible and only updates taskFamilies", async () => {
     runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
       enabled: true,
       status: "healthy",
       profiles: [runtimeProfile()],
     })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(runtimeProfile({ taskFamilies: ["chat", "review"] }))
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce({
+      profile: runtimeProfile({ taskFamilies: ["chat", "review"] }),
+      staleSecretRef: null,
+    })
 
     const { container, root } = renderSection()
     await flush()
@@ -607,7 +619,10 @@ describe("TaskMatrixSection", () => {
       profileId: "profile-1",
       taskFamilies: ["chat", "review"],
     })
-    expect(container.querySelector("[data-testid='task-matrix-status-review']")?.textContent).toContain("Not wired")
+    expect(container.querySelector("[data-testid='task-matrix-status-review']")?.textContent).toContain("Effective")
+    expect(container.querySelector("[data-testid='task-matrix-status-taxonomy']")?.textContent).toContain("Not wired")
+    expect(container.querySelector("[data-testid='task-matrix-status-embedding']")?.textContent)
+      .not.toContain("Not wired")
 
     unmount(root)
   })

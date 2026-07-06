@@ -323,6 +323,9 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
               const addableProfiles = profiles.filter((profile) => (
                 profile.enabled && profile.taskFamilies.includes(family) && !orderSet.has(profile.profileId)
               ))
+              const addableAgentKindWarning = family === "agent"
+                ? addableProfiles.find((profile) => profile.kind !== "agent-run")
+                : undefined
               return (
                 <section key={family} className="space-y-3 rounded-md border p-3">
                   <div className="flex items-start justify-between gap-3">
@@ -436,6 +439,16 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
                       {t("fallbackPolicy.save")}
                     </button>
                   </div>
+                  {addableAgentKindWarning && (
+                    <p
+                      className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300"
+                      data-testid="fallback-agent-kind-warning"
+                    >
+                      {t("settings.sections.modelConfig.profiles.agentKindWarning", {
+                        kind: addableAgentKindWarning.kind,
+                      })}
+                    </p>
+                  )}
                 </section>
               )
             })}

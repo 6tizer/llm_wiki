@@ -795,6 +795,14 @@ pub struct RuntimeProfileDeleteRequest {
     profile_id: String,
 }
 
+/// Response payload for updating a model profile. It never contains a secret value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeProfileUpdateResult {
+    profile: RuntimeProfileRecord,
+    stale_secret_ref: Option<String>,
+}
+
 /// Response payload for a soft-deleted model profile. It never contains a secret value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -95,6 +95,7 @@ describe("claimModelCallProfileForFamily", () => {
   })
 
   it("returns null when the pool is disabled", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     runtimeDbMocks.runtimeProfilePoolList.mockResolvedValue({
       enabled: false,
       status: "disabled",
@@ -104,7 +105,10 @@ describe("claimModelCallProfileForFamily", () => {
     const { claimModelCallProfileForFamily } = await import("./pool-chat")
 
     await expect(claimModelCallProfileForFamily("chat", "chat:1")).resolves.toBeNull()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("taskFamily=chat"))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pool disabled/no candidates"))
     expect(runtimeDbMocks.runtimeProfileList).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 
   it("throws when the pool is enabled but unhealthy", async () => {
@@ -122,6 +126,7 @@ describe("claimModelCallProfileForFamily", () => {
   })
 
   it("returns null when no model-call profile candidate exists", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
       status: "healthy",
@@ -130,10 +135,14 @@ describe("claimModelCallProfileForFamily", () => {
     const { claimModelCallProfileForFamily } = await import("./pool-chat")
 
     await expect(claimModelCallProfileForFamily("chat", "chat:1")).resolves.toBeNull()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("taskFamily=chat"))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pool disabled/no candidates"))
     expect(runtimeDbMocks.runtimeProfilePoolClaim).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 
   it("returns null for unprobed model-call profiles", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
       status: "healthy",
@@ -146,7 +155,9 @@ describe("claimModelCallProfileForFamily", () => {
     const { claimModelCallProfileForFamily } = await import("./pool-chat")
 
     await expect(claimModelCallProfileForFamily("chat", "chat:1")).resolves.toBeNull()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pool disabled/no candidates"))
     expect(runtimeDbMocks.runtimeProfilePoolClaim).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
   })
 
   it("throws when candidates exist but claim fails", async () => {
@@ -201,6 +212,7 @@ describe("streamChatRouted", () => {
   })
 
   it("falls back to legacy streamChat when claim returns null", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     runtimeDbMocks.runtimeProfilePoolList.mockResolvedValue({
       enabled: false,
       status: "disabled",
@@ -234,9 +246,12 @@ describe("streamChatRouted", () => {
       undefined,
     )
     expect(runtimeDbMocks.runtimeProfilePoolRelease).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("taskFamily=chat"))
+    warnSpy.mockRestore()
   })
 
   it("falls back to legacy streamChat when only unknown chat profiles exist", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     runtimeDbMocks.runtimeProfileList.mockResolvedValue({
       enabled: true,
       status: "healthy",
@@ -274,6 +289,8 @@ describe("streamChatRouted", () => {
 
     expect(runtimeDbMocks.runtimeProfilePoolClaim).not.toHaveBeenCalled()
     expect(llmClientMocks.streamChat).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pool disabled/no candidates"))
+    warnSpy.mockRestore()
   })
 
   it("releases rate-limited streams in finally", async () => {

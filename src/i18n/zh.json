@@ -604,7 +604,6 @@
       "modelConfig": {
         "title": "模型配置",
         "description": "集中管理外部信息源、runtime 模型 Profiles、任务分配，以及从旧 provider 设置的一次性导入。",
-        "connections": "连接",
         "profiles": {
           "title": "Model Profiles",
           "description": "Profile 是 runtime 用于 model-call 和 agent-run 调度的记录。密钥只以引用形式保存。",
@@ -698,7 +697,6 @@
             }
           }
         },
-        "taskMatrixHeading": "任务分配矩阵",
         "tabs": {
           "navLabel": "模型配置分区",
           "sources": "外部信息源",
@@ -709,6 +707,7 @@
         "migration": {
           "title": "导入旧配置",
           "description": "从旧 provider 设置创建 {{count}} 个 runtime Model Profile：{{presets}}。这不会改变当前 fallback 行为。",
+          "matrixHint": "用途之后可在任务分配矩阵中调整。",
           "templateCorrected": "部分 endpoint、API 模式或鉴权方式会按 provider 模板库校正。",
           "keepResolvedEndpoint": "模板建议校正时仍保留原 endpoint",
           "create": "导入旧配置",
@@ -723,7 +722,12 @@
           "empty": "还没有 profile。请先在上方创建 Profile，再分配任务族。",
           "taskFamily": "任务族",
           "effective": "已生效",
+          "inlineOnly": "全局配置",
           "notWired": "尚未接入运行时选择——当前不影响实际行为",
+          "inlineConfigHint": {
+            "embedding": "Embedding 行内配置使用全局 embedding 设置，不走 profile 池。",
+            "vision": "Vision 任务族勾选会进入池路由；multimodal 行内配置仍是兜底直连配置。"
+          },
           "configure": "行内配置",
           "toggle": "切换 {{profile}} 的 {{family}}",
           "saved": "任务分配已保存。",

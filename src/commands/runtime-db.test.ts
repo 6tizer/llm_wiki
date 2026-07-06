@@ -664,9 +664,10 @@ describe("runtime-db commands", () => {
       deletedAtMs: 456,
       secretRef: "llm-wiki-profile-secret:550e8400-e29b-41d4-a716-446655440000",
     }
+    const updateResult = { profile: updated, staleSecretRef: null }
     tauriMocks.invoke
       .mockResolvedValueOnce(created)
-      .mockResolvedValueOnce(updated)
+      .mockResolvedValueOnce(updateResult)
       .mockResolvedValueOnce(probe)
       .mockResolvedValueOnce(models)
       .mockResolvedValueOnce(list)
@@ -698,7 +699,7 @@ describe("runtime-db commands", () => {
         capabilityStatus: "limited",
         capabilityJson: "{\"reason\":\"manual\"}",
       }),
-    ).resolves.toBe(updated)
+    ).resolves.toBe(updateResult)
     await expect(
       runtimeProfileProbe({
         profileId: "profile-1",
