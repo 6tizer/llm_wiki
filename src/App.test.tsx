@@ -230,19 +230,32 @@ function renderApp(): { root: Root } {
   return { root }
 }
 
-// handleProjectOpened chains many real awaits (dynamic imports, several
-// sequential mocked IO calls) — a fixed microtask-tick count is fragile
-// since each hop can itself take more than one tick. A real macrotask
-// boundary (setTimeout) reliably drains every pending microtask first,
-// so a handful of these flushes gets a chain to its next genuine
-// suspension point (e.g. a manually-controlled deferred) regardless of
-// exactly how many microtask hops are in between.
+// A short macrotask yield is enough to let React publish the next render
+// or reach a test-controlled deferred, but it is not a completion signal
+// for handleProjectOpened's longer dynamic-import chain.
 async function flush(rounds = 8): Promise<void> {
   for (let i = 0; i < rounds; i++) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
   }
+}
+
+async function waitFor(assertion: () => void, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let lastError: unknown
+  while (Date.now() < deadline) {
+    try {
+      assertion()
+      return
+    } catch (error) {
+      lastError = error
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+  }
+  throw lastError
 }
 
 function unmount(root: Root): void {
@@ -593,7 +606,6 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
     await act(async () => {
       stall.resolve(undefined)
     })
-    await flush(30)
     await Promise.allSettled([pA, pB])
 
     expect(useWikiStore.getState().project?.id).toBe("b")
@@ -648,7 +660,6 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
     })
     expect(useWikiStore.getState().project).toBeNull()
 
-    await flush(30)
     await Promise.allSettled([pA, pC])
     expect(useWikiStore.getState().project?.id).toBe("c")
 
@@ -690,8 +701,9 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
     act(() => {
       pA = onSelectProject(projA)
     })
-    await flush()
-    expect(projectStoreMocks.loadScheduledImportConfig).toHaveBeenCalledWith(projA.path)
+    await waitFor(() => {
+      expect(projectStoreMocks.loadScheduledImportConfig).toHaveBeenCalledWith(projA.path)
+    })
 
     let pB!: Promise<void>
     act(() => {
@@ -707,7 +719,6 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
         lastScan: null,
       })
     })
-    await flush(30)
     await Promise.allSettled([pA, pB])
 
     expect(scheduledImportMocks.startScheduledImport).not.toHaveBeenCalledWith(
@@ -768,7 +779,6 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
     await act(async () => {
       delayedARestore.resolve(undefined)
     })
-    await flush(30)
     await Promise.allSettled([pA, pB])
 
     expect(embeddingConsumerMocks.startEmbeddingConsumer).not.toHaveBeenCalledWith(projA)
@@ -778,62 +788,69 @@ describe("App — resetProjectState serialization (P0/P1 regression)", () => {
     unmount(root)
   })
 
-  it("P1d (SPEC-6 PR3+4): starts the taxonomy consumer for a normal single-project open, after the embedding consumer", async () => {
-    const { root } = renderApp()
-    await flush()
+  it(
+    "P1d (SPEC-6 PR3+4): starts the taxonomy consumer for a normal single-project open, after the embedding consumer",
+    { timeout: 15000 },
+    async () => {
+      const { root } = renderApp()
+      await flush()
 
-    const onSelectProject = welcomeScreenProps.current!.onSelectProject
-    const proj = project("a", "/tmp/a")
-    fsMocks.openProject.mockResolvedValue(proj)
+      const onSelectProject = welcomeScreenProps.current!.onSelectProject
+      const proj = project("a", "/tmp/a")
+      fsMocks.openProject.mockResolvedValue(proj)
 
-    await act(async () => {
-      await onSelectProject(proj)
-    })
-    await flush()
+      await act(async () => {
+        await onSelectProject(proj)
+      })
+      await flush()
 
-    expect(taxonomyConsumerMocks.startTaxonomyConsumer).toHaveBeenCalledWith(proj)
+      expect(taxonomyConsumerMocks.startTaxonomyConsumer).toHaveBeenCalledWith(proj)
 
-    unmount(root)
-  })
+      unmount(root)
+    },
+  )
 
-  it("P1e (SPEC-6 PR3+4): stale taxonomy-consumer startup work cannot land after a newer project is queued — same checkpoint shape as the embedding-consumer P1c guard", async () => {
-    const { root } = renderApp()
-    await flush()
+  it(
+    "P1e (SPEC-6 PR3+4): stale taxonomy-consumer startup work cannot land after a newer project is queued — same checkpoint shape as the embedding-consumer P1c guard",
+    { timeout: 15000 },
+    async () => {
+      const { root } = renderApp()
+      await flush()
 
-    const onSelectProject = welcomeScreenProps.current!.onSelectProject
-    const projA = project("a", "/tmp/a")
-    const projB = project("b", "/tmp/b")
-    fsMocks.openProject.mockImplementation(async (path: string) =>
-      path === projA.path ? projA : projB,
-    )
+      const onSelectProject = welcomeScreenProps.current!.onSelectProject
+      const projA = project("a", "/tmp/a")
+      const projB = project("b", "/tmp/b")
+      fsMocks.openProject.mockImplementation(async (path: string) =>
+        path === projA.path ? projA : projB,
+      )
 
-    const delayedARestore = deferred<undefined>()
-    ingestQueueMocks.restoreQueue.mockImplementation(async (_id: string, path: string) =>
-      path === projA.path ? delayedARestore.promise : undefined,
-    )
+      const delayedARestore = deferred<undefined>()
+      ingestQueueMocks.restoreQueue.mockImplementation(async (_id: string, path: string) =>
+        path === projA.path ? delayedARestore.promise : undefined,
+      )
 
-    let pA!: Promise<void>
-    act(() => {
-      pA = onSelectProject(projA)
-    })
-    await flush()
+      let pA!: Promise<void>
+      act(() => {
+        pA = onSelectProject(projA)
+      })
+      await flush()
 
-    let pB!: Promise<void>
-    act(() => {
-      pB = onSelectProject(projB)
-    })
-    await flush()
+      let pB!: Promise<void>
+      act(() => {
+        pB = onSelectProject(projB)
+      })
+      await flush()
 
-    await act(async () => {
-      delayedARestore.resolve(undefined)
-    })
-    await flush(30)
-    await Promise.allSettled([pA, pB])
+      await act(async () => {
+        delayedARestore.resolve(undefined)
+      })
+      await Promise.allSettled([pA, pB])
 
-    expect(taxonomyConsumerMocks.startTaxonomyConsumer).not.toHaveBeenCalledWith(projA)
-    expect(taxonomyConsumerMocks.startTaxonomyConsumer).toHaveBeenCalledWith(projB)
-    expect(useWikiStore.getState().project?.id).toBe("b")
+      expect(taxonomyConsumerMocks.startTaxonomyConsumer).not.toHaveBeenCalledWith(projA)
+      expect(taxonomyConsumerMocks.startTaxonomyConsumer).toHaveBeenCalledWith(projB)
+      expect(useWikiStore.getState().project?.id).toBe("b")
 
-    unmount(root)
-  })
+      unmount(root)
+    },
+  )
 })

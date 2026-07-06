@@ -73,8 +73,9 @@ async function flush(): Promise<void> {
 }
 
 async function waitFor(assertion: () => void): Promise<void> {
+  const deadline = Date.now() + 3000
   let lastError: unknown
-  for (let i = 0; i < 20; i += 1) {
+  while (Date.now() < deadline) {
     try {
       assertion()
       return
