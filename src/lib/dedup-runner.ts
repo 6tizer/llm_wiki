@@ -10,6 +10,13 @@ import { normalizePath } from "@/lib/path-utils"
 import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { prefilterDedupCandidates } from "./dedup_embedding"
+import { embedPage, removePageEmbedding } from "@/lib/embedding"
+import { recordEmbeddingStaleMarker } from "@/lib/ingest-write"
+import {
+  extractPageTitle,
+  isRootStructuralWikiPagePath,
+  wikiPathToVectorPageId,
+} from "@/lib/wiki-page-identity"
 import {
   detectDuplicateGroups,
   extractEntitySummary,
@@ -86,6 +93,36 @@ function toWikiRelative(projectPath: string, absPath: string): string {
   const norm = normalizePath(absPath)
   if (norm.startsWith(`${pp}/`)) return norm.slice(pp.length + 1)
   return norm
+}
+
+async function markWrittenPageEmbeddingStale(
+  projectPath: string,
+  wikiPath: string,
+  content: string,
+): Promise<void> {
+  const embCfg = useWikiStore.getState().embeddingConfig
+  if (!embCfg.enabled || !embCfg.model) return
+  if (isRootStructuralWikiPagePath(projectPath, wikiPath)) return
+
+  try {
+    const status = await recordEmbeddingStaleMarker(wikiPath, content)
+    if (status !== "runtime-disabled") return
+
+    const titleFallback = wikiPath.replace(/^wiki\//, "").replace(/\.md$/, "")
+    const title = extractPageTitle(content, titleFallback)
+    await embedPage(
+      projectPath,
+      wikiPathToVectorPageId(projectPath, wikiPath),
+      title,
+      content,
+      embCfg,
+    )
+  } catch (err) {
+    console.warn(
+      `[dedup] failed to update embedding marker for ${wikiPath}:`,
+      err instanceof Error ? err.message : err,
+    )
+  }
 }
 
 /**
@@ -248,16 +285,23 @@ export async function executeMerge(
 
   // 3. Write canonical
   await writeFile(`${pp}/${result.canonicalPath}`, result.canonicalContent)
+  await markWrittenPageEmbeddingStale(pp, result.canonicalPath, result.canonicalContent)
 
   // 4. Apply rewrites
   for (const r of result.rewrites) {
     await writeFile(`${pp}/${r.path}`, r.newContent)
+    await markWrittenPageEmbeddingStale(pp, r.path, r.newContent)
   }
 
   // 5. Delete merged-away pages
   for (const dead of result.pagesToDelete) {
     try {
       await deleteFile(`${pp}/${dead}`)
+      try {
+        await removePageEmbedding(pp, wikiPathToVectorPageId(pp, dead))
+      } catch (err) {
+        console.warn(`[dedup] failed to remove embedding for ${dead}: ${err}`)
+      }
     } catch (err) {
       // Surface as a warning — backup is still safe.
       console.warn(`[dedup] failed to delete ${dead}: ${err}`)
