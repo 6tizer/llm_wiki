@@ -4,7 +4,6 @@ import { SettingsView } from "@/components/settings/settings-view"
 import { SourcesView } from "@/components/sources/sources-view"
 import { ExploreView } from "@/components/explore/explore-view"
 import { WikiHealthView } from "@/components/wiki-health/wiki-health-view"
-import { ResearchPanel } from "./research-panel"
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled active view: ${String(value)}`)
@@ -25,11 +24,8 @@ export function ContentArea() {
     case "wiki-health":
       return <WikiHealthView />
     case "research":
-      return (
-        <div className="h-full min-h-0">
-          <ResearchPanel />
-        </div>
-      )
+      // Alias to ExploreView; pendingExploreTab selects the Research tab.
+      return <ExploreView />
     default:
       return assertNever(activeView)
   }

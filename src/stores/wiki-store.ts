@@ -333,6 +333,8 @@ export interface ExternalPreview {
   snippet: string
 }
 
+type ExploreTab = "graph" | "search" | "research"
+
 interface WikiState {
 	project: WikiProject | null
 	fileTree: FileNode[]
@@ -357,6 +359,7 @@ interface WikiState {
 	chatExpanded: boolean
 	/** Right-side knowledge/files panel collapsed UI preference. */
 	sidebarCollapsed: boolean
+	pendingExploreTab: ExploreTab | null
 	activeView: "wiki" | "sources" | "explore" | "wiki-health" | "research" | "settings"
 	llmConfig: LlmConfig
 	/** Per-provider-preset stored overrides (API key, model, endpoint, …). */
@@ -393,6 +396,7 @@ interface WikiState {
 	setPendingScrollImageSrc: (src: string | null) => void
 	setChatExpanded: (expanded: boolean) => void
 	setSidebarCollapsed: (collapsed: boolean) => void
+	setPendingExploreTab: (tab: ExploreTab | null) => void
 	setActiveView: (view: WikiState["activeView"]) => void
 	setLlmConfig: (config: LlmConfig) => void
 	setProviderConfigs: (configs: ProviderConfigs) => void
@@ -420,6 +424,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	pendingScrollImageSrc: null,
 	chatExpanded: false,
 	sidebarCollapsed: readSidebarCollapsed(),
+	pendingExploreTab: null,
 	activeView: "wiki",
 	llmConfig: {
 		provider: "openai",
@@ -450,7 +455,13 @@ export const useWikiStore = create<WikiState>((set) => ({
 		writeSidebarCollapsed(sidebarCollapsed)
 		set({ sidebarCollapsed })
 	},
-	setActiveView: (activeView) => set({ activeView }),
+	setPendingExploreTab: (pendingExploreTab) => set({ pendingExploreTab }),
+	setActiveView: (activeView) => {
+		// "research" remains an internal view alias that opens Explore's Research tab.
+		set(activeView === "research"
+			? { activeView, pendingExploreTab: "research" }
+			: { activeView, pendingExploreTab: null })
+	},
 	searchApiConfig: {
 		provider: "none",
 		apiKey: "",
@@ -552,6 +563,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 export type {
 	ApiConfig,
 	EmbeddingConfig,
+	ExploreTab,
 	LlmConfig,
 	MultimodalConfig,
 	OutputLanguage,

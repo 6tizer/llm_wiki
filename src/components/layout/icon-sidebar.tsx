@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, FolderOpen, Search, HeartPulse, Settings, ArrowLeftRight, Globe, MessageSquare,
+  FileText, FolderOpen, Search, HeartPulse, Settings, ArrowLeftRight, MessageSquare,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
-import { useResearchStore } from "@/stores/research-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
@@ -19,7 +18,6 @@ const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = 
   { view: "sources", icon: FolderOpen, labelKey: "nav.sources" },
   { view: "explore", icon: Search, labelKey: "nav.explore" },
   { view: "wiki-health", icon: HeartPulse, labelKey: "nav.wikiHealth" },
-  { view: "research", icon: Globe, labelKey: "nav.research" },
 ]
 
 interface IconSidebarProps {
@@ -32,7 +30,6 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const reviewPendingCount = useReviewStore((s) => s.items.filter((i) => !i.resolved).length)
   const lintCount = useLintStore((s) => s.items.length)
-  const researchActiveCount = useResearchStore((s) => s.tasks.filter((t) => t.status !== "done" && t.status !== "error").length)
   const healthCount = lintCount + reviewPendingCount
   // Use `hasAvailableUpdate` (ignores dismiss state) rather than
   // `shouldShowUpdateBanner`. The dot is a passive signpost — it
@@ -71,40 +68,37 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             className="h-8 w-8 rounded-[22%]"
           />
         </div>
-        {/* Top: main nav items + Deep Research */}
+        {/* Top: main nav items */}
         <div className="flex flex-1 flex-col items-center gap-1">
-          {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => (
-            <Tooltip key={view}>
-              <TooltipTrigger
-                onClick={() => setActiveView(view)}
-                aria-label={t(labelKey)}
-                aria-current={activeView === view ? "page" : undefined}
-                className={`relative flex min-h-12 w-16 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-center transition-colors ${
-                  activeView === view
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
-                }`}
-              >
-                <Icon className="h-5 w-5 shrink-0" />
-                <span className="max-w-full truncate text-[10px] leading-none">{t(labelKey)}</span>
-                {view === "wiki-health" && healthCount > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                    {healthCount > 99 ? "99+" : healthCount}
-                  </span>
-                )}
-                {view === "research" && researchActiveCount > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-bold text-white">
-                    {researchActiveCount > 99 ? "99+" : researchActiveCount}
-                  </span>
-                )}
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                {t(labelKey)}
-                {view === "wiki-health" && healthCount > 0 && ` (${healthCount})`}
-                {view === "research" && researchActiveCount > 0 && ` (${researchActiveCount})`}
-              </TooltipContent>
-            </Tooltip>
-          ))}
+          {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => {
+            const isActive = activeView === view || (activeView === "research" && view === "explore")
+            return (
+              <Tooltip key={view}>
+                <TooltipTrigger
+                  onClick={() => setActiveView(view)}
+                  aria-label={t(labelKey)}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`relative flex min-h-12 w-16 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-center transition-colors ${
+                    isActive
+                      ? "bg-accent text-accent-foreground"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+                  }`}
+                >
+                  <Icon className="h-5 w-5 shrink-0" />
+                  <span className="max-w-full truncate text-[10px] leading-none">{t(labelKey)}</span>
+                  {view === "wiki-health" && healthCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                      {healthCount > 99 ? "99+" : healthCount}
+                    </span>
+                  )}
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  {t(labelKey)}
+                  {view === "wiki-health" && healthCount > 0 && ` (${healthCount})`}
+                </TooltipContent>
+              </Tooltip>
+            )
+          })}
         </div>
         {/* Bottom: daemon status + settings + switch project */}
         <div className="flex flex-col items-center gap-1 pb-1">

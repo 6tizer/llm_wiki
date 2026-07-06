@@ -22,6 +22,9 @@ interface ResearchState {
   addTask: (topic: string, projectPath: string) => string
   updateTask: (id: string, updates: Partial<ResearchTask>) => void
   removeTask: (id: string) => void
+  /** Active includes queued tasks; drives UI badges. */
+  getActiveResearchCount: (projectPath: string) => number
+  /** Running excludes queued tasks; drives the concurrency gate. */
   getRunningCount: (projectPath: string) => number
   getNextQueued: (projectPath: string) => ResearchTask | undefined
 }
@@ -62,6 +65,15 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     set((state) => ({
       tasks: state.tasks.filter((t) => t.id !== id),
     })),
+
+  getActiveResearchCount: (projectPath) => {
+    const { tasks } = get()
+    return tasks.filter((t) =>
+      t.projectPath === projectPath &&
+      t.status !== "done" &&
+      t.status !== "error"
+    ).length
+  },
 
   getRunningCount: (projectPath) => {
     const { tasks } = get()
