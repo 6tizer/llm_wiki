@@ -130,13 +130,13 @@
 | SPEC-11 | completed via #262/#263/#256/#270/#274/#268/#275/#272/#273 | #262/#263/#256/#270/#274/#268/#275/#272/#273 |
 | SPEC-12 | completed（2026-07-05 closeout） | #295/#297/#299/#302/#305/#308 |
 | SPEC-13 | completed（2026-07-06 closeout：A1=M 五项重跑全绿 + 三维度深度 review + hotfix，报告见 SPEC-13/closeout-report.md） | #324/#325/#326/#327/#328/#331-#336/#341/#345/#348 |
-| SPEC-14 | in progress（三轨 GOAL 轨2：① #344、② #347 已合并；③④+closeout 进行中） | #344/#347/… |
+| SPEC-14 | completed（2026-07-06 closeout：A2 生产构建 IA 走查九项+两维度深度 review+hotfix，报告见 SPEC-14/closeout-report.md） | #344/#347/#355/#357/#361 |
 
 2026-07-02 全仓深度 review 的证据见 `spec-5-8-post-review-findings.md`。它新增并完成了 SPEC-5-FIX、SPEC-10、SPEC-11，也回灌修正了 SPEC-6/7/8；旧 OKF/KW 队列和旧 Phase 7 队列不再作为当前执行入口。
 
 当前优先级（2026-07-05 更新，基于用户实测反馈）：
 
-0. **SPEC-13 已 completed（2026-07-06）**。当前 = 三轨 GOAL 直通 1.0 门槛：**SPEC-14 UI IA 二轮**（①②已合并，③④+closeout 进行中）与 **SPEC-8 维护批**（PR1-PR3 已合并，Rust 精简/TS 精简/QA fixture/closeout 进行中）并行推进；三 SPEC closeout + 终验报告合并 = 1.0 门槛达成（SPEC-9 维持 deferred 且移出门槛）。其余 follow-up：#309、#286/#287/#289、#311/#313/#314、#337/#340、#350-#353。
+0. **SPEC-13 已 completed（2026-07-06）**。当前 = 三轨 GOAL 直通 1.0 门槛：**SPEC-14 已 completed（2026-07-06）**；**SPEC-8 维护批**（PR1-PR6 已/在合并，剩 agent handler map+i18n/#86 QA fixture/App.tsx 拆分/#182 裁定/closeout）收尾中；三 SPEC closeout + 终验报告合并 = 1.0 门槛达成（SPEC-9 维持 deferred 且移出门槛）。其余 follow-up：#309、#286/#287/#289、#311/#313/#314、#337/#340、#350-#353。
 
 历史优先级记录：
 

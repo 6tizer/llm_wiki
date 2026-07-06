@@ -1,6 +1,6 @@
 # SPEC-14: UI 信息架构二轮（IA Round 2）
 
-> 类型：阶段 SPEC | 状态：charter draft | 依赖：SPEC-13（Agent 设置/对话页最终形态依赖新模型接入层） | 来源：2026-07-05 用户实测反馈
+> 类型：阶段 SPEC | 状态：**completed（2026-07-06 closeout，报告见 [SPEC-14/closeout-report.md](./SPEC-14/closeout-report.md)）** | PR：① #344 / ② #347 / ③ #355 / ④ #357（含 #338/#339）+ closeout hotfix #361 | 依赖：SPEC-13（已 completed） | 来源：2026-07-05 用户实测反馈 | follow-up：#359/#362
 
 ## 范围（结构性 IA 改动，快赢批之外）
 
