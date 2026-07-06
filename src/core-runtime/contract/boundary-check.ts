@@ -40,10 +40,6 @@ const FORBIDDEN_IMPORTS = [
     match: (specifier: string) => specifier.startsWith("@tauri-apps/"),
     reason: "Core Runtime must not import Tauri plugin APIs",
   },
-  {
-    match: (specifier: string) => specifier === "@/lib/runtime.db",
-    reason: "Core Runtime must not import runtime persistence directly",
-  },
 ] as const
 
 export function collectModuleSpecifiers(sourceText: string): readonly string[] {

@@ -26,7 +26,7 @@ import { resolveMarkdownImageSrc } from "@/lib/markdown-image-resolver"
 import { findRawSourceForImage, imageUrlToAbsolute } from "@/lib/raw-source-resolver"
 import { detectLanguage } from "@/lib/detect-language"
 import { getHtmlLang, getTextDirection } from "@/lib/language-metadata"
-import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
+import { createMarkdownComponents } from "@/components/markdown/markdown-components"
 import { inferWikiTypeFromPath } from "@/lib/wiki-page-types"
 import { AgentBlockList } from "./agent-block-list"
 import { AgentCostCard, hasAgentCostData } from "./agent-cost-card"
@@ -1122,7 +1122,10 @@ function MarkdownContent({ content }: { content: string }) {
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
-          components={{
+          components={createMarkdownComponents({
+            preClassName: "max-w-full rounded bg-background/50 p-2 text-xs overflow-x-auto",
+            codeClassNameFallback: "break-words",
+            overrides: {
             a: ({ href, children }) => {
               if (href?.startsWith("wikilink:")) {
                 const pageName = href.slice("wikilink:".length)
@@ -1143,43 +1146,8 @@ function MarkdownContent({ content }: { content: string }) {
                 {...props}
               />
             ),
-            table: ({ children, ...props }) => (
-              <div className="my-2 overflow-x-auto rounded border border-border">
-                <table className="w-full border-collapse text-xs" {...props}>{children}</table>
-              </div>
-            ),
-            thead: ({ children, ...props }) => (
-              <thead className="bg-muted" {...props}>{children}</thead>
-            ),
-            th: ({ children, ...props }) => (
-              <th className="border border-border/80 px-3 py-1.5 text-start font-semibold bg-muted" {...props}>{children}</th>
-            ),
-            td: ({ children, ...props }) => (
-              <td className="border border-border/60 px-3 py-1.5" {...props}>{children}</td>
-            ),
-            pre: ({ children, ...props }) => {
-              const mermaid = unwrapMermaidPre(children)
-              if (mermaid) return <>{mermaid}</>
-              return (
-                <pre
-                  dir="ltr"
-                  className="max-w-full rounded bg-background/50 p-2 text-xs overflow-x-auto"
-                  style={{ textAlign: "left" }}
-                  {...props}
-                >
-                  {children}
-                </pre>
-              )
             },
-            code: ({ className, children, ...props }) => {
-              const lang = className?.replace("language-", "")
-              const codeText = String(children).replace(/\n$/, "")
-              if (lang === "mermaid") {
-                return <MermaidDiagram code={codeText} />
-              }
-              return <code dir="ltr" className={className ? className : "break-words"} {...props}>{children}</code>
-            },
-          }}
+          })}
         >
           {processed}
         </ReactMarkdown>

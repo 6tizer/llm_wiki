@@ -9,6 +9,7 @@ import {
   type RuntimeJobCreateRequest,
   type RuntimeJobRecord,
 } from "@/commands/runtime-db"
+import { isDuplicateRuntimeJobError } from "@/lib/parallel-knowledge/runtime-job-errors"
 
 export interface BulkKnowledgePrepareRuntimeAdapter {
   readonly createJob: (request: RuntimeJobCreateRequest) => Promise<RuntimeJobRecord>
@@ -55,7 +56,7 @@ export async function enqueueBulkKnowledgePrepareJobs(
       })
       enqueuedJobs.push(record)
     } catch (error) {
-      if (isDuplicateRuntimeJobError(error)) {
+      if (isDuplicateRuntimeJobError(describeError(error))) {
         skippedDuplicateJobIds.push(job.jobKey)
       } else {
         failedJobs.push({ jobId: job.jobKey, message: describeError(error) })
@@ -69,16 +70,6 @@ export async function enqueueBulkKnowledgePrepareJobs(
     skippedDuplicateJobIds,
     failedJobs,
   }
-}
-
-function isDuplicateRuntimeJobError(error: unknown): boolean {
-  const message = describeError(error).toLowerCase()
-  return (
-    message.includes("duplicate") ||
-    message.includes("already exists") ||
-    // Rust currently wraps SQLite primary-key failures as text; keep retries idempotent until a structured duplicate code exists.
-    message.includes("unique constraint")
-  )
 }
 
 function describeError(error: unknown): string {

@@ -38,8 +38,8 @@ import {
   parseFrontmatterArray,
   writeFrontmatterArray,
 } from "@/lib/sources-merge"
-import type { FileNode } from "@/types/wiki"
 import { withProjectLock } from "@/lib/project-mutex"
+import { flattenMdFiles } from "@/lib/wiki-utils"
 
 /**
  * Detect whether a wiki page lives under `wiki/sources/`. We treat
@@ -123,21 +123,6 @@ export async function cascadeDeleteWikiPage(
       // images were extracted from this source. Not an error.
     }
   }
-}
-
-function flattenMd(nodes: readonly FileNode[]): FileNode[] {
-  const out: FileNode[] = []
-  function walk(ns: readonly FileNode[]): void {
-    for (const n of ns) {
-      if (n.is_dir) {
-        if (n.children) walk(n.children)
-        continue
-      }
-      if (n.name.endsWith(".md")) out.push(n)
-    }
-  }
-  walk(nodes)
-  return out
 }
 
 export interface CascadeDeleteResult {
@@ -234,7 +219,7 @@ export async function cascadeDeleteWikiPagesWithRefsUnlocked(
   // 3. Sweep surviving wiki/*.md.
   const deletedKeys = buildDeletedKeys(infos)
   const wikiTree = await listDirectory(`${pp}/wiki`)
-  const allMd = flattenMd(wikiTree)
+  const allMd = flattenMdFiles(wikiTree)
 
   for (const file of allMd) {
     if (result.deletedPaths.includes(file.path)) continue // already gone

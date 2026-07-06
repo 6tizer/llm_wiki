@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
 import i18n from "@/i18n"
-import { useWikiStore } from "@/stores/wiki-store"
+import { DEFAULT_API_CONFIG, useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
@@ -346,13 +346,13 @@ function App() {
         const savedApi = await loadApiConfig()
         if (savedApi) {
           useWikiStore.getState().setApiConfig({
-            enabled: typeof savedApi.enabled === "boolean" ? savedApi.enabled : true,
+            enabled: typeof savedApi.enabled === "boolean" ? savedApi.enabled : DEFAULT_API_CONFIG.enabled,
             allowUnauthenticated:
               typeof savedApi.allowUnauthenticated === "boolean"
                 ? savedApi.allowUnauthenticated
-                : false,
-            mcpEnabled: typeof savedApi.mcpEnabled === "boolean" ? savedApi.mcpEnabled : false,
-            token: typeof savedApi.token === "string" ? savedApi.token : "",
+                : DEFAULT_API_CONFIG.allowUnauthenticated,
+            mcpEnabled: typeof savedApi.mcpEnabled === "boolean" ? savedApi.mcpEnabled : DEFAULT_API_CONFIG.mcpEnabled,
+            token: typeof savedApi.token === "string" ? savedApi.token : DEFAULT_API_CONFIG.token,
           })
         }
       })
