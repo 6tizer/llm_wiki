@@ -23,17 +23,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
 use super::cli_resolver::{
-    apply_env_allowlist, child_path_env, child_path_env_override, find_cli_command,
-    graceful_kill_process_group, kill_all_tracked_children, kill_process_group, KillSignal,
-    GRACEFUL_KILL_GRACE_PERIOD,
+    abort_timeout_task, apply_child_path_env, apply_env_allowlist, find_cli_command,
+    graceful_kill_process_group, kill_all_tracked_children, kill_process_group,
+    suppress_windows_console, DetectResult, KillSignal, TimeoutTaskMap, GRACEFUL_KILL_GRACE_PERIOD,
 };
 use crate::commands::runtime_db;
 
@@ -58,22 +57,11 @@ const CLAUDE_PROVIDER_ENV_ALLOWLIST: &[&str] = &[
 #[derive(Default)]
 pub struct ClaudeCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
-    timeout_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    timeout_tasks: TimeoutTaskMap,
 }
 
 const MIN_CLAUDE_SPAWN_TIMEOUT_MINUTES: u64 = 1;
 const MAX_CLAUDE_SPAWN_TIMEOUT_MINUTES: u64 = 240;
-
-#[derive(Serialize)]
-pub struct DetectResult {
-    installed: bool,
-    version: Option<String>,
-    path: Option<String>,
-    /// When !installed, a short human-readable reason (missing from PATH,
-    /// quarantined on macOS, spawn failed, etc). The frontend shows this
-    /// verbatim in the status pill.
-    error: Option<String>,
-}
 
 #[derive(Deserialize)]
 pub struct ClaudeMessage {
@@ -156,16 +144,6 @@ async fn find_claude_command() -> Result<PathBuf, String> {
     find_cli_command("claude", &["claude.cmd", "claude.exe"]).await
 }
 
-fn suppress_windows_console(_cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        _cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-}
-
 /// Locate `claude` on PATH and confirm it's runnable by calling
 /// `claude --version` with a short timeout. Cheap — safe to call on
 /// mount of the settings panel.
@@ -188,8 +166,7 @@ pub async fn claude_cli_detect() -> Result<DetectResult, String> {
     let mut cmd = Command::new(&path);
     suppress_windows_console(&mut cmd);
     apply_env_allowlist(&mut cmd, CLAUDE_PROVIDER_ENV_ALLOWLIST);
-    let (path_key, path_value) = child_path_env_override(child_path_env().await);
-    cmd.env(path_key, path_value);
+    apply_child_path_env(&mut cmd).await;
     let output = tokio::time::timeout(Duration::from_secs(3), cmd.arg("--version").output()).await;
 
     match output {
@@ -298,8 +275,7 @@ pub async fn claude_cli_spawn(
     let mut cmd = Command::new(&claude);
     suppress_windows_console(&mut cmd);
     apply_env_allowlist(&mut cmd, CLAUDE_PROVIDER_ENV_ALLOWLIST);
-    let (path_key, path_value) = child_path_env_override(child_path_env().await);
-    cmd.env(path_key, path_value);
+    apply_child_path_env(&mut cmd).await;
     cmd.args(build_claude_cli_args(&model, isolate_local_config));
     cmd.current_dir(&working_directory);
 
@@ -434,7 +410,7 @@ pub async fn claude_cli_spawn(
         // Wait for the child to fully exit so we can report its code.
         // Don't hold the map lock across .wait() — kill could race.
         let child_opt = children.lock().await.remove(&stream_id_task);
-        abort_claude_timeout_task(&timeout_tasks, &stream_id_task).await;
+        abort_timeout_task(&timeout_tasks, &stream_id_task).await;
         let exit_code = if let Some(mut child) = child_opt {
             match child.wait().await {
                 Ok(status) => status.code(),
@@ -486,18 +462,6 @@ fn append_claude_timeout_message(mut stderr: String, timeout_minutes: u64) -> St
     }
     stderr.push_str(&claude_timeout_message(timeout_minutes));
     stderr
-}
-
-async fn abort_claude_timeout_task(
-    timeout_tasks: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
-    stream_id: &str,
-) -> bool {
-    if let Some(task) = timeout_tasks.lock().await.remove(stream_id) {
-        task.abort();
-        true
-    } else {
-        false
-    }
 }
 
 async fn kill_child_for_claude_timeout(
@@ -626,7 +590,7 @@ pub async fn claude_cli_kill(
     if let Some(mut child) = state.children.lock().await.remove(&stream_id) {
         graceful_kill_process_group(&mut child, GRACEFUL_KILL_GRACE_PERIOD).await;
     }
-    abort_claude_timeout_task(&state.timeout_tasks, &stream_id).await;
+    abort_timeout_task(&state.timeout_tasks, &stream_id).await;
     Ok(())
 }
 
@@ -821,7 +785,7 @@ mod tests {
             .await
             .insert("stream-1".to_string(), task);
 
-        assert!(abort_claude_timeout_task(&timeout_tasks, "stream-1").await);
+        assert!(abort_timeout_task(&timeout_tasks, "stream-1").await);
         assert!(timeout_tasks.lock().await.is_empty());
         tokio::time::sleep(Duration::from_millis(75)).await;
         assert!(!timed_out.load(Ordering::SeqCst));
@@ -841,7 +805,7 @@ mod tests {
             .lock()
             .await
             .insert("stream-1".to_string(), task);
-        assert!(abort_claude_timeout_task(&timeout_tasks, "stream-1").await);
+        assert!(abort_timeout_task(&timeout_tasks, "stream-1").await);
 
         tokio::time::sleep(Duration::from_millis(75)).await;
         let payload = claude_done_payload(

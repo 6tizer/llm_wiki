@@ -13,17 +13,15 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
 use super::cli_resolver::{
-    apply_env_allowlist, child_path_env, child_path_env_override, find_cli_command,
-    graceful_kill_process_group, kill_all_tracked_children, kill_process_group, KillSignal,
-    GRACEFUL_KILL_GRACE_PERIOD,
+    abort_timeout_task, apply_child_path_env, apply_env_allowlist, find_cli_command,
+    graceful_kill_process_group, kill_all_tracked_children, kill_process_group,
+    suppress_windows_console, DetectResult, KillSignal, TimeoutTaskMap, GRACEFUL_KILL_GRACE_PERIOD,
 };
 use crate::commands::runtime_db;
 
@@ -44,7 +42,7 @@ const CODEX_PROVIDER_ENV_ALLOWLIST: &[&str] = &[
 
 pub struct CodexCliState {
     children: Arc<Mutex<HashMap<String, Child>>>,
-    timeout_tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    timeout_tasks: TimeoutTaskMap,
 }
 
 impl Default for CodexCliState {
@@ -54,14 +52,6 @@ impl Default for CodexCliState {
             timeout_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-}
-
-#[derive(Serialize)]
-pub struct DetectResult {
-    installed: bool,
-    version: Option<String>,
-    path: Option<String>,
-    error: Option<String>,
 }
 
 const DEFAULT_CODEX_SPAWN_TIMEOUT_MINUTES: u64 = 10;
@@ -89,16 +79,6 @@ async fn find_codex_command() -> Result<PathBuf, String> {
     find_cli_command("codex", &["codex.cmd", "codex.exe"]).await
 }
 
-fn suppress_windows_console(_cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        _cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-}
-
 #[tauri::command]
 pub async fn codex_cli_detect() -> Result<DetectResult, String> {
     let path = match find_codex_command().await {
@@ -117,8 +97,7 @@ pub async fn codex_cli_detect() -> Result<DetectResult, String> {
     let mut cmd = Command::new(&path);
     suppress_windows_console(&mut cmd);
     apply_env_allowlist(&mut cmd, CODEX_PROVIDER_ENV_ALLOWLIST);
-    let (path_key, path_value) = child_path_env_override(child_path_env().await);
-    cmd.env(path_key, path_value);
+    apply_child_path_env(&mut cmd).await;
     let output = tokio::time::timeout(Duration::from_secs(3), cmd.arg("--version").output()).await;
 
     match output {
@@ -179,8 +158,7 @@ pub async fn codex_cli_spawn(
     let mut cmd = Command::new(&codex);
     suppress_windows_console(&mut cmd);
     apply_env_allowlist(&mut cmd, CODEX_PROVIDER_ENV_ALLOWLIST);
-    let (path_key, path_value) = child_path_env_override(child_path_env().await);
-    cmd.env(path_key, path_value);
+    apply_child_path_env(&mut cmd).await;
     cmd.args(build_codex_cli_args(&model, isolate_local_config));
     cmd.current_dir(&working_directory);
 
@@ -353,18 +331,6 @@ fn codex_timeout_message(timeout_minutes: u64) -> String {
         "minutes"
     };
     format!("Codex CLI timed out after {timeout_minutes} {unit}.")
-}
-
-async fn abort_timeout_task(
-    timeout_tasks: &Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
-    stream_id: &str,
-) -> bool {
-    if let Some(task) = timeout_tasks.lock().await.remove(stream_id) {
-        task.abort();
-        true
-    } else {
-        false
-    }
 }
 
 fn codex_done_payload(

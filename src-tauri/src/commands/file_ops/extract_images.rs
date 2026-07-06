@@ -6,10 +6,9 @@
 //!   - the vision-caption helper (Phase 3) which sends them to a VLM
 //!   - direct write-to-disk in `wiki/media/<source-slug>/`
 //!
-//! This module is intentionally separate from `fs.rs` (which already
-//! has its own pdfium binding lifecycle for text extraction). PDF
-//! image extraction reuses the same global `Pdfium` instance via the
-//! `pdfium()` helper exposed by `fs.rs`.
+//! This module is intentionally separate from the text extraction code.
+//! PDF image extraction reuses the same global `Pdfium` instance via
+//! `office_extract.rs`.
 //!
 //! Outputs are deterministic for a given input file (same image
 //! ordering, same `index` per image), so the dedup cache in Phase 3
@@ -25,33 +24,7 @@ use sha2::{Digest, Sha256};
 use tauri::State;
 
 use super::file_sync::ProjectRootState;
-use super::path_safety::validate_within_project;
-
-/// Sandbox helper for extract_images commands. Write mode for dest paths,
-/// fail-closed if no project root is known. See fs.rs::sandbox_path for the
-/// read/write policy rationale (#119 P0-2).
-fn sandbox_write(
-    state: &State<'_, ProjectRootState>,
-    path: &str,
-) -> Result<std::path::PathBuf, String> {
-    match state.get() {
-        Some(root) => validate_within_project(&root, path),
-        None => Err(format!(
-            "Cannot write to '{path}': no active project root (no project open). \
-             Open a project first."
-        )),
-    }
-}
-
-fn sandbox_read(
-    state: &State<'_, ProjectRootState>,
-    path: &str,
-) -> Result<std::path::PathBuf, String> {
-    match state.get() {
-        Some(root) => validate_within_project(&root, path),
-        None => Ok(std::path::PathBuf::from(path)),
-    }
-}
+use super::path_safety::{sandbox_path, SandboxMode};
 
 /// Filter knobs. The defaults mirror what's documented in
 /// plans/multimodal-images.md; callers (the TS layer wiring this up)
@@ -121,7 +94,7 @@ pub struct ExtractedImage {
 /// in the markdown via `media_url_prefix + "/img-<N>.png"`. Pass an
 /// absolute path as the prefix when you want the markdown to render
 /// regardless of where the file is opened (this is what the raw-
-/// source preview wants — see `extract_pdf_text` in fs.rs).
+/// source preview wants — see `extract_pdf_text` in office_extract.rs).
 ///
 /// When `media_dest_dir` is `None`, image objects are skipped
 /// entirely and the output is text + page headers only — useful for
@@ -139,8 +112,8 @@ pub fn extract_pdf_markdown(
 ) -> Result<String, String> {
     use pdfium_render::prelude::*;
 
-    let _guard = crate::commands::fs::lock_pdfium();
-    let pdfium = crate::commands::fs::pdfium()?;
+    let _guard = super::office_extract::lock_pdfium();
+    let pdfium = super::office_extract::pdfium()?;
     let doc = pdfium.load_pdf_from_file(path, None).map_err(|e| match e {
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
             format!("PDF is password-protected and cannot be read: '{path}'")
@@ -267,12 +240,12 @@ pub fn extract_pdf_images(
     use pdfium_render::prelude::*;
 
     // Hold the global PDFium lock for the entire call. The C library
-    // is NOT safe for concurrent access — see `lock_pdfium` in fs.rs
+    // is NOT safe for concurrent access — see `lock_pdfium` in office_extract.rs
     // for the full rationale. Held for the whole document lifetime so
     // page iteration doesn't race a concurrent `load_pdf_from_file`
     // on a different worker thread.
-    let _guard = crate::commands::fs::lock_pdfium();
-    let pdfium = crate::commands::fs::pdfium()?;
+    let _guard = super::office_extract::lock_pdfium();
+    let pdfium = super::office_extract::pdfium()?;
     let doc = pdfium
         .load_pdf_from_file(path, None)
         .map_err(|e| format!("Failed to open PDF '{path}': {e}"))?;
@@ -704,8 +677,8 @@ pub fn extract_and_save_pdf_images(
     use pdfium_render::prelude::*;
 
     // See `extract_pdf_images` for why this lock is mandatory.
-    let _guard = crate::commands::fs::lock_pdfium();
-    let pdfium = crate::commands::fs::pdfium()?;
+    let _guard = super::office_extract::lock_pdfium();
+    let pdfium = super::office_extract::pdfium()?;
     let doc = pdfium
         .load_pdf_from_file(path, None)
         .map_err(|e| format!("Failed to open PDF '{path}': {e}"))?;
@@ -929,7 +902,7 @@ pub async fn extract_pdf_images_cmd(
     // PDFium FFI touches it. These raw (no-save) variants are not invoked
     // from the webview today, but they remain on the invoke handler so
     // we close the boundary uniformly (#119 P0-2, re-review P2).
-    let validated = sandbox_read(&state, &path)?;
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_pdf_images", || {
             extract_pdf_images(
@@ -947,7 +920,7 @@ pub async fn extract_office_images_cmd(
     path: String,
     state: State<'_, ProjectRootState>,
 ) -> Result<Vec<ExtractedImage>, String> {
-    let validated = sandbox_read(&state, &path)?;
+    let validated = sandbox_path(&state, &path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_office_images", || {
             extract_office_images(
@@ -969,9 +942,9 @@ pub async fn extract_and_save_pdf_images_cmd(
 ) -> Result<Vec<SavedImage>, String> {
     // Sandbox dest_dir (write) and rel_to (write-derived). source_path is a
     // read; we validate it too to prevent traversal on the read side.
-    let dest_validated = sandbox_write(&state, &dest_dir)?;
-    let rel_validated = sandbox_write(&state, &rel_to)?;
-    let source_validated = sandbox_read(&state, &source_path)?;
+    let dest_validated = sandbox_path(&state, &dest_dir, SandboxMode::Write)?;
+    let rel_validated = sandbox_path(&state, &rel_to, SandboxMode::Write)?;
+    let source_validated = sandbox_path(&state, &source_path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_and_save_pdf_images", || {
             extract_and_save_pdf_images(
@@ -993,9 +966,9 @@ pub async fn extract_and_save_office_images_cmd(
     rel_to: String,
     state: State<'_, ProjectRootState>,
 ) -> Result<Vec<SavedImage>, String> {
-    let dest_validated = sandbox_write(&state, &dest_dir)?;
-    let rel_validated = sandbox_write(&state, &rel_to)?;
-    let source_validated = sandbox_read(&state, &source_path)?;
+    let dest_validated = sandbox_path(&state, &dest_dir, SandboxMode::Write)?;
+    let rel_validated = sandbox_path(&state, &rel_to, SandboxMode::Write)?;
+    let source_validated = sandbox_path(&state, &source_path, SandboxMode::Read)?;
     tauri::async_runtime::spawn_blocking(move || {
         crate::panic_guard::run_guarded("extract_and_save_office_images", || {
             extract_and_save_office_images(
