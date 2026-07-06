@@ -205,6 +205,21 @@ export async function restoreSingleAgentWikiSnapshot(args: {
 
   const destination = fullPath(projectPath, entry.path)
   try {
+    if (entry.operation === "delete") {
+      try {
+        await readFile(destination)
+        return {
+          ok: false,
+          restoredPaths: [],
+          failures: [changedAfterSnapshotFailure(entry.path)],
+        }
+      } catch (err) {
+        if (!isMissingFileError(err)) throw err
+      }
+      const before = await readFile(`${dir}/${entry.snapshotFile}`)
+      await writeFile(destination, before)
+      return { ok: true, restoredPaths: [entry.path], failures: [] }
+    }
     const current = await readFile(destination)
     const currentSha256 = await sha256Text(current)
     // This naturally enforces same-run reverse order for repeated writes:
@@ -338,7 +353,19 @@ export async function restoreAgentWikiSnapshots(args: {
   for (const entry of entries) {
     const destination = fullPath(projectPath, entry.path)
     try {
-      if (!entry.existedBefore) {
+      if (entry.operation === "delete") {
+        try {
+          await readFile(destination)
+          failures.push(changedAfterSnapshotFailure(entry.path))
+          continue
+        } catch (err) {
+          if (!isMissingFileError(err)) throw err
+          if (pathRestoredByPriorCreate({ entry, entriesByPath })) continue
+        }
+        const before = await readFile(`${dir}/${entry.snapshotFile}`)
+        await writeFile(destination, before)
+        restoredSet.add(entry.path)
+      } else if (!entry.existedBefore) {
         let current: string
         try {
           current = await readFile(destination)

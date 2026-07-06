@@ -270,6 +270,23 @@ describe("computeAgentRewindGateDecision", () => {
     ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
+  it("keeps orphan fix_lint_result uncovered because cascade rewrites are not snapshotted in PR-A", () => {
+    const messages = [
+      msg("m1", 1, [
+        { toolName: "mcp__llm_wiki__fix_lint_result", toolUseId: "tool-orphan", phase: "post", ok: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
+  })
+
   it("blocks when a wiki write tool call lands on a LATER message (A2)", () => {
     const messages = [
       msg("m1", 1),

@@ -38,6 +38,8 @@ export interface WikiChangedPayload {
 	operation: "update" | "create" | "delete";
 	oldSha256?: string;
 	newSha256?: string;
+	existedBefore?: boolean;
+	beforeText?: string;
 	toolUseId?: string;
 	snapshotted?: boolean;
 }
@@ -70,7 +72,7 @@ export interface LlmWikiToolContext extends WikiApiClientOptions {
 interface RewindSnapshotManifestEntry {
 	seq: number;
 	path: string;
-	operation: "update" | "create";
+	operation: "update" | "create" | "delete";
 	existedBefore: boolean;
 	beforeSha256?: string;
 	afterSha256: string;
@@ -100,7 +102,7 @@ async function writeRewindSnapshot(args: {
 	projectPath: string;
 	streamId?: string;
 	relativePath: string;
-	operation: "update" | "create";
+	operation: "update" | "create" | "delete";
 	existedBefore: boolean;
 	beforeText: string;
 	beforeSha256?: string;
@@ -133,6 +135,70 @@ async function writeRewindSnapshot(args: {
 		return true;
 	} catch {
 		return false;
+	}
+}
+
+async function readPostWriteText(projectPath: string, relativePath: string, operation: WikiChangedPayload["operation"]): Promise<string | undefined> {
+	if (operation === "delete") return "";
+	try {
+		return await fs.readFile(path.join(projectPath, relativePath), "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
+async function snapshotAppToolWikiChange(args: {
+	context: LlmWikiToolContext;
+	toolName: string;
+	changed: WikiChangedPayload;
+}): Promise<WikiChangedPayload> {
+	const { context, toolName, changed } = args;
+	const toolUseId = context.getCurrentToolUseId?.(`mcp__llm_wiki__${toolName}`);
+	if (
+		!context.projectPath ||
+		!context.streamId ||
+		typeof changed.beforeText !== "string" ||
+		typeof changed.existedBefore !== "boolean"
+	) {
+		return {
+			...changed,
+			...(toolUseId ? { toolUseId } : {}),
+		};
+	}
+	try {
+		assertWikiMarkdownPath(changed.path);
+		// TOCTOU note: app tools report beforeText, while sidecar re-reads the
+		// post-write file here to compute afterSha256. If external mutation lands
+		// between the app write and this read, restore's sha/existence guard will
+		// fail closed rather than rolling back over newer content.
+		const afterText = await readPostWriteText(context.projectPath, changed.path, changed.operation);
+		if (afterText === undefined) {
+			return {
+				...changed,
+				...(toolUseId ? { toolUseId } : {}),
+			};
+		}
+		const snapshotStored = await writeRewindSnapshot({
+			projectPath: context.projectPath,
+			streamId: context.streamId,
+			relativePath: changed.path,
+			operation: changed.operation,
+			existedBefore: changed.existedBefore,
+			beforeText: changed.beforeText,
+			beforeSha256: changed.oldSha256 ?? (changed.existedBefore ? sha256(changed.beforeText) : undefined),
+			afterSha256: changed.newSha256 ?? sha256(afterText),
+			toolUseId,
+		});
+		return {
+			...changed,
+			...(toolUseId ? { toolUseId } : {}),
+			...(snapshotStored && toolUseId ? { snapshotted: true } : {}),
+		};
+	} catch {
+		return {
+			...changed,
+			...(toolUseId ? { toolUseId } : {}),
+		};
 	}
 }
 
@@ -321,8 +387,9 @@ async function appTool(
 			? pathFromObject(data.result)
 			: undefined;
 		for (const changed of data.wikiChanged ?? []) {
-			changedPaths.add(changed.path);
-			context.onWikiChanged?.(changed);
+			const snapshottedChange = await snapshotAppToolWikiChange({ context, toolName, changed });
+			changedPaths.add(snapshottedChange.path);
+			context.onWikiChanged?.(snapshottedChange);
 		}
 		for (const changedPath of data.changedPaths ?? []) {
 			changedPaths.add(changedPath);
@@ -459,6 +526,8 @@ function parseWikiChanged(value: unknown): WikiChangedPayload[] {
 				operation: record.operation as WikiChangedPayload["operation"],
 				...(typeof record.oldSha256 === "string" ? { oldSha256: record.oldSha256 } : {}),
 				...(typeof record.newSha256 === "string" ? { newSha256: record.newSha256 } : {}),
+				...(typeof record.existedBefore === "boolean" ? { existedBefore: record.existedBefore } : {}),
+				...(typeof record.beforeText === "string" ? { beforeText: record.beforeText } : {}),
 			},
 		];
 	});

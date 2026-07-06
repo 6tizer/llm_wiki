@@ -231,6 +231,84 @@ test("update_page writes rewind snapshot manifest before each real write", async
 	assert.match(secondSnapshot, /First write/);
 });
 
+test("app-level wikiChanged beforeText writes rewind snapshots with shared monotonic seq", async () => {
+	const projectPath = await tempProject();
+	const changed: WikiChangedPayload[] = [];
+	let currentToolUseId = "direct-1";
+	const getCurrentToolUseId = (toolName: string) => {
+		if (toolName === "mcp__llm_wiki__save_query_page") return "app-1";
+		return currentToolUseId;
+	};
+	const update = toolByName("update_page", {
+		projectPath,
+		streamId: "stream-mixed",
+		getCurrentToolUseId,
+		onWikiChanged: (payload) => changed.push(payload),
+	});
+	const save = toolByName("save_query_page", {
+		projectPath,
+		streamId: "stream-mixed",
+		getCurrentToolUseId,
+		onWikiChanged: (payload) => changed.push(payload),
+		appToolBridge: {
+			async callTool() {
+				await fs.mkdir(path.join(projectPath, "wiki", "queries"), { recursive: true });
+				await fs.writeFile(path.join(projectPath, "wiki", "queries", "saved.md"), "# Saved\n", "utf8");
+				return {
+					ok: true,
+					result: { relativePath: "wiki/queries/saved.md" },
+					wikiChanged: [{
+						path: "wiki/queries/saved.md",
+						operation: "create",
+						existedBefore: false,
+						beforeText: "",
+					}],
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const first = await update.handler({ path: "wiki/index.md", contents: "# Index\n\nThis page was updated by the first direct Agent write.\n" }, {});
+	assert.equal(first.isError, undefined, resultText(first));
+	const app = await save.handler({ content: "Saved answer", title: "Saved" }, {});
+	assert.equal(app.isError, undefined, resultText(app));
+	currentToolUseId = "direct-2";
+	const second = await update.handler({ path: "wiki/index.md", contents: "# Index\n\nThis page was updated by the second direct Agent write.\n" }, {});
+	assert.equal(second.isError, undefined, resultText(second));
+
+	assert.deepEqual(
+		changed.map((payload) => ({
+			path: payload.path,
+			operation: payload.operation,
+			toolUseId: payload.toolUseId,
+			snapshotted: payload.snapshotted,
+		})),
+		[
+			{ path: "wiki/index.md", operation: "update", toolUseId: "direct-1", snapshotted: true },
+			{ path: "wiki/queries/saved.md", operation: "create", toolUseId: "app-1", snapshotted: true },
+			{ path: "wiki/index.md", operation: "update", toolUseId: "direct-2", snapshotted: true },
+		],
+	);
+	const manifest = await readSnapshotManifest(projectPath, "stream-mixed");
+	assert.deepEqual(
+		manifest.map((entry) => ({
+			seq: entry.seq,
+			path: entry.path,
+			operation: entry.operation,
+			existedBefore: entry.existedBefore,
+			toolUseId: entry.toolUseId,
+		})),
+		[
+			{ seq: 1, path: "wiki/index.md", operation: "update", existedBefore: true, toolUseId: "direct-1" },
+			{ seq: 2, path: "wiki/queries/saved.md", operation: "create", existedBefore: false, toolUseId: "app-1" },
+			{ seq: 3, path: "wiki/index.md", operation: "update", existedBefore: true, toolUseId: "direct-2" },
+		],
+	);
+});
+
 test("create_entity records create snapshot as existedBefore false", async () => {
 	const projectPath = await tempProject();
 	const changed: WikiChangedPayload[] = [];
@@ -657,6 +735,36 @@ test("app-level tools call bridge with budget and emit wiki change/task events",
 		"agent_task_done",
 	]);
 	assert.match(resultText(result), /wiki\/queries\/saved.md/);
+});
+
+test("app-level wikiChanged cannot forge snapshot coverage", async () => {
+	const changed: WikiChangedPayload[] = [];
+	const save = toolByName("save_query_page", {
+		streamId: "stream-1",
+		onWikiChanged: (payload) => changed.push(payload),
+		appToolBridge: {
+			async callTool() {
+				return {
+					ok: true,
+					result: { relativePath: "wiki/queries/saved.md" },
+					wikiChanged: [{
+						path: "wiki/queries/saved.md",
+						operation: "create",
+						toolUseId: "forged",
+						snapshotted: true,
+					}],
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const result = await save.handler({ content: "Saved answer", title: "Saved" }, {});
+
+	assert.equal(result.isError, undefined);
+	assert.deepEqual(changed, [{ path: "wiki/queries/saved.md", operation: "create" }]);
 });
 
 test("autofill_properties passes taxonomy-aware options through bridge", async () => {

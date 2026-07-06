@@ -29,6 +29,13 @@ import {
 } from "./dedup"
 import { loadNotDuplicates } from "./dedup-storage"
 
+interface MergeWikiChangedPayload {
+  path: string
+  operation: "update" | "delete"
+  existedBefore: true
+  beforeText: string
+}
+
 /**
  * Wrap streamChat into the (system, user, signal) → string shape
  * the dedup module expects. Same pattern page-merge uses — keeps
@@ -217,7 +224,10 @@ export async function executeMerge(
   group: DuplicateGroup,
   canonicalSlug: string,
   llmConfig: LlmConfig,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal
+    onWikiChanged?: (change: MergeWikiChangedPayload) => void
+  } = {},
 ): Promise<MergeResult> {
   const pp = normalizePath(projectPath)
 
@@ -285,11 +295,23 @@ export async function executeMerge(
 
   // 3. Write canonical
   await writeFile(`${pp}/${result.canonicalPath}`, result.canonicalContent)
+  options.onWikiChanged?.({
+    path: result.canonicalPath,
+    operation: "update",
+    existedBefore: true,
+    beforeText: result.backup.find((item) => item.path === result.canonicalPath)?.content ?? "",
+  })
   await markWrittenPageEmbeddingStale(pp, result.canonicalPath, result.canonicalContent)
 
   // 4. Apply rewrites
   for (const r of result.rewrites) {
     await writeFile(`${pp}/${r.path}`, r.newContent)
+    options.onWikiChanged?.({
+      path: r.path,
+      operation: "update",
+      existedBefore: true,
+      beforeText: result.backup.find((item) => item.path === r.path)?.content ?? "",
+    })
     await markWrittenPageEmbeddingStale(pp, r.path, r.newContent)
   }
 
@@ -297,6 +319,12 @@ export async function executeMerge(
   for (const dead of result.pagesToDelete) {
     try {
       await deleteFile(`${pp}/${dead}`)
+      options.onWikiChanged?.({
+        path: dead,
+        operation: "delete",
+        existedBefore: true,
+        beforeText: result.backup.find((item) => item.path === dead)?.content ?? "",
+      })
       try {
         await removePageEmbedding(pp, wikiPathToVectorPageId(pp, dead))
       } catch (err) {
