@@ -450,7 +450,16 @@ export const STORE_BOUNDARY_ENTRIES: readonly StoreBoundaryEntry[] = [
   {
     id: "wiki-store-ui-view-state",
     currentSurface: "zustand",
-    currentKeys: ["selectedFile", "fileContent", "externalPreview", "pendingScrollImageSrc", "chatExpanded", "activeView"],
+    currentKeys: [
+      "selectedFile",
+      "fileContent",
+      "externalPreview",
+      "pendingScrollImageSrc",
+      "chatExpanded",
+      "pendingExploreTab",
+      "pendingWikiHealthTab",
+      "activeView",
+    ],
     owner: "ui-shell",
     category: "zustand-ui-view-state",
     rustLocked: false,

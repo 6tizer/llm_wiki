@@ -221,6 +221,7 @@ describe("SPEC-1 store boundary inventory", () => {
     )
 
     expect(uiView?.category).toBe("zustand-ui-view-state")
+    expect(uiView?.currentKeys).toEqual(expect.arrayContaining(["pendingExploreTab", "pendingWikiHealthTab"]))
     expect(uiView?.currentKeys).not.toContain("sidebarCollapsed")
     expect(persistedMirror?.category).toBe("zustand-persisted-setting-mirror")
     expect(projectMirror?.category).toBe("zustand-project-session-mirror")

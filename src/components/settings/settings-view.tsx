@@ -330,6 +330,7 @@ export function SettingsView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
   const setActiveView = useWikiStore((s) => s.setActiveView)
+  const setPendingWikiHealthTab = useWikiStore((s) => s.setPendingWikiHealthTab)
   const outputLanguage = useWikiStore((s) => s.outputLanguage)
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
   const proxyConfig = useWikiStore((s) => s.proxyConfig)
@@ -771,7 +772,10 @@ export function SettingsView() {
         return (
           <DerivedStatusSection
             project={project}
-            onNavigate={() => setActiveView("wiki-health")}
+            onNavigate={() => {
+              setPendingWikiHealthTab("governance")
+              setActiveView("wiki-health")
+            }}
           />
         )
       case "general":
@@ -785,7 +789,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [activeCategory, draft, project, setDraft, setActiveView])
+  }, [activeCategory, draft, project, setDraft, setActiveView, setPendingWikiHealthTab])
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden md:flex-row">

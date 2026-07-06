@@ -333,7 +333,8 @@ export interface ExternalPreview {
   snippet: string
 }
 
-type ExploreTab = "graph" | "search" | "research"
+export type ExploreTab = "graph" | "search" | "research"
+export type WikiHealthTab = "dashboard" | "lint" | "review" | "derived" | "governance"
 
 interface WikiState {
 	project: WikiProject | null
@@ -360,6 +361,7 @@ interface WikiState {
 	/** Right-side knowledge/files panel collapsed UI preference. */
 	sidebarCollapsed: boolean
 	pendingExploreTab: ExploreTab | null
+	pendingWikiHealthTab: WikiHealthTab | null
 	activeView: "wiki" | "sources" | "explore" | "wiki-health" | "research" | "settings"
 	llmConfig: LlmConfig
 	/** Per-provider-preset stored overrides (API key, model, endpoint, …). */
@@ -397,6 +399,7 @@ interface WikiState {
 	setChatExpanded: (expanded: boolean) => void
 	setSidebarCollapsed: (collapsed: boolean) => void
 	setPendingExploreTab: (tab: ExploreTab | null) => void
+	setPendingWikiHealthTab: (tab: WikiHealthTab | null) => void
 	setActiveView: (view: WikiState["activeView"]) => void
 	setLlmConfig: (config: LlmConfig) => void
 	setProviderConfigs: (configs: ProviderConfigs) => void
@@ -425,6 +428,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 	chatExpanded: false,
 	sidebarCollapsed: readSidebarCollapsed(),
 	pendingExploreTab: null,
+	pendingWikiHealthTab: null,
 	activeView: "wiki",
 	llmConfig: {
 		provider: "openai",
@@ -456,6 +460,7 @@ export const useWikiStore = create<WikiState>((set) => ({
 		set({ sidebarCollapsed })
 	},
 	setPendingExploreTab: (pendingExploreTab) => set({ pendingExploreTab }),
+	setPendingWikiHealthTab: (pendingWikiHealthTab) => set({ pendingWikiHealthTab }),
 	setActiveView: (activeView) => {
 		// "research" remains an internal view alias that opens Explore's Research tab.
 		set(activeView === "research"
@@ -563,7 +568,6 @@ export const useWikiStore = create<WikiState>((set) => ({
 export type {
 	ApiConfig,
 	EmbeddingConfig,
-	ExploreTab,
 	LlmConfig,
 	MultimodalConfig,
 	OutputLanguage,

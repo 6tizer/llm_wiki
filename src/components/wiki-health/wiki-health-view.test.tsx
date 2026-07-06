@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   fixAllLintResults: vi.fn(async (_projectPath: string, results: unknown[]) => ({ fixed: results, failed: [] })),
   mintManualRebuildForLayer: vi.fn(async () => ({ mintedCount: 1, failedCount: 0, runtimeDisabled: false })),
 }))
+const originalLoadSnapshot = useDerivedLayerStore.getState().loadSnapshot
 
 vi.mock("@/commands/fs", () => ({ listDirectory: mocks.listDirectory }))
 vi.mock("@/lib/lint-fixer", () => ({
@@ -144,6 +145,7 @@ beforeEach(() => {
     capturedAtMs: 1,
     error: null,
     runtimeDisabled: false,
+    loadSnapshot: vi.fn(async () => {}),
   })
 })
 
@@ -151,7 +153,7 @@ afterEach(() => {
   useWikiStore.setState({ project: null, fileTree: [] })
   useLintStore.setState({ items: [] })
   useReviewStore.setState({ items: [] })
-  useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false })
+  useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false, loadSnapshot: originalLoadSnapshot })
   document.body.innerHTML = ""
 })
 
@@ -165,6 +167,39 @@ describe("WikiHealthView", () => {
     expect(container.textContent).toContain("4 issues found")
     expect(container.querySelector("[data-testid='wiki-health-tab-lint']")?.textContent).toContain("2")
     expect(container.querySelector("[data-testid='wiki-health-tab-review']")?.textContent).toContain("1")
+
+    unmount(root)
+  })
+
+  it("loads the derived snapshot on mount for the active project", () => {
+    const loadSnapshot = vi.fn(async () => {})
+    useDerivedLayerStore.setState({ loadSnapshot })
+
+    const { root } = renderWikiHealthView()
+
+    expect(loadSnapshot).toHaveBeenCalledOnce()
+
+    unmount(root)
+  })
+
+  it("consumes a pending review tab once on mount", () => {
+    useWikiStore.setState({ pendingWikiHealthTab: "review" })
+
+    const { container, root } = renderWikiHealthView()
+
+    expect(container.querySelector("[data-testid='review-view']")).not.toBeNull()
+    expect(useWikiStore.getState().pendingWikiHealthTab).toBeNull()
+
+    unmount(root)
+  })
+
+  it("consumes a pending governance tab once on mount", () => {
+    useWikiStore.setState({ pendingWikiHealthTab: "governance" })
+
+    const { container, root } = renderWikiHealthView()
+
+    expect(container.querySelector("[data-testid='taxonomy-section']")).not.toBeNull()
+    expect(useWikiStore.getState().pendingWikiHealthTab).toBeNull()
 
     unmount(root)
   })
@@ -269,15 +304,16 @@ describe("WikiHealthView", () => {
     unmount(root)
   })
 
-  it("renders an all-clear dashboard with score 100 when there are no issues", () => {
+  it("renders an unknown dashboard state while the derived snapshot is not loaded", () => {
     useLintStore.setState({ items: [] })
     useReviewStore.setState({ items: [] })
     useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false })
 
     const { container, root } = renderWikiHealthView()
 
-    expect(container.querySelector("[data-testid='wiki-health-score']")?.textContent).toBe("100")
-    expect(container.textContent).toContain("No issues found")
+    expect(container.querySelector("[data-testid='wiki-health-score']")?.textContent).toBe("Unknown")
+    expect(container.textContent).toContain("Derived status is still loading.")
+    expect(container.textContent).not.toContain("No issues found")
 
     unmount(root)
   })

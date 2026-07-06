@@ -4,6 +4,7 @@ import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useResearchStore } from "@/stores/research-store"
+import { useDerivedLayerStore } from "@/stores/derived-layer-store"
 import { getQueue, pauseQueue } from "./ingest-queue"
 
 // Dynamic-import mocks: resetProjectState uses `import("@/lib/ingest-queue")`
@@ -166,6 +167,26 @@ describe("resetProjectState — Zustand stores", () => {
 
     await resetProjectState()
     expect(useResearchStore.getState().tasks).toEqual([])
+  })
+
+  it("clears derived layer snapshot state", async () => {
+    useDerivedLayerStore.setState({
+      buckets: {
+        embedding: { layer: "embedding", status: "dirty", stale: true, lastRebuiltAtMs: null },
+      },
+      capturedAtMs: 123,
+      error: "stale project",
+      runtimeDisabled: true,
+    })
+
+    await resetProjectState()
+
+    expect(useDerivedLayerStore.getState()).toMatchObject({
+      buckets: null,
+      capturedAtMs: null,
+      error: null,
+      runtimeDisabled: false,
+    })
   })
 })
 

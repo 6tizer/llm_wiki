@@ -424,6 +424,110 @@ describe("ChatPanel agent mode rendering", () => {
     container.remove()
   })
 
+  it("clears a dangling conversation agent profile override after candidates load successfully", async () => {
+    setupActiveProjectConversation()
+    useChatStore.getState().setConversationAgentProfileOverride("conv-1", "missing-profile")
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord({ profileId: "available-profile" })],
+    })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useChatStore.getState().conversations[0].agentProfileIdOverride).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(
+      "[chat] clearing missing agent profile override: missing-profile",
+    )
+    expect(container.textContent).toContain("Auto")
+
+    warn.mockRestore()
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("clears a dangling override when candidates load successfully but are empty", async () => {
+    setupActiveProjectConversation()
+    useChatStore.getState().setConversationAgentProfileOverride("conv-1", "missing-profile")
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useChatStore.getState().conversations[0].agentProfileIdOverride).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(
+      "[chat] clearing missing agent profile override: missing-profile",
+    )
+    expect(container.textContent).toContain("Auto")
+
+    warn.mockRestore()
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("does not clear a profile override when candidate loading fails", async () => {
+    setupActiveProjectConversation()
+    useChatStore.getState().setConversationAgentProfileOverride("conv-1", "missing-profile")
+    runtimeProfileListMock.mockRejectedValue(new Error("runtime unavailable"))
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useChatStore.getState().conversations[0].agentProfileIdOverride).toBe("missing-profile")
+    expect(warn).not.toHaveBeenCalledWith(
+      "[chat] clearing missing agent profile override: missing-profile",
+    )
+
+    warn.mockRestore()
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("keeps an existing profile override when candidates still contain it", async () => {
+    setupActiveProjectConversation()
+    useChatStore.getState().setConversationAgentProfileOverride("conv-1", "agent-profile")
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [agentRunProfileRecord()],
+    })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(useChatStore.getState().conversations[0].agentProfileIdOverride).toBe("agent-profile")
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("clearing missing agent profile override"),
+    )
+
+    warn.mockRestore()
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("does not show a collapsed policy badge for the default policy", async () => {
     setupActiveProjectConversation()
     const { container, root } = renderChatPanel()

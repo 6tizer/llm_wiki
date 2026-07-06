@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react"
+import { useCallback } from "react"
+import { create } from "zustand"
 import { listDirectory } from "@/commands/fs"
 import { fixAllLintResults, fixLintResult, isFixable } from "@/lib/lint-fixer"
 import { lintFixMutex } from "@/lib/lint-fix-mutex"
@@ -15,6 +16,20 @@ interface FixAllLintItemsOptions {
   errorLabel?: string
 }
 
+interface LintFixActionState {
+  fixingId: string | null
+  fixingAll: boolean
+  setFixingId: (fixingId: string | null) => void
+  setFixingAll: (fixingAll: boolean) => void
+}
+
+export const useLintFixActionStore = create<LintFixActionState>((set) => ({
+  fixingId: null,
+  fixingAll: false,
+  setFixingId: (fixingId) => set({ fixingId }),
+  setFixingAll: (fixingAll) => set({ fixingAll }),
+}))
+
 /**
  * Shared auto-fix actions for LintView and Wiki Health Dashboard.
  */
@@ -26,8 +41,10 @@ export function useLintFixActions() {
   const items = useLintStore((state) => state.items)
   const removeLintItem = useLintStore((state) => state.removeItem)
   const setLintItems = useLintStore((state) => state.setItems)
-  const [fixingId, setFixingId] = useState<string | null>(null)
-  const [fixingAll, setFixingAll] = useState(false)
+  const fixingId = useLintFixActionStore((state) => state.fixingId)
+  const fixingAll = useLintFixActionStore((state) => state.fixingAll)
+  const setFixingId = useLintFixActionStore((state) => state.setFixingId)
+  const setFixingAll = useLintFixActionStore((state) => state.setFixingAll)
 
   const refreshTree = useCallback(async () => {
     if (!project) return
@@ -45,8 +62,11 @@ export function useLintFixActions() {
     options: FixLintItemOptions = {},
   ): Promise<boolean> => {
     if (!project || !isFixable(item)) return false
+    const busyId = options.busyId ?? item.id
+    const currentBusy = useLintFixActionStore.getState()
+    if (currentBusy.fixingAll || currentBusy.fixingId === busyId) return false
     const pp = normalizePath(project.path)
-    setFixingId(options.busyId ?? item.id)
+    setFixingId(busyId)
 
     const release = await lintFixMutex.acquire()
     try {
@@ -63,12 +83,12 @@ export function useLintFixActions() {
       release()
       setFixingId(null)
     }
-  }, [llmConfig, project, refreshTree, removeLintItem])
+  }, [llmConfig, project, refreshTree, removeLintItem, setFixingId])
 
   const fixAllLintItems = useCallback(async (
     options: FixAllLintItemsOptions = {},
   ): Promise<void> => {
-    if (!project || fixingAll) return
+    if (!project || useLintFixActionStore.getState().fixingAll) return
     const pp = normalizePath(project.path)
     setFixingAll(true)
 
@@ -87,7 +107,7 @@ export function useLintFixActions() {
       release()
       setFixingAll(false)
     }
-  }, [fixingAll, items, llmConfig, project, refreshTree, setLintItems])
+  }, [items, llmConfig, project, refreshTree, setFixingAll, setLintItems])
 
   return {
     fixingId,
