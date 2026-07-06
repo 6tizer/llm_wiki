@@ -34,6 +34,22 @@ function expectTokenBefore(source: string, beforeToken: string, afterToken: stri
 }
 
 const migratedCandidateSourceByCallSite = new Map<string, string>([
+  ["loadLlmConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadProviderConfigs", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadActivePresetId", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["saveLlmConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadSearchApiConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadEmbeddingConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadMultimodalConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadMineruConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadProxyConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadApiConfig", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadZoomLevel", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadTheme", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["loadLanguage", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["getLastProject", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["openProject", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["handleProjectOpened", "src/lib/bootstrap/init-config-hydration.ts"],
   ["setupAutoSave", "src/lib/hooks/use-app-mount-services.ts"],
   ["startClipWatcher", "src/lib/hooks/use-app-mount-services.ts"],
   ["setTimeout", "src/lib/hooks/use-update-check-bootstrap.ts"],
