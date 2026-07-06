@@ -17,6 +17,15 @@ function repoFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf-8")
 }
 
+function rustProductionSource(source: string): string {
+  const testModule = /\n#\[cfg\(test\)]\s*\nmod\s+tests\b/.exec(source)
+  return testModule?.index === undefined ? source : source.slice(0, testModule.index)
+}
+
+function rustProductionFile(path: string): string {
+  return rustProductionSource(repoFile(path))
+}
+
 function allCurrentKeys(): Set<string> {
   return new Set(STORE_BOUNDARY_ENTRIES.flatMap((entry) => entry.currentKeys))
 }
@@ -31,6 +40,14 @@ function rustLockedKeys(): Set<string> {
 
 function sourceHasNestedGet(source: string, parentKey: string, nestedKey: string): boolean {
   return new RegExp(String.raw`\.get\("${parentKey}"\)[\s\S]{0,120}\.get\("${nestedKey}"\)`).test(source)
+}
+
+function sourceHasApiConfigValueRead(source: string, nestedKey: string): boolean {
+  return new RegExp(String.raw`api_config_value\([^)]*,\s*"${nestedKey}"\)`).test(source)
+}
+
+function sourceHasApiConfigNestedRead(source: string, nestedKey: string): boolean {
+  return sourceHasNestedGet(source, "apiConfig", nestedKey) || sourceHasApiConfigValueRead(source, nestedKey)
 }
 
 function sourceHasTopLevelGet(source: string, key: string): boolean {
@@ -68,6 +85,18 @@ function stringGetLiterals(source: string): string[] {
   return [...source.matchAll(/\.get\("([^"]+)"\)/g)].map((match) => match[1])
 }
 
+function apiConfigValueLiterals(source: string): string[] {
+  return [...source.matchAll(/api_config_value\([^)]*,\s*"([^"]+)"\)/g)].map((match) => match[1])
+}
+
+function rustAppStateReaderLiterals(source: string): string[] {
+  return [
+    ...functionBodiesCalling(source, "load_app_state").flatMap(stringGetLiterals),
+    ...(sourceHasTopLevelGet(source, "apiConfig") ? ["apiConfig"] : []),
+    ...apiConfigValueLiterals(source),
+  ]
+}
+
 function hasStringConst(source: string, key: string): boolean {
   return new RegExp(String.raw`const\s+\w+\s*=\s*"${key}"`).test(source)
 }
@@ -101,14 +130,14 @@ describe("SPEC-1 store boundary inventory", () => {
 
   it("guards Rust reader tokens instead of relying only on the ADR", () => {
     const apiServer = ["mod", "projects", "reviews", "graph"]
-      .map((name) => repoFile(`src-tauri/src/api_server/${name}.rs`))
+      .map((name) => rustProductionFile(`src-tauri/src/api_server/${name}.rs`))
       .join("\n")
-    const rustLib = repoFile("src-tauri/src/lib.rs")
-    const proxy = repoFile("src-tauri/src/proxy.rs")
+    const rustLib = rustProductionFile("src-tauri/src/lib.rs")
+    const proxy = rustProductionFile("src-tauri/src/proxy.rs")
 
     const discoveredReaderKeys = new Set<string>()
     for (const nestedKey of ["enabled", "allowUnauthenticated", "token", "mcpEnabled"]) {
-      if (sourceHasNestedGet(apiServer, "apiConfig", nestedKey)) {
+      if (sourceHasApiConfigNestedRead(apiServer, nestedKey)) {
         discoveredReaderKeys.add(`apiConfig.${nestedKey}`)
       }
     }
@@ -137,14 +166,8 @@ describe("SPEC-1 store boundary inventory", () => {
     }
 
     expect([...discoveredReaderKeys].sort()).toEqual([...PR4_DISCOVERED_RUST_READ_APP_STATE_KEYS].sort())
-    expect(
-      functionBodiesCalling(apiServer, "load_app_state").flatMap(stringGetLiterals).sort(),
-    ).toEqual([
+    expect(rustAppStateReaderLiterals(apiServer).sort()).toEqual([
       "allowUnauthenticated",
-      "apiConfig",
-      "apiConfig",
-      "apiConfig",
-      "apiConfig",
       "apiConfig",
       "default",
       "default",
