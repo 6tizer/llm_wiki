@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { runtimeProfileList, type RuntimeProfileApiMode, type RuntimeProfileRecord } from "@/commands/runtime-db"
 import { useWikiStore, type ProviderOverride } from "@/stores/wiki-store"
-import { LLM_PRESETS, type LlmPreset } from "../llm-presets"
+import { LLM_PRESETS, type LlmPreset } from "@/lib/llm-presets"
 import { resolveConfig } from "../preset-resolver"
 import { providerAccessTemplateById, type ProviderAccessTemplate } from "@/lib/provider-access-templates"
 import {

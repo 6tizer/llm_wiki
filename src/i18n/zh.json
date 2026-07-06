@@ -257,9 +257,10 @@
     "modelAuto": "自动",
     "modelIndicator": "模型路由",
     "agentRouting": {
-      "profile": "运行配置",
+      "profile": "连接",
       "profileAuto": "自动（推荐）",
       "policy": "权限策略",
+      "policyScopeHint": "仅作用于本对话",
       "policyOptions": {
         "default": {
           "label": "默认",

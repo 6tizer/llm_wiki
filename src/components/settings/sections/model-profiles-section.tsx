@@ -26,9 +26,10 @@ import {
   profileSecretWrite,
   type ProfileSecretBackend,
 } from "@/commands/profile-secrets"
-import { LLM_PRESETS } from "../llm-presets"
+import { LLM_PRESETS } from "@/lib/llm-presets"
 import { ProviderAccessWizard } from "./provider-access-wizard"
 import { ProfileCapabilityBadge, capabilityBadgeMeta } from "./profile-capability-badge"
+import { groupProfilesByConnection } from "@/lib/profile-connections"
 
 const MAX_PROFILE_CONCURRENCY = 128
 // Keep these version strings aligned with src-tauri/src/commands/runtime_db.rs.
@@ -79,15 +80,6 @@ export interface ModelProfileDraft {
   clearSecret: boolean
 }
 
-export interface ProfileConnectionGroup {
-  key: string
-  providerId: string
-  providerLabel: string
-  endpoint: string
-  secretRef: string
-  profiles: RuntimeProfileRecord[]
-}
-
 type LoadState =
   | { kind: "loading" }
   | { kind: "ready"; enabled: boolean; status: RuntimeDbHealthState }
@@ -107,49 +99,6 @@ type SecretBackendState =
 
 function presetForProviderId(providerId: string) {
   return LLM_PRESETS.find((preset) => preset.id === providerId)
-}
-
-function providerLabel(providerId: string): string {
-  return presetForProviderId(providerId)?.label ?? providerId
-}
-
-export function profileConnectionGroupKey(profile: RuntimeProfileRecord): string {
-  return JSON.stringify([
-    profile.providerId,
-    profile.endpoint ?? "",
-    profile.secretRef ?? "",
-  ])
-}
-
-/** Groups runtime profiles by shared provider endpoint and secret reference. */
-export function groupProfilesByConnection(profiles: RuntimeProfileRecord[]): ProfileConnectionGroup[] {
-  const groups = new Map<string, ProfileConnectionGroup>()
-  for (const profile of profiles) {
-    const key = profileConnectionGroupKey(profile)
-    const existing = groups.get(key)
-    if (existing) {
-      existing.profiles.push(profile)
-      continue
-    }
-    groups.set(key, {
-      key,
-      providerId: profile.providerId,
-      providerLabel: providerLabel(profile.providerId),
-      endpoint: profile.endpoint ?? "",
-      secretRef: profile.secretRef ?? "",
-      profiles: [profile],
-    })
-  }
-  return Array.from(groups.values())
-    .map((group) => ({
-      ...group,
-      profiles: [...group.profiles].sort((a, b) => a.displayName.localeCompare(b.displayName)),
-    }))
-    .sort((a, b) => (
-      a.providerLabel.localeCompare(b.providerLabel)
-        || a.endpoint.localeCompare(b.endpoint)
-        || a.secretRef.localeCompare(b.secretRef)
-    ))
 }
 
 export function defaultApiModeForProvider(providerId: string): RuntimeProfileApiMode {

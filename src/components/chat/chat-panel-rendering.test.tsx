@@ -186,16 +186,20 @@ function mockModelCallSuccess(content = "model answer"): void {
   })
 }
 
-function agentRunProfileRecord(): Record<string, unknown> {
+function agentRunProfileRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     profileId: "agent-profile",
     displayName: "Agent",
+    providerId: "openai",
+    endpoint: "https://api.openai.com/v1",
+    secretRef: "llm-wiki-profile-secret:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     enabled: true,
     kind: "agent-run",
     taskFamilies: ["agent"],
     capabilityVersion: "profile-probe.v1",
     capabilityStatus: "supported",
     capabilityJson: JSON.stringify({ agentRunSupported: true }),
+    ...overrides,
   }
 }
 
@@ -473,6 +477,14 @@ describe("ChatPanel agent mode rendering", () => {
   })
 
   it("keeps permission policy copy explicit about restricted and bypass scope", () => {
+    expect(i18n.t("chat.agentRouting.profile", { lng: "en" })).toBe("Connection")
+    expect(i18n.t("chat.agentRouting.profile", { lng: "zh" })).toBe("连接")
+    expect(i18n.t("chat.agentRouting.policyScopeHint", { lng: "en" })).toBe(
+      "Applies to this conversation only",
+    )
+    expect(i18n.t("chat.agentRouting.policyScopeHint", { lng: "zh" })).toBe(
+      "仅作用于本对话",
+    )
     expect(
       i18n.t("chat.agentRouting.policyOptions.restricted.description", { lng: "en" }),
     ).toBe("Disables built-in tools, including Bash and file reads.")
@@ -1282,10 +1294,22 @@ describe("ChatPanel agent mode rendering", () => {
   })
 
   it("refreshes runtime profile candidates when the routing dropdown opens", async () => {
+    const longEndpoint = "https://api.openai.com/v1/projects/agent-runtime/very/long/endpoint"
     runtimeProfileListMock.mockResolvedValue({
       enabled: true,
       status: "healthy",
-      profiles: [agentRunProfileRecord()],
+      profiles: [
+        agentRunProfileRecord({
+          profileId: "agent-profile-b",
+          displayName: "Agent B",
+          endpoint: longEndpoint,
+        }),
+        agentRunProfileRecord({
+          profileId: "agent-profile-a",
+          displayName: "Agent A",
+          endpoint: longEndpoint,
+        }),
+      ],
     })
     setupActiveProjectConversation()
     const { container, root } = renderChatPanel()
@@ -1305,6 +1329,89 @@ describe("ChatPanel agent mode rendering", () => {
     })
 
     expect(runtimeProfileListMock).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain("Connection")
+    expect(container.textContent).toContain("Auto (recommended)")
+    expect(container.textContent).toContain("OpenAI (GPT) · 2 profiles")
+    expect(container.textContent).toContain(longEndpoint)
+    const endpointLabel = [...container.querySelectorAll<HTMLElement>("div")]
+      .find((node) => node.textContent === longEndpoint)
+    expect(endpointLabel?.className).toContain("truncate")
+    expect(endpointLabel?.getAttribute("title")).toBe(longEndpoint)
+    expect(container.textContent).toContain("Applies to this conversation only")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("updates the routing button label immediately when a profile override is selected", async () => {
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        agentRunProfileRecord({
+          profileId: "agent-profile-a",
+          displayName: "Agent Alpha",
+        }),
+      ],
+    })
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const routeButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${i18n.t("chat.modelIndicator")}"]`,
+    )
+    if (!routeButton) throw new Error("route button not found")
+    await act(async () => {
+      routeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      findButtonByText(container, "Agent Alpha").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(routeButton.textContent).toContain("Agent Alpha")
+    expect(streamAgentMock).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("shows selected profile and conversation policy together", async () => {
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        agentRunProfileRecord({
+          profileId: "agent-profile-b",
+          displayName: "Agent Beta",
+        }),
+      ],
+    })
+    setupActiveProjectConversation()
+    useChatStore
+      .getState()
+      .setConversationAgentProfileOverride("conv-1", "agent-profile-b")
+    useChatStore
+      .getState()
+      .setConversationAgentPermissionPolicyOverride("conv-1", "restricted")
+    const { container, root } = renderChatPanel()
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const routeButton = container.querySelector<HTMLButtonElement>(
+      `button[title="${i18n.t("chat.modelIndicator")}"]`,
+    )
+    if (!routeButton) throw new Error("route button not found")
+
+    expect(routeButton.textContent).toContain("Agent Beta")
+    expect(routeButton.textContent).toContain("Restricted")
 
     act(() => root.unmount())
     container.remove()
@@ -1619,6 +1726,26 @@ describe("normal Chat Router progress rendering", () => {
     expect(html).toContain("(2)")
     expect(html).not.toContain("Project files")
     await i18n.changeLanguage("en")
+  })
+
+  it("keeps chat message markdown and code blocks constrained for long content", () => {
+    const message: DisplayMessage = {
+      id: "assistant-long",
+      conversationId: "conv-1",
+      role: "assistant",
+      content: "`averyveryveryveryveryverylonginlineidentifier`\n\n```txt\naveryveryveryveryveryverylongcodeidentifier\n```",
+      timestamp: 1,
+    }
+
+    const html = renderToStaticMarkup(<ChatMessage message={message} />)
+
+    expect(html).toContain("min-w-0 rounded-lg")
+    expect(html).toContain("chat-markdown prose prose-sm min-w-0")
+    expect(html).toContain("break-words")
+    expect(html).toContain("max-w-full rounded")
+    expect(html).toContain("<code dir=\"ltr\" class=\"break-words\"")
+    expect(html).toContain("<code dir=\"ltr\" class=\"language-txt\"")
+    expect(html).not.toContain("break-all")
   })
 })
 
