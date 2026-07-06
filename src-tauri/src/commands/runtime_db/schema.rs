@@ -177,6 +177,32 @@ pub(crate) fn with_runtime_writer<T>(
     body()
 }
 
+pub(crate) fn run_project_write<T>(
+    command_name: &'static str,
+    root_state: State<'_, ProjectRootState>,
+    body: impl FnOnce(Option<&Path>, bool, i64) -> Result<T, String>,
+) -> Result<T, String> {
+    run_guarded(command_name, || {
+        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
+        let project_root = root_state.get();
+        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
+        body(project_root.as_deref(), runtime_enabled, now)
+    })
+}
+
+pub(crate) fn run_project_read<T>(
+    command_name: &'static str,
+    root_state: State<'_, ProjectRootState>,
+    body: impl FnOnce(Option<&Path>, bool) -> Result<T, String>,
+) -> Result<T, String> {
+    run_guarded(command_name, || {
+        body(
+            root_state.get().as_deref(),
+            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
+        )
+    })
+}
+
 fn open_runtime_connection(db_path: &Path) -> Result<Connection, String> {
     let connection = Connection::open(db_path)
         .map_err(|err| format!("Failed to open runtime DB '{}': {err}", db_path.display()))?;

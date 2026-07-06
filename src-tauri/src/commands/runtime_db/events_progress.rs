@@ -1,5 +1,4 @@
 use crate::commands::file_sync::ProjectRootState;
-use crate::panic_guard::run_guarded;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use std::path::Path;
 use tauri::State;
@@ -13,12 +12,13 @@ pub fn runtime_event_append(
     request: RuntimeEventAppendRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeEventRecord, String> {
-    run_guarded("runtime_event_append", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_event_append_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_event_append",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_event_append_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Append or coalesce a runtime progress fact for the currently-open project.
@@ -27,12 +27,13 @@ pub fn runtime_progress_append(
     request: RuntimeProgressAppendRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProgressAppend, String> {
-    run_guarded("runtime_progress_append", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_progress_append_for_project(project_root.as_deref(), runtime_enabled, request, now)
-    })
+    run_project_write(
+        "runtime_progress_append",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_progress_append_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// List runtime events for the currently-open project.
@@ -41,16 +42,20 @@ pub fn runtime_timeline_list(
     request: Option<RuntimeTimelineListRequest>,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeTimelineList, String> {
-    run_guarded("runtime_timeline_list", || {
-        runtime_timeline_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-            request.unwrap_or(RuntimeTimelineListRequest {
-                job_id: None,
-                limit: None,
-            }),
-        )
-    })
+    run_project_read(
+        "runtime_timeline_list",
+        root_state,
+        |project_root, enabled| {
+            runtime_timeline_list_for_project(
+                project_root,
+                enabled,
+                request.unwrap_or(RuntimeTimelineListRequest {
+                    job_id: None,
+                    limit: None,
+                }),
+            )
+        },
+    )
 }
 
 /// List runtime progress facts for the currently-open project.
@@ -59,16 +64,20 @@ pub fn runtime_progress_list(
     request: Option<RuntimeProgressListRequest>,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProgressList, String> {
-    run_guarded("runtime_progress_list", || {
-        runtime_progress_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-            request.unwrap_or(RuntimeProgressListRequest {
-                job_id: None,
-                limit: None,
-            }),
-        )
-    })
+    run_project_read(
+        "runtime_progress_list",
+        root_state,
+        |project_root, enabled| {
+            runtime_progress_list_for_project(
+                project_root,
+                enabled,
+                request.unwrap_or(RuntimeProgressListRequest {
+                    job_id: None,
+                    limit: None,
+                }),
+            )
+        },
+    )
 }
 
 pub(crate) fn runtime_event_append_for_project(
@@ -363,8 +372,7 @@ fn read_events(
             .query_map([limit], map_event_row)
             .map_err(|err| format!("events-read-failed: {err}"))?,
     };
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("events-read-failed: {err}"))
+    collect_mapped_rows(rows, "events-read-failed")
 }
 
 fn read_progress_rows(
@@ -389,8 +397,7 @@ fn read_progress_rows(
             .query_map([limit], map_progress_row)
             .map_err(|err| format!("progress-read-failed: {err}"))?,
     };
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("progress-read-failed: {err}"))
+    collect_mapped_rows(rows, "progress-read-failed")
 }
 
 fn event_select_sql(suffix: &str) -> String {

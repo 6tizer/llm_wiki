@@ -1,5 +1,4 @@
 use crate::commands::file_sync::ProjectRootState;
-use crate::panic_guard::run_guarded;
 use rusqlite::{params, Connection, OpenFlags, Transaction};
 use std::path::Path;
 use tauri::State;
@@ -13,17 +12,13 @@ pub fn runtime_commit_budget_claim(
     request: RuntimeCommitBudgetClaimRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeCommitBudgetClaim, String> {
-    run_guarded("runtime_commit_budget_claim", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_commit_budget_claim_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_commit_budget_claim",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_commit_budget_claim_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Release an active commit-path budget claim.
@@ -32,17 +27,13 @@ pub fn runtime_commit_budget_release(
     request: RuntimeCommitBudgetReleaseRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<Vec<RuntimeResourceBudgetClaimRecord>, String> {
-    run_guarded("runtime_commit_budget_release", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_commit_budget_release_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_commit_budget_release",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_commit_budget_release_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// List commit budget rows and active claims for the currently-open project.
@@ -50,12 +41,11 @@ pub fn runtime_commit_budget_release(
 pub fn runtime_commit_budget_list(
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeCommitBudgetList, String> {
-    run_guarded("runtime_commit_budget_list", || {
-        runtime_commit_budget_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-        )
-    })
+    run_project_read(
+        "runtime_commit_budget_list",
+        root_state,
+        |project_root, enabled| runtime_commit_budget_list_for_project(project_root, enabled),
+    )
 }
 
 pub(crate) fn runtime_commit_budget_claim_for_project(
@@ -415,8 +405,7 @@ fn read_resource_budgets(
     let rows = statement
         .query_map([], map_resource_budget_row)
         .map_err(|err| format!("resource-budgets-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("resource-budgets-read-failed: {err}"))
+    collect_mapped_rows(rows, "resource-budgets-read-failed")
 }
 
 fn read_active_resource_claims(
@@ -430,8 +419,7 @@ fn read_active_resource_claims(
     let rows = statement
         .query_map([], map_resource_claim_row)
         .map_err(|err| format!("resource-claims-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("resource-claims-read-failed: {err}"))
+    collect_mapped_rows(rows, "resource-claims-read-failed")
 }
 
 fn read_claims_by_id_tx(
@@ -446,8 +434,7 @@ fn read_claims_by_id_tx(
     let rows = statement
         .query_map([claim_id], map_resource_claim_row)
         .map_err(|err| format!("resource-claims-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("resource-claims-read-failed: {err}"))
+    collect_mapped_rows(rows, "resource-claims-read-failed")
 }
 
 fn read_active_claims_by_id_tx(
@@ -463,8 +450,7 @@ fn read_active_claims_by_id_tx(
     let rows = statement
         .query_map([claim_id], map_resource_claim_row)
         .map_err(|err| format!("resource-claims-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("resource-claims-read-failed: {err}"))
+    collect_mapped_rows(rows, "resource-claims-read-failed")
 }
 
 fn resource_budget_select_sql(suffix: &str) -> String {

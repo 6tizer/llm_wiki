@@ -1,7 +1,6 @@
 use crate::commands::file_sync::ProjectRootState;
-use crate::panic_guard::run_guarded;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 use super::*;
@@ -14,17 +13,13 @@ pub fn runtime_staging_artifact_record(
     request: RuntimeStagingArtifactRecordRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactRecord, String> {
-    run_guarded("runtime_staging_artifact_record", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_staging_artifact_record_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_staging_artifact_record",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_staging_artifact_record_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Store a validated staging artifact body and commit-intent metadata.
@@ -33,17 +28,13 @@ pub fn runtime_staging_artifact_store(
     request: RuntimeStagingArtifactStoreRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactRecord, String> {
-    run_guarded("runtime_staging_artifact_store", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_staging_artifact_store_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_staging_artifact_store",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_staging_artifact_store_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Read a pending staging artifact body by registered artifact id.
@@ -52,15 +43,13 @@ pub fn runtime_staging_artifact_read_body(
     request: RuntimeStagingArtifactReadBodyRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactReadBody, String> {
-    run_guarded("runtime_staging_artifact_read_body", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        runtime_staging_artifact_read_body_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-        )
-    })
+    run_project_read(
+        "runtime_staging_artifact_read_body",
+        root_state,
+        |project_root, enabled| {
+            runtime_staging_artifact_read_body_for_project(project_root, enabled, request)
+        },
+    )
 }
 
 /// Clear pending staging artifacts and files for one runtime job.
@@ -69,17 +58,18 @@ pub fn runtime_staging_artifacts_clear_pending_for_job(
     request: RuntimeStagingArtifactsClearPendingForJobRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactsClearPendingForJob, String> {
-    run_guarded("runtime_staging_artifacts_clear_pending_for_job", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_staging_artifacts_clear_pending_for_job_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_staging_artifacts_clear_pending_for_job",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_staging_artifacts_clear_pending_for_job_for_project(
+                project_root,
+                enabled,
+                request,
+                now,
+            )
+        },
+    )
 }
 
 /// Mark a committed staging artifact and clean up its runtime staging file.
@@ -88,17 +78,13 @@ pub fn runtime_staging_artifact_commit_success(
     request: RuntimeStagingArtifactCommitSuccessRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactRecord, String> {
-    run_guarded("runtime_staging_artifact_commit_success", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_staging_artifact_commit_success_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_staging_artifact_commit_success",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_staging_artifact_commit_success_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Delete expired failed/cancelled staging artifacts for the currently-open project.
@@ -106,12 +92,13 @@ pub fn runtime_staging_artifact_commit_success(
 pub fn runtime_staging_artifact_gc(
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactGc, String> {
-    run_guarded("runtime_staging_artifact_gc", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_staging_artifact_gc_for_project(project_root.as_deref(), runtime_enabled, now)
-    })
+    run_project_write(
+        "runtime_staging_artifact_gc",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_staging_artifact_gc_for_project(project_root, enabled, now)
+        },
+    )
 }
 
 /// List staging artifact metadata for the currently-open project.
@@ -120,17 +107,21 @@ pub fn runtime_staging_artifact_list(
     request: Option<RuntimeStagingArtifactListRequest>,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeStagingArtifactList, String> {
-    run_guarded("runtime_staging_artifact_list", || {
-        runtime_staging_artifact_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-            request.unwrap_or(RuntimeStagingArtifactListRequest {
-                job_id: None,
-                status: None,
-                limit: None,
-            }),
-        )
-    })
+    run_project_read(
+        "runtime_staging_artifact_list",
+        root_state,
+        |project_root, enabled| {
+            runtime_staging_artifact_list_for_project(
+                project_root,
+                enabled,
+                request.unwrap_or(RuntimeStagingArtifactListRequest {
+                    job_id: None,
+                    status: None,
+                    limit: None,
+                }),
+            )
+        },
+    )
 }
 
 fn runtime_staging_artifact_record_for_project(
@@ -695,6 +686,10 @@ fn hash_staging_markdown(markdown: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn staging_artifact_file_path(project_root: &Path, artifact_path: impl AsRef<Path>) -> PathBuf {
+    staging_dir_path(project_root).join(artifact_path)
+}
+
 fn write_normalized_staging_artifact_file(
     project_root: &Path,
     artifact_path: &str,
@@ -707,7 +702,7 @@ fn write_normalized_staging_artifact_file(
             staging_root.display()
         )
     })?;
-    let target = staging_root.join(&artifact_path);
+    let target = staging_artifact_file_path(project_root, artifact_path);
     let parent = target
         .parent()
         .ok_or_else(|| "invalid-artifact-path: artifact path has no parent".to_string())?;
@@ -823,7 +818,7 @@ fn remove_staging_artifact_file(project_root: &Path, artifact_path: &str) -> Res
             staging_root.display()
         )
     })?;
-    let target = staging_root.join(artifact_path);
+    let target = staging_artifact_file_path(project_root, artifact_path);
     let metadata = match std::fs::symlink_metadata(&target) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -873,7 +868,7 @@ fn remove_staging_artifact_file(project_root: &Path, artifact_path: &str) -> Res
 fn read_staging_artifact_file(project_root: &Path, artifact_path: &str) -> Result<String, String> {
     let artifact_path = normalize_staging_artifact_path(artifact_path)?;
     let staging_root = staging_dir_path(project_root);
-    let target = staging_root.join(artifact_path);
+    let target = staging_artifact_file_path(project_root, artifact_path);
     let metadata = std::fs::symlink_metadata(&target).map_err(|err| {
         format!(
             "staging-artifact-stat-failed: failed to inspect '{}': {err}",
@@ -1046,8 +1041,7 @@ fn read_expired_staging_artifacts_tx(
     let rows = statement
         .query_map([now], map_staging_artifact_row)
         .map_err(|err| format!("staging-artifacts-gc-read-failed: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("staging-artifacts-gc-read-failed: {err}"))
+    collect_mapped_rows(rows, "staging-artifacts-gc-read-failed")
 }
 
 fn read_staging_artifacts(
@@ -1069,8 +1063,7 @@ fn read_staging_artifacts(
             let rows = statement
                 .query_map(params![job_id, status, limit], map_staging_artifact_row)
                 .map_err(|err| format!("staging-artifacts-read-failed: {err}"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|err| format!("staging-artifacts-read-failed: {err}"))
+            collect_mapped_rows(rows, "staging-artifacts-read-failed")
         }
         (Some(job_id), None) => {
             let mut statement = connection
@@ -1082,8 +1075,7 @@ fn read_staging_artifacts(
             let rows = statement
                 .query_map(params![job_id, limit], map_staging_artifact_row)
                 .map_err(|err| format!("staging-artifacts-read-failed: {err}"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|err| format!("staging-artifacts-read-failed: {err}"))
+            collect_mapped_rows(rows, "staging-artifacts-read-failed")
         }
         (None, Some(status)) => {
             let mut statement = connection
@@ -1095,8 +1087,7 @@ fn read_staging_artifacts(
             let rows = statement
                 .query_map(params![status, limit], map_staging_artifact_row)
                 .map_err(|err| format!("staging-artifacts-read-failed: {err}"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|err| format!("staging-artifacts-read-failed: {err}"))
+            collect_mapped_rows(rows, "staging-artifacts-read-failed")
         }
         (None, None) => {
             let mut statement = connection
@@ -1108,8 +1099,7 @@ fn read_staging_artifacts(
             let rows = statement
                 .query_map([limit], map_staging_artifact_row)
                 .map_err(|err| format!("staging-artifacts-read-failed: {err}"))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|err| format!("staging-artifacts-read-failed: {err}"))
+            collect_mapped_rows(rows, "staging-artifacts-read-failed")
         }
     }
 }

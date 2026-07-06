@@ -19,17 +19,13 @@ pub fn runtime_profile_pool_claim(
     request: RuntimeProfilePoolClaimRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfilePoolClaim, String> {
-    run_guarded("runtime_profile_pool_claim", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_profile_pool_claim_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_profile_pool_claim",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_profile_pool_claim_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Release one active profile-pool claim for the currently-open project.
@@ -38,17 +34,13 @@ pub fn runtime_profile_pool_release(
     request: RuntimeProfilePoolReleaseRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfilePoolRelease, String> {
-    run_guarded("runtime_profile_pool_release", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_profile_pool_release_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_profile_pool_release",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_profile_pool_release_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// Renew one active profile-pool claim for the currently-open project.
@@ -57,17 +49,13 @@ pub fn runtime_profile_pool_renew(
     request: RuntimeProfilePoolRenewRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfilePoolRenew, String> {
-    run_guarded("runtime_profile_pool_renew", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_profile_pool_renew_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_profile_pool_renew",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_profile_pool_renew_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 /// List active profile-pool claims and open circuit breakers for observability.
@@ -98,13 +86,17 @@ pub fn runtime_profile_pool_events_list(
     request: Option<RuntimeProfilePoolEventsListRequest>,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfilePoolEventsList, String> {
-    run_guarded("runtime_profile_pool_events_list", || {
-        runtime_profile_pool_events_list_for_project(
-            root_state.get().as_deref(),
-            resolve_work_runtime_enabled(read_work_runtime_flag_value()),
-            request.unwrap_or(RuntimeProfilePoolEventsListRequest { limit: None }),
-        )
-    })
+    run_project_read(
+        "runtime_profile_pool_events_list",
+        root_state,
+        |project_root, enabled| {
+            runtime_profile_pool_events_list_for_project(
+                project_root,
+                enabled,
+                request.unwrap_or(RuntimeProfilePoolEventsListRequest { limit: None }),
+            )
+        },
+    )
 }
 
 /// Clear one open profile circuit breaker for the currently-open project.
@@ -113,17 +105,13 @@ pub fn runtime_profile_breaker_clear(
     request: RuntimeProfileBreakerClearRequest,
     root_state: State<'_, ProjectRootState>,
 ) -> Result<RuntimeProfileBreakerClearResult, String> {
-    run_guarded("runtime_profile_breaker_clear", || {
-        let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
-        let project_root = root_state.get();
-        let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_profile_breaker_clear_for_project(
-            project_root.as_deref(),
-            runtime_enabled,
-            request,
-            now,
-        )
-    })
+    run_project_write(
+        "runtime_profile_breaker_clear",
+        root_state,
+        |project_root, enabled, now| {
+            runtime_profile_breaker_clear_for_project(project_root, enabled, request, now)
+        },
+    )
 }
 
 pub(crate) fn runtime_profile_pool_claim_for_project(

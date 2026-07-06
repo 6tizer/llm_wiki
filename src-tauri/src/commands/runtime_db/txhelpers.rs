@@ -1,4 +1,4 @@
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, MappedRows, OptionalExtension, Row, Transaction};
 
 use super::*;
 
@@ -88,4 +88,17 @@ pub(crate) fn release_lease(
     } else {
         Err("inactive-lease: active lease was not released".to_string())
     }
+}
+
+// Behavior-preserving extraction: error text stays `"{label}: {err}"`, byte-identical
+// to the former per-site inline mapping.
+pub(crate) fn collect_mapped_rows<T, F>(
+    rows: MappedRows<'_, F>,
+    error_label: &str,
+) -> Result<Vec<T>, String>
+where
+    F: FnMut(&Row<'_>) -> rusqlite::Result<T>,
+{
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("{error_label}: {err}"))
 }
