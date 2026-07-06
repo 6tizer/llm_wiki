@@ -61,7 +61,12 @@ import type {
 } from "@/lib/agent/agent-types";
 import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
 import { executeIngestWrites, startIngest } from "@/lib/ingest";
-import { hasModelCallProfileCandidate, streamChatRouted } from "@/lib/pool-chat";
+import {
+	hasModelCallProfileCandidate,
+	streamChatRouted,
+	type PoolStatusEvent,
+} from "@/lib/pool-chat";
+import { useCountdown } from "@/lib/hooks/use-countdown";
 import { normalizePath } from "@/lib/path-utils";
 import { groupProfilesByConnection } from "@/lib/profile-connections";
 import { notifyWikiPathsChanged } from "@/lib/wiki-change-notifier";
@@ -69,6 +74,7 @@ import { SOURCE_WATCH_FILE_TYPE_GROUPS } from "@/lib/source-watch-config";
 import { buildChatAgentMessages, type ChatAgentEvent } from "@/lib/chat-agent";
 import {
 	chatMessagesToLLM,
+	type AgentProgressSummaryRecord,
 	type DisplayMessage,
 	type MessageImage,
 	type MessageReference,
@@ -195,6 +201,46 @@ function agentRunCandidatesInList(result: RuntimeProfileList): RuntimeProfileRec
 function modelCallChatCandidatesInList(result: RuntimeProfileList): RuntimeProfileRecord[] {
 	if (!result.enabled || result.status !== "healthy") return [];
 	return result.profiles.filter((profile) => hasModelCallProfileCandidate(profile, "chat"));
+}
+
+function formatPoolCooldownRemaining(
+	remainingMs: number,
+	t: ReturnType<typeof useTranslation>["t"],
+): string {
+	const seconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+	if (seconds < 60) {
+		return t("agent.timeline.modelCallCooldownSeconds", { count: seconds });
+	}
+	return t("agent.timeline.modelCallCooldownMinutes", {
+		count: Math.ceil(seconds / 60),
+	});
+}
+
+function appendPoolProgressSummaries(
+	conversationId: string,
+	summaries: AgentProgressSummaryRecord[],
+	targetSinceMs: number,
+	appendAgentProgressSummary: (
+		messageId: string,
+		summary: AgentProgressSummaryRecord,
+	) => void,
+): void {
+	if (summaries.length === 0) return;
+	const finalMessage = [...useChatStore.getState().messages]
+		.reverse()
+		.find(
+			(message) =>
+				message.conversationId === conversationId &&
+				message.role === "assistant" &&
+				message.timestamp >= targetSinceMs,
+		);
+	if (!finalMessage) {
+		console.warn("[pool-chat] dropped pool timeline summaries: no assistant message");
+		return;
+	}
+	for (const summary of summaries) {
+		appendAgentProgressSummary(finalMessage.id, summary);
+	}
 }
 
 function shortProfileId(profileId: string): string {
@@ -464,6 +510,9 @@ function ConversationSidebar() {
 }
 export function ChatPanel() {
 	const { t } = useTranslation();
+	const [poolCooldownUntilMs, setPoolCooldownUntilMs] = useState<number | null>(null);
+	const poolCooldownRemainingMs = useCountdown(poolCooldownUntilMs);
+	const poolCooldownRemainingRef = useRef(poolCooldownRemainingMs);
 	useSourceFiles(); // Keep source file cache warm
 	const activeConversationId = useChatStore((s) => s.activeConversationId);
 	const isStreaming = useChatStore((s) => s.isStreaming);
@@ -538,6 +587,10 @@ export function ChatPanel() {
 		? allMessages.filter((m) => m.conversationId === activeConversationId)
 		: [];
 	const project = useWikiStore((s) => s.project);
+
+	useEffect(() => {
+		poolCooldownRemainingRef.current = poolCooldownRemainingMs;
+	}, [poolCooldownRemainingMs]);
 	const llmConfig = useWikiStore((s) => s.llmConfig);
 	const searchApiConfig = useWikiStore((s) => s.searchApiConfig);
 	const anyTxtAvailable = hasConfiguredAnyTxt(searchApiConfig.anyTxt);
@@ -1094,7 +1147,9 @@ export function ChatPanel() {
 				images,
 				chatOptions: options,
 			});
+			const poolSummaryTargetSinceMs = Date.now();
 			setStreaming(true);
+			const poolProgressSummaries: AgentProgressSummaryRecord[] = [];
 			try {
 				setChatAgentEvents([]);
 				const controller = new AbortController();
@@ -1142,6 +1197,30 @@ export function ChatPanel() {
 				};
 				const streamFinalAnswer = async (reasoningOff: boolean) => {
 					let streamError: Error | null = null;
+					const handlePoolStatus = (event: PoolStatusEvent) => {
+						if (event.type === "fallback") {
+							poolProgressSummaries.push({
+								text: t("agent.timeline.modelCallProfileFallback", {
+									profile: event.profileId,
+									requested: event.requestedProfileId ?? t("chat.modelAuto"),
+								}),
+								timestamp: Date.now(),
+							});
+							return;
+						}
+						setPoolCooldownUntilMs(event.openUntilMs);
+						const remainingMs = Math.max(
+							poolCooldownRemainingRef.current,
+							event.openUntilMs - Date.now(),
+						);
+						poolProgressSummaries.push({
+							text: t("agent.timeline.modelCallProfileCooldown", {
+								profile: event.profileId,
+								remaining: formatPoolCooldownRemaining(remainingMs, t),
+							}),
+							timestamp: Date.now(),
+						});
+					};
 					await streamChatRouted(
 						"chat",
 						llmConfig,
@@ -1163,6 +1242,7 @@ export function ChatPanel() {
 						controller.signal,
 						reasoningOff ? { reasoning: { mode: "off" } } : undefined,
 						`chat:${convId}`,
+						handlePoolStatus,
 					);
 					if (streamError) throw streamError;
 				};
@@ -1177,6 +1257,12 @@ export function ChatPanel() {
 				}
 				closeReasoning();
 				finalizeStream(accumulated, agentResult.references, convId, agentResult.steps);
+				appendPoolProgressSummaries(
+					convId,
+					poolProgressSummaries,
+					poolSummaryTargetSinceMs,
+					appendAgentProgressSummary,
+				);
 				setChatAgentEvents([]);
 				abortRef.current = null;
 			} catch (err) {
@@ -1189,9 +1275,21 @@ export function ChatPanel() {
 						streamingAgentMessageId: null,
 						streamingContent: "",
 					});
+					appendPoolProgressSummaries(
+						convId,
+						poolProgressSummaries,
+						poolSummaryTargetSinceMs,
+						appendAgentProgressSummary,
+					);
 				} else {
 					const message = err instanceof Error ? err.message : String(err);
 					finalizeStream(`Error: ${message}`, undefined, convId);
+					appendPoolProgressSummaries(
+						convId,
+						poolProgressSummaries,
+						poolSummaryTargetSinceMs,
+						appendAgentProgressSummary,
+					);
 				}
 			}
 			return;
@@ -1210,9 +1308,11 @@ export function ChatPanel() {
 			addMessage,
 			setStreaming,
 			appendStreamToken,
+			appendAgentProgressSummary,
 			finalizeStream,
 			createConversation,
 			maxHistoryMessages,
+			t,
 		],
 	);
 	const handleStop = useCallback(() => {

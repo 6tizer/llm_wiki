@@ -380,6 +380,10 @@
       "empty": "无工具调用",
       "progress": "进度更新",
       "profileFallback": "所选 profile 不可用，本次使用了 {{profile}}。",
+      "modelCallProfileFallback": "已降级到 {{profile}}（请求 {{requested}}）。",
+      "modelCallProfileCooldown": "{{profile}} 限流冷却中（剩余 {{remaining}}）。",
+      "modelCallCooldownSeconds": "{{count}} 秒",
+      "modelCallCooldownMinutes": "{{count}} 分钟",
       "permission": {
         "allow_temporary": "已允许 {{toolName}}",
         "allow_permanent": "已允许 {{toolName}}",

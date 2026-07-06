@@ -570,6 +570,8 @@ export interface RuntimeProfilePoolClaim {
   claimId: string
   profileId: string
   expiresAtMs: number
+  requestedProfileId?: string | null
+  fallbackReason?: string | null
   claim: RuntimeProfileClaimRecord
 }
 

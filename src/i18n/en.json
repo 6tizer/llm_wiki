@@ -380,6 +380,10 @@
       "empty": "No tool calls",
       "progress": "Progress update",
       "profileFallback": "Selected profile is unavailable; using {{profile}} for this run.",
+      "modelCallProfileFallback": "Fell back to {{profile}} (requested {{requested}}).",
+      "modelCallProfileCooldown": "{{profile}} is rate-limited and cooling down ({{remaining}} remaining).",
+      "modelCallCooldownSeconds": "{{count}}s",
+      "modelCallCooldownMinutes": "{{count}}m",
       "permission": {
         "allow_temporary": "Allowed {{toolName}}",
         "allow_permanent": "Allowed {{toolName}}",

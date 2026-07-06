@@ -323,6 +323,8 @@ pub(crate) fn runtime_profile_pool_claim_for_project(
             claim_id,
             profile_id: selected_profile_id,
             expires_at_ms,
+            requested_profile_id: fallback_requested_profile_id.cloned(),
+            fallback_reason,
             claim,
         })
     })
@@ -1477,6 +1479,7 @@ mod tests {
     use super::*;
 
     use rusqlite::{params, Connection};
+    use serde::Deserialize;
 
     use std::fs;
     use std::sync::{Arc, Barrier};
@@ -1493,6 +1496,15 @@ mod tests {
             reason: None,
             error: None,
         }
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LegacyProfilePoolClaimResponse {
+        claim_id: String,
+        profile_id: String,
+        expires_at_ms: i64,
+        claim: serde_json::Value,
     }
 
     #[test]
@@ -1720,7 +1732,99 @@ mod tests {
             .expect("claim policy profile");
 
         assert_eq!(claimed.profile_id, "profile-2");
+        assert!(claimed.requested_profile_id.is_none());
+        assert!(claimed.fallback_reason.is_none());
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_claim_response_reports_policy_fallback_without_job_id() {
+        let project = temp_project("profile-pool-policy-fallback-response");
+        fs::create_dir_all(&project).expect("create temp project");
+        create_profile_pool_profile(
+            &project,
+            "profile-primary",
+            "model-call",
+            false,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        create_profile_pool_profile(
+            &project,
+            "profile-fallback",
+            "model-call",
+            true,
+            1,
+            profile_pool_capability_json(serde_json::json!(true), serde_json::json!(false)),
+        );
+        runtime_task_policy_set_for_project(
+            Some(&project),
+            true,
+            RuntimeTaskPolicySetRequest {
+                task_family: "summarize".to_string(),
+                profile_order: vec![
+                    "profile-primary".to_string(),
+                    "profile-fallback".to_string(),
+                ],
+                auto_failover: Some(true),
+            },
+            175,
+        )
+        .expect("save policy");
+        let mut request = profile_pool_claim_request("claim-1", vec![]);
+        request.preferred_profile_ids = None;
+
+        let claimed = runtime_profile_pool_claim_for_project(Some(&project), true, request, 200)
+            .expect("claim fallback profile");
+
+        assert_eq!(claimed.profile_id, "profile-fallback");
+        assert_eq!(
+            claimed.requested_profile_id.as_deref(),
+            Some("profile-primary")
+        );
+        assert_eq!(claimed.fallback_reason.as_deref(), Some("disabled"));
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let fallback_events: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_events WHERE event_name = ?1",
+                [PROFILE_POOL_FALLBACK_NAME],
+                |row| row.get(0),
+            )
+            .expect("count fallback events");
+        assert_eq!(fallback_events, 0);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn profile_pool_claim_response_with_fallback_remains_legacy_deserializable() {
+        let claim = RuntimeProfilePoolClaim {
+            claim_id: "claim-1".to_string(),
+            profile_id: "profile-fallback".to_string(),
+            expires_at_ms: 1_200,
+            requested_profile_id: Some("profile-primary".to_string()),
+            fallback_reason: Some("disabled".to_string()),
+            claim: RuntimeProfileClaimRecord {
+                claim_id: "claim-1".to_string(),
+                profile_id: "profile-fallback".to_string(),
+                kind: "model-call".to_string(),
+                task_family: "summarize".to_string(),
+                job_id: None,
+                holder: "tester".to_string(),
+                acquired_at_ms: 200,
+                expires_at_ms: 1_200,
+                released_at_ms: None,
+                status: ACTIVE_CLAIM_STATUS.to_string(),
+            },
+        };
+
+        let legacy: LegacyProfilePoolClaimResponse =
+            serde_json::from_value(serde_json::to_value(claim).expect("serialize claim"))
+                .expect("legacy client ignores fallback fields");
+
+        assert_eq!(legacy.claim_id, "claim-1");
+        assert_eq!(legacy.profile_id, "profile-fallback");
+        assert_eq!(legacy.expires_at_ms, 1_200);
+        assert_eq!(legacy.claim["claimId"], "claim-1");
     }
 
     #[test]

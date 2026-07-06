@@ -1036,6 +1036,10 @@ pub struct RuntimeProfilePoolClaim {
     claim_id: String,
     profile_id: String,
     expires_at_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_reason: Option<String>,
     claim: RuntimeProfileClaimRecord,
 }
 
