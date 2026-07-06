@@ -8,13 +8,15 @@ import "@/i18n"
 import {
   createEmptyProfileDraft,
   draftFromProfile,
-  groupProfilesByConnection,
   ModelProfilesSection,
-  profileConnectionGroupKey,
   saveProfileDraft,
   taskFamiliesForRender,
   type ModelProfileDraft,
 } from "./model-profiles-section"
+import {
+  groupProfilesByConnection,
+  profileConnectionGroupKey,
+} from "@/lib/profile-connections"
 import type { RuntimeProfileRecord } from "@/commands/runtime-db"
 
 const runtimeDbMocks = vi.hoisted(() => ({

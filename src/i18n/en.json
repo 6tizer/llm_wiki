@@ -257,9 +257,10 @@
     "modelAuto": "Auto",
     "modelIndicator": "Model routing",
     "agentRouting": {
-      "profile": "Profile",
+      "profile": "Connection",
       "profileAuto": "Auto (recommended)",
       "policy": "Policy",
+      "policyScopeHint": "Applies to this conversation only",
       "policyOptions": {
         "default": {
           "label": "Default",

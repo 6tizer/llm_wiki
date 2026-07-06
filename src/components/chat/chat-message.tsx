@@ -142,7 +142,7 @@ function ChatMessageImpl({
           />
         ) : (!isUser || content) && (
           <div
-            className={`rounded-lg px-3 py-2 text-sm ${isUser ? "self-end" : "self-start"} ${
+            className={`min-w-0 rounded-lg px-3 py-2 text-sm ${isUser ? "self-end" : "self-start"} ${
               isUser
                 ? "bg-primary text-primary-foreground"
                 : "bg-muted text-foreground"
@@ -1114,7 +1114,7 @@ function MarkdownContent({ content }: { content: string }) {
     <div>
       {thinking && <ThinkingBlock content={thinking} />}
       <div
-        className="chat-markdown prose prose-sm max-w-none dark:prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
+        className="chat-markdown prose prose-sm min-w-0 max-w-none break-words dark:prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
         dir={direction}
         lang={htmlLang}
         style={{ textAlign: "start" }}
@@ -1163,7 +1163,7 @@ function MarkdownContent({ content }: { content: string }) {
               return (
                 <pre
                   dir="ltr"
-                  className="rounded bg-background/50 p-2 text-xs overflow-x-auto"
+                  className="max-w-full rounded bg-background/50 p-2 text-xs overflow-x-auto"
                   style={{ textAlign: "left" }}
                   {...props}
                 >
@@ -1177,7 +1177,7 @@ function MarkdownContent({ content }: { content: string }) {
               if (lang === "mermaid") {
                 return <MermaidDiagram code={codeText} />
               }
-              return <code dir="ltr" className={className} {...props}>{children}</code>
+              return <code dir="ltr" className={className ? className : "break-words"} {...props}>{children}</code>
             },
           }}
         >

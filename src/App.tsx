@@ -288,7 +288,7 @@ function App() {
           if (!savedProviderConfigs) {
             return
           }
-          const { LLM_PRESETS } = await import("@/components/settings/llm-presets")
+          const { LLM_PRESETS } = await import("@/lib/llm-presets")
           const { resolveConfig } = await import("@/components/settings/preset-resolver")
           const preset = LLM_PRESETS.find((p) => p.id === savedActivePreset)
           if (preset) {

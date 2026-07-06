@@ -13,6 +13,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -62,6 +63,7 @@ import { hasConfiguredAnyTxt } from "@/lib/anytxt-search";
 import { executeIngestWrites, startIngest } from "@/lib/ingest";
 import { hasModelCallProfileCandidate, streamChatRouted } from "@/lib/pool-chat";
 import { normalizePath } from "@/lib/path-utils";
+import { groupProfilesByConnection } from "@/lib/profile-connections";
 import { SOURCE_WATCH_FILE_TYPE_GROUPS } from "@/lib/source-watch-config";
 import { buildChatAgentMessages, type ChatAgentEvent } from "@/lib/chat-agent";
 import {
@@ -1326,6 +1328,12 @@ export function ChatPanel() {
 	const activeRunProfile = activeConversationId
 		? activeRunProfileByConversation[activeConversationId] ?? null
 		: null;
+	const selectedProfileId = activeConversation?.agentProfileIdOverride;
+	const selectedProfileRecord = selectedProfileId
+		? agentRunProfileCandidates.find(
+				(profile) => profile.profileId === selectedProfileId,
+			)
+		: undefined;
 	const resolvedProfileRecord = activeRunProfile
 		? agentRunProfileCandidates.find(
 				(profile) => profile.profileId === activeRunProfile.profileId,
@@ -1334,10 +1342,15 @@ export function ChatPanel() {
 	const activeRunModel = activeConversationId
 		? activeRunModelByConversation[activeConversationId]
 		: null;
-	const modelIndicator = activeRunProfile
+	const modelIndicator = selectedProfileRecord
+		? selectedProfileRecord.displayName
+		: activeRunProfile
 		? (resolvedProfileRecord?.displayName ?? shortProfileId(activeRunProfile.profileId))
 		: (activeRunModel ?? t("chat.modelAuto"));
-	const selectedProfileId = activeConversation?.agentProfileIdOverride;
+	const agentRunProfileGroups = useMemo(
+		() => groupProfilesByConnection(agentRunProfileCandidates),
+		[agentRunProfileCandidates],
+	);
 	const selectedPermissionPolicy =
 		activeConversation?.agentPermissionPolicyOverride ??
 		agentResourceConfig.defaultPermissionPolicy ??
@@ -1531,26 +1544,47 @@ export function ChatPanel() {
 										<span>{t("chat.agentRouting.profileAuto")}</span>
 										{!selectedProfileId && <Check className="h-3 w-3" />}
 									</button>
-									{agentRunProfileCandidates.map((profile) => (
-										<button
-											key={profile.profileId}
-											type="button"
-											onClick={() => setProfileOverride(profile.profileId)}
-											className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent ${
-												selectedProfileId === profile.profileId
-													? "bg-accent text-accent-foreground"
-													: ""
-											}`}
-										>
-											<span className="min-w-0 truncate">{profile.displayName}</span>
-											{selectedProfileId === profile.profileId && (
-												<Check className="h-3 w-3 shrink-0" />
-											)}
-										</button>
+									{agentRunProfileGroups.map((group) => (
+										<section key={group.key} className="mt-1">
+											<div className="px-2 pb-1 pt-2">
+												<div className="truncate text-[10px] font-semibold uppercase text-muted-foreground">
+													{t("profileGroups.heading", {
+														provider: group.providerLabel,
+														count: group.profiles.length,
+													})}
+												</div>
+												<div
+													className="truncate text-[10px] text-muted-foreground"
+													title={group.endpoint}
+												>
+													{group.endpoint || t("profileGroups.defaultEndpoint")}
+												</div>
+											</div>
+											{group.profiles.map((profile) => (
+												<button
+													key={profile.profileId}
+													type="button"
+													onClick={() => setProfileOverride(profile.profileId)}
+													className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent ${
+														selectedProfileId === profile.profileId
+															? "bg-accent text-accent-foreground"
+															: ""
+													}`}
+												>
+													<span className="min-w-0 truncate">{profile.displayName}</span>
+													{selectedProfileId === profile.profileId && (
+														<Check className="h-3 w-3 shrink-0" />
+													)}
+												</button>
+											))}
+										</section>
 									))}
 									<div className="mt-2 border-t border-border pt-2">
 										<div className="px-2 pb-1 text-[10px] font-semibold uppercase text-muted-foreground">
 											{t("chat.agentRouting.policy")}
+										</div>
+										<div className="px-2 pb-1 text-[10px] text-muted-foreground">
+											{t("chat.agentRouting.policyScopeHint")}
 										</div>
 										{(["default", "restricted", "bypassPermissions"] as const).map((policy) => (
 											<button

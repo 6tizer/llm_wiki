@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { LLM_PRESETS } from "./llm-presets"
+import { LLM_PRESETS } from "@/lib/llm-presets"
 import { resolveConfig } from "./preset-resolver"
 import type { LlmConfig } from "@/stores/wiki-store"
-import type { LlmPreset } from "./llm-presets"
+import type { LlmPreset } from "@/lib/llm-presets"
 
 function fallbackConfig(overrides: Partial<LlmConfig> = {}): LlmConfig {
   return {
