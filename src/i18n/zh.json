@@ -51,7 +51,6 @@
     "sources": "资料",
     "explore": "探索",
     "wikiHealth": "Wiki 健康",
-    "research": "深度研究",
     "settings": "设置",
     "switchProject": "切换项目",
     "updateAvailable": "有可用更新",
@@ -76,8 +75,9 @@
   "explore": {
     "navLabel": "探索工具",
     "tabs": {
+      "graph": "图谱",
       "search": "搜索",
-      "graph": "图谱"
+      "research": "深度研究"
     }
   },
   "wikiHealth": {

@@ -11,7 +11,6 @@ vi.mock("@/components/sources/sources-view", () => ({ SourcesView: () => <div da
 vi.mock("@/components/settings/settings-view", () => ({ SettingsView: () => <div data-testid="view-settings" /> }))
 vi.mock("@/components/explore/explore-view", () => ({ ExploreView: () => <div data-testid="view-explore" /> }))
 vi.mock("@/components/wiki-health/wiki-health-view", () => ({ WikiHealthView: () => <div data-testid="view-wiki-health" /> }))
-vi.mock("./research-panel", () => ({ ResearchPanel: () => <div data-testid="view-research" /> }))
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -43,7 +42,7 @@ describe("ContentArea", () => {
     ["sources", "view-sources"],
     ["explore", "view-explore"],
     ["wiki-health", "view-wiki-health"],
-    ["research", "view-research"],
+    ["research", "view-explore"],
     ["settings", "view-settings"],
   ] as Array<[WikiState["activeView"], string]>)("renders %s explicitly", (activeView, testId) => {
     useWikiStore.setState({ activeView })

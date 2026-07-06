@@ -8,7 +8,6 @@ import { IconSidebar } from "./icon-sidebar"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useReviewStore } from "@/stores/review-store"
-import { useResearchStore } from "@/stores/research-store"
 
 vi.mock("@/commands/fs", () => ({
   clipServerStatus: vi.fn(async () => "running"),
@@ -76,22 +75,6 @@ beforeEach(() => {
       },
     ],
   })
-  useResearchStore.setState({
-    tasks: [
-      {
-        id: "research-1",
-        projectPath: "/project",
-        topic: "Topic",
-        status: "queued",
-        webResults: [],
-        synthesis: "",
-        savedPath: null,
-        error: null,
-        createdAt: 1,
-      },
-    ],
-    maxConcurrent: 3,
-  })
 })
 
 afterEach(() => {
@@ -99,19 +82,32 @@ afterEach(() => {
 })
 
 describe("IconSidebar", () => {
-  it("renders the five main nav items with visible labels and accessible names", async () => {
+  it("renders the four main nav items with visible labels and accessible names", async () => {
     const { container, root } = renderSidebar()
     await flush()
 
-    for (const label of ["Chat", "Sources", "Explore", "Wiki Health", "Deep Research"]) {
+    const mainLabels = ["Chat", "Sources", "Explore", "Wiki Health"]
+    for (const label of mainLabels) {
       const button = container.querySelector(`button[aria-label='${label}']`)
       expect(button).not.toBeNull()
       expect(button?.textContent).toContain(label)
     }
+    expect(mainLabels).toHaveLength(4)
+    expect(container.querySelector("button[aria-label='Deep Research']")).toBeNull()
     expect(container.querySelector("button[aria-label='Search']")).toBeNull()
     expect(container.querySelector("button[aria-label='Graph']")).toBeNull()
     expect(container.querySelector("button[aria-label='Lint']")).toBeNull()
     expect(container.querySelector("button[aria-label='Review']")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("marks Explore active when the internal research alias is active", async () => {
+    useWikiStore.setState({ activeView: "research" })
+    const { container, root } = renderSidebar()
+    await flush()
+
+    expect(container.querySelector("button[aria-label='Explore']")?.getAttribute("aria-current")).toBe("page")
 
     unmount(root)
   })

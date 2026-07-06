@@ -16,19 +16,12 @@ describe("getAppLayoutVisibility", () => {
     })
   })
 
-  it("keeps research as a main workspace view without a right panel by itself", () => {
-    expect(getAppLayoutVisibility("research", null)).toEqual({
-      showLeftPanel: true,
-      hasRightPanel: false,
-    })
-  })
-
   it("keeps sidebar visibility as layout chrome state, independent from collapsed rendering", () => {
     expect(getAppLayoutVisibility("wiki", null).showLeftPanel).toBe(true)
     expect(getAppLayoutVisibility("settings", null).showLeftPanel).toBe(false)
   })
 
-  it.each(["sources", "explore", "wiki-health"] as const)(
+  it.each(["sources", "explore", "wiki-health", "research"] as const)(
     "keeps %s as workspace chrome without a selected file",
     (activeView) => {
       expect(getAppLayoutVisibility(activeView, null)).toEqual({
