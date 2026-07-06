@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { RuntimeProfileRecord } from "@/commands/runtime-db"
+import type { RuntimeProfilePoolClaim, RuntimeProfileRecord } from "@/commands/runtime-db"
 
 const runtimeDbMocks = vi.hoisted(() => ({
   runtimeModelCallStream: vi.fn(),
@@ -52,7 +52,7 @@ function profile(overrides: Partial<RuntimeProfileRecord> = {}): RuntimeProfileR
   }
 }
 
-function claim() {
+function claim(overrides: Partial<RuntimeProfilePoolClaim> = {}): RuntimeProfilePoolClaim {
   return {
     claimId: "claim-chat",
     profileId: "profile-chat",
@@ -67,6 +67,7 @@ function claim() {
       expiresAtMs: 1_202,
       status: "active",
     },
+    ...overrides,
   }
 }
 
@@ -293,6 +294,59 @@ describe("streamChatRouted", () => {
     warnSpy.mockRestore()
   })
 
+  it("emits a fallback pool status when claim reports a requested profile fallback", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        profile({ profileId: "profile-primary", displayName: "Primary" }),
+        profile({ profileId: "profile-fallback", displayName: "Fallback" }),
+      ],
+    })
+    runtimeDbMocks.runtimeProfilePoolClaim.mockResolvedValue(claim({
+      profileId: "profile-fallback",
+      requestedProfileId: "profile-primary",
+      fallbackReason: "disabled",
+      claim: {
+        ...claim().claim,
+        profileId: "profile-fallback",
+      },
+    }))
+    const { streamChatRouted } = await import("./pool-chat")
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+    const onPoolStatus = vi.fn()
+
+    await streamChatRouted(
+      "chat",
+      {
+        provider: "openai",
+        apiKey: "",
+        model: "legacy",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 128_000,
+        reasoning: { mode: "auto" },
+      },
+      [{ role: "user", content: "hello" }],
+      callbacks,
+      undefined,
+      undefined,
+      "chat:1",
+      onPoolStatus,
+    )
+
+    expect(onPoolStatus).toHaveBeenCalledWith({
+      type: "fallback",
+      requestedProfileId: "profile-primary",
+      profileId: "profile-fallback",
+      reason: "disabled",
+    })
+  })
+
   it("releases rate-limited streams in finally", async () => {
     runtimeDbMocks.runtimeModelCallStream.mockImplementation(async (_request, onEvent) => {
       onEvent.onmessage?.({
@@ -332,6 +386,61 @@ describe("streamChatRouted", () => {
       outcome: "rate-limited",
       retryAfterMs: 12000,
       error: "model-call-rate-limited: retryAfterMs=12000 provider returned 429 Too Many Requests",
+    })
+  })
+
+  it("emits a cooldown pool status when release returns a circuit breaker", async () => {
+    runtimeDbMocks.runtimeModelCallStream.mockImplementation(async (_request, onEvent) => {
+      onEvent.onmessage?.({
+        type: "error",
+        status: 429,
+        message: "model-call-rate-limited: retryAfterMs=12000 provider returned 429 Too Many Requests",
+      })
+    })
+    runtimeDbMocks.runtimeProfilePoolRelease.mockResolvedValue({
+      claim: claim().claim,
+      circuitBreaker: {
+        profileId: "profile-chat",
+        status: "rate-limited",
+        reason: "provider returned 429",
+        error: "model-call-rate-limited",
+        openedAtMs: 1_000,
+        openUntilMs: 13_000,
+        updatedAtMs: 1_000,
+      },
+    })
+    const { streamChatRouted } = await import("./pool-chat")
+    const callbacks = {
+      onToken: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }
+    const onPoolStatus = vi.fn()
+
+    await streamChatRouted(
+      "chat",
+      {
+        provider: "openai",
+        apiKey: "",
+        model: "legacy",
+        ollamaUrl: "",
+        customEndpoint: "",
+        maxContextSize: 128_000,
+        reasoning: { mode: "auto" },
+      },
+      [{ role: "user", content: "hello" }],
+      callbacks,
+      undefined,
+      undefined,
+      "chat:1",
+      onPoolStatus,
+    )
+
+    expect(onPoolStatus).toHaveBeenCalledWith({
+      type: "cooldown",
+      profileId: "profile-chat",
+      reason: "provider returned 429",
+      openUntilMs: 13_000,
     })
   })
 

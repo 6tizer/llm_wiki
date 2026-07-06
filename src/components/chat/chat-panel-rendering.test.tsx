@@ -19,7 +19,12 @@ const buildChatAgentMessagesMock = vi.hoisted(() => vi.fn())
 const streamChatMock = vi.hoisted(() => vi.fn())
 const streamAgentMock = vi.hoisted(() => vi.fn())
 const deleteFileMock = vi.hoisted(() => vi.fn())
+const runtimeModelCallStreamMock = vi.hoisted(() => vi.fn())
+const runtimeModelCallStreamCancelMock = vi.hoisted(() => vi.fn())
 const runtimeProfileListMock = vi.hoisted(() => vi.fn())
+const runtimeProfilePoolClaimMock = vi.hoisted(() => vi.fn())
+const runtimeProfilePoolListMock = vi.hoisted(() => vi.fn())
+const runtimeProfilePoolReleaseMock = vi.hoisted(() => vi.fn())
 const runtimeJobCreateMock = vi.hoisted(() => vi.fn())
 const runtimeJobClaimByKindMock = vi.hoisted(() => vi.fn())
 const runtimeJobHeartbeatMock = vi.hoisted(() => vi.fn())
@@ -69,6 +74,12 @@ vi.mock("@/lib/llm-client", async (importOriginal) => {
   }
 })
 
+vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class<T> {
+    onmessage?: (message: T) => void
+  },
+}))
+
 vi.mock("@/lib/agent/agent-transport", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/agent/agent-transport")>()
   return {
@@ -90,7 +101,12 @@ vi.mock("@/commands/runtime-db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/commands/runtime-db")>()
   return {
     ...actual,
+    runtimeModelCallStream: runtimeModelCallStreamMock,
+    runtimeModelCallStreamCancel: runtimeModelCallStreamCancelMock,
     runtimeProfileList: runtimeProfileListMock,
+    runtimeProfilePoolClaim: runtimeProfilePoolClaimMock,
+    runtimeProfilePoolList: runtimeProfilePoolListMock,
+    runtimeProfilePoolRelease: runtimeProfilePoolReleaseMock,
     runtimeJobCreate: runtimeJobCreateMock,
     runtimeJobClaimByKind: runtimeJobClaimByKindMock,
     runtimeJobHeartbeat: runtimeJobHeartbeatMock,
@@ -157,6 +173,14 @@ async function pressEnter(container: HTMLElement): Promise<void> {
   })
 }
 
+async function flushPromises(times = 3): Promise<void> {
+  await act(async () => {
+    for (let index = 0; index < times; index += 1) {
+      await Promise.resolve()
+    }
+  })
+}
+
 async function chooseImage(container: HTMLElement): Promise<void> {
   const input = container.querySelector<HTMLInputElement>('input[type="file"]')
   if (!input) throw new Error("file input not found")
@@ -204,6 +228,29 @@ function agentRunProfileRecord(overrides: Record<string, unknown> = {}): Record<
     capabilityVersion: "profile-probe.v1",
     capabilityStatus: "supported",
     capabilityJson: JSON.stringify({ agentRunSupported: true }),
+    ...overrides,
+  }
+}
+
+function modelCallProfileRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    profileId: "profile-chat",
+    displayName: "Chat",
+    providerId: "openai",
+    modelId: "gpt-test",
+    endpoint: null,
+    apiMode: "openai-chat-completions",
+    authStyle: "bearer",
+    secretRef: "llm-wiki-profile-secret:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    enabled: true,
+    kind: "model-call",
+    taskFamilies: ["chat"],
+    maxConcurrency: 1,
+    capabilityVersion: "profile-probe.v1",
+    capabilityStatus: "supported",
+    capabilityJson: JSON.stringify({ modelCallSupported: true }),
+    createdAtMs: 1,
+    updatedAtMs: 1,
     ...overrides,
   }
 }
@@ -318,10 +365,48 @@ async function openDeleteQaDialog(container: HTMLElement): Promise<void> {
 describe("ChatPanel agent mode rendering", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    delete (globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__
     globalThis.FileReader = MockFileReader as unknown as typeof FileReader
     saveQaForConversationMock.mockResolvedValue({ ok: true, saved: true })
     streamAgentMock.mockResolvedValue(undefined)
     deleteFileMock.mockResolvedValue(undefined)
+    runtimeModelCallStreamMock.mockResolvedValue(undefined)
+    runtimeModelCallStreamCancelMock.mockResolvedValue(undefined)
+    runtimeProfilePoolClaimMock.mockResolvedValue({
+      claimId: "claim-chat",
+      profileId: "profile-chat",
+      expiresAtMs: 1_202,
+      claim: {
+        claimId: "claim-chat",
+        profileId: "profile-chat",
+        kind: "model-call",
+        taskFamily: "chat",
+        holder: "chat:conv-1",
+        acquiredAtMs: 2,
+        expiresAtMs: 1_202,
+        status: "active",
+      },
+    })
+    runtimeProfilePoolListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      activeClaims: [],
+      circuitBreakers: [],
+    })
+    runtimeProfilePoolReleaseMock.mockResolvedValue({
+      claim: {
+        claimId: "claim-chat",
+        profileId: "profile-chat",
+        kind: "model-call",
+        taskFamily: "chat",
+        holder: "chat:conv-1",
+        acquiredAtMs: 2,
+        expiresAtMs: 1_202,
+        status: "released",
+      },
+      circuitBreaker: null,
+    })
     runtimeJobCreateMock.mockResolvedValue({
       jobId: "agent-job-1",
       kind: "agent-chat-run",
@@ -1412,6 +1497,164 @@ describe("ChatPanel agent mode rendering", () => {
 
     expect(container.textContent).toContain(
       "Selected profile is unavailable; using agent-profile for this run.",
+    )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("renders model-call pool fallback and cooldown timeline rows", async () => {
+    setupActiveProjectConversation()
+    useChatStore.setState((state) => ({
+      messages: state.messages.map((message) =>
+        message.id === "m2"
+          ? {
+              ...message,
+              progressSummaries: [
+                {
+                  text: i18n.t("agent.timeline.modelCallProfileFallback", {
+                    profile: "profile-fallback",
+                    requested: "profile-primary",
+                  }),
+                  timestamp: 3,
+                },
+                {
+                  text: i18n.t("agent.timeline.modelCallProfileCooldown", {
+                    profile: "profile-fallback",
+                    remaining: i18n.t("agent.timeline.modelCallCooldownSeconds", {
+                      count: 12,
+                    }),
+                  }),
+                  timestamp: 4,
+                },
+              ],
+            }
+          : message,
+      ),
+    }))
+    const { container, root } = renderChatPanel()
+
+    const timelineButton = findButtonByText(container, "Activity timeline")
+    await act(async () => {
+      timelineButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain(
+      "Fell back to profile-fallback (requested profile-primary).",
+    )
+    expect(container.textContent).toContain(
+      "profile-fallback is rate-limited and cooling down (12s remaining).",
+    )
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it("flushes model-call pool timeline rows onto the error assistant message", async () => {
+    ;(globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__ = {}
+    setupActiveProjectConversation()
+    useWikiStore.setState((state) => ({
+      llmConfig: {
+        ...state.llmConfig,
+        provider: "anthropic",
+        apiKey: "",
+      },
+    }))
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    buildChatAgentMessagesMock.mockResolvedValue({
+      messages: [{ role: "user", content: "prompt" }],
+      references: [],
+      queryPages: [],
+      steps: [],
+    })
+    runtimeProfilePoolClaimMock.mockResolvedValue({
+      claimId: "claim-chat",
+      profileId: "profile-fallback",
+      requestedProfileId: "profile-primary",
+      fallbackReason: "disabled",
+      expiresAtMs: 1_202,
+      claim: {
+        claimId: "claim-chat",
+        profileId: "profile-fallback",
+        kind: "model-call",
+        taskFamily: "chat",
+        holder: "chat:conv-1",
+        acquiredAtMs: 2,
+        expiresAtMs: 1_202,
+        status: "active",
+      },
+    })
+    runtimeModelCallStreamMock.mockImplementation(async (_request, onEvent) => {
+      onEvent.onmessage?.({
+        type: "error",
+        status: 429,
+        message:
+          "model-call-rate-limited: retryAfterMs=12000 provider returned 429 Too Many Requests",
+      })
+    })
+    runtimeProfilePoolReleaseMock.mockResolvedValue({
+      claim: {
+        claimId: "claim-chat",
+        profileId: "profile-fallback",
+        kind: "model-call",
+        taskFamily: "chat",
+        holder: "chat:conv-1",
+        acquiredAtMs: 2,
+        expiresAtMs: 1_202,
+        status: "released",
+      },
+      circuitBreaker: {
+        profileId: "profile-fallback",
+        status: "rate-limited",
+        reason: "provider returned 429",
+        error: "model-call-rate-limited",
+        openedAtMs: Date.now(),
+        openUntilMs: Date.now() + 12_000,
+        updatedAtMs: Date.now(),
+      },
+    })
+    const { container, root } = renderChatPanel()
+    await flushPromises(3)
+    runtimeProfileListMock.mockResolvedValue({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        modelCallProfileRecord({
+          profileId: "profile-primary",
+          displayName: "Primary",
+        }),
+        modelCallProfileRecord({
+          profileId: "profile-fallback",
+          displayName: "Fallback",
+        }),
+      ],
+    })
+
+    await typeText(container, "use the chat pool")
+    await pressEnter(container)
+    await flushPromises(8)
+
+    expect(runtimeModelCallStreamMock).toHaveBeenCalledTimes(1)
+    expect(streamChatMock).not.toHaveBeenCalled()
+    expect(container.textContent).toContain("Error: model-call-rate-limited")
+
+    const timelineButton = findButtonByText(container, "Activity timeline")
+    await act(async () => {
+      timelineButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain(
+      "Fell back to profile-fallback (requested profile-primary).",
+    )
+    expect(container.textContent).toContain(
+      "profile-fallback is rate-limited and cooling down",
     )
 
     act(() => root.unmount())

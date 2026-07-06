@@ -168,7 +168,7 @@ function ChatMessageImpl({
         {!isAgent && message.agentSteps && message.agentSteps.length > 0 && (
           <ChatAgentSteps steps={message.agentSteps} />
         )}
-        {!isSessionCompactOnly && isAgent && (
+        {!isSessionCompactOnly && (isAgent || (message.progressSummaries?.length ?? 0) > 0) && (
           <AgentToolTimeline
             toolCalls={message.toolCalls ?? []}
             progressSummaries={message.progressSummaries}

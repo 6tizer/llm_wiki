@@ -26,6 +26,8 @@ const textEncoder = new TextEncoder()
 interface ClaimedModelCallProfile {
   claimId: string
   profile: RuntimeProfileRecord
+  requestedProfileId?: string | null
+  fallbackReason?: string | null
 }
 
 interface StreamEvent {
@@ -34,6 +36,23 @@ interface StreamEvent {
   message?: unknown
   status?: unknown
 }
+
+/** Pool routing status emitted by model-call chat streams for timeline observability. */
+export type PoolStatusEvent =
+  | {
+      type: "fallback"
+      requestedProfileId?: string | null
+      profileId: string
+      reason?: string | null
+      openUntilMs?: never
+    }
+  | {
+      type: "cooldown"
+      requestedProfileId?: never
+      profileId: string
+      reason?: string | null
+      openUntilMs: number
+    }
 
 class PoolStreamError extends Error {
   status?: number
@@ -179,7 +198,12 @@ export async function claimModelCallProfileForFamily(
     }
     throw profileUnavailable("claimed profile is not present in profile list")
   }
-  return { claimId: claim.claimId, profile }
+  return {
+    claimId: claim.claimId,
+    profile,
+    requestedProfileId: claim.requestedProfileId,
+    fallbackReason: claim.fallbackReason,
+  }
 }
 
 function streamIdFor(taskFamily: ModelCallTaskFamily): string {
@@ -334,10 +358,19 @@ export async function streamChatRouted(
   signal?: AbortSignal,
   requestOverrides?: RequestOverrides,
   holder = `${taskFamily}:${Date.now().toString(36)}`,
+  onPoolStatus?: (event: PoolStatusEvent) => void,
 ): Promise<void> {
   const claim = await claimModelCallProfileForFamily(taskFamily, holder)
   if (!claim) {
     return streamChat(llmConfig, messages, callbacks, signal, requestOverrides)
+  }
+  if (claim.requestedProfileId && claim.requestedProfileId !== claim.profile.profileId) {
+    onPoolStatus?.({
+      type: "fallback",
+      requestedProfileId: claim.requestedProfileId,
+      profileId: claim.profile.profileId,
+      reason: claim.fallbackReason,
+    })
   }
 
   let streamError: Error | null = null
@@ -357,12 +390,20 @@ export async function streamChatRouted(
   } finally {
     const release = releaseOutcomeForError(streamError)
     try {
-      await runtimeProfilePoolRelease({
+      const released = await runtimeProfilePoolRelease({
         claimId: claim.claimId,
         outcome: release.outcome,
         retryAfterMs: release.retryAfterMs,
         error: release.error,
       })
+      if (released.circuitBreaker) {
+        onPoolStatus?.({
+          type: "cooldown",
+          profileId: released.circuitBreaker.profileId,
+          reason: released.circuitBreaker.reason ?? released.circuitBreaker.status,
+          openUntilMs: released.circuitBreaker.openUntilMs,
+        })
+      }
     } catch (err) {
       if (!errorMessage(err).startsWith(PROFILE_CLAIM_INACTIVE_PREFIX)) {
         console.warn("[pool-chat] failed to release profile claim:", err)
