@@ -124,7 +124,7 @@
 | SPEC-5-FIX | completed via #258/#259/#260/#264/#267/#269 | #258/#259/#260/#264/#267/#269 |
 | SPEC-6 | completed（closeout hotfix merged #290） | #280/#283/#284/#285/#288/#290 |
 | SPEC-7 | completed（2026-07-05 closeout；含 #292 阶段一） | #277/#291/#296/#298/#300/#301/#303/#304/#306/#307 + closeout hotfix |
-| SPEC-8 | reviewed / augmented by 2026-07 review / ready for PR split | pending |
+| SPEC-8 | completed（2026-07-06 closeout：两维度深度 review 零 P0/P1 + 行为无变化抽查，报告见 SPEC-8/closeout-report.md；deferred/P3 长尾随 #183） | #343/#346/#349/#356/#358/#360/#364/#365/#366/#367/#368 |
 | SPEC-9 | deferred / gated | deferred |
 | SPEC-10 | completed via #250/#252/#254/#261/#265/#266/#271 | #250/#252/#254/#261/#265/#266/#271 |
 | SPEC-11 | completed via #262/#263/#256/#270/#274/#268/#275/#272/#273 | #262/#263/#256/#270/#274/#268/#275/#272/#273 |

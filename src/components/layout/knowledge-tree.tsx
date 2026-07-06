@@ -8,6 +8,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
+import { flattenMdFiles } from "@/lib/wiki-utils"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 import { inferWikiTypeFromPath, wikiTypeLabel } from "@/lib/wiki-page-types"
 
@@ -415,18 +416,6 @@ function DeleteButton({
       <Trash2 className="h-3 w-3" />
     </Button>
   )
-}
-
-function flattenMdFiles(nodes: FileNode[]): FileNode[] {
-  const files: FileNode[] = []
-  for (const node of nodes) {
-    if (node.is_dir && node.children) {
-      files.push(...flattenMdFiles(node.children))
-    } else if (!node.is_dir && node.name.endsWith(".md")) {
-      files.push(node)
-    }
-  }
-  return files
 }
 
 function flattenAllFiles(nodes: FileNode[]): FileNode[] {
