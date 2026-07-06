@@ -1,5 +1,7 @@
 import i18n from "@/i18n"
 import { openProject } from "@/commands/fs"
+import { runtimeProfileList } from "@/commands/runtime-db"
+import { hasModelCallProfileCandidate } from "@/lib/pool-chat"
 import { DEFAULT_API_CONFIG, useWikiStore } from "@/stores/wiki-store"
 import { useZoomStore } from "@/stores/zoom-store"
 import {
@@ -73,6 +75,20 @@ export async function runInitConfigHydration({
     if (savedActivePreset) {
       useWikiStore.getState().setActivePresetId(savedActivePreset)
       if (!savedProviderConfigs) {
+        return
+      }
+      let hasActiveModelCallProfile = false
+      try {
+        const profileList = await runtimeProfileList()
+        hasActiveModelCallProfile =
+          profileList.enabled &&
+          profileList.status === "healthy" &&
+          profileList.profiles.some((profile) => hasModelCallProfileCandidate(profile, "chat"))
+      } catch {
+        hasActiveModelCallProfile = false
+      }
+      // #351: profile pool is authoritative; legacy re-resolve/write-back only fills zero-profile installs.
+      if (hasActiveModelCallProfile) {
         return
       }
       const { LLM_PRESETS } = await import("@/lib/llm-presets")

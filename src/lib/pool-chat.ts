@@ -80,7 +80,8 @@ function retryAfterMsFromMessage(message: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function profileSupportsModelCall(profile: RuntimeProfileRecord): boolean {
+/** Returns true only for probed profiles whose capability payload allows model-call forwarding. */
+export function profileSupportsModelCall(profile: RuntimeProfileRecord): boolean {
   if (profile.capabilityVersion !== PROFILE_PROBE_CAPABILITY_VERSION) return false
   if (!MODEL_CALL_CAPABLE_STATUSES.has(profile.capabilityStatus)) return false
   try {
@@ -91,6 +92,7 @@ function profileSupportsModelCall(profile: RuntimeProfileRecord): boolean {
   }
 }
 
+/** Checks whether a profile is eligible for the requested model-call task family. */
 export function hasModelCallProfileCandidate(
   profile: RuntimeProfileRecord,
   taskFamily: ModelCallTaskFamily,
