@@ -183,6 +183,16 @@ export interface MintManualRebuildForLayerResult {
   runtimeDisabled: boolean
 }
 
+/** Derived layers supported by the mint-only manual rebuild path. */
+export type RebuildableLayer = "embedding" | "taxonomy"
+
+const REBUILDABLE_LAYERS = new Set<DerivedStaleMarkerLayer>(["embedding", "taxonomy"])
+
+/** Whether a derived layer supports the mint-only manual rebuild path. */
+export function isRebuildableLayer(layer: DerivedStaleMarkerLayer): layer is RebuildableLayer {
+  return REBUILDABLE_LAYERS.has(layer)
+}
+
 /**
  * Whole-layer manual rebuild for `embedding`/`taxonomy` (SPEC-6 PR6 decision
  * 5/6's new Rebuild buttons). `embedding` mints one marker per current wiki
@@ -197,7 +207,7 @@ export interface MintManualRebuildForLayerResult {
  * potentially hundreds of pages for the same foregone conclusion.
  */
 export async function mintManualRebuildForLayer(
-  layer: "embedding" | "taxonomy",
+  layer: RebuildableLayer,
   projectPath: string,
   holder: string,
 ): Promise<MintManualRebuildForLayerResult> {

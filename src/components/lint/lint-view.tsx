@@ -12,18 +12,18 @@ import {
 	Wrench,
 	Zap,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listDirectory, readFile, writeFile } from "@/commands/fs";
 import { Button } from "@/components/ui/button";
 import { hasUsableLlm } from "@/lib/has-usable-llm";
 import { runSemanticLint, runStructuralLint } from "@/lib/lint";
-import { fixAllLintResults, fixLintResult, isFixable } from "@/lib/lint-fixer";
-import { lintFixMutex } from "@/lib/lint-fix-mutex";
+import { isFixable } from "@/lib/lint-fixer";
 import { normalizePath } from "@/lib/path-utils";
 import { useReviewStore } from "@/stores/review-store";
 import { useWikiStore } from "@/stores/wiki-store";
 import { useLintStore, type LintItem } from "@/stores/lint-store";
+import { useLintFixActions } from "./use-lint-fix-actions";
 
 export function groupLintResultsForDisplay(results: readonly LintItem[]): {
 	warnings: LintItem[];
@@ -60,13 +60,19 @@ export function LintView() {
 	const addLintItems = useLintStore((s) => s.addItems);
 	const removeLintItem = useLintStore((s) => s.removeItem);
 	const clearLintItems = useLintStore((s) => s.clearItems);
-	const setLintItems = useLintStore((s) => s.setItems);
 
 	const [running, setRunning] = useState(false);
 	const [hasRun, setHasRun] = useState(false);
 	const [runSemantic, setRunSemantic] = useState(false);
-	const [fixingId, setFixingId] = useState<string | null>(null);
-	const [fixingAll, setFixingAll] = useState(false);
+	const [manualFixingId, setManualFixingId] = useState<string | null>(null);
+	const {
+		fixingId: autoFixingId,
+		fixingAll,
+		refreshTree,
+		fixLintItem,
+		fixAllLintItems,
+	} = useLintFixActions();
+	const fixingId = manualFixingId ?? autoFixingId;
 
 	const typeConfig = useMemo(
 		() => ({
@@ -77,17 +83,6 @@ export function LintView() {
 		}),
 		[t],
 	);
-
-	const refreshTree = useCallback(async () => {
-		if (!project) return;
-		try {
-			const tree = await listDirectory(project.path);
-			setFileTree(tree);
-			bumpDataVersion();
-		} catch {
-			// ignore
-		}
-	}, [project, setFileTree, bumpDataVersion]);
 
 	async function handleRunLint() {
 		if (!project || running) return;
@@ -131,7 +126,7 @@ export function LintView() {
 	async function handleFix(item: LintItem) {
 		if (!project) return;
 		const pp = normalizePath(project.path);
-		setFixingId(item.id);
+		setManualFixingId(item.id);
 
 		try {
 			switch (item.type) {
@@ -208,51 +203,19 @@ export function LintView() {
 		} catch (err) {
 			console.error("Fix failed:", err);
 		} finally {
-			setFixingId(null);
+			setManualFixingId(null);
 		}
 	}
 
 	async function handleAutoFix(item: LintItem) {
-		if (!project) return;
-		const pp = normalizePath(project.path);
-		setFixingId(`autofix-${item.id}`);
-
-		const release = await lintFixMutex.acquire();
-		try {
-			const ok = await fixLintResult(pp, item, llmConfig);
-			if (ok) {
-				removeLintItem(item.id);
-				await refreshTree();
-			}
-		} catch (err) {
-			console.error("Auto fix failed:", err);
-		} finally {
-			release();
-			setFixingId(null);
-		}
+		await fixLintItem(item, {
+			busyId: `autofix-${item.id}`,
+			errorLabel: "Auto fix failed:",
+		});
 	}
 
 	async function handleFixAll() {
-		if (!project || fixingAll) return;
-		const pp = normalizePath(project.path);
-		setFixingAll(true);
-
-		const release = await lintFixMutex.acquire();
-		try {
-			const fixableItems = items.filter(isFixable);
-			const { fixed } = await fixAllLintResults(pp, fixableItems, llmConfig);
-			if (fixed.length > 0) {
-				const fixedPages = new Set(fixed.map((r) => `${r.type}:${r.page}`));
-				const remaining = items.filter(item => !fixedPages.has(`${item.type}:${item.page}`));
-				setLintItems(remaining);
-				await refreshTree();
-			}
-		} catch (err) {
-			console.error("Fix all failed:", err);
-		} finally {
-			release();
-			setFixingAll(false);
-		}
+		await fixAllLintItems({ errorLabel: "Fix all failed:" });
 	}
 
 	async function handleDeleteOrphan(item: LintItem) {
