@@ -136,7 +136,7 @@
 
 当前优先级（2026-07-05 更新，基于用户实测反馈）：
 
-0. **SPEC-13 已 completed（2026-07-06）**。当前 = 三轨 GOAL 直通 1.0 门槛：**SPEC-14 已 completed（2026-07-06）**；**SPEC-8 维护批**（PR1-PR6 已/在合并，剩 agent handler map+i18n/#86 QA fixture/App.tsx 拆分/#182 裁定/closeout）收尾中；三 SPEC closeout + 终验报告合并 = 1.0 门槛达成（SPEC-9 维持 deferred 且移出门槛）。其余 follow-up：#309、#286/#287/#289、#311/#313/#314、#337/#340、#350-#353。
+0. **1.0 门槛已达成（2026-07-06）**：SPEC-13/14/8 全部 completed，F 终验三项（M 冒烟/IA 走查/SPEC-8 行为无变化抽查）真机通过——报告见 [release-1.0-final-acceptance.md](./release-1.0-final-acceptance.md)。后续入口=follow-up backlog：#309、#286/#287/#289、#311/#313/#314、#337/#340、#350-#353、#359/#362、#183 P3 长尾；SPEC-9 维持 deferred。
 
 历史优先级记录：
 
