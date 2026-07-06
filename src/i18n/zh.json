@@ -639,6 +639,8 @@
           "provider": "Provider 预设",
           "kind": "Profile 类型",
           "agentSdkModel": "Agent SDK 模型别名",
+          "agentSdkModelDriftWarning": "Agent 实际调用 {{agentSdkModelId}}，而非 {{modelId}}。",
+          "agentSdkModelSync": "一键同步",
           "authStyle": "鉴权方式",
           "maxConcurrency": "最大并发",
           "enabled": "启用 runtime 调度",
