@@ -1865,12 +1865,32 @@ describe("normal Chat Router progress rendering", () => {
     const html = renderToStaticMarkup(<ChatMessage message={message} />)
 
     expect(html).toContain("min-w-0 rounded-lg")
+    expect(html).toContain("min-w-0 rounded-lg max-w-full overflow-hidden")
     expect(html).toContain("chat-markdown prose prose-sm min-w-0")
     expect(html).toContain("break-words")
     expect(html).toContain("max-w-full rounded")
     expect(html).toContain("overflow-x-auto overscroll-x-contain")
     expect(html).toContain("<code dir=\"ltr\" class=\"break-words\"")
     expect(html).toContain("<code dir=\"ltr\" class=\"language-txt\"")
+    expect(html).not.toContain("break-all")
+  })
+
+  it("keeps user message bubbles constrained for long unbreakable tokens", () => {
+    const token = "x".repeat(140)
+    const message: DisplayMessage = {
+      id: "user-long-token",
+      conversationId: "conv-1",
+      role: "user",
+      content: token,
+      timestamp: 1,
+    }
+
+    const html = renderToStaticMarkup(<ChatMessage message={message} />)
+
+    expect(html).toContain("min-w-0 rounded-lg")
+    expect(html).toContain("min-w-0 rounded-lg max-w-full overflow-hidden")
+    expect(html).toContain('class="whitespace-pre-wrap wrap-anywhere"')
+    expect(html).toContain(token)
     expect(html).not.toContain("break-all")
   })
 })
