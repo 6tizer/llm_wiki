@@ -640,6 +640,8 @@
           "provider": "Provider preset",
           "kind": "Profile kind",
           "agentSdkModel": "Agent SDK model alias",
+          "agentSdkModelDriftWarning": "Agent will call {{agentSdkModelId}} instead of {{modelId}}.",
+          "agentSdkModelSync": "Sync alias",
           "authStyle": "Auth style",
           "maxConcurrency": "Max concurrency",
           "enabled": "Enabled for runtime selection",

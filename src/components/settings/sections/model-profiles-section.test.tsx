@@ -135,6 +135,13 @@ async function input(element: HTMLInputElement, value: string): Promise<void> {
   })
 }
 
+async function blur(element: HTMLElement): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new FocusEvent("focusout", { bubbles: true }))
+    await Promise.resolve()
+  })
+}
+
 async function select(element: HTMLSelectElement, value: string): Promise<void> {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set
@@ -1020,6 +1027,159 @@ describe("ModelProfilesSection UI", () => {
     await flush()
 
     expect(container.querySelector("[data-testid='profile-agent-sdk-model']")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("renders a warning when an agent-run SDK alias drifts from model id", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          modelId: "gpt-4o",
+          agentSdkModelId: "deepseek-chat",
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const warning = container.querySelector("[data-testid='profile-model-alias-drift-warning']")
+    expect(warning?.textContent).toContain("deepseek-chat")
+    expect(warning?.textContent).toContain("gpt-4o")
+
+    unmount(root)
+  })
+
+  it("syncs a drifted SDK alias through the draft and hides the warning", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          modelId: "gpt-4o",
+          agentSdkModelId: "deepseek-chat",
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const sync = container.querySelector<HTMLButtonElement>(
+      "[data-testid='profile-model-alias-drift-warning'] button",
+    )
+    if (!sync) throw new Error("model alias drift sync button not found")
+    await click(sync)
+
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-agent-sdk-model']")?.value).toBe("gpt-4o")
+    expect(container.querySelector("[data-testid='profile-model-alias-drift-warning']")).toBeNull()
+    expect(runtimeDbMocks.runtimeProfileUpdate).not.toHaveBeenCalled()
+
+    unmount(root)
+  })
+
+  it("shows a drift warning immediately when selecting an existing drifted profile", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          profileId: "profile-a",
+          displayName: "A profile",
+          kind: "model-call",
+        }),
+        runtimeProfile({
+          profileId: "profile-b",
+          displayName: "B profile",
+          kind: "agent-run",
+          modelId: "gpt-4o",
+          agentSdkModelId: "deepseek-chat",
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    expect(container.querySelector("[data-testid='profile-model-alias-drift-warning']")).toBeNull()
+    await click(container.querySelector<HTMLButtonElement>("[data-testid='profile-select-profile-b']")!)
+
+    expect(container.querySelector("[data-testid='profile-model-alias-drift-warning']")?.textContent)
+      .toContain("deepseek-chat")
+
+    unmount(root)
+  })
+
+  it("does not render a drift warning for model-call profiles with stored aliases", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "model-call",
+          modelId: "gpt-4o",
+          agentSdkModelId: "deepseek-chat",
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    expect(container.querySelector("[data-testid='profile-model-alias-drift-warning']")).toBeNull()
+
+    unmount(root)
+  })
+
+  it("fills an empty agent SDK alias from model id on model blur", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          modelId: "gpt-4o",
+          agentSdkModelId: null,
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const model = container.querySelector<HTMLInputElement>("[data-testid='profile-model']")
+    if (!model) throw new Error("profile model input not found")
+    await input(model, "gpt-4.1-mini")
+    await blur(model)
+
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-agent-sdk-model']")?.value)
+      .toBe("gpt-4.1-mini")
+
+    unmount(root)
+  })
+
+  it("does not overwrite a non-empty agent SDK alias on model blur", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          kind: "agent-run",
+          modelId: "gpt-4o",
+          agentSdkModelId: "deepseek-chat",
+        }),
+      ],
+    })
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const model = container.querySelector<HTMLInputElement>("[data-testid='profile-model']")
+    if (!model) throw new Error("profile model input not found")
+    await input(model, "gpt-4.1-mini")
+    await blur(model)
+
+    expect(container.querySelector<HTMLInputElement>("[data-testid='profile-agent-sdk-model']")?.value)
+      .toBe("deepseek-chat")
 
     unmount(root)
   })

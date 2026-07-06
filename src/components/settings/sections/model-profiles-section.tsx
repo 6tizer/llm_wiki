@@ -295,6 +295,12 @@ function agentSdkModelIdForAgentRun(draft: ModelProfileDraft): string {
   return draft.kind === "agent-run" ? draft.agentSdkModelId.trim() : ""
 }
 
+function profileHasModelAliasDrift(draft: ModelProfileDraft): boolean {
+  const modelId = draft.modelId.trim()
+  const agentSdkModelId = draft.agentSdkModelId.trim()
+  return draft.kind === "agent-run" && agentSdkModelId !== "" && modelId !== agentSdkModelId
+}
+
 function profileProbeInputsChanged(
   draft: ModelProfileDraft,
   existing: RuntimeProfileRecord,
@@ -644,6 +650,7 @@ export function ModelProfilesSection({
         ? t("settings.sections.modelConfig.profiles.agentRunCapabilityWarning")
         : null
     : null
+  const modelAliasDrift = profileHasModelAliasDrift(draft)
 
   if (loadState.kind === "ready" && loadState.status === "disabled") {
     return null
@@ -851,6 +858,11 @@ export function ModelProfilesSection({
                   data-testid="profile-model"
                   value={draft.modelId}
                   onChange={(event) => updateDraft({ modelId: event.target.value })}
+                  onBlur={() => {
+                    if (draft.kind === "agent-run" && draft.agentSdkModelId.trim() === "") {
+                      updateDraft({ agentSdkModelId: draft.modelId.trim() })
+                    }
+                  }}
                 />
               </div>
               {draft.kind === "agent-run" && (
@@ -861,6 +873,26 @@ export function ModelProfilesSection({
                     value={draft.agentSdkModelId}
                     onChange={(event) => updateDraft({ agentSdkModelId: event.target.value })}
                   />
+                </div>
+              )}
+              {modelAliasDrift && (
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 md:col-span-2"
+                  data-testid="profile-model-alias-drift-warning"
+                >
+                  <span>
+                    {t("settings.sections.modelConfig.profiles.agentSdkModelDriftWarning", {
+                      agentSdkModelId: draft.agentSdkModelId.trim(),
+                      modelId: draft.modelId.trim(),
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-md border border-amber-500/40 bg-background px-2 py-1 text-xs hover:bg-accent"
+                    onClick={() => updateDraft({ agentSdkModelId: draft.modelId.trim() })}
+                  >
+                    {t("settings.sections.modelConfig.profiles.agentSdkModelSync")}
+                  </button>
                 </div>
               )}
               <div className="space-y-1.5">
