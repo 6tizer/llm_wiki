@@ -1126,7 +1126,7 @@ function MarkdownContent({ content }: { content: string }) {
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
           components={createMarkdownComponents({
-            preClassName: "max-w-full rounded bg-background/50 p-2 text-xs overflow-x-auto",
+            preClassName: "max-w-full rounded bg-background/50 p-2 text-xs overflow-x-auto overscroll-x-contain",
             codeClassNameFallback: "break-words",
             overrides: {
             a: ({ href, children }) => {

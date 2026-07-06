@@ -1425,7 +1425,7 @@ export function ChatPanel() {
 					<>
 						<div
 							ref={scrollContainerRef}
-							className="flex-1 overflow-y-auto px-3 py-2"
+							className="flex-1 overflow-x-hidden overflow-y-auto px-3 py-2"
 						>
 							<div className="flex flex-col gap-3">
 								{activeMessages.length === 0 && (
