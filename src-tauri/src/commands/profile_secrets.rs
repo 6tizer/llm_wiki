@@ -252,7 +252,20 @@ impl SecretStore for MigratingSecretStore {
             Ok(value) => Ok(value),
             Err(active_err) => match self.fallback.read(secret_ref) {
                 Ok(value) => {
-                    let _ = self.active.write(secret_ref, &value);
+                    if self.active.write(secret_ref, &value).is_ok() {
+                        if self.fallback.delete(secret_ref).is_err() {
+                            eprintln!(
+                                "{}",
+                                bounded_secret_error(
+                                    "profile-secret-delete-fallback-failed",
+                                    format!(
+                                        "secret_ref {secret_ref}; fallback {:?}",
+                                        self.fallback_backend
+                                    ),
+                                )
+                            );
+                        }
+                    }
                     Ok(value)
                 }
                 Err(fallback_err) => Err(bounded_secret_error(
@@ -615,6 +628,24 @@ mod tests {
         }
     }
 
+    struct FailingDeleteSecretStore {
+        inner: Arc<InMemorySecretStore>,
+    }
+
+    impl SecretStore for FailingDeleteSecretStore {
+        fn write(&self, secret_ref: &str, secret_value: &str) -> Result<(), String> {
+            self.inner.write(secret_ref, secret_value)
+        }
+
+        fn read(&self, secret_ref: &str) -> Result<String, String> {
+            self.inner.read(secret_ref)
+        }
+
+        fn delete(&self, _secret_ref: &str) -> Result<(), String> {
+            Err("profile-secret-delete-failed: injected failure".to_string())
+        }
+    }
+
     struct TempSecretDir {
         path: PathBuf,
     }
@@ -837,11 +868,53 @@ mod tests {
             ProfileSecretBackend::File,
             Box::new(active),
             ProfileSecretBackend::Keychain,
+            Box::new(fallback.clone()),
+        );
+
+        assert_eq!(
+            store
+                .read(&secret_ref)
+                .expect("read fallback despite write-back failure"),
+            "fallback-secret"
+        );
+        assert_eq!(
+            fallback
+                .read(&secret_ref)
+                .expect("fallback remains after write-back failure"),
+            "fallback-secret"
+        );
+    }
+
+    #[test]
+    fn migrating_secret_store_returns_value_when_fallback_cleanup_fails() {
+        let active = Arc::new(InMemorySecretStore::default());
+        let fallback_inner = Arc::new(InMemorySecretStore::default());
+        let fallback = FailingDeleteSecretStore {
+            inner: fallback_inner.clone(),
+        };
+        let secret_ref = new_profile_secret_ref();
+        fallback_inner.insert(&secret_ref, "fallback-secret");
+        let store = MigratingSecretStore::new(
+            ProfileSecretBackend::File,
+            Box::new(active.clone()),
+            ProfileSecretBackend::Keychain,
             Box::new(fallback),
         );
 
         assert_eq!(
-            store.read(&secret_ref).expect("read fallback despite write-back failure"),
+            store
+                .read(&secret_ref)
+                .expect("read fallback despite cleanup failure"),
+            "fallback-secret"
+        );
+        assert_eq!(
+            active.read(&secret_ref).expect("active received secret"),
+            "fallback-secret"
+        );
+        assert_eq!(
+            fallback_inner
+                .read(&secret_ref)
+                .expect("fallback remains after cleanup failure"),
             "fallback-secret"
         );
     }
@@ -892,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn keychain_active_migrates_from_file_fallback_without_clearing_file() {
+    fn keychain_active_migrates_from_file_fallback_and_clears_file() {
         let temp = TempSecretDir::new();
         let file_store = FileSecretStore::new(temp.path.clone());
         let secret_ref = new_profile_secret_ref();
@@ -915,12 +988,11 @@ mod tests {
             "file-secret"
         );
         assert_eq!(
-            keychain_store.read(&secret_ref).expect("active received secret"),
+            keychain_store
+                .read(&secret_ref)
+                .expect("active received secret"),
             "file-secret"
         );
-        assert_eq!(
-            file_store.read(&secret_ref).expect("file fallback remains intact"),
-            "file-secret"
-        );
+        assert!(file_store.read(&secret_ref).is_err());
     }
 }
