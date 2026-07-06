@@ -94,6 +94,8 @@ export interface AgentWikiChangedPayload {
 	operation: "update" | "create" | "delete";
 	oldSha256?: string;
 	newSha256?: string;
+	existedBefore?: boolean;
+	beforeText?: string;
 	toolUseId?: string;
 	snapshotted?: boolean;
 }

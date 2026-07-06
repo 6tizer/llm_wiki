@@ -12,6 +12,7 @@ export interface SaveQueryPageArgs {
 	tags?: string[];
 	autoIngest?: boolean;
 	llmConfig?: LlmConfig;
+	onPageWritten?: (record: SaveQueryPageWrittenRecord) => void;
 }
 
 export interface SaveQueryPageResult {
@@ -24,6 +25,21 @@ export interface SaveQueryPageResult {
 	logUpdated: boolean;
 	autoIngestStarted: boolean;
 	fileTree: FileNode[];
+}
+
+/** Snapshot metadata for each file saveQueryPage writes successfully. */
+export interface SaveQueryPageWrittenRecord {
+	path: string;
+	wasCreated: boolean;
+	previousContent: string | null;
+}
+
+async function readExistingContent(path: string): Promise<string | null> {
+	try {
+		return await readFile(path);
+	} catch {
+		return null;
+	}
 }
 
 function cleanSavedQueryContent(content: string): string {
@@ -68,6 +84,7 @@ export async function saveQueryPage({
 	tags,
 	autoIngest = false,
 	llmConfig,
+	onPageWritten,
 }: SaveQueryPageArgs): Promise<SaveQueryPageResult> {
 	const pp = normalizePath(projectPath);
 	const cleanContent = cleanSavedQueryContent(content);
@@ -76,15 +93,17 @@ export async function saveQueryPage({
 	const relativePath = `wiki/queries/${fileName}`;
 	const filePath = `${pp}/${relativePath}`;
 
+	const existingPage = await readExistingContent(filePath);
 	await writeFile(filePath, frontmatter(pageTitle, date, tags) + cleanContent);
+	onPageWritten?.({
+		path: relativePath,
+		wasCreated: existingPage === null,
+		previousContent: existingPage,
+	});
 
 	const indexPath = `${pp}/wiki/index.md`;
-	let indexContent = "";
-	try {
-		indexContent = await readFile(indexPath);
-	} catch {
-		indexContent = "# Wiki Index\n\n## Queries\n";
-	}
+	const existingIndex = await readExistingContent(indexPath);
+	let indexContent = existingIndex ?? "# Wiki Index\n\n## Queries\n";
 	const linkTarget = fileName.replace(/\.md$/, "");
 	const entry = `- [[queries/${linkTarget}|${pageTitle}]]`;
 	if (indexContent.includes("## Queries")) {
@@ -93,16 +112,22 @@ export async function saveQueryPage({
 		indexContent = indexContent.trimEnd() + "\n\n## Queries\n" + entry + "\n";
 	}
 	await writeFile(indexPath, indexContent);
+	onPageWritten?.({
+		path: "wiki/index.md",
+		wasCreated: existingIndex === null,
+		previousContent: existingIndex,
+	});
 
 	const logPath = `${pp}/wiki/log.md`;
-	let logContent = "";
-	try {
-		logContent = await readFile(logPath);
-	} catch {
-		logContent = "# Wiki Log\n\n";
-	}
+	const existingLog = await readExistingContent(logPath);
+	const logContent = existingLog ?? "# Wiki Log\n\n";
 	const logEntry = `- ${date}: Saved query page \`${fileName}\`\n`;
 	await writeFile(logPath, logContent.trimEnd() + "\n" + logEntry);
+	onPageWritten?.({
+		path: "wiki/log.md",
+		wasCreated: existingLog === null,
+		previousContent: existingLog,
+	});
 
 	const fileTree = await listDirectory(pp);
 

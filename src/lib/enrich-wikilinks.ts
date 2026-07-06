@@ -4,6 +4,13 @@ import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
 import { buildLanguageDirective } from "./output-language"
 import { normalizePath } from "@/lib/path-utils"
 
+/** Snapshot metadata for a page updated by enrichWithWikilinks. */
+export interface EnrichWikilinksWrittenRecord {
+  path: string
+  wasCreated: false
+  previousContent: string
+}
+
 /**
  * Lightweight post-save enrichment: ask LLM to add [[wikilinks]] to a saved wiki page.
  *
@@ -26,6 +33,7 @@ export async function enrichWithWikilinks(
   projectPath: string,
   filePath: string,
   llmConfig: LlmConfig,
+  onPageWritten?: (record: EnrichWikilinksWrittenRecord) => void,
 ): Promise<void> {
   const pp = normalizePath(projectPath)
   const fp = normalizePath(filePath)
@@ -101,6 +109,11 @@ export async function enrichWithWikilinks(
   if (enriched === content) return
 
   await writeFile(fp, enriched)
+  onPageWritten?.({
+    path: fp.replace(`${pp}/`, ""),
+    wasCreated: false,
+    previousContent: content,
+  })
   useWikiStore.getState().bumpDataVersion()
 }
 

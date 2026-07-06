@@ -431,6 +431,68 @@ function wikiChangedFromPaths(paths: string[]): AgentWikiChangedPayload[] {
     .map((path) => ({ path, operation: "update" as const }))
 }
 
+async function readBeforeChange(projectPath: string, relativePath: string): Promise<{
+  existedBefore: boolean
+  beforeText: string
+}> {
+  // Snapshot capture relies on SDK tool_use execution being serial for app
+  // tools. If future SDK/runtime versions allow concurrent write tools, this
+  // must move into an atomic read-modify-write path at the business write site.
+  try {
+    return {
+      existedBefore: true,
+      beforeText: await readFile(`${normalizePath(projectPath)}/${relativePath}`),
+    }
+  } catch {
+    return {
+      existedBefore: false,
+      beforeText: "",
+    }
+  }
+}
+
+function wikiChangedFromBefore(args: {
+  path: string
+  operation: AgentWikiChangedPayload["operation"]
+  before: { existedBefore: boolean; beforeText: string }
+}): AgentWikiChangedPayload {
+  return {
+    path: args.path,
+    operation: args.operation,
+    existedBefore: args.before.existedBefore,
+    beforeText: args.before.beforeText,
+  }
+}
+
+function wikiChangedFromWrittenRecord(record: {
+  path: string
+  wasCreated: boolean
+  previousContent: string | null
+}): AgentWikiChangedPayload {
+  return {
+    path: record.path,
+    operation: record.wasCreated ? "create" : "update",
+    existedBefore: !record.wasCreated,
+    beforeText: record.previousContent ?? "",
+  }
+}
+
+function partialWriteFailure(err: unknown, wikiChanged: AgentWikiChangedPayload[]): AgentAppToolSuccessResponse {
+  return {
+    ok: true,
+    result: {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      partial: true,
+    },
+    wikiChanged,
+  }
+}
+
+function beforeTextForMergePath(result: MergeResult, targetPath: string): string {
+  return result.backup.find((item) => item.path === targetPath)?.content ?? ""
+}
+
 function lintResultArg(args: ToolArgs): LintResult {
   const value = args.result
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -525,8 +587,18 @@ function mergeWikiChanged(result: MergeResult): AgentWikiChangedPayload[] {
   ]
   const uniqueUpdates = [...new Set(updates.filter((path) => path.startsWith("wiki/")))]
   return [
-    ...uniqueUpdates.map((path) => ({ path, operation: "update" as const })),
-    ...result.pagesToDelete.map((path) => ({ path, operation: "delete" as const })),
+    ...uniqueUpdates.map((path) => ({
+      path,
+      operation: "update" as const,
+      existedBefore: true,
+      beforeText: beforeTextForMergePath(result, path),
+    })),
+    ...result.pagesToDelete.map((path) => ({
+      path,
+      operation: "delete" as const,
+      existedBefore: true,
+      beforeText: beforeTextForMergePath(result, path),
+    })),
   ]
 }
 
@@ -566,27 +638,34 @@ async function handleBuildAnswerContext(toolContext: AgentAppToolContext): Promi
 async function handleSaveQueryPage(toolContext: AgentAppToolContext): Promise<AgentAppToolResponse> {
   const { args, state, projectPath } = toolContext
 
-    const result = await saveQueryPage({
-      projectPath,
-      content: stringArg(args, "content"),
-      title: typeof args.title === "string" ? args.title : undefined,
-      tags: optionalStringArray(args, "tags"),
-      autoIngest: args.autoIngest === true,
-      llmConfig: state.llmConfig,
-    })
-    state.setFileTree(result.fileTree)
-    useWikiStore.getState().bumpDataVersion()
-    return {
-      ok: true,
-      result: {
-        path: result.path,
-        relativePath: result.relativePath,
-        title: result.title,
-        fileName: result.fileName,
-        date: result.date,
-        autoIngestStarted: result.autoIngestStarted,
-      },
-      wikiChanged: [{ path: result.relativePath, operation: "create" }],
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const result = await saveQueryPage({
+        projectPath,
+        content: stringArg(args, "content"),
+        title: typeof args.title === "string" ? args.title : undefined,
+        tags: optionalStringArray(args, "tags"),
+        autoIngest: args.autoIngest === true,
+        llmConfig: state.llmConfig,
+        onPageWritten: (record) => wikiChanged.push(wikiChangedFromWrittenRecord(record)),
+      })
+      state.setFileTree(result.fileTree)
+      useWikiStore.getState().bumpDataVersion()
+      return {
+        ok: true,
+        result: {
+          path: result.path,
+          relativePath: result.relativePath,
+          title: result.title,
+          fileName: result.fileName,
+          date: result.date,
+          autoIngestStarted: result.autoIngestStarted,
+        },
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -737,9 +816,26 @@ async function handleMergeDuplicateGroup(toolContext: AgentAppToolContext): Prom
       const blocked = preflightBudget(toolName, budget, changedPathsFromWikiChanged(plannedChanges))
       if (blocked) return blocked
     }
-    const result = dryRun
-      ? await previewDuplicateMerge(projectPath, group, canonicalSlug, state.llmConfig)
-      : await executeMerge(projectPath, group, canonicalSlug, state.llmConfig)
+    const emittedChanges: AgentWikiChangedPayload[] = []
+    let result: MergeResult
+    try {
+      result = dryRun
+        ? await previewDuplicateMerge(projectPath, group, canonicalSlug, state.llmConfig)
+        : await executeMerge(projectPath, group, canonicalSlug, state.llmConfig, {
+            onWikiChanged: (change) => emittedChanges.push(change),
+          })
+    } catch (err) {
+      if (emittedChanges.length === 0) throw err
+      return {
+        ok: true,
+        result: {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+          partial: true,
+        },
+        wikiChanged: emittedChanges,
+      }
+    }
     if (!dryRun) {
       state.setFileTree(await listDirectory(projectPath))
       useWikiStore.getState().bumpDataVersion()
@@ -747,7 +843,7 @@ async function handleMergeDuplicateGroup(toolContext: AgentAppToolContext): Prom
     return {
       ok: true,
       result: summarizeMergeResult(result, dryRun),
-      wikiChanged: dryRun ? [] : mergeWikiChanged(result),
+      wikiChanged: dryRun ? [] : emittedChanges.length > 0 ? emittedChanges : mergeWikiChanged(result),
     }
 }
 
@@ -810,26 +906,48 @@ async function handleIngestSource(toolContext: AgentAppToolContext): Promise<Age
     if (blocked) return blocked
     const sourcePath = await normalizeSourcePath(projectPath, stringArg(args, "sourcePath"))
     const folderContext = typeof args.folderContext === "string" ? args.folderContext : undefined
-    const writtenPaths = await autoIngest(projectPath, sourcePath, state.llmConfig, undefined, folderContext)
-    // Run property autofill after ingest completes
-    const autofillResult = await runAutofill(projectPath)
-    state.setFileTree(await listDirectory(projectPath))
-    useWikiStore.getState().bumpDataVersion()
-    const wikiChanged = wikiChangedFromPaths([
-      ...writtenPaths,
-      ...autofillResult.details.map((detail) => detail.relativePath),
-    ])
-    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
-    if (overBudget) return overBudget
-    return {
-      ok: true,
-      result: {
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const writtenPaths = await autoIngest(
+        projectPath,
         sourcePath,
-        writtenPaths,
-        filesWritten: writtenPaths.length,
-        autofill: autofillResult,
-      },
-      wikiChanged,
+        state.llmConfig,
+        undefined,
+        folderContext,
+        (record) => wikiChanged.push(wikiChangedFromWrittenRecord(record)),
+      )
+      // Run property autofill after ingest completes. Preview first so any
+      // autofill writes from this app tool also carry beforeText snapshots.
+      const autofillPreview = await runAutofill(projectPath, { dryRun: true })
+      const autofillBefore = new Map<string, Awaited<ReturnType<typeof readBeforeChange>>>()
+      for (const path of uniqueStrings(autofillPreview.details.map((detail) => detail.relativePath))) {
+        autofillBefore.set(path, await readBeforeChange(projectPath, path))
+      }
+      const autofillResult = await runAutofill(projectPath)
+      for (const path of uniqueStrings(autofillResult.details.map((detail) => detail.relativePath))) {
+        wikiChanged.push(wikiChangedFromBefore({
+          path,
+          operation: autofillBefore.get(path)?.existedBefore === false ? "create" : "update",
+          before: autofillBefore.get(path) ?? { existedBefore: false, beforeText: "" },
+        }))
+      }
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
+      return {
+        ok: true,
+        result: {
+          sourcePath,
+          writtenPaths,
+          filesWritten: writtenPaths.length,
+          autofill: autofillResult,
+        },
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -839,24 +957,28 @@ async function handleCaptionSourceImages(toolContext: AgentAppToolContext): Prom
     const blocked = preflightUnknownWriteBudget(toolName, budget)
     if (blocked) return blocked
     const sourcePath = await normalizeSourcePath(projectPath, stringArg(args, "sourcePath"))
-    const result = await captionSourceImages(
-      projectPath,
-      sourcePath,
-      state.llmConfig,
-      undefined,
-      args.forceRecaption === true,
-    )
-    state.setFileTree(await listDirectory(projectPath))
-    useWikiStore.getState().bumpDataVersion()
-    const wikiChanged = result.sourceSummaryUpdated
-      ? [{ path: result.sourceSummaryPath, operation: "update" as const }]
-      : []
-    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
-    if (overBudget) return overBudget
-    return {
-      ok: true,
-      result,
-      wikiChanged,
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const result = await captionSourceImages(
+        projectPath,
+        sourcePath,
+        state.llmConfig,
+        undefined,
+        args.forceRecaption === true,
+        (record) => wikiChanged.push(wikiChangedFromWrittenRecord(record)),
+      )
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
+      return {
+        ok: true,
+        result,
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -867,15 +989,43 @@ async function handleFixLintResult(toolContext: AgentAppToolContext): Promise<Ag
     const changedPath = wikiPathForPage(result.page)
     const blocked = preflightBudget(toolName, budget, [changedPath])
     if (blocked) return blocked
-    const ok = await fixLintResult(projectPath, result, state.llmConfig)
-    if (ok) {
-      state.setFileTree(await listDirectory(projectPath))
-      useWikiStore.getState().bumpDataVersion()
+    if (result.type === "orphan") {
+      // Orphan fixes cascade through cascadeDeleteWikiPagesWithRefs, deleting
+      // the page and rewriting backlinks/index/frontmatter. PR-A has no
+      // per-rewritten-file beforeText hook there, so keep this fail-closed:
+      // do not emit wikiChanged, do not snapshot, and let rewind gate block
+      // this tool as uncovered. Full cascade snapshotting belongs in PR-B.
+      const fixed = await fixLintResult(projectPath, result, state.llmConfig)
+      if (fixed) {
+        state.setFileTree(await listDirectory(projectPath))
+        useWikiStore.getState().bumpDataVersion()
+      }
+      return {
+        ok: true,
+        result: { fixed, result },
+      }
     }
-    return {
-      ok: true,
-      result: { fixed: ok, result },
-      wikiChanged: ok ? [{ path: changedPath, operation: "update" }] : [],
+    const before = await readBeforeChange(projectPath, changedPath)
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const ok = await fixLintResult(projectPath, result, state.llmConfig)
+      if (ok) {
+        wikiChanged.push(wikiChangedFromBefore({
+          path: changedPath,
+          operation: before.existedBefore ? "update" : "create",
+          before,
+        }))
+        state.setFileTree(await listDirectory(projectPath))
+        useWikiStore.getState().bumpDataVersion()
+      }
+      return {
+        ok: true,
+        result: { fixed: ok, result },
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -942,12 +1092,23 @@ async function handleEnrichWikilinks(toolContext: AgentAppToolContext): Promise<
     const relativePath = filePath.replace(`${normalizePath(projectPath)}/`, "")
     const blocked = preflightBudget(toolName, budget, [relativePath])
     if (blocked) return blocked
-    await enrichWithWikilinks(projectPath, filePath, state.llmConfig)
-    state.setFileTree(await listDirectory(projectPath))
-    return {
-      ok: true,
-      result: { path: relativePath },
-      wikiChanged: [{ path: relativePath, operation: "update" }],
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      await enrichWithWikilinks(
+        projectPath,
+        filePath,
+        state.llmConfig,
+        (record) => wikiChanged.push(wikiChangedFromWrittenRecord(record)),
+      )
+      state.setFileTree(await listDirectory(projectPath))
+      return {
+        ok: true,
+        result: { path: relativePath },
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 

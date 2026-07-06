@@ -845,9 +845,10 @@ export async function captionSourceImages(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   forceRecaption = false,
+  onPageWritten?: (record: WrittenPageRecord) => void,
 ): Promise<CaptionSourceImagesResult> {
   return withProjectLock(normalizePath(projectPath), () =>
-    captionSourceImagesImpl(projectPath, sourcePath, llmConfig, signal, forceRecaption),
+    captionSourceImagesImpl(projectPath, sourcePath, llmConfig, signal, forceRecaption, onPageWritten),
   )
 }
 
@@ -857,6 +858,7 @@ async function captionSourceImagesImpl(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   forceRecaption = false,
+  onPageWritten?: (record: WrittenPageRecord) => void,
 ): Promise<CaptionSourceImagesResult> {
   const pp = normalizePath(projectPath)
   const sp = normalizePath(sourcePath)
@@ -890,7 +892,13 @@ async function captionSourceImagesImpl(
       failed = result.failed
     }
 
-    sourceSummaryUpdated = await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
+    sourceSummaryUpdated = await injectImagesIntoSourceSummary(
+      pp,
+      sourceIdentity,
+      sourceSummarySlug,
+      savedImages,
+      onPageWritten,
+    )
     if (sourceSummaryUpdated) {
       await reembedSourceSummary(pp, sourceIdentity, sourceSummarySlug)
     }

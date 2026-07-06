@@ -17,6 +17,20 @@ const ingestMock = vi.hoisted(() => ({
   captionSourceImages: vi.fn(),
 }))
 
+const saveQueryPageMock = vi.hoisted(() => ({
+  saveQueryPage: vi.fn(),
+}))
+
+const lintFixerMock = vi.hoisted(() => ({
+  fixLintResult: vi.fn(),
+  fixLintReport: vi.fn(),
+  runLintAndReport: vi.fn(),
+}))
+
+const enrichMock = vi.hoisted(() => ({
+  enrichWithWikilinks: vi.fn(),
+}))
+
 const deepResearchMock = vi.hoisted(() => ({
   collectResearchSources: vi.fn(),
   queueResearch: vi.fn(),
@@ -148,6 +162,20 @@ vi.mock("@/lib/ingest", () => ({
   captionSourceImages: ingestMock.captionSourceImages,
 }))
 
+vi.mock("@/lib/save-query-page", () => ({
+  saveQueryPage: saveQueryPageMock.saveQueryPage,
+}))
+
+vi.mock("@/lib/lint-fixer", () => ({
+  fixLintResult: lintFixerMock.fixLintResult,
+  fixLintReport: lintFixerMock.fixLintReport,
+  runLintAndReport: lintFixerMock.runLintAndReport,
+}))
+
+vi.mock("@/lib/enrich-wikilinks", () => ({
+  enrichWithWikilinks: enrichMock.enrichWithWikilinks,
+}))
+
 vi.mock("@/lib/deep-research", () => ({
   collectResearchSources: deepResearchMock.collectResearchSources,
   queueResearch: deepResearchMock.queueResearch,
@@ -268,6 +296,14 @@ describe("runAgentAppTool ingest parity tools", () => {
       ["/project/purpose.md", "# Purpose"],
     ])
     ingestMock.autoIngest.mockReset()
+    saveQueryPageMock.saveQueryPage.mockReset()
+    lintFixerMock.fixLintResult.mockReset()
+    lintFixerMock.fixLintResult.mockResolvedValue(true)
+    lintFixerMock.fixLintReport.mockReset()
+    lintFixerMock.fixLintReport.mockResolvedValue({ report: {}, reportPath: "wiki/lint-report.md" })
+    lintFixerMock.runLintAndReport.mockReset()
+    lintFixerMock.runLintAndReport.mockResolvedValue({ report: {}, reportPath: "wiki/lint-report.md", changedPaths: [] })
+    enrichMock.enrichWithWikilinks.mockReset()
     autofillMock.runAutofill.mockClear()
     autofillMock.runAutofill.mockResolvedValue({ pagesScanned: 0, statusPromoted: 0, tagsAssigned: 0, details: [] })
     okfValidateMock.validateOkfBundle.mockClear()
@@ -359,7 +395,18 @@ describe("runAgentAppTool ingest parity tools", () => {
   })
 
   it("runs ingest_source through autoIngest and reports changed wiki paths", async () => {
-    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md", "wiki/entities/topic.md"])
+    ingestMock.autoIngest.mockImplementationOnce(async (
+      _projectPath: string,
+      _sourcePath: string,
+      _llmConfig: unknown,
+      _signal: unknown,
+      _folderContext: unknown,
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void,
+    ) => {
+      onPageWritten?.({ path: "wiki/sources/source.md", wasCreated: false, previousContent: "old source" })
+      onPageWritten?.({ path: "wiki/entities/topic.md", wasCreated: true, previousContent: null })
+      return ["wiki/sources/source.md", "wiki/entities/topic.md"]
+    })
 
     const response = await runAgentAppTool("ingest_source", {
       sourcePath: "source.pdf",
@@ -372,6 +419,7 @@ describe("runAgentAppTool ingest parity tools", () => {
       expect.objectContaining({ model: "gpt-test" }),
       undefined,
       "folder note",
+      expect.any(Function),
     )
     expect(response.result).toEqual({
       sourcePath: "/project/raw/sources/source.pdf",
@@ -381,16 +429,96 @@ describe("runAgentAppTool ingest parity tools", () => {
     })
     expect(response.changedPaths).toBeUndefined()
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/sources/source.md", operation: "update" },
-      { path: "wiki/entities/topic.md", operation: "update" },
+      {
+        path: "wiki/sources/source.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "old source",
+      },
+      {
+        path: "wiki/entities/topic.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      },
     ])
-    expect(autofillMock.runAutofill).toHaveBeenCalledWith("/project")
+    expect(autofillMock.runAutofill).toHaveBeenNthCalledWith(1, "/project", { dryRun: true })
+    expect(autofillMock.runAutofill).toHaveBeenNthCalledWith(2, "/project")
     expect(useWikiStore.getState().fileTree).toEqual(fsMock.tree)
     expect(useWikiStore.getState().dataVersion).toBe(1)
   })
 
+  it("runs save_query_page and emits one wikiChanged per successful file write", async () => {
+    saveQueryPageMock.saveQueryPage.mockImplementationOnce(async (options: {
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void
+    }) => {
+      options.onPageWritten?.({ path: "wiki/queries/saved.md", wasCreated: true, previousContent: null })
+      options.onPageWritten?.({ path: "wiki/index.md", wasCreated: false, previousContent: "# Index\n" })
+      options.onPageWritten?.({ path: "wiki/log.md", wasCreated: false, previousContent: "# Log\n" })
+      return {
+        path: "/project/wiki/queries/saved.md",
+        relativePath: "wiki/queries/saved.md",
+        title: "Saved",
+        fileName: "saved.md",
+        date: "2026-07-06",
+        autoIngestStarted: false,
+        fileTree: fsMock.tree,
+      }
+    })
+
+    const response = await runAgentAppTool("save_query_page", {
+      content: "# Saved",
+      title: "Saved",
+    })
+
+    expect(saveQueryPageMock.saveQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      projectPath: "/project",
+      content: "# Saved",
+      title: "Saved",
+      onPageWritten: expect.any(Function),
+    }))
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/queries/saved.md", operation: "create", existedBefore: false, beforeText: "" },
+      { path: "wiki/index.md", operation: "update", existedBefore: true, beforeText: "# Index\n" },
+      { path: "wiki/log.md", operation: "update", existedBefore: true, beforeText: "# Log\n" },
+    ])
+  })
+
+  it("returns partial wikiChanged when save_query_page fails after a write", async () => {
+    saveQueryPageMock.saveQueryPage.mockImplementationOnce(async (options: {
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void
+    }) => {
+      options.onPageWritten?.({ path: "wiki/queries/saved.md", wasCreated: true, previousContent: null })
+      throw new Error("index write failed")
+    })
+
+    const response = await runAgentAppTool("save_query_page", {
+      content: "# Saved",
+      title: "Saved",
+    })
+
+    expect(response.result).toEqual({
+      ok: false,
+      error: "index write failed",
+      partial: true,
+    })
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/queries/saved.md", operation: "create", existedBefore: false, beforeText: "" },
+    ])
+  })
+
   it("runs caption_source_images and rejects absolute paths outside project", async () => {
-    ingestMock.captionSourceImages.mockResolvedValue({
+    fsMock.files.set("/project/wiki/sources/source.md", "old source summary")
+    ingestMock.captionSourceImages.mockImplementationOnce(async (
+      _projectPath: string,
+      _sourcePath: string,
+      _llmConfig: unknown,
+      _signal: unknown,
+      _forceRecaption: boolean,
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void,
+    ) => {
+      onPageWritten?.({ path: "wiki/sources/source.md", wasCreated: false, previousContent: "old source summary" })
+      return {
       sourcePath: "/project/raw/sources/source.pdf",
       sourceIdentity: "source.pdf",
       sourceSummaryPath: "wiki/sources/source.md",
@@ -401,6 +529,7 @@ describe("runAgentAppTool ingest parity tools", () => {
       multimodalEnabled: true,
       sourceSummaryUpdated: true,
       embeddingRecommended: true,
+      }
     })
 
     const response = await runAgentAppTool("caption_source_images", {
@@ -414,9 +543,15 @@ describe("runAgentAppTool ingest parity tools", () => {
       expect.objectContaining({ model: "gpt-test" }),
       undefined,
       true,
+      expect.any(Function),
     )
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/sources/source.md", operation: "update" },
+      {
+        path: "wiki/sources/source.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "old source summary",
+      },
     ])
     await expect(
       runAgentAppTool("caption_source_images", { sourcePath: "/tmp/source.pdf" }),
@@ -427,6 +562,52 @@ describe("runAgentAppTool ingest parity tools", () => {
     await expect(
       runAgentAppTool("ingest_source", { sourcePath: "/project/raw/sources/../secrets.txt" }),
     ).rejects.toThrow(/traversal/)
+  })
+
+  it("keeps orphan fix_lint_result uncovered by returning no wikiChanged", async () => {
+    const response = await runAgentAppTool("fix_lint_result", {
+      result: { type: "orphan", severity: "info", page: "entities/orphan.md", detail: "orphan" },
+    })
+
+    expect(lintFixerMock.fixLintResult).toHaveBeenCalledWith(
+      "/project",
+      { type: "orphan", severity: "info", page: "entities/orphan.md", detail: "orphan", affectedPages: undefined },
+      expect.objectContaining({ model: "gpt-test" }),
+    )
+    expect(response.result).toMatchObject({ fixed: true })
+    expect(response.wikiChanged).toBeUndefined()
+  })
+
+  it("emits enrich_wikilinks wikiChanged only after the write callback succeeds", async () => {
+    enrichMock.enrichWithWikilinks.mockImplementationOnce(async (
+      _projectPath: string,
+      _filePath: string,
+      _llmConfig: unknown,
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void,
+    ) => {
+      onPageWritten?.({ path: "wiki/entities/topic.md", wasCreated: false, previousContent: "before links" })
+    })
+
+    const response = await runAgentAppTool("enrich_wikilinks", {
+      path: "wiki/entities/topic.md",
+    })
+
+    expect(response.wikiChanged).toEqual([
+      {
+        path: "wiki/entities/topic.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "before links",
+      },
+    ])
+  })
+
+  it("does not emit fake enrich_wikilinks wikiChanged when enrichment fails before writing", async () => {
+    enrichMock.enrichWithWikilinks.mockRejectedValueOnce(new Error("enrich failed"))
+
+    await expect(
+      runAgentAppTool("enrich_wikilinks", { path: "wiki/entities/topic.md" }),
+    ).rejects.toThrow("enrich failed")
   })
 
   it("rejects source paths that canonicalize outside raw/sources", async () => {
@@ -739,7 +920,11 @@ describe("runAgentAppTool ingest parity tools", () => {
       canonicalContent: "Merged",
       rewrites: [{ path: "wiki/overview.md", newContent: "Overview" }],
       pagesToDelete: ["wiki/entities/b.md"],
-      backup: [],
+      backup: [
+        { path: "wiki/entities/a.md", content: "A before" },
+        { path: "wiki/overview.md", content: "Overview before" },
+        { path: "wiki/entities/b.md", content: "B before" },
+      ],
     })
 
     const response = await runAgentAppTool("merge_duplicate_group", {
@@ -753,11 +938,27 @@ describe("runAgentAppTool ingest parity tools", () => {
       { slugs: ["a", "b"], reason: "", confidence: "low" },
       "a",
       expect.objectContaining({ model: "gpt-test" }),
+      expect.objectContaining({ onWikiChanged: expect.any(Function) }),
     )
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/entities/a.md", operation: "update" },
-      { path: "wiki/overview.md", operation: "update" },
-      { path: "wiki/entities/b.md", operation: "delete" },
+      {
+        path: "wiki/entities/a.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "A before",
+      },
+      {
+        path: "wiki/overview.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "Overview before",
+      },
+      {
+        path: "wiki/entities/b.md",
+        operation: "delete",
+        existedBefore: true,
+        beforeText: "B before",
+      },
     ])
     expect(useWikiStore.getState().fileTree).toEqual(fsMock.tree)
     expect(useWikiStore.getState().dataVersion).toBe(1)
@@ -1525,7 +1726,18 @@ describe("runAgentAppTool ingest parity tools", () => {
   })
 
   it("returns post-flight resource limit for ingest_source after unknown batch writes exceed budget", async () => {
-    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md", "wiki/entities/topic.md"])
+    ingestMock.autoIngest.mockImplementationOnce(async (
+      _projectPath: string,
+      _sourcePath: string,
+      _llmConfig: unknown,
+      _signal: unknown,
+      _folderContext: unknown,
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void,
+    ) => {
+      onPageWritten?.({ path: "wiki/sources/source.md", wasCreated: false, previousContent: "old source" })
+      onPageWritten?.({ path: "wiki/entities/topic.md", wasCreated: true, previousContent: null })
+      return ["wiki/sources/source.md", "wiki/entities/topic.md"]
+    })
 
     const response = await runAgentAppTool(
       "ingest_source",
@@ -1536,15 +1748,36 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.ok).toBe(false)
     if (response.ok) throw new Error("expected resource limit")
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/sources/source.md", operation: "update" },
-      { path: "wiki/entities/topic.md", operation: "update" },
+      {
+        path: "wiki/sources/source.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "old source",
+      },
+      {
+        path: "wiki/entities/topic.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      },
     ])
     expect(response.resourceLimit.message).toMatch(/exceeded maxFilesChanged/)
     expect(response.resourceLimit.attempted).toBe(2)
   })
 
   it("lets post-flight writes pass when maxFilesChanged enforcement is disabled", async () => {
-    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md", "wiki/entities/topic.md"])
+    ingestMock.autoIngest.mockImplementationOnce(async (
+      _projectPath: string,
+      _sourcePath: string,
+      _llmConfig: unknown,
+      _signal: unknown,
+      _folderContext: unknown,
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void,
+    ) => {
+      onPageWritten?.({ path: "wiki/sources/source.md", wasCreated: false, previousContent: "old source" })
+      onPageWritten?.({ path: "wiki/entities/topic.md", wasCreated: true, previousContent: null })
+      return ["wiki/sources/source.md", "wiki/entities/topic.md"]
+    })
 
     const response = await runAgentAppTool(
       "ingest_source",
@@ -1554,14 +1787,34 @@ describe("runAgentAppTool ingest parity tools", () => {
 
     expect(response.ok).toBe(true)
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/sources/source.md", operation: "update" },
-      { path: "wiki/entities/topic.md", operation: "update" },
+      {
+        path: "wiki/sources/source.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "old source",
+      },
+      {
+        path: "wiki/entities/topic.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      },
     ])
     expect("resourceLimit" in response ? response.resourceLimit : undefined).toBeUndefined()
   })
 
   it("shares pipeline budget across internal steps and returns the blocking resource limit", async () => {
-    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md"])
+    ingestMock.autoIngest.mockImplementationOnce(async (
+      _projectPath: string,
+      _sourcePath: string,
+      _llmConfig: unknown,
+      _signal: unknown,
+      _folderContext: unknown,
+      onPageWritten?: (record: { path: string; wasCreated: boolean; previousContent: string | null }) => void,
+    ) => {
+      onPageWritten?.({ path: "wiki/sources/source.md", wasCreated: false, previousContent: "old source" })
+      return ["wiki/sources/source.md"]
+    })
     pipelineMock.executePipeline.mockImplementationOnce(async (
       _schema: unknown,
       runner?: (toolName: string, args: Record<string, unknown>) => Promise<{

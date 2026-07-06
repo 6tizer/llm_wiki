@@ -22,6 +22,13 @@ export async function tryReadFile(path: string): Promise<string | null> {
   }
 }
 
+/** Snapshot metadata for a wiki page write completed by ingest write helpers. */
+export interface IngestWrittenPageRecord {
+  path: string
+  wasCreated: boolean
+  previousContent: string | null
+}
+
 export function buildPageMerger(llmConfig: LlmConfig): MergeFn {
   return async (existingContent, incomingContent, sourceFileName, signal) => {
     const systemPrompt = [
@@ -132,6 +139,7 @@ export async function injectImagesIntoSourceSummary(
   sourceIdentity: string,
   sourceSummarySlug: string,
   savedImages: { relPath: string; page: number | null; sha256?: string }[],
+  onPageWritten?: (record: IngestWrittenPageRecord) => void,
 ): Promise<boolean> {
   if (savedImages.length === 0) return false
   const sourceSummaryPath = `wiki/sources/${sourceSummarySlug}.md`
@@ -181,6 +189,11 @@ export async function injectImagesIntoSourceSummary(
       ].join("\n")
       await writeFile(sourceSummaryFullPath, stubFrontmatter + wrapped)
     }
+    onPageWritten?.({
+      path: sourceSummaryPath,
+      wasCreated: existing === null,
+      previousContent: existing,
+    })
     console.log(
       `[ingest:images] injected ${savedImages.length} image reference(s) into ${sourceSummaryPath}`,
     )

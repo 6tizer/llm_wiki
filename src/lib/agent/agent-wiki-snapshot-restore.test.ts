@@ -16,6 +16,7 @@ vi.mock("@/commands/fs", () => ({
 }))
 
 import {
+  parseManifestEntry,
   restoreAgentWikiSnapshots,
   restoreSingleAgentWikiSnapshot,
 } from "./agent-wiki-snapshot-restore"
@@ -164,6 +165,197 @@ describe("restoreAgentWikiSnapshots", () => {
     expect(result.ok).toBe(true)
     expect(fsMocks.deleteFile).toHaveBeenCalledWith("/proj/wiki/entities/new.md")
     expect(fsMocks.writeFile).not.toHaveBeenCalled()
+  })
+
+  it("parses delete manifest entries and restores deleted files from snapshots", async () => {
+    const emptySha256 = await sha256Text("")
+    const entryLine = line({
+      seq: 1,
+      path: "wiki/entities/deleted.md",
+      operation: "delete",
+      existedBefore: true,
+      beforeSha256: await sha256Text("before delete"),
+      afterSha256: emptySha256,
+      toolUseId: "tool-delete",
+      snapshotFile: "000001-deleted.md",
+    })
+
+    expect(parseManifestEntry(entryLine)).toMatchObject({
+      operation: "delete",
+      afterSha256: emptySha256,
+    })
+
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) return entryLine
+      if (path === "/proj/wiki/entities/deleted.md") throw new Error("ENOENT: no such file")
+      if (path.endsWith("000001-deleted.md")) return "before delete"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [{
+          path: "wiki/entities/deleted.md",
+          operation: "delete",
+          timestamp: 1,
+          toolUseId: "tool-delete",
+          snapshotted: true,
+        }]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: ["wiki/entities/deleted.md"], failures: [] })
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/entities/deleted.md", "before delete")
+  })
+
+  it("blocks delete restore when the deleted path was recreated even with empty content", async () => {
+    const emptySha256 = await sha256Text("")
+    const entryLine = line({
+      seq: 1,
+      path: "wiki/entities/deleted.md",
+      operation: "delete",
+      existedBefore: true,
+      beforeSha256: await sha256Text("before delete"),
+      afterSha256: emptySha256,
+      toolUseId: "tool-delete",
+      snapshotFile: "000001-deleted.md",
+    })
+
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) return entryLine
+      if (path === "/proj/wiki/entities/deleted.md") return ""
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [{
+          path: "wiki/entities/deleted.md",
+          operation: "delete",
+          timestamp: 1,
+          toolUseId: "tool-delete",
+          snapshotted: true,
+        }]),
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.failures).toEqual([{
+      path: "wiki/entities/deleted.md",
+      error: "文件已被后续修改，请用 rewind 或手动处理",
+    }])
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
+  })
+
+  it("rewinds create then delete on the same path as a no-op when the file is already absent", async () => {
+    const createdSha256 = await sha256Text("created")
+    const emptySha256 = await sha256Text("")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return [
+          line({
+            seq: 1,
+            path: "wiki/transient.md",
+            operation: "create",
+            existedBefore: false,
+            afterSha256: createdSha256,
+            toolUseId: "tool-create",
+            snapshotFile: "000001-transient.md",
+          }),
+          line({
+            seq: 2,
+            path: "wiki/transient.md",
+            operation: "delete",
+            existedBefore: true,
+            beforeSha256: createdSha256,
+            afterSha256: emptySha256,
+            toolUseId: "tool-delete",
+            snapshotFile: "000002-transient.md",
+          }),
+        ].join("\n")
+      }
+      if (path === "/proj/wiki/transient.md") throw new Error("ENOENT: no such file")
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [
+          { path: "wiki/transient.md", operation: "create", timestamp: 1, toolUseId: "tool-create", snapshotted: true },
+          { path: "wiki/transient.md", operation: "delete", timestamp: 2, toolUseId: "tool-delete", snapshotted: true },
+        ]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: [], failures: [] })
+    expect(fsMocks.writeFile).not.toHaveBeenCalled()
+    expect(fsMocks.deleteFile).not.toHaveBeenCalled()
+  })
+
+  it("rewinds delete then create on the same path by deleting replacement and restoring deleted content", async () => {
+    let current: string | null = "replacement"
+    const beforeSha256 = await sha256Text("before delete")
+    const replacementSha256 = await sha256Text("replacement")
+    const emptySha256 = await sha256Text("")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return [
+          line({
+            seq: 1,
+            path: "wiki/replaced.md",
+            operation: "delete",
+            existedBefore: true,
+            beforeSha256,
+            afterSha256: emptySha256,
+            toolUseId: "tool-delete",
+            snapshotFile: "000001-replaced.md",
+          }),
+          line({
+            seq: 2,
+            path: "wiki/replaced.md",
+            operation: "create",
+            existedBefore: false,
+            afterSha256: replacementSha256,
+            toolUseId: "tool-create",
+            snapshotFile: "000002-replaced.md",
+          }),
+        ].join("\n")
+      }
+      if (path === "/proj/wiki/replaced.md") {
+        if (current === null) throw new Error("ENOENT: no such file")
+        return current
+      }
+      if (path.endsWith("000001-replaced.md")) return "before delete"
+      throw new Error(`unexpected read ${path}`)
+    })
+    fsMocks.deleteFile.mockImplementation(async () => {
+      current = null
+    })
+    fsMocks.writeFile.mockImplementation(async (_path, contents) => {
+      current = contents
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [
+          { path: "wiki/replaced.md", operation: "delete", timestamp: 1, toolUseId: "tool-delete", snapshotted: true },
+          { path: "wiki/replaced.md", operation: "create", timestamp: 2, toolUseId: "tool-create", snapshotted: true },
+        ]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: ["wiki/replaced.md"], failures: [] })
+    expect(fsMocks.deleteFile).toHaveBeenCalledWith("/proj/wiki/replaced.md")
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/replaced.md", "before delete")
+    expect(current).toBe("before delete")
   })
 
   it("returns failures when a restore write fails", async () => {
