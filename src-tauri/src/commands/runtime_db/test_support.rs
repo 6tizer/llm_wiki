@@ -145,6 +145,7 @@ pub(crate) fn claim_by_kind_request(
     RuntimeJobClaimByKindRequest {
         holder: holder.to_string(),
         lease_id: Some(lease_id.to_string()),
+        job_id: None,
         kind: kind.to_string(),
         payload_layer: None,
     }

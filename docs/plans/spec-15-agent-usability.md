@@ -1,6 +1,6 @@
 # SPEC-15 — Agent 干活可用性收口（Agent Usability Hardening）
 
-> 类型：SPEC charter | 状态：draft / 待用户确认波次 | 创建：2026-07-06
+> 类型：SPEC charter | 状态：approved（2026-07-06 用户确认波次与裁定点） | 创建：2026-07-06
 > 入口对账：[post-1.0-backlog-triage.md](./post-1.0-backlog-triage.md) 池子 A
 
 ## 1. 问题陈述

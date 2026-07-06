@@ -231,7 +231,7 @@ pub(crate) fn runtime_job_claim_by_kind_for_project(
         RuntimeJobClaimRequest {
             holder: request.holder,
             lease_id: request.lease_id,
-            job_id: None,
+            job_id: request.job_id,
         },
         Some(kind),
         payload_layer,
@@ -1496,6 +1496,79 @@ mod tests {
         )
         .expect("claim next queued derived-rebuild job by priority alone");
         assert_eq!(claimed.job.job_id, "job-embedding-high");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_by_kind_with_job_id_filter_claims_only_that_specific_job() {
+        let project = temp_project("job-claim-by-kind-id-hit");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-kind-high", "agent-chat-run", 100),
+            100,
+        )
+        .expect("create higher-priority same-kind job");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-kind-target", "agent-chat-run", 10),
+            110,
+        )
+        .expect("create target same-kind job");
+
+        let claimed = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            RuntimeJobClaimByKindRequest {
+                job_id: Some("job-kind-target".to_string()),
+                ..claim_by_kind_request("agent-chat-run", "lease-target", "agent-chat-run")
+            },
+            200,
+        )
+        .expect("claim exact requested job within kind");
+        assert_eq!(claimed.job.job_id, "job-kind-target");
+
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        let untouched = list
+            .jobs
+            .iter()
+            .find(|job| job.job_id == "job-kind-high")
+            .expect("higher-priority same-kind job present");
+        assert_eq!(untouched.state, "queued");
+        assert_eq!(untouched.attempt, 0);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn scoped_claim_by_kind_with_job_id_filter_returns_no_queued_job_without_fallback() {
+        let project = temp_project("job-claim-by-kind-id-miss");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            create_request_with_kind("job-kind-high", "agent-chat-run", 100),
+            100,
+        )
+        .expect("create same-kind job that must not be claimed");
+
+        let error = runtime_job_claim_by_kind_for_project(
+            Some(&project),
+            true,
+            RuntimeJobClaimByKindRequest {
+                job_id: Some("job-does-not-exist".to_string()),
+                ..claim_by_kind_request("agent-chat-run", "lease-miss", "agent-chat-run")
+            },
+            200,
+        )
+        .expect_err("missing exact job id does not fall back");
+        assert!(error.starts_with("no-queued-job"));
+
+        let list = runtime_job_list_for_project(Some(&project), true).expect("list jobs");
+        assert_eq!(list.jobs[0].job_id, "job-kind-high");
+        assert_eq!(list.jobs[0].state, "queued");
+        assert_eq!(list.jobs[0].attempt, 0);
         let _ = fs::remove_dir_all(project);
     }
 

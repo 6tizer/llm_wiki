@@ -143,6 +143,34 @@ describe("runtime-db commands", () => {
     })
   })
 
+  it("sends runtime job claim-by-kind payloads with an exact jobId filter", async () => {
+    const claim = {
+      job: { jobId: "job-agent-chat-1", kind: "agent-chat-run" },
+      lease: { leaseId: "lease-agent-chat-1", jobId: "job-agent-chat-1" },
+    }
+    tauriMocks.invoke.mockResolvedValue(claim)
+
+    await expect(
+      runtimeJobClaimByKind({
+        kind: "agent-chat-run",
+        holder: "agent-chat-run:job-agent-chat-1",
+        leaseId: "lease-agent-chat-1",
+        payloadLayer: "chat",
+        jobId: "job-agent-chat-1",
+      }),
+    ).resolves.toBe(claim)
+
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("runtime_job_claim_by_kind", {
+      request: {
+        kind: "agent-chat-run",
+        holder: "agent-chat-run:job-agent-chat-1",
+        leaseId: "lease-agent-chat-1",
+        payloadLayer: "chat",
+        jobId: "job-agent-chat-1",
+      },
+    })
+  })
+
   it("sends cancel, pause, and resume request payloads by job id only", async () => {
     const cancelResponse = { jobId: "job-1" }
     const pauseResponse = { jobId: "job-2" }

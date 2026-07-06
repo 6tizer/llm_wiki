@@ -219,7 +219,7 @@ pub struct RuntimeJobCreateRequest {
 /// race-safe conditional UPDATE), instead of the default "next queued job of
 /// any kind" behavior used by callers with no filter.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeJobClaimRequest {
     holder: String,
     lease_id: Option<String>,
@@ -239,6 +239,7 @@ pub struct RuntimeJobClaimRequest {
 pub struct RuntimeJobClaimByKindRequest {
     holder: String,
     lease_id: Option<String>,
+    job_id: Option<String>,
     kind: String,
     payload_layer: Option<String>,
 }
@@ -1189,4 +1190,77 @@ struct RuntimeProfileProbeOutcome {
 struct NormalizedAffectedPath {
     display_key: String,
     resource_key: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_job_claim_request_accepts_ts_maximal_contract() {
+        let request = serde_json::from_str::<RuntimeJobClaimRequest>(
+            r#"{
+                "holder": "synthesis-staleness",
+                "leaseId": "lease-1",
+                "jobId": "job-1"
+            }"#,
+        )
+        .expect("claim accepts TS maximal request shape");
+
+        assert_eq!(request.holder, "synthesis-staleness");
+        assert_eq!(request.lease_id.as_deref(), Some("lease-1"));
+        assert_eq!(request.job_id.as_deref(), Some("job-1"));
+    }
+
+    #[test]
+    fn runtime_job_claim_request_rejects_unknown_fields() {
+        let error = serde_json::from_str::<RuntimeJobClaimRequest>(
+            r#"{
+                "holder": "synthesis-staleness",
+                "leaseId": "lease-1",
+                "jobId": "job-1",
+                "bogusField": true
+            }"#,
+        )
+        .expect_err("claim keeps deny_unknown_fields semantics");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn runtime_job_claim_by_kind_request_accepts_ts_maximal_contract() {
+        let request = serde_json::from_str::<RuntimeJobClaimByKindRequest>(
+            r#"{
+                "holder": "agent-chat-run:job-1",
+                "leaseId": "lease-1",
+                "kind": "agent-chat-run",
+                "payloadLayer": "chat",
+                "jobId": "job-1"
+            }"#,
+        )
+        .expect("claim_by_kind accepts TS maximal request shape");
+
+        assert_eq!(request.holder, "agent-chat-run:job-1");
+        assert_eq!(request.lease_id.as_deref(), Some("lease-1"));
+        assert_eq!(request.kind, "agent-chat-run");
+        assert_eq!(request.payload_layer.as_deref(), Some("chat"));
+        assert_eq!(request.job_id.as_deref(), Some("job-1"));
+    }
+
+    #[test]
+    fn runtime_job_claim_by_kind_request_rejects_unknown_fields() {
+        let error = serde_json::from_str::<RuntimeJobClaimByKindRequest>(
+            r#"{
+                "holder": "agent-chat-run:job-1",
+                "leaseId": "lease-1",
+                "kind": "agent-chat-run",
+                "payloadLayer": "chat",
+                "jobId": "job-1",
+                "bogusField": true
+            }"#,
+        )
+        .expect_err("claim_by_kind keeps deny_unknown_fields semantics");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
 }
