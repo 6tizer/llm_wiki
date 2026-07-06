@@ -397,6 +397,21 @@ describe("ChatPanel agent mode rendering", () => {
     expect(html).toContain("Model routing")
   })
 
+  it("keeps the message list from becoming an implicit horizontal scroller", () => {
+    setupActiveProjectConversation()
+    const { container, root } = renderChatPanel()
+
+    const scrollContainer = container.querySelector<HTMLElement>(
+      ".flex-1.overflow-x-hidden.overflow-y-auto",
+    )
+
+    expect(scrollContainer?.className).toContain("overflow-x-hidden")
+    expect(scrollContainer?.className).toContain("overflow-y-auto")
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it("shows Auto in the footer when no resolved Agent profile or SDK model exists", async () => {
     const { container, root } = renderChatPanel()
 
@@ -1853,6 +1868,7 @@ describe("normal Chat Router progress rendering", () => {
     expect(html).toContain("chat-markdown prose prose-sm min-w-0")
     expect(html).toContain("break-words")
     expect(html).toContain("max-w-full rounded")
+    expect(html).toContain("overflow-x-auto overscroll-x-contain")
     expect(html).toContain("<code dir=\"ltr\" class=\"break-words\"")
     expect(html).toContain("<code dir=\"ltr\" class=\"language-txt\"")
     expect(html).not.toContain("break-all")
