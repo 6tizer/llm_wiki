@@ -23,4 +23,14 @@ describe("GraphView layout key", () => {
       handler.indexOf('useWikiStore.getState().setActiveView("research")'),
     )
   })
+
+  it("keeps the graph title on one truncated line under tight panel widths", () => {
+    const source = readFileSync("src/components/graph/graph-view.tsx", "utf8")
+
+    expect(source).toContain('className="flex min-w-0 items-center justify-between border-b px-4 py-2 shrink-0"')
+    expect(source).toContain('className="flex min-w-0 items-center gap-3"')
+    expect(source).toContain('className="flex min-w-0 items-center gap-2"')
+    expect(source).toContain('className="h-4 w-4 shrink-0 text-muted-foreground"')
+    expect(source).toContain('className="truncate text-sm font-medium"')
+  })
 })

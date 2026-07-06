@@ -470,9 +470,19 @@ export const useWikiStore = create<WikiState>((set) => ({
 	setPendingWikiHealthTab: (pendingWikiHealthTab) => set({ pendingWikiHealthTab }),
 	setActiveView: (activeView) => {
 		// "research" remains an internal view alias that opens Explore's Research tab.
-		set(activeView === "research"
-			? { activeView, pendingExploreTab: "research" }
-			: { activeView, pendingExploreTab: null })
+		// Leaving Explore/Research owns graph previews; callers that need to
+		// keep a file selected must switch view first, then setSelectedFile.
+		set((state) => {
+			const wasExploreFamily = state.activeView === "explore" || state.activeView === "research"
+			const isExploreFamily = activeView === "explore" || activeView === "research"
+			const nextState = activeView === "research"
+				? { activeView, pendingExploreTab: "research" as const }
+				: { activeView, pendingExploreTab: null }
+
+			return wasExploreFamily && !isExploreFamily
+				? { ...nextState, selectedFile: null, fileContent: "", externalPreview: null }
+				: nextState
+		})
 	},
 	searchApiConfig: {
 		provider: "none",
