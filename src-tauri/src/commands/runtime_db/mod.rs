@@ -79,6 +79,7 @@ const DEFAULT_HEARTBEAT_MIN_INTERVAL_MS: i64 = 5_000;
 // bounding true mint/fold crash windows.
 const ORPHAN_QUEUED_JOB_THRESHOLD_MS: i64 = 360_000;
 const DERIVED_MARKER_GC_INTERVAL_MS: i64 = 86_400_000;
+const REWIND_SNAPSHOT_GC_INTERVAL_MS: i64 = DERIVED_MARKER_GC_INTERVAL_MS;
 // How often the core-runtime background scheduler (see
 // `start_lease_reclaim_scheduler`) scans for `running` jobs whose active
 // lease has expired. Comfortably below DEFAULT_LEASE_TTL_MS so a crashed
@@ -102,6 +103,9 @@ const MAX_COMMIT_BUDGET_TTL_MS: i64 = 1_200_000;
 const DEFAULT_FAILED_ARTIFACT_TTL_MS: i64 = 604_800_000;
 const MAX_FAILED_ARTIFACT_TTL_MS: i64 = 2_592_000_000;
 const DEFAULT_DERIVED_MARKER_TERMINAL_TTL_MS: i64 = DEFAULT_FAILED_ARTIFACT_TTL_MS;
+// Product retention window for agent rewind snapshots; adjustable independently
+// from staging/marker internals even though it currently shares the 7-day TTL.
+const REWIND_SNAPSHOT_TTL_MS: i64 = DEFAULT_FAILED_ARTIFACT_TTL_MS;
 const MAX_STAGING_ARTIFACT_PATH_BYTES: usize = 1024;
 const MAX_STAGING_ARTIFACT_HASH_BYTES: usize = 128;
 const MAX_STAGING_ARTIFACT_ERROR_BYTES: usize = 4096;

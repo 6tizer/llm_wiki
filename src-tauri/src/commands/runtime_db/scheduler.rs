@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use super::*;
+use std::fs;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 
 /// Expire an active running lease for a specific job/lease pair, moving the
@@ -199,6 +200,8 @@ const BENIGN_ORPHAN_RECONCILE_RACE_PREFIXES: [&str; 2] =
     ["invalid-transition", "queued-job-not-stale"];
 static LAST_DERIVED_MARKER_GC_MS_BY_PROJECT: OnceLock<Mutex<HashMap<PathBuf, i64>>> =
     OnceLock::new();
+static LAST_REWIND_SNAPSHOT_GC_MS_BY_PROJECT: OnceLock<Mutex<HashMap<PathBuf, i64>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RuntimeOrphanReconcileStats {
@@ -225,6 +228,10 @@ fn is_benign_orphan_reconcile_race(err: &str) -> bool {
 
 fn derived_marker_gc_throttle_by_project() -> &'static Mutex<HashMap<PathBuf, i64>> {
     LAST_DERIVED_MARKER_GC_MS_BY_PROJECT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn rewind_snapshot_gc_throttle_by_project() -> &'static Mutex<HashMap<PathBuf, i64>> {
+    LAST_REWIND_SNAPSHOT_GC_MS_BY_PROJECT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Reclaim every `running` job in the project whose active lease has expired:
@@ -721,6 +728,94 @@ fn runtime_derived_marker_gc_tick(
     }
 }
 
+fn system_time_ms(time: SystemTime) -> Result<i64, String> {
+    let duration = time
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("rewind-snapshot-gc-invalid-mtime: {err}"))?;
+    i64::try_from(duration.as_millis())
+        .map_err(|_| "rewind-snapshot-gc-invalid-mtime: timestamp exceeds i64".to_string())
+}
+
+fn rewind_snapshot_dir_modified_ms(path: &Path) -> Result<i64, String> {
+    let metadata =
+        fs::metadata(path).map_err(|err| format!("rewind-snapshot-gc-stat-failed: {err}"))?;
+    let modified = metadata
+        .modified()
+        .map_err(|err| format!("rewind-snapshot-gc-mtime-failed: {err}"))?;
+    system_time_ms(modified)
+}
+
+fn rewind_snapshot_gc_for_project(project_root: &Path, now: i64) -> Result<usize, String> {
+    let snapshots_root = project_root.join(".llm-wiki").join("rewind-snapshots");
+    if !snapshots_root.exists() {
+        return Ok(0);
+    }
+    let entries = fs::read_dir(&snapshots_root)
+        .map_err(|err| format!("rewind-snapshot-gc-read-dir-failed: {err}"))?;
+    let cutoff = now.saturating_sub(REWIND_SNAPSHOT_TTL_MS);
+    let mut deleted = 0;
+
+    // Current discovery covers agent-chat-run streamId directories written by
+    // the sidecar. If the appTool channel starts writing snapshots in #309,
+    // its directory discovery must be kept in sync here.
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("rewind-snapshot-gc-read-entry-failed: {err}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("rewind-snapshot-gc-file-type-failed: {err}"))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let path = entry.path();
+        let modified_ms = rewind_snapshot_dir_modified_ms(&path)?;
+        if modified_ms > cutoff {
+            continue;
+        }
+        fs::remove_dir_all(&path)
+            .map_err(|err| format!("rewind-snapshot-gc-delete-failed: {err}"))?;
+        deleted += 1;
+    }
+
+    Ok(deleted)
+}
+
+fn runtime_rewind_snapshot_gc_tick(project_root: Option<&Path>, now: i64) -> Result<usize, String> {
+    let Some(project_root) = project_root else {
+        return Ok(0);
+    };
+    let project_key = project_root.to_path_buf();
+    let previous_last = {
+        let mut throttle = rewind_snapshot_gc_throttle_by_project()
+            .lock()
+            .map_err(|err| format!("rewind-snapshot-gc-throttle-lock-failed: {err}"))?;
+        let previous_last = throttle.get(&project_key).copied();
+        if let Some(last) = previous_last {
+            if now.saturating_sub(last) < REWIND_SNAPSHOT_GC_INTERVAL_MS {
+                return Ok(0);
+            }
+        }
+        throttle.insert(project_key.clone(), now);
+        previous_last
+    };
+
+    match rewind_snapshot_gc_for_project(project_root, now) {
+        Ok(deleted) => Ok(deleted),
+        Err(err) => {
+            if let Ok(mut throttle) = rewind_snapshot_gc_throttle_by_project().lock() {
+                if throttle.get(&project_key).copied() == Some(now) {
+                    if let Some(last) = previous_last {
+                        throttle.insert(project_key, last);
+                    } else {
+                        throttle.remove(&project_key);
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
 fn runtime_orphan_reconcile_tick(
     project_root: Option<&Path>,
 ) -> Result<RuntimeOrphanReconcileStats, String> {
@@ -803,6 +898,16 @@ pub fn start_lease_reclaim_scheduler(app: AppHandle) {
                 eprintln!("[orphan-reconcile] tick failed: {err}");
             }
         }
+        match now_ms().and_then(|now| runtime_rewind_snapshot_gc_tick(project_root.as_deref(), now))
+        {
+            Ok(deleted) if deleted > 0 => {
+                eprintln!("[rewind-snapshot-gc] deleted {deleted} expired stream snapshot dir(s)");
+            }
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("[rewind-snapshot-gc] tick failed: {err}");
+            }
+        }
     });
 }
 
@@ -849,6 +954,45 @@ mod tests {
             max_attempts: Some(1),
             priority: None,
         }
+    }
+
+    fn rewind_snapshot_stream_dir(project: &Path, stream_id: &str) -> PathBuf {
+        project
+            .join(".llm-wiki")
+            .join("rewind-snapshots")
+            .join(stream_id)
+    }
+
+    fn create_rewind_snapshot_stream(
+        project: &Path,
+        stream_id: &str,
+        write_manifest: bool,
+    ) -> PathBuf {
+        let stream_dir = rewind_snapshot_stream_dir(project, stream_id);
+        fs::create_dir_all(&stream_dir).expect("create rewind snapshot stream dir");
+        fs::write(stream_dir.join("snapshot-1.json"), "{}").expect("write snapshot file");
+        if write_manifest {
+            fs::write(
+                stream_dir.join("manifest.jsonl"),
+                "{\"sequence\":1,\"createdAt\":\"2026-07-06T00:00:00.000Z\"}\n",
+            )
+            .expect("write manifest");
+        }
+        stream_dir
+    }
+
+    fn bump_rewind_snapshot_dir_after(stream_dir: &Path, minimum_ms: i64) -> i64 {
+        for attempt in 0..100 {
+            thread::sleep(Duration::from_millis(5));
+            fs::write(stream_dir.join(format!("bump-{attempt}.tmp")), "x")
+                .expect("touch rewind snapshot stream dir");
+            let modified_ms =
+                rewind_snapshot_dir_modified_ms(stream_dir).expect("read stream dir mtime");
+            if modified_ms > minimum_ms {
+                return modified_ms;
+            }
+        }
+        panic!("stream dir mtime did not advance past {minimum_ms}");
     }
 
     fn setup_claimed_marker_project(label: &str, marker_id: &str) -> std::path::PathBuf {
@@ -1541,6 +1685,98 @@ mod tests {
             runtime_derived_marker_gc_tick(Some(&project_b), true, now).expect("project b gc tick");
         assert_eq!(b_deleted, 1);
         assert!(!marker_exists(&project_b, "marker-b"));
+
+        let _ = fs::remove_dir_all(project_a);
+        let _ = fs::remove_dir_all(project_b);
+    }
+
+    #[test]
+    fn rewind_snapshot_gc_deletes_expired_dirs_and_keeps_fresh_dirs_by_mtime() {
+        let project = temp_project("rewind-snapshot-gc");
+        fs::create_dir_all(&project).expect("create temp project");
+
+        let expired = create_rewind_snapshot_stream(&project, "expired-stream", true);
+        let damaged = create_rewind_snapshot_stream(&project, "damaged-stream", false);
+        let expired_mtime = rewind_snapshot_dir_modified_ms(&expired).expect("expired mtime");
+        let damaged_mtime = rewind_snapshot_dir_modified_ms(&damaged).expect("damaged mtime");
+        let old_cutoff_base = expired_mtime.max(damaged_mtime);
+
+        let fresh = create_rewind_snapshot_stream(&project, "fresh-stream", true);
+        bump_rewind_snapshot_dir_after(&fresh, old_cutoff_base + 1);
+        let running = create_rewind_snapshot_stream(&project, "running-stream", true);
+        bump_rewind_snapshot_dir_after(&running, old_cutoff_base + 1);
+
+        let deleted =
+            rewind_snapshot_gc_for_project(&project, old_cutoff_base + REWIND_SNAPSHOT_TTL_MS + 1)
+                .expect("rewind snapshot gc");
+
+        assert_eq!(deleted, 2);
+        assert!(!expired.exists());
+        assert!(
+            !damaged.exists(),
+            "GC judges by directory mtime regardless of manifest presence"
+        );
+        assert!(fresh.exists());
+        assert!(
+            running.exists(),
+            "recently written stream dir is protected by mtime"
+        );
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn rewind_snapshot_gc_allows_empty_root() {
+        let project = temp_project("rewind-snapshot-gc-empty");
+        let snapshots_root = project.join(".llm-wiki").join("rewind-snapshots");
+        fs::create_dir_all(&snapshots_root).expect("create empty rewind snapshot root");
+
+        let deleted = rewind_snapshot_gc_for_project(&project, REWIND_SNAPSHOT_TTL_MS + 1_000)
+            .expect("empty rewind snapshot gc");
+
+        assert_eq!(deleted, 0);
+        assert!(snapshots_root.exists());
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn rewind_snapshot_gc_tick_runs_at_most_once_per_project_interval() {
+        let project_a = temp_project("rewind-snapshot-gc-project-a");
+        let project_b = temp_project("rewind-snapshot-gc-project-b");
+        fs::create_dir_all(&project_a).expect("create project a");
+        fs::create_dir_all(&project_b).expect("create project b");
+
+        let a_old = create_rewind_snapshot_stream(&project_a, "old-a", true);
+        let b_old = create_rewind_snapshot_stream(&project_b, "old-b", true);
+        let old_mtime = rewind_snapshot_dir_modified_ms(&a_old)
+            .expect("project a old mtime")
+            .max(rewind_snapshot_dir_modified_ms(&b_old).expect("project b old mtime"));
+        let now = old_mtime + REWIND_SNAPSHOT_TTL_MS + 1;
+
+        let a_deleted =
+            runtime_rewind_snapshot_gc_tick(Some(&project_a), now).expect("project a gc tick");
+        assert_eq!(a_deleted, 1);
+        assert!(!a_old.exists());
+
+        let b_deleted =
+            runtime_rewind_snapshot_gc_tick(Some(&project_b), now).expect("project b gc tick");
+        assert_eq!(b_deleted, 1);
+        assert!(!b_old.exists());
+
+        let a_second = create_rewind_snapshot_stream(&project_a, "old-a-second", true);
+        let throttled_deleted = runtime_rewind_snapshot_gc_tick(
+            Some(&project_a),
+            now + REWIND_SNAPSHOT_GC_INTERVAL_MS - 1,
+        )
+        .expect("project a throttled gc tick");
+        assert_eq!(throttled_deleted, 0);
+        assert!(a_second.exists());
+
+        let second_deleted =
+            runtime_rewind_snapshot_gc_tick(Some(&project_a), now + REWIND_SNAPSHOT_GC_INTERVAL_MS)
+                .expect("project a second gc tick");
+        assert_eq!(second_deleted, 1);
+        assert!(!a_second.exists());
 
         let _ = fs::remove_dir_all(project_a);
         let _ = fs::remove_dir_all(project_b);
