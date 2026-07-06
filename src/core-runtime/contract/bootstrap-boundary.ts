@@ -109,7 +109,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
       "loadTheme",
       "loadLanguage",
     ],
-    migrationNote: "Do not drop the active-preset saveLlmConfig write-back side effect.",
+    migrationNote:
+      "Migrated to src/lib/bootstrap/init-config-hydration.ts; Do not drop the active-preset saveLlmConfig write-back side effect.",
   },
   {
     id: "last-project-open",
@@ -118,7 +119,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     targetBoundary: "project-family",
     currentResponsibilities: ["Read last project", "Open last project if still valid"],
     currentCallSites: ["getLastProject", "openProject", "handleProjectOpened"],
-    migrationNote: "Opening the last project must remain best-effort and must not block loading forever.",
+    migrationNote:
+      "Migrated to src/lib/bootstrap/init-config-hydration.ts; opening the last project must remain best-effort and must not block loading forever.",
   },
   {
     id: "project-open-runtime-handshake",

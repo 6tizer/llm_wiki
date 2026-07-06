@@ -1,20 +1,18 @@
 import { useState, useEffect, useRef } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
-import i18n from "@/i18n"
-import { DEFAULT_API_CONFIG, useWikiStore } from "@/stores/wiki-store"
+import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
 import { useAgentSettingsStore } from "@/stores/agent-settings-store"
 import { BASE_FONT_SIZE_PX, useZoomStore } from "@/stores/zoom-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMineruConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig, loadZoomLevel, loadTheme } from "@/lib/project-store"
-import { activateThemePreference } from "@/lib/theme"
+import { getRecentProjects, saveLastProject, loadOutputLanguage, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig } from "@/lib/project-store"
 import { loadAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { cleanExpiredAgentSessions, loadReviewItems, loadLintItems, loadChatHistory } from "@/lib/persist"
 import { CLIP_SERVER_BASE_URL } from "@/lib/clip-server-constants"
-import { normalizeMineruConfig } from "@/lib/mineru-config"
 import { createSerialQueue } from "@/lib/serial-queue"
+import { runInitConfigHydration } from "@/lib/bootstrap/init-config-hydration"
 import { useAppMountServices } from "@/lib/hooks/use-app-mount-services"
 import { useUpdateCheckBootstrap } from "@/lib/hooks/use-update-check-bootstrap"
 import { UPDATE_REPO } from "@/lib/update-check"
@@ -156,147 +154,10 @@ function App() {
   // step means a bad zoom-level read no longer costs the user their
   // last-open project on the next launch.
   useEffect(() => {
-    const runStep = async (label: string, fn: () => Promise<void>) => {
-      try {
-        await fn()
-      } catch (err) {
-        console.error(`[init] ${label} failed:`, err)
-      }
-    }
-
-    async function init() {
-      // Populated by the providerConfigs step; read by the activePreset
-      // step for its per-preset override lookup. Stays null if that step
-      // fails; in that case activePreset must not re-resolve and persist
-      // a defaults-only LlmConfig over the user's last good snapshot.
-      let savedProviderConfigs: Awaited<ReturnType<typeof loadProviderConfigs>> = null
-
-      await runStep("llmConfig", async () => {
-        const savedConfig = await loadLlmConfig()
-        if (savedConfig) {
-          useWikiStore.getState().setLlmConfig(savedConfig)
-        }
-      })
-
-      await runStep("providerConfigs", async () => {
-        savedProviderConfigs = await loadProviderConfigs()
-        if (savedProviderConfigs) {
-          useWikiStore.getState().setProviderConfigs(savedProviderConfigs)
-        }
-      })
-
-      // Re-resolve the active preset's LlmConfig from (preset defaults +
-      // saved overrides). Without this, preset default updates (e.g. a
-      // corrected Anthropic model ID shipped in a release) never reach
-      // users who are relying on defaults — their stored `llmConfig`
-      // snapshot from a previous launch would keep the old value.
-      // Overrides still win, so an explicit user choice is preserved.
-      // Kept as a single step (not split further) since its sub-parts
-      // depend on each other in sequence.
-      await runStep("activePreset", async () => {
-        const savedActivePreset = await loadActivePresetId()
-        if (savedActivePreset) {
-          useWikiStore.getState().setActivePresetId(savedActivePreset)
-          if (!savedProviderConfigs) {
-            return
-          }
-          const { LLM_PRESETS } = await import("@/lib/llm-presets")
-          const { resolveConfig } = await import("@/components/settings/preset-resolver")
-          const preset = LLM_PRESETS.find((p) => p.id === savedActivePreset)
-          if (preset) {
-            const currentFallback = useWikiStore.getState().llmConfig
-            const override = savedProviderConfigs[savedActivePreset]
-            const resolved = resolveConfig(preset, override, currentFallback)
-            useWikiStore.getState().setLlmConfig(resolved)
-            const { saveLlmConfig } = await import("@/lib/project-store")
-            await saveLlmConfig(resolved)
-          }
-        }
-      })
-
-      await runStep("searchApiConfig", async () => {
-        const savedSearchConfig = await loadSearchApiConfig()
-        if (savedSearchConfig) {
-          useWikiStore.getState().setSearchApiConfig(savedSearchConfig)
-        }
-      })
-
-      await runStep("embeddingConfig", async () => {
-        const savedEmbeddingConfig = await loadEmbeddingConfig()
-        if (savedEmbeddingConfig) {
-          useWikiStore.getState().setEmbeddingConfig(savedEmbeddingConfig)
-        }
-      })
-
-      await runStep("multimodalConfig", async () => {
-        const savedMultimodalConfig = await loadMultimodalConfig()
-        if (savedMultimodalConfig) {
-          useWikiStore.getState().setMultimodalConfig(savedMultimodalConfig)
-        }
-      })
-
-      await runStep("mineruConfig", async () => {
-        const savedMineruConfig = await loadMineruConfig()
-        if (savedMineruConfig) {
-          useWikiStore.getState().setMineruConfig(normalizeMineruConfig(savedMineruConfig))
-        }
-      })
-
-      await runStep("proxyConfig", async () => {
-        const savedProxy = await loadProxyConfig()
-        if (savedProxy) {
-          useWikiStore.getState().setProxyConfig(savedProxy)
-        }
-      })
-
-      await runStep("apiConfig", async () => {
-        // Local HTTP API server config — global (single token + enable
-        // flag for the whole install, not per-project). The Rust side
-        // reads `apiConfig.{enabled,token,mcpEnabled}` from `app-state.json`
-        // directly; this only hydrates the Zustand store so the
-        // Settings UI reflects the persisted values.
-        const savedApi = await loadApiConfig()
-        if (savedApi) {
-          useWikiStore.getState().setApiConfig({
-            enabled: typeof savedApi.enabled === "boolean" ? savedApi.enabled : DEFAULT_API_CONFIG.enabled,
-            allowUnauthenticated:
-              typeof savedApi.allowUnauthenticated === "boolean"
-                ? savedApi.allowUnauthenticated
-                : DEFAULT_API_CONFIG.allowUnauthenticated,
-            mcpEnabled: typeof savedApi.mcpEnabled === "boolean" ? savedApi.mcpEnabled : DEFAULT_API_CONFIG.mcpEnabled,
-            token: typeof savedApi.token === "string" ? savedApi.token : DEFAULT_API_CONFIG.token,
-          })
-        }
-      })
-
-      await runStep("zoomLevel", async () => {
-        useZoomStore.getState().setLevel(await loadZoomLevel())
-      })
-
-      await runStep("theme", async () => {
-        activateThemePreference(await loadTheme())
-      })
-
-      await runStep("language", async () => {
-        const savedLang = await loadLanguage()
-        if (savedLang) {
-          await i18n.changeLanguage(savedLang)
-        }
-      })
-
-      // Independent of every step above — must run even if an earlier
-      // load failed.
-      await runStep("lastProject", async () => {
-        const lastProject = await getLastProject()
-        if (lastProject) {
-          const proj = await openProject(lastProject.path)
-          await handleProjectOpened(proj)
-        }
-      })
-
-      setLoading(false)
-    }
-    init()
+    void runInitConfigHydration({
+      handleProjectOpened,
+      onDone: () => setLoading(false),
+    })
   }, [])
 
   async function handleProjectOpened(proj: WikiProject) {
