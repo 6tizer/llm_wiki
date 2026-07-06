@@ -7,6 +7,7 @@ import { safeStringify } from "./agent-format"
 export type AgentPermissionAction =
   | "allow_temporary"
   | "allow_permanent"
+  | "allow_run"
   | "deny"
   | "deny_interrupt"
 
@@ -33,6 +34,13 @@ export function buildAgentPermissionDecision(
         ? { updatedPermissions: suggestions }
         : {}),
       decisionClassification: "user_permanent",
+    }
+  }
+  if (action === "allow_run") {
+    return {
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+      scope: "run",
     }
   }
   const reason = payload.decisionReason ?? "Permission denied"

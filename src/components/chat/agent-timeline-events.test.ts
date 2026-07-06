@@ -6,13 +6,14 @@ import {
 } from "./agent-timeline-events"
 
 describe("agent timeline event helpers", () => {
-  it("classifies permission timeout before deny interrupt", () => {
+  it("classifies permission timeout from the structured flag", () => {
     expect(
       classifyAgentPermissionDecision(
         {
           behavior: "deny",
-          message: "Permission request timed out",
+          message: "Translated timeout copy can change",
           interrupt: true,
+          autoTimeout: true,
         },
         "Permission request timed out",
       ),

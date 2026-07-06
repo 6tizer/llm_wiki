@@ -51,9 +51,8 @@ export function classifyAgentPermissionDecision(
 		}
 		return "allow_temporary";
 	}
-	if (decision.message === timeoutMessage || decision.reason === timeoutMessage) {
-		return "timeout";
-	}
+	void timeoutMessage;
+	if (decision.autoTimeout) return "timeout";
 	if (decision.interrupt) return "deny_interrupt";
 	return "deny";
 }

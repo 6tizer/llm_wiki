@@ -890,6 +890,155 @@ test("canUseTool fast-path allows Wiki writes under bypass policies without aski
 	}
 });
 
+test("canUseTool consumes run-allow for later asks while preserving Wiki deny gates", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const bridgeCalls: string[] = [];
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async (_streamId, toolName, _input, options) => {
+				bridgeCalls.push(toolName);
+				return {
+					behavior: "allow",
+					toolUseID: options.toolUseID,
+					decisionClassification: "user_permanent",
+					scope: "run",
+				};
+			},
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: false,
+		},
+	});
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	const signal = new AbortController().signal;
+	assert.deepEqual(
+		await canUseTool(
+			"Bash",
+			{ command: "pwd" },
+			{ signal, toolUseID: "tool-run-1", requestId: "req-run-1" },
+		),
+		{
+			behavior: "allow",
+			toolUseID: "tool-run-1",
+			decisionClassification: "user_permanent",
+		},
+	);
+	assert.deepEqual(
+		await canUseTool(
+			"Edit",
+			{ file_path: "/tmp/wiki.md" },
+			{ signal, toolUseID: "tool-run-2", requestId: "req-run-2" },
+		),
+		{
+			behavior: "allow",
+			toolUseID: "tool-run-2",
+			decisionClassification: "user_permanent",
+		},
+	);
+	assert.deepEqual(
+		await canUseTool(
+			"mcp__llm_wiki__update_page",
+			{ path: "wiki/index.md" },
+			{ signal, toolUseID: "tool-run-deny", requestId: "req-run-deny" },
+		),
+		{
+			behavior: "deny",
+			message: "Wiki write tools are disabled",
+			toolUseID: "tool-run-deny",
+		},
+	);
+	assert.deepEqual(bridgeCalls, ["Bash"]);
+});
+
+test("canUseTool run-allow allows later Wiki ask tools without another bridge prompt", async () => {
+	let capturedInput: Parameters<QueryFn>[0] | undefined;
+	const bridgeCalls: string[] = [];
+	const queryFn: QueryFn = async function* (input) {
+		capturedInput = input;
+	};
+
+	const handleRequest = createRequestHandler({
+		queryFn,
+		send: () => {},
+		error: () => {},
+		env: {},
+		permissionBridge: {
+			requestPermission: async (_streamId, toolName, _input, options) => {
+				bridgeCalls.push(toolName);
+				return {
+					behavior: "allow",
+					toolUseID: options.toolUseID,
+					decisionClassification: "user_permanent",
+					scope: "run",
+				};
+			},
+			handleResponse: () => {},
+			rejectStream: () => {},
+			hasPending: () => false,
+		},
+	});
+
+	await handleRequest({
+		...baseRequest,
+		options: {
+			...baseRequest.options,
+			projectPath: "/tmp/wiki",
+			enableWikiTools: true,
+			enableWriteTools: true,
+			permissionPolicy: "default",
+		},
+	});
+
+	const canUseTool = capturedInput?.options?.canUseTool;
+	assert.ok(canUseTool);
+	const signal = new AbortController().signal;
+	assert.deepEqual(
+		await canUseTool(
+			"Bash",
+			{ command: "pwd" },
+			{ signal, toolUseID: "tool-run-1", requestId: "req-run-1" },
+		),
+		{
+			behavior: "allow",
+			toolUseID: "tool-run-1",
+			decisionClassification: "user_permanent",
+		},
+	);
+	assert.deepEqual(
+		await canUseTool(
+			"mcp__llm_wiki__update_page",
+			{ path: "wiki/index.md", contents: "approved by run allow" },
+			{ signal, toolUseID: "tool-run-wiki", requestId: "req-run-wiki" },
+		),
+		{
+			behavior: "allow",
+			toolUseID: "tool-run-wiki",
+			decisionClassification: "user_permanent",
+		},
+	);
+	assert.deepEqual(bridgeCalls, ["Bash"]);
+});
+
 test("canUseTool asks permission bridge for non-Wiki tools", async () => {
 	let capturedInput: Parameters<QueryFn>[0] | undefined;
 	const bridgeCalls: Array<{

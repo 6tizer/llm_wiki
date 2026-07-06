@@ -125,6 +125,30 @@ pub struct AgentSandboxOptions {
     pub network: Option<Value>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPermissionDecisionWire {
+    pub behavior: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_permissions: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interrupt: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_classification: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_timeout: Option<bool>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSpawnArgs {
@@ -907,7 +931,7 @@ pub async fn agent_permission_response(
     stream_id: String,
     request_id: String,
     ok: bool,
-    decision: Option<Value>,
+    decision: Option<AgentPermissionDecisionWire>,
     error: Option<String>,
 ) -> Result<(), String> {
     let stdin = {
@@ -1003,6 +1027,43 @@ mod tests {
         assert!(!redacted.contains("gateway-token"));
         assert!(!redacted.contains("json-token"));
         assert!(!redacted.contains("apiKey"));
+    }
+
+    #[test]
+    fn permission_decision_wire_accepts_optional_run_scope_and_timeout_flag() {
+        let run_allow: super::AgentPermissionDecisionWire = serde_json::from_value(
+            serde_json::json!({
+                "behavior": "allow",
+                "decisionClassification": "user_permanent",
+                "scope": "run"
+            }),
+        )
+        .unwrap();
+        assert_eq!(run_allow.scope.as_deref(), Some("run"));
+        assert_eq!(
+            run_allow.decision_classification.as_deref(),
+            Some("user_permanent")
+        );
+
+        let timeout: super::AgentPermissionDecisionWire = serde_json::from_value(
+            serde_json::json!({
+                "behavior": "deny",
+                "message": "[permission_denied:timeout] Permission gate timed out",
+                "autoTimeout": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(timeout.auto_timeout, Some(true));
+
+        let legacy: super::AgentPermissionDecisionWire = serde_json::from_value(
+            serde_json::json!({
+                "behavior": "deny",
+                "message": "Permission denied"
+            }),
+        )
+        .unwrap();
+        assert_eq!(legacy.scope, None);
+        assert_eq!(legacy.auto_timeout, None);
     }
 
     #[test]

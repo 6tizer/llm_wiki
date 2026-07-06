@@ -54,6 +54,11 @@ describe("agent permission helpers", () => {
       updatedPermissions: request.suggestions,
       decisionClassification: "user_permanent",
     })
+    expect(buildAgentPermissionDecision("allow_run", request)).toEqual({
+      behavior: "allow",
+      decisionClassification: "user_permanent",
+      scope: "run",
+    })
     expect(buildAgentPermissionDecision("deny", request)).toMatchObject({
       behavior: "deny",
       decisionClassification: "user_reject",
@@ -113,6 +118,7 @@ describe("AgentPermissionDialog", () => {
     expect(html).toContain("Shell command")
     expect(html).toContain("Claude wants to run a shell command.")
     expect(html).toContain("/tmp/blocked")
+    expect(html).toContain("Allow All This Run")
     expect(html).toContain("Allow Temporary")
     expect(html).toContain("Deny + Interrupt")
   })

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+} from "react"
 import { useTranslation } from "react-i18next"
 import { ShieldAlert } from "lucide-react"
 import {
@@ -22,6 +30,8 @@ import type { AgentPermissionDecision } from "@/lib/agent/agent-types"
 interface AgentPermissionDialogProps {
   request: AgentPermissionRequestRecord | null
   onDecision: (requestId: string, decision: AgentPermissionDecision) => void
+  onPauseTimer?: (requestId: string) => void
+  onResumeTimer?: (requestId: string) => void
 }
 
 interface AgentPermissionDialogBodyProps {
@@ -102,6 +112,9 @@ export function AgentPermissionDialogBody({
         <Button variant="outline" onClick={() => onAction("allow_permanent")}>
           {t("agent.permission.allowPermanent")}
         </Button>
+        <Button variant="outline" onClick={() => onAction("allow_run")}>
+          {t("agent.permission.allowRun")}
+        </Button>
         <Button onClick={() => onAction("allow_temporary")}>
           {t("agent.permission.allowTemporary")}
         </Button>
@@ -110,10 +123,20 @@ export function AgentPermissionDialogBody({
   )
 }
 
-export function AgentPermissionDialog({ request, onDecision }: AgentPermissionDialogProps) {
+export function AgentPermissionDialog({
+  request,
+  onDecision,
+  onPauseTimer,
+  onResumeTimer,
+}: AgentPermissionDialogProps) {
   const [now, setNow] = useState(() => Date.now())
+  const hoverPausedRef = useRef(false)
+  const focusPausedRef = useRef(false)
   const remainingSeconds = request
-    ? Math.max(0, Math.ceil((request.expiresAt - now) / 1000))
+    ? Math.max(
+        0,
+        Math.ceil((request.pausedRemainingMs ?? request.expiresAt - now) / 1000),
+      )
     : 0
 
   useEffect(() => {
@@ -121,6 +144,12 @@ export function AgentPermissionDialog({ request, onDecision }: AgentPermissionDi
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
+  }, [request])
+
+  useEffect(() => {
+    if (request) return
+    hoverPausedRef.current = false
+    focusPausedRef.current = false
   }, [request])
 
   const decide = useCallback(
@@ -153,12 +182,56 @@ export function AgentPermissionDialog({ request, onDecision }: AgentPermissionDi
     [decide],
   )
 
+  const pauseTimer = useCallback(() => {
+    if (!request) return
+    onPauseTimer?.(request.requestId)
+  }, [onPauseTimer, request])
+
+  const resumeTimer = useCallback(() => {
+    if (!request) return
+    onResumeTimer?.(request.requestId)
+  }, [onResumeTimer, request])
+
+  const resumeTimerIfIdle = useCallback(() => {
+    if (hoverPausedRef.current || focusPausedRef.current) return
+    resumeTimer()
+  }, [resumeTimer])
+
+  const handleMouseEnter = useCallback(() => {
+    hoverPausedRef.current = true
+    pauseTimer()
+  }, [pauseTimer])
+
+  const handleMouseLeave = useCallback(() => {
+    hoverPausedRef.current = false
+    resumeTimerIfIdle()
+  }, [resumeTimerIfIdle])
+
+  const handleFocus = useCallback(() => {
+    focusPausedRef.current = true
+    pauseTimer()
+  }, [pauseTimer])
+
+  const handleBlur = useCallback(
+    (event: FocusEvent<HTMLDivElement>) => {
+      const nextTarget = event.relatedTarget
+      if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return
+      focusPausedRef.current = false
+      resumeTimerIfIdle()
+    },
+    [resumeTimerIfIdle],
+  )
+
   return (
     <Dialog open={Boolean(request)} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl grid-rows-[auto_1fr_auto] overflow-hidden"
         onKeyDown={handleKeyDown}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onFocusCapture={handleFocus}
+        onBlurCapture={handleBlur}
       >
         {request && (
           <AgentPermissionDialogBody
@@ -175,11 +248,15 @@ export function AgentPermissionDialog({ request, onDecision }: AgentPermissionDi
 export function AgentPermissionDialogHost() {
   const request = useChatStore((s) => s.activeAgentPermissionRequest)
   const resolveAgentPermission = useChatStore((s) => s.resolveAgentPermission)
+  const pauseAgentPermissionTimer = useChatStore((s) => s.pauseAgentPermissionTimer)
+  const resumeAgentPermissionTimer = useChatStore((s) => s.resumeAgentPermissionTimer)
 
   return (
     <AgentPermissionDialog
       request={request}
       onDecision={resolveAgentPermission}
+      onPauseTimer={pauseAgentPermissionTimer}
+      onResumeTimer={resumeAgentPermissionTimer}
     />
   )
 }

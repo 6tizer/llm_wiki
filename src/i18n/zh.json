@@ -523,9 +523,10 @@
       "expiresIn": "{{seconds}} 秒后自动拒绝",
       "allowTemporary": "临时允许",
       "allowPermanent": "永久允许",
+      "allowRun": "本次运行全部允许",
       "deny": "拒绝",
       "denyInterrupt": "拒绝并中断",
-      "timeoutDenied": "权限请求已超时",
+      "timeoutDenied": "[permission_denied:timeout] 权限门等待用户响应超时。写入未执行是因为权限门未响应，非校验失败；可切换权限模式或让用户重发。",
       "stopped": "Agent 运行已停止",
       "keyboardHint": "Enter 临时允许，Escape 拒绝。",
       "noDescription": "允许前请检查请求的工具调用。"
