@@ -169,7 +169,7 @@ describe("runAgentRewind", () => {
 
     expect(result.status).toBe("success")
     expect(transportMocks.rewindAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ resume: "session-1" }),
+      expect.objectContaining({ conversationId: "conv-1", resume: "session-1" }),
       "user-uuid-1",
       "assistant-uuid-1",
     )

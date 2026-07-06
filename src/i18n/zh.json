@@ -143,6 +143,7 @@
   },
   "runtimeJobs": {
     "title": "Runtime 任务",
+    "rewindTitle": "Agent rewind 会话",
     "summary": "{{running}} 个运行中 / {{queued}} 个排队中 / {{paused}} 个暂停 / {{failed}} 个失败",
     "empty": "暂无 runtime 任务",
     "attempt": "第 {{attempt}}/{{maxAttempts}} 次",

@@ -299,6 +299,7 @@ export interface AgentTransportOptions {
 	projectPath?: string;
 	apiServerBaseUrl?: string;
 	apiToken?: string;
+	conversationId?: string;
 	enableWikiTools?: boolean;
 	enableWriteTools?: boolean;
 	maxWriteBytes?: number;

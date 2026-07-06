@@ -143,6 +143,7 @@
   },
   "runtimeJobs": {
     "title": "Runtime Jobs",
+    "rewindTitle": "Agent rewind session",
     "summary": "{{running}} running / {{queued}} queued / {{paused}} paused / {{failed}} failed",
     "empty": "No runtime jobs",
     "attempt": "attempt {{attempt}}/{{maxAttempts}}",

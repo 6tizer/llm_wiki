@@ -19,6 +19,10 @@ import {
 } from "@/commands/runtime-db";
 import { AgentRunError } from "./agent-run-state";
 import { runAgentAppTool } from "./agent-app-tools";
+import {
+	startAgentRewindSessionJob,
+	type AgentRewindSessionJobController,
+} from "./agent-rewind-session-job";
 import { isSdkCompactSummaryMessage } from "./agent-summary";
 import type {
 	AgentActionRequiredPayload,
@@ -353,6 +357,11 @@ export async function rewindAgentSession(
 	}
 
 	const streamId = crypto.randomUUID();
+	const rewindJob: AgentRewindSessionJobController = startAgentRewindSessionJob({
+		conversationId: options.conversationId ?? "",
+		streamId,
+		targetUserMessageId: rewindUserMessageId,
+	});
 	let unlistenData: UnlistenFn | undefined;
 	let unlistenDone: UnlistenFn | undefined;
 	let settled = false;
@@ -360,8 +369,24 @@ export async function rewindAgentSession(
 	let profileClaim: RuntimeProfilePoolClaim | null = null;
 	let profileClaimTransferredToRust = false;
 	let resolveResult: (payload: AgentRewindFilesPayload) => void = () => {};
+	let rewindJobTerminal = false;
 
-	const cleanup = () => {
+	const cleanup = (terminalPayload?: AgentRewindFilesPayload) => {
+		if (terminalPayload && !rewindJobTerminal) {
+			rewindJobTerminal = true;
+			if (terminalPayload.ok) {
+				rewindJob.complete();
+			} else {
+				rewindJob.fail(
+					terminalPayload.error ??
+						terminalPayload.unavailableReason ??
+						"Agent rewind session failed",
+				);
+			}
+		} else if (!terminalPayload && !rewindJobTerminal) {
+			rewindJobTerminal = true;
+			rewindJob.fail("rewind-cleanup-without-result");
+		}
 		if (timeout) clearTimeout(timeout);
 		const offData = unlistenData;
 		const offDone = unlistenDone;
@@ -375,12 +400,14 @@ export async function rewindAgentSession(
 		resolveResult = (payload) => {
 			if (settled) return;
 			settled = true;
-			cleanup();
+			cleanup(payload);
 			resolve(payload);
 		};
 	});
 
 	timeout = setTimeout(() => {
+		// Best-effort ledger: the client can mark the job failed before the
+		// one-shot sidecar process has observed its own terminal state.
 		resolveResult({
 			ok: false,
 			error: "Timed out waiting for Agent rewind-session result",
@@ -395,6 +422,7 @@ export async function rewindAgentSession(
 					type: string;
 					data: unknown;
 				};
+				rewindJob.heartbeat();
 				if (wrapper.type === "profile_resolved") {
 					onProfileResolved?.({
 						...(wrapper.data as AgentProfileResolvedPayload),

@@ -56,6 +56,33 @@ const appToolMocks = vi.hoisted(() => ({
 	runAgentAppTool: vi.fn(async () => ({ ok: true, result: { value: "ok" } })),
 }));
 
+const rewindJobMocks = vi.hoisted(() => {
+	const controllers: Array<{
+		streamId: string;
+		heartbeat: ReturnType<typeof vi.fn>;
+		complete: ReturnType<typeof vi.fn>;
+		fail: ReturnType<typeof vi.fn>;
+	}> = [];
+	const startAgentRewindSessionJob = vi.fn((args: { streamId: string }) => {
+		const controller = {
+			streamId: args.streamId,
+			heartbeat: vi.fn(),
+			complete: vi.fn(),
+			fail: vi.fn(),
+		};
+		controllers.push(controller);
+		return controller;
+	});
+	return {
+		controllers,
+		startAgentRewindSessionJob,
+		reset: () => {
+			controllers.length = 0;
+			startAgentRewindSessionJob.mockClear();
+		},
+	};
+});
+
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: tauriMocks.invoke,
 }));
@@ -68,11 +95,16 @@ vi.mock("./agent-app-tools", () => ({
 	runAgentAppTool: appToolMocks.runAgentAppTool,
 }));
 
+vi.mock("./agent-rewind-session-job", () => ({
+	startAgentRewindSessionJob: rewindJobMocks.startAgentRewindSessionJob,
+}));
+
 import { rewindAgentFiles, rewindAgentSession, streamAgent } from "./agent-transport";
 
 beforeEach(() => {
 	vi.clearAllMocks();
 	tauriMocks.reset();
+	rewindJobMocks.reset();
 	tauriMocks.invoke.mockImplementation(
 		async (command: string): Promise<unknown> => {
 			if (command === "runtime_profile_pool_list") {
@@ -1731,6 +1763,14 @@ describe("rewindAgentSession", () => {
 			ok: true,
 			result: { canRewind: true, filesChanged: ["wiki/page.md"] },
 		});
+		expect(rewindJobMocks.startAgentRewindSessionJob).toHaveBeenCalledWith({
+			conversationId: "",
+			streamId,
+			targetUserMessageId: "user-uuid-1",
+		});
+		expect(rewindJobMocks.controllers[0]?.heartbeat).toHaveBeenCalledTimes(1);
+		expect(rewindJobMocks.controllers[0]?.complete).toHaveBeenCalledTimes(1);
+		expect(rewindJobMocks.controllers[0]?.fail).not.toHaveBeenCalled();
 	});
 
 	it("forwards profile_resolved events from rewindAgentSession", async () => {
@@ -1840,6 +1880,97 @@ describe("rewindAgentSession", () => {
 		expect(result.ok).toBe(false);
 		expect(result.unavailableReason).toBe("spawn_failed");
 		expect(result.error).toContain("sidecar crashed");
+		expect(rewindJobMocks.controllers[0]?.fail).toHaveBeenCalledWith(
+			expect.stringContaining("sidecar crashed"),
+		);
+	});
+
+	it("marks the rewind session job failed when the sidecar emits an error event", async () => {
+		const promise = rewindAgentSession(
+			{ apiKey: "test-key", resume: "session-abc" },
+			"user-uuid-1",
+		);
+
+		await vi.waitFor(() => {
+			expect(tauriMocks.invoke).toHaveBeenCalledWith(
+				"agent_rewind_session",
+				expect.anything(),
+			);
+		});
+		const call = tauriMocks.invoke.mock.calls.find(
+			([command]) => command === "agent_rewind_session",
+		);
+		const payload = call?.[1] as { args: { streamId: string } };
+		tauriMocks.emitString(
+			`agent:${payload.args.streamId}`,
+			JSON.stringify({
+				streamId: payload.args.streamId,
+				type: "error",
+				data: { error: "rewind sidecar failed" },
+			}),
+		);
+
+		await expect(promise).resolves.toMatchObject({
+			ok: false,
+			error: "rewind sidecar failed",
+		});
+		expect(rewindJobMocks.controllers[0]?.heartbeat).toHaveBeenCalledTimes(1);
+		expect(rewindJobMocks.controllers[0]?.fail).toHaveBeenCalledWith("rewind sidecar failed");
+	});
+
+	it("marks the rewind session job failed when the client timeout wins", async () => {
+		vi.useFakeTimers();
+		try {
+			const promise = rewindAgentSession(
+				{ apiKey: "test-key", resume: "session-abc", conversationId: "conv-1" },
+				"user-uuid-1",
+			);
+
+			await vi.waitFor(() => {
+				expect(tauriMocks.invoke).toHaveBeenCalledWith(
+					"agent_rewind_session",
+					expect.anything(),
+				);
+			});
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			await expect(promise).resolves.toMatchObject({
+				ok: false,
+				error: "Timed out waiting for Agent rewind-session result",
+			});
+			expect(rewindJobMocks.startAgentRewindSessionJob).toHaveBeenCalledWith({
+				conversationId: "conv-1",
+				streamId: expect.any(String),
+				targetUserMessageId: "user-uuid-1",
+			});
+			expect(rewindJobMocks.controllers[0]?.complete).not.toHaveBeenCalled();
+			expect(rewindJobMocks.controllers[0]?.fail).toHaveBeenCalledWith(
+				"Timed out waiting for Agent rewind-session result",
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("marks the rewind session job failed when cleanup runs without a result", async () => {
+		tauriMocks.listen.mockRejectedValueOnce(new Error("listen failed"));
+
+		await expect(
+			rewindAgentSession(
+				{ apiKey: "test-key", resume: "session-abc", conversationId: "conv-1" },
+				"user-uuid-1",
+			),
+		).rejects.toThrow("listen failed");
+
+		expect(rewindJobMocks.startAgentRewindSessionJob).toHaveBeenCalledWith({
+			conversationId: "conv-1",
+			streamId: expect.any(String),
+			targetUserMessageId: "user-uuid-1",
+		});
+		expect(rewindJobMocks.controllers[0]?.complete).not.toHaveBeenCalled();
+		expect(rewindJobMocks.controllers[0]?.fail).toHaveBeenCalledWith(
+			"rewind-cleanup-without-result",
+		);
 	});
 
 	it("keeps the legacy Agent config path for rewind when runtime is healthy but no Agent-run profile is configured", async () => {

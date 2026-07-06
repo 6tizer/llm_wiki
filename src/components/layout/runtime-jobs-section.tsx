@@ -40,6 +40,7 @@ import {
   AGENT_CHAT_RUN_JOB_KIND,
   parseAgentChatRunJobPayload,
 } from "@/lib/agent/agent-chat-run-job"
+import { AGENT_REWIND_SESSION_JOB_KIND } from "@/lib/agent/agent-rewind-session-job"
 import { useWikiStore } from "@/stores/wiki-store"
 import { usePolling } from "@/lib/hooks/use-polling"
 import { useCountdown } from "@/lib/hooks/use-countdown"
@@ -486,20 +487,22 @@ function RuntimeJobRow({
   const { t } = useTranslation()
   const isBusy = actionJobId === job.jobId
   const isAgentChatRun = job.kind === AGENT_CHAT_RUN_JOB_KIND
-  const canPause = !isAgentChatRun && (job.state === "queued" || job.state === "running")
-  const canResume = !isAgentChatRun && job.state === "paused"
+  const isAgentRewindSession = job.kind === AGENT_REWIND_SESSION_JOB_KIND
+  const isAgentReadOnly = isAgentChatRun || isAgentRewindSession
+  const canPause = !isAgentReadOnly && (job.state === "queued" || job.state === "running")
+  const canResume = !isAgentReadOnly && job.state === "paused"
   // Anchor jobs (closeout hotfix P1 #3) complete inline the same tick
   // they're created — this panel showing a Cancel button for one at all
   // would be a UI ghost, not a real action.
   const canCancel =
-    !isAgentChatRun &&
+    !isAgentReadOnly &&
     !ANCHOR_JOB_KINDS.has(job.kind) &&
     ["queued", "running", "paused", "retry-wait"].includes(job.state)
   const isSuspectedStuck = job.state === "running" && leaseHealth === "suspected-stuck"
   const suspectedStuckLabel = isSuspectedStuck ? t("runtimeJobs.state.suspectedStuck") : null
   const Icon = isSuspectedStuck ? AlertTriangle : iconForJobState(job.state)
   const agentPayload = isAgentChatRun ? parseAgentChatRunJobPayload(job.payload) : null
-  const title = agentPayload?.title ?? job.kind
+  const title = isAgentRewindSession ? t("runtimeJobs.rewindTitle") : agentPayload?.title ?? job.kind
 
   return (
     <div className="py-1.5 text-xs" data-testid={`runtime-job-row-${job.jobId}`}>
