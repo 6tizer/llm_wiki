@@ -48,6 +48,7 @@ import {
 	getAgentPreflightError,
 } from "@/lib/agent/agent-run-state";
 import { hasAgentRunProfileCandidate, streamAgent } from "@/lib/agent/agent-transport";
+import { resolveConversationPermissionPolicy } from "@/lib/agent/permission-policy-resolver";
 import {
 	runtimeProfileList,
 	type RuntimeProfileList,
@@ -1480,10 +1481,15 @@ export function ChatPanel() {
 		() => groupProfilesByConnection(agentRunProfileCandidates),
 		[agentRunProfileCandidates],
 	);
-	const selectedPermissionPolicy =
-		activeConversation?.agentPermissionPolicyOverride ??
-		agentResourceConfig.defaultPermissionPolicy ??
-		"default";
+	const selectedPermissionPolicyResolution = resolveConversationPermissionPolicy(
+		activeConversation,
+		agentResourceConfig,
+	);
+	const selectedPermissionPolicy = selectedPermissionPolicyResolution.policy;
+	const selectedPermissionPolicySource = selectedPermissionPolicyResolution.source;
+	const selectedPermissionPolicyLabel = t(
+		`chat.agentRouting.policyOptions.${selectedPermissionPolicy}.label`,
+	);
 	const showPermissionPolicyBadge = selectedPermissionPolicy !== "default";
 	const permissionPolicyBadgeClass =
 		selectedPermissionPolicy === "bypassPermissions"
@@ -1715,12 +1721,44 @@ export function ChatPanel() {
 										<div className="px-2 pb-1 text-[10px] text-muted-foreground">
 											{t("chat.agentRouting.policyScopeHint")}
 										</div>
-										{(["default", "restricted", "bypassPermissions"] as const).map((policy) => (
+										<div className="px-2 pb-1 text-[10px] text-muted-foreground">
+											{t("chat.agentRouting.policyEffective", {
+												policy: selectedPermissionPolicyLabel,
+												source: t(
+													`chat.agentRouting.policySources.${selectedPermissionPolicySource}`,
+												),
+											})}
+										</div>
+										<button
+											type="button"
+											onClick={() => setPolicyOverride(undefined)}
+											className={`flex w-full items-start justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent ${
+												selectedPermissionPolicySource !== "conversation"
+													? "bg-accent text-accent-foreground"
+													: ""
+											}`}
+										>
+											<span className="min-w-0">
+												<span className="block font-medium">
+													{t("chat.agentRouting.policyFollowGlobal.label")}
+												</span>
+												<span className="block text-[10px] text-muted-foreground">
+													{t("chat.agentRouting.policyFollowGlobal.description", {
+														policy: selectedPermissionPolicyLabel,
+													})}
+												</span>
+											</span>
+											{selectedPermissionPolicySource !== "conversation" && (
+												<Check className="h-3 w-3 shrink-0" />
+											)}
+										</button>
+										{(["restricted", "bypassPermissions"] as const).map((policy) => (
 											<button
 												key={policy}
 												type="button"
 												onClick={() => setPolicyOverride(policy)}
 												className={`flex w-full items-start justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent ${
+													selectedPermissionPolicySource === "conversation" &&
 													selectedPermissionPolicy === policy
 														? "bg-accent text-accent-foreground"
 														: ""
@@ -1728,13 +1766,16 @@ export function ChatPanel() {
 											>
 												<span className="min-w-0">
 													<span className="block font-medium">
-														{t(`chat.agentRouting.policyOptions.${policy}.label`)}
+														{t("chat.agentRouting.policyOverrideLabel", {
+															policy: t(`chat.agentRouting.policyOptions.${policy}.label`),
+														})}
 													</span>
 													<span className="block text-[10px] text-muted-foreground">
 														{t(`chat.agentRouting.policyOptions.${policy}.description`)}
 													</span>
 												</span>
-												{selectedPermissionPolicy === policy && (
+												{selectedPermissionPolicySource === "conversation" &&
+													selectedPermissionPolicy === policy && (
 													<Check className="h-3 w-3 shrink-0" />
 												)}
 											</button>

@@ -278,6 +278,17 @@
       "profileAuto": "Auto (recommended)",
       "policy": "Policy",
       "policyScopeHint": "Applies to this conversation only",
+      "policyEffective": "Current: {{policy}} · {{source}}",
+      "policyFollowGlobal": {
+        "label": "Default (inherits global)",
+        "description": "Follows the global default. Current: {{policy}}."
+      },
+      "policyOverrideLabel": "{{policy}} (this conversation override)",
+      "policySources": {
+        "conversation": "this conversation override",
+        "global": "inherited global default",
+        "fallback": "built-in default"
+      },
       "policyOptions": {
         "default": {
           "label": "Default",
