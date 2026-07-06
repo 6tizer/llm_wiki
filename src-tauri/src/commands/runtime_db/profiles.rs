@@ -1,6 +1,6 @@
 use crate::commands::file_sync::ProjectRootState;
 use crate::panic_guard::run_guarded;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use std::path::Path;
 use tauri::State;
 
@@ -27,12 +27,17 @@ pub fn runtime_profile_create(
 pub fn runtime_profile_update(
     request: RuntimeProfileUpdateRequest,
     root_state: State<'_, ProjectRootState>,
-) -> Result<RuntimeProfileRecord, String> {
+) -> Result<RuntimeProfileUpdateResult, String> {
     run_guarded("runtime_profile_update", || {
         let runtime_enabled = resolve_work_runtime_enabled(read_work_runtime_flag_value());
         let project_root = root_state.get();
         let now = now_for_enabled_project(project_root.as_deref(), runtime_enabled)?;
-        runtime_profile_update_for_project(project_root.as_deref(), runtime_enabled, request, now)
+        runtime_profile_update_result_for_project(
+            project_root.as_deref(),
+            runtime_enabled,
+            request,
+            now,
+        )
     })
 }
 
@@ -187,12 +192,22 @@ pub(crate) fn runtime_profile_create_for_project(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn runtime_profile_update_for_project(
     project_root: Option<&Path>,
     enabled: bool,
     request: RuntimeProfileUpdateRequest,
     now: i64,
 ) -> Result<RuntimeProfileRecord, String> {
+    Ok(runtime_profile_update_result_for_project(project_root, enabled, request, now)?.profile)
+}
+
+pub(crate) fn runtime_profile_update_result_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeProfileUpdateRequest,
+    now: i64,
+) -> Result<RuntimeProfileUpdateResult, String> {
     let project_root = require_enabled_project(project_root, enabled)?;
     let profile_id = normalize_profile_text(
         "invalid-profile-id",
@@ -205,6 +220,7 @@ pub(crate) fn runtime_profile_update_for_project(
         let mut connection = open_profile_runtime_locked(project_root)?;
         let tx = connection.transaction().map_err(tx_err)?;
         let existing = read_visible_profile_tx(&tx, &profile_id)?;
+        let old_secret_ref = existing.secret_ref.clone();
         let display_name = normalize_profile_text_update(
             request.display_name,
             existing.display_name,
@@ -361,8 +377,20 @@ pub(crate) fn runtime_profile_update_for_project(
         )
         .map_err(|err| format!("profile-update-failed: {err}"))?;
         let profile = read_visible_profile_tx(&tx, &profile_id)?;
+        // SQLite can only make the stale-ref decision atomically; keychain/file deletion
+        // happens later in the caller and must stay fail-closed on any uncertainty.
+        let stale_secret_ref = match old_secret_ref {
+            Some(value) if profile.secret_ref.as_deref() != Some(value.as_str()) => {
+                let remaining = count_live_secret_ref_references(&tx, &value, Some(&profile_id))?;
+                if remaining == 0 { Some(value) } else { None }
+            }
+            _ => None,
+        };
         tx.commit().map_err(tx_err)?;
-        Ok(profile)
+        Ok(RuntimeProfileUpdateResult {
+            profile,
+            stale_secret_ref,
+        })
     })
 }
 
@@ -401,6 +429,13 @@ fn runtime_profile_delete_for_project(
         if changed == 0 {
             return Err("profile-not-found: runtime model profile does not exist".to_string());
         }
+        let secret_ref = match secret_ref {
+            Some(value) => {
+                let remaining = count_live_secret_ref_references(&tx, &value, Some(&profile_id))?;
+                if remaining == 0 { Some(value) } else { None }
+            }
+            None => None,
+        };
         tx.commit().map_err(tx_err)?;
         Ok(RuntimeProfileDeleteResult {
             profile_id,
@@ -755,6 +790,24 @@ fn read_visible_profile_secret_ref_tx(
     .ok_or_else(|| "profile-not-found: runtime model profile does not exist".to_string())
 }
 
+fn count_live_secret_ref_references(
+    connection: &Connection,
+    secret_ref: &str,
+    exclude_profile_id: Option<&str>,
+) -> Result<i64, String> {
+    connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM runtime_model_profiles
+             WHERE secret_ref = ?1
+               AND deleted_at_ms IS NULL
+               AND (?2 IS NULL OR profile_id != ?2)",
+            params![secret_ref, exclude_profile_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| format!("profile-secret-ref-count-failed: {err}"))
+}
+
 fn profile_select_sql(suffix: &str) -> String {
     profile_select_sql_with_sdk_alias("agent_sdk_model_id", suffix)
 }
@@ -837,7 +890,7 @@ fn parse_profile_task_families(value: String) -> rusqlite::Result<Vec<String>> {
 mod tests {
     use super::*;
 
-    use rusqlite::{params, Connection};
+    use rusqlite::{Connection, params};
 
     use std::fs;
 
@@ -1181,6 +1234,96 @@ mod tests {
             .expect("read historical claim");
         assert_eq!(claim_count, 1);
         assert_eq!(claim_status, EXPIRED_CLAIM_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn runtime_profile_delete_only_returns_secret_ref_for_last_live_reference() {
+        let project = temp_project("profile-delete-shared-secret-ref");
+        fs::create_dir_all(&project).expect("create temp project");
+        let shared_ref = profile_secret_ref("shared");
+        let mut first = profile_create_request("profile-a");
+        first.secret_ref = Some(shared_ref.clone());
+        runtime_profile_create_for_project(Some(&project), true, first, 100)
+            .expect("create first profile");
+        let mut second = profile_create_request("profile-b");
+        second.secret_ref = Some(shared_ref.clone());
+        runtime_profile_create_for_project(Some(&project), true, second, 110)
+            .expect("create second profile");
+
+        let deleted_first = runtime_profile_delete_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileDeleteRequest {
+                profile_id: "profile-a".to_string(),
+            },
+            200,
+        )
+        .expect("delete first profile");
+
+        assert_eq!(deleted_first.profile_id, "profile-a");
+        assert!(deleted_first.secret_ref.is_none());
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let count_after_first = count_live_secret_ref_references(&connection, &shared_ref, None)
+            .expect("count after first delete");
+        assert_eq!(count_after_first, 1);
+
+        let deleted_second = runtime_profile_delete_for_project(
+            Some(&project),
+            true,
+            RuntimeProfileDeleteRequest {
+                profile_id: "profile-b".to_string(),
+            },
+            250,
+        )
+        .expect("delete last profile");
+
+        assert_eq!(
+            deleted_second.secret_ref.as_deref(),
+            Some(shared_ref.as_str())
+        );
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn runtime_profile_update_returns_stale_secret_ref_only_for_last_live_reference() {
+        let project = temp_project("profile-update-stale-secret-ref");
+        fs::create_dir_all(&project).expect("create temp project");
+        let shared_ref = profile_secret_ref("shared");
+        let replacement_ref = profile_secret_ref("profile-1");
+        for profile_id in ["profile-a", "profile-b"] {
+            let mut create = profile_create_request(profile_id);
+            create.secret_ref = Some(shared_ref.clone());
+            runtime_profile_create_for_project(Some(&project), true, create, 100)
+                .expect("create shared profile");
+        }
+
+        let mut replace = profile_update_request("profile-a");
+        replace.secret_ref = Some(replacement_ref.clone());
+        let replaced =
+            runtime_profile_update_result_for_project(Some(&project), true, replace, 200)
+                .expect("replace first secret ref");
+        assert!(replaced.stale_secret_ref.is_none());
+        assert_eq!(
+            replaced.profile.secret_ref.as_deref(),
+            Some(replacement_ref.as_str())
+        );
+
+        let mut clear = profile_update_request("profile-b");
+        clear.clear_secret_ref = Some(true);
+        let cleared = runtime_profile_update_result_for_project(Some(&project), true, clear, 250)
+            .expect("clear second secret ref");
+        assert_eq!(
+            cleared.stale_secret_ref.as_deref(),
+            Some(shared_ref.as_str())
+        );
+        assert!(cleared.profile.secret_ref.is_none());
+
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        let replacement_count =
+            count_live_secret_ref_references(&connection, &replacement_ref, None)
+                .expect("count replacement ref");
+        assert_eq!(replacement_count, 1);
         let _ = fs::remove_dir_all(project);
     }
 

@@ -67,6 +67,12 @@ function profileUnavailable(message: string): Error {
   return new Error(`profile-unavailable: ${message}`)
 }
 
+function warnPoolFallback(taskFamily: ModelCallTaskFamily) {
+  console.warn(
+    `[pool-chat] falling back to legacy streamChat for taskFamily=${taskFamily}: pool disabled/no candidates`,
+  )
+}
+
 function retryAfterMsFromMessage(message: string): number | undefined {
   const match = /retryAfterMs=(\d+)/.exec(message)
   if (!match) return undefined
@@ -115,7 +121,10 @@ export async function claimModelCallProfileForFamily(
     if (isRuntimeDisabledError(err)) return null
     throw profileUnavailable(errorMessage(err))
   }
-  if (!pool.enabled) return null
+  if (!pool.enabled) {
+    warnPoolFallback(taskFamily)
+    return null
+  }
   if (pool.status !== "healthy") {
     throw profileUnavailable(`profile pool is ${pool.status}`)
   }
@@ -127,14 +136,20 @@ export async function claimModelCallProfileForFamily(
     if (isRuntimeDisabledError(err)) return null
     throw profileUnavailable(errorMessage(err))
   }
-  if (!profiles.enabled) return null
+  if (!profiles.enabled) {
+    warnPoolFallback(taskFamily)
+    return null
+  }
   if (profiles.status !== "healthy") {
     throw profileUnavailable(`profile list is ${profiles.status}`)
   }
   const candidates = profiles.profiles.filter((profile) =>
     hasModelCallProfileCandidate(profile, taskFamily)
   )
-  if (candidates.length === 0) return null
+  if (candidates.length === 0) {
+    warnPoolFallback(taskFamily)
+    return null
+  }
 
   let claim
   try {

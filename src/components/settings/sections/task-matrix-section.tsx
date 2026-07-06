@@ -15,7 +15,7 @@ type LoadState =
   | { kind: "ready"; enabled: boolean; status: RuntimeDbHealthState; profiles: RuntimeProfileRecord[] }
   | { kind: "error"; message: string }
 
-const EFFECTIVE_TASK_FAMILIES = new Set(["agent", "ingest"])
+const EFFECTIVE_TASK_FAMILIES = new Set(["agent", "ingest", "chat", "review", "synthesis", "vision"])
 type InlineConfigTarget = "embedding" | "vision"
 const CONFIG_TARGETS = new Set<InlineConfigTarget>(["embedding", "vision"])
 
@@ -39,6 +39,16 @@ function normalizedTaskFamilies(values: string[]): string[] {
 
 function taskFamilyLabelKey(family: string): string {
   return `settings.sections.modelConfig.taskMatrix.families.${family}`
+}
+
+function taskFamilyStatusLabelKey(family: string): string {
+  if (EFFECTIVE_TASK_FAMILIES.has(family)) {
+    return "settings.sections.modelConfig.taskMatrix.effective"
+  }
+  if (family === "embedding") {
+    return "settings.sections.modelConfig.taskMatrix.inlineOnly"
+  }
+  return "settings.sections.modelConfig.taskMatrix.notWired"
 }
 
 export function TaskMatrixSection({
@@ -95,10 +105,11 @@ export function TaskMatrixSection({
     })
     setMessage(null)
     try {
-      const updated = await runtimeProfileUpdate({
+      const result = await runtimeProfileUpdate({
         profileId: profile.profileId,
         taskFamilies,
       })
+      const updated = result.profile
       profilesRef.current = profilesRef.current.map((item) => (
         item.profileId === updated.profileId ? updated : item
       ))
@@ -196,9 +207,7 @@ export function TaskMatrixSection({
                           }`}
                           data-testid={`task-matrix-status-${family}`}
                         >
-                          {EFFECTIVE_TASK_FAMILIES.has(family)
-                            ? t("settings.sections.modelConfig.taskMatrix.effective")
-                            : t("settings.sections.modelConfig.taskMatrix.notWired")}
+                          {t(taskFamilyStatusLabelKey(family))}
                         </span>
                         {CONFIG_TARGETS.has(family as InlineConfigTarget) && (
                           <button
@@ -215,6 +224,22 @@ export function TaskMatrixSection({
                           </button>
                         )}
                       </div>
+                      {family === "embedding" && (
+                        <p
+                          className="max-w-52 text-[11px] text-muted-foreground"
+                          data-testid="task-matrix-inline-note-embedding"
+                        >
+                          {t("settings.sections.modelConfig.taskMatrix.inlineConfigHint.embedding")}
+                        </p>
+                      )}
+                      {family === "vision" && (
+                        <p
+                          className="max-w-52 text-[11px] text-muted-foreground"
+                          data-testid="task-matrix-inline-note-vision"
+                        >
+                          {t("settings.sections.modelConfig.taskMatrix.inlineConfigHint.vision")}
+                        </p>
+                      )}
                     </div>
                   </th>
                   {loadState.profiles.map((profile) => {

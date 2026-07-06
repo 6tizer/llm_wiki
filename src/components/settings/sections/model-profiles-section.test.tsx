@@ -239,7 +239,10 @@ describe("ModelProfilesSection helpers", () => {
         capabilityCheckedAtMs: 0,
         clearLastCapabilityError: true,
       })
-      return runtimeProfile({ secretRef: null })
+      return {
+        profile: runtimeProfile({ secretRef: null }),
+        staleSecretRef: existing.secretRef,
+      }
     })
 
     await expect(saveProfileDraft(draft, existing)).resolves.toMatchObject({
@@ -247,6 +250,104 @@ describe("ModelProfilesSection helpers", () => {
     })
 
     expect(calls).toEqual(["update", "delete"])
+  })
+
+  it("keeps a shared old secret when another profile still references it", async () => {
+    const existing = runtimeProfile()
+    const draft: ModelProfileDraft = {
+      ...draftFromProfile(existing),
+      rawSecret: "replacement",
+    }
+    secretMocks.profileSecretWrite.mockResolvedValue({
+      secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+    })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({
+      profile: runtimeProfile({
+        secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+      }),
+      staleSecretRef: null,
+    })
+
+    await saveProfileDraft(draft, existing)
+
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalledWith({
+      secretRef: existing.secretRef,
+    })
+  })
+
+  it("deletes an old secret after replacement when no live profile still references it", async () => {
+    const existing = runtimeProfile()
+    const draft: ModelProfileDraft = {
+      ...draftFromProfile(existing),
+      rawSecret: "replacement",
+    }
+    secretMocks.profileSecretWrite.mockResolvedValue({
+      secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+    })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({
+      profile: runtimeProfile({
+        secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+      }),
+      staleSecretRef: existing.secretRef,
+    })
+
+    await saveProfileDraft(draft, existing)
+
+    expect(secretMocks.profileSecretDelete).toHaveBeenCalledWith({
+      secretRef: existing.secretRef,
+    })
+  })
+
+  it("keeps the old secret and warns when update omits staleSecretRef", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const existing = runtimeProfile()
+    const draft: ModelProfileDraft = {
+      ...draftFromProfile(existing),
+      rawSecret: "replacement",
+    }
+    secretMocks.profileSecretWrite.mockResolvedValue({
+      secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+    })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({
+      profile: runtimeProfile({
+        secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+      }),
+    })
+
+    await saveProfileDraft(draft, existing)
+
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalledWith({
+      secretRef: existing.secretRef,
+    })
+    expect(warn).toHaveBeenCalledWith(
+      "[model-profiles] runtime profile update omitted staleSecretRef; keeping old secretRef",
+    )
+    warn.mockRestore()
+  })
+
+  it("does not delete stale secrets when update omits the profile payload", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const existing = runtimeProfile()
+    const draft: ModelProfileDraft = {
+      ...draftFromProfile(existing),
+      rawSecret: "replacement",
+    }
+    secretMocks.profileSecretWrite.mockResolvedValue({
+      secretRef: "llm-wiki-profile-secret:33333333-3333-4333-8333-333333333333",
+    })
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({
+      staleSecretRef: existing.secretRef,
+    })
+
+    await expect(saveProfileDraft(draft, existing)).resolves.toBe(existing)
+
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalledWith({
+      secretRef: existing.secretRef,
+    })
+    expect(warn).toHaveBeenCalledWith(
+      "[model-profiles] runtime profile update omitted profile; keeping secrets untouched",
+    )
+    warn.mockRestore()
   })
 
   it("preserves unknown task families in render options", () => {
@@ -346,7 +447,7 @@ describe("ModelProfilesSection helpers", () => {
 
   it("does not send SDK alias clear flags for plain model-call updates", async () => {
     const existing = runtimeProfile({ kind: "model-call", agentSdkModelId: null })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile())
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({ profile: runtimeProfile(), staleSecretRef: null })
 
     await saveProfileDraft(draftFromProfile(existing), existing)
 
@@ -357,7 +458,10 @@ describe("ModelProfilesSection helpers", () => {
 
   it("clears stale SDK aliases from model-call updates when one already exists", async () => {
     const existing = runtimeProfile({ kind: "model-call", agentSdkModelId: "stale-alias" })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile({ agentSdkModelId: null }))
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({
+      profile: runtimeProfile({ agentSdkModelId: null }),
+      staleSecretRef: null,
+    })
 
     await saveProfileDraft(draftFromProfile(existing), existing)
 
@@ -376,7 +480,10 @@ describe("ModelProfilesSection helpers", () => {
       kind: "model-call" as const,
       agentSdkModelId: "",
     }
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile({ agentSdkModelId: null }))
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({
+      profile: runtimeProfile({ agentSdkModelId: null }),
+      staleSecretRef: null,
+    })
 
     await saveProfileDraft(draft, existing)
 
@@ -403,7 +510,7 @@ describe("ModelProfilesSection UI", () => {
       deletedAtMs: 456,
       secretRef: "llm-wiki-profile-secret:11111111-1111-4111-8111-111111111111",
     })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue(runtimeProfile())
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValue({ profile: runtimeProfile(), staleSecretRef: null })
     runtimeDbMocks.runtimeProfileProbe.mockResolvedValue({
       profile: runtimeProfile({
         capabilityStatus: "supported",
@@ -492,7 +599,7 @@ describe("ModelProfilesSection UI", () => {
       status: "healthy",
       profiles: [profileA, profileB],
     })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(savedB)
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce({ profile: savedB, staleSecretRef: null })
 
     const { container, root } = renderProfiles({ refreshToken: 0 })
     await flush()
@@ -642,6 +749,37 @@ describe("ModelProfilesSection UI", () => {
     unmount(root)
   })
 
+  it("keeps a shared profile secret when delete result omits secretRef", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    runtimeDbMocks.runtimeProfileDelete.mockResolvedValueOnce({
+      profileId: "profile-1",
+      deletedAtMs: 456,
+      secretRef: null,
+    })
+    const { container, root } = await renderProfilesWithList({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile(),
+        runtimeProfile({
+          profileId: "profile-2",
+          displayName: "Second profile",
+          secretRef: "llm-wiki-profile-secret:11111111-1111-4111-8111-111111111111",
+        }),
+      ],
+    })
+
+    await click(container.querySelector("[data-testid='profile-delete']") as HTMLButtonElement)
+
+    expect(runtimeDbMocks.runtimeProfileDelete).toHaveBeenCalledWith({ profileId: "profile-1" })
+    expect(secretMocks.profileSecretDelete).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain("Primary profile")
+    expect(container.textContent).toContain("Second profile")
+
+    confirmSpy.mockRestore()
+    unmount(root)
+  })
+
   it("does not delete profile secrets when DB delete fails", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
     runtimeDbMocks.runtimeProfileDelete.mockRejectedValueOnce(new Error("active profile claim exists"))
@@ -753,10 +891,13 @@ describe("ModelProfilesSection UI", () => {
         }),
       ],
     })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(runtimeProfile({
-      providerId: "future-provider",
-      modelId: "future-model",
-    }))
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce({
+      profile: runtimeProfile({
+        providerId: "future-provider",
+        modelId: "future-model",
+      }),
+      staleSecretRef: null,
+    })
     const { container, root } = renderProfiles()
     await flush()
 
@@ -947,15 +1088,18 @@ describe("ModelProfilesSection UI", () => {
       status: "healthy",
       profiles: [existing],
     })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(runtimeProfile({
-      kind: "agent-run",
-      modelId: "gpt-new",
-      agentSdkModelId: "deepseek-chat",
-      capabilityStatus: "unknown",
-      capabilityVersion: "spec-4-pr1",
-      capabilityCheckedAtMs: 0,
-      lastCapabilityError: null,
-    }))
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce({
+      profile: runtimeProfile({
+        kind: "agent-run",
+        modelId: "gpt-new",
+        agentSdkModelId: "deepseek-chat",
+        capabilityStatus: "unknown",
+        capabilityVersion: "spec-4-pr1",
+        capabilityCheckedAtMs: 0,
+        lastCapabilityError: null,
+      }),
+      staleSecretRef: null,
+    })
     const { container, root } = renderProfiles()
     await flush()
 
@@ -1450,6 +1594,45 @@ describe("ModelProfilesSection UI", () => {
         agentSdkModelId: "deepseek-custom",
       }),
     )
+
+    unmount(root)
+  })
+
+  it("renders every probe result status with capability badge color and label", async () => {
+    const cases = [
+      { status: "supported", className: "border-emerald-500/40", label: "Healthy", message: "Probe supported." },
+      { status: "limited", className: "border-amber-500/40", label: "Limited", message: "Probe limited." },
+      { status: "unsupported", className: "border-destructive/40", label: "Unavailable", message: "Probe unsupported." },
+      { status: "error", className: "border-destructive/40", label: "Unavailable", message: "Probe error." },
+      { status: "unknown", className: "border-muted", label: "Untested", message: "Probe unknown." },
+    ] as const
+    for (const item of cases) {
+      runtimeDbMocks.runtimeProfileProbe.mockResolvedValueOnce({
+        profile: null,
+        status: item.status,
+        capabilityJson: "{}",
+        capabilityVersion: "profile-probe.v1",
+        checkedAtMs: 123,
+        backoffUntilMs: null,
+        message: item.message,
+      })
+    }
+    const { container, root } = renderProfiles()
+    await flush()
+
+    const probe = container.querySelector<HTMLButtonElement>("[data-testid='profile-probe']")
+    if (!probe) throw new Error("profile probe button not found")
+    for (const item of cases) {
+      await click(probe)
+      const result = Array.from(container.querySelectorAll("div"))
+        .find((element) => (
+          element.className.includes("rounded-md border")
+            && element.className.includes("px-3 py-2 text-xs")
+            && element.textContent?.includes(item.message)
+        ))
+      expect(result?.className).toContain(item.className)
+      expect(result?.textContent).toContain(item.label)
+    }
 
     unmount(root)
   })

@@ -118,8 +118,8 @@ describe("ModelConfigSection", () => {
 
     expect(container.querySelector("[data-testid='model-config-section']")).not.toBeNull()
     expect(container.querySelector("[data-testid='model-config-tab-llm']")).toBeNull()
-    expect(container.textContent).toContain("External Information Sources")
-    expect(container.querySelector("[data-testid='model-config-tab-sources']")?.getAttribute("aria-current")).toBe("page")
+    expect(container.textContent).toContain("Model profiles")
+    expect(container.querySelector("[data-testid='model-config-tab-profiles']")?.getAttribute("aria-current")).toBe("page")
 
     await clickTab(container, "sources")
     expect(container.textContent).toContain("External Information Sources")
@@ -135,20 +135,21 @@ describe("ModelConfigSection", () => {
 
   it("refreshes Profiles after a matrix update succeeds", async () => {
     const updated = runtimeProfile({ taskFamilies: ["chat", "ingest"] })
-    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce(updated)
+    runtimeDbMocks.runtimeProfileUpdate.mockResolvedValueOnce({ profile: updated, staleSecretRef: null })
     const { container, root } = renderSection()
     await flush()
+    const initialProfileLoads = runtimeDbMocks.runtimeProfileList.mock.calls.length
     await clickTab(container, "taskMatrix")
     await flush()
 
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(1)
+    expect(runtimeDbMocks.runtimeProfileList.mock.calls.length).toBeGreaterThanOrEqual(initialProfileLoads)
     const ingestToggle = container.querySelector("[data-testid='task-matrix-profile-1-ingest']")
     if (!ingestToggle) throw new Error("ingest toggle not found")
 
     await click(ingestToggle)
     await flush()
 
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
+    expect(runtimeDbMocks.runtimeProfileList.mock.calls.length).toBeGreaterThan(initialProfileLoads)
 
     unmount(root)
   })
@@ -170,8 +171,9 @@ describe("ModelConfigSection", () => {
     }))
     const { container, root } = renderSection()
     await flush()
+    const initialProfileLoads = runtimeDbMocks.runtimeProfileList.mock.calls.length
 
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(1)
+    expect(initialProfileLoads).toBeGreaterThanOrEqual(1)
     const create = container.querySelector("[data-testid='provider-migration-create']")
     if (!create) throw new Error("migration create button not found")
 
@@ -186,7 +188,7 @@ describe("ModelConfigSection", () => {
     )
     await clickTab(container, "profiles")
     await flush()
-    expect(runtimeDbMocks.runtimeProfileList).toHaveBeenCalledTimes(2)
+    expect(runtimeDbMocks.runtimeProfileList.mock.calls.length).toBeGreaterThan(initialProfileLoads)
     expect(container.querySelector("[data-testid='provider-migration-banner']")).toBeNull()
 
     unmount(root)

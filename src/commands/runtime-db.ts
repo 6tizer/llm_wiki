@@ -400,6 +400,11 @@ export interface RuntimeProfileUpdateRequest {
   clearLastCapabilityError?: boolean | null
 }
 
+export interface RuntimeProfileUpdateResult {
+  profile: RuntimeProfileRecord
+  staleSecretRef?: string | null
+}
+
 export interface RuntimeProfileStatusRequest {
   profileId: string
 }
@@ -820,8 +825,8 @@ export function runtimeProfileCreate(
 
 export function runtimeProfileUpdate(
   request: RuntimeProfileUpdateRequest,
-): Promise<RuntimeProfileRecord> {
-  return invoke<RuntimeProfileRecord>("runtime_profile_update", { request })
+): Promise<RuntimeProfileUpdateResult> {
+  return invoke<RuntimeProfileUpdateResult>("runtime_profile_update", { request })
 }
 
 export function runtimeProfileList(): Promise<RuntimeProfileList> {

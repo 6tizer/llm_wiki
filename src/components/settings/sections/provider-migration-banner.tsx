@@ -28,6 +28,7 @@ interface MigrationCandidate {
   migrationPrefix: string
   resolvedEndpoint: string
   resolvedApiMode: RuntimeProfileApiMode
+  resolvedAuthStyle: ReturnType<typeof defaultAuthStyleForProvider>
   migrationEndpoint: string
   migrationApiMode: RuntimeProfileApiMode
   migrationAuthStyle: ReturnType<typeof defaultAuthStyleForProvider>
@@ -39,6 +40,7 @@ interface StaleLegacyConfig {
 }
 
 const SNAPSHOT_STORAGE_KEY = "llm-wiki:legacy-provider-migration:v1"
+const MIGRATED_TEXT_TASK_FAMILIES = ["chat", "ingest", "review", "synthesis"] as const
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -182,6 +184,12 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
       const migrationEndpoint = template && !keepResolvedEndpoint
         ? template.endpoint
         : resolvedEndpoint
+      const migrationApiMode = template && !keepResolvedEndpoint
+        ? template.apiMode
+        : resolvedApiMode
+      const migrationAuthStyle = template && !keepResolvedEndpoint
+        ? template.authStyle
+        : resolvedAuthStyle
       return [{
         preset,
         presetId,
@@ -190,9 +198,10 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
         migrationPrefix: migratedProfilePrefix(presetId),
         resolvedEndpoint,
         resolvedApiMode,
+        resolvedAuthStyle,
         migrationEndpoint,
-        migrationApiMode: template?.apiMode ?? resolvedApiMode,
-        migrationAuthStyle: template?.authStyle ?? resolvedAuthStyle,
+        migrationApiMode,
+        migrationAuthStyle,
       }]
     })
   }, [activePresetId, providerConfigs, llmConfig, keepResolvedEndpoint])
@@ -210,7 +219,7 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
       && (
         candidate.migrationEndpoint !== candidate.resolvedEndpoint
           || candidate.migrationApiMode !== candidate.resolvedApiMode
-          || candidate.migrationAuthStyle !== defaultAuthStyleForProvider(candidate.preset.id)
+          || candidate.migrationAuthStyle !== candidate.resolvedAuthStyle
       )
   ))
 
@@ -295,13 +304,11 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
         providerId: candidate.template?.id ?? candidate.preset.id,
         modelId: candidate.resolved.model,
         agentSdkModelId: "",
-        endpoint: candidate.template && !keepResolvedEndpoint
-          ? candidate.template.endpoint
-          : endpointFromResolvedConfig(candidate.resolved),
-        apiMode: candidate.template?.apiMode ?? apiModeFromResolvedConfig(candidate.preset.id, candidate.resolved),
-        authStyle: candidate.template?.authStyle ?? defaultAuthStyleForProvider(candidate.preset.id),
+        endpoint: candidate.migrationEndpoint,
+        apiMode: candidate.migrationApiMode,
+        authStyle: candidate.migrationAuthStyle,
         enabled: true,
-        taskFamilies: ["chat"],
+        taskFamilies: [...MIGRATED_TEXT_TASK_FAMILIES],
         maxConcurrency: 1,
         secretRef: null,
         rawSecret: candidate.resolved.apiKey ?? "",
@@ -368,6 +375,8 @@ export function ProviderMigrationBanner({ onMigrated }: Props = {}) {
             count: importableCandidates.length,
             presets: importableCandidates.map((candidate) => candidate.preset.label).join(", "),
           })}
+          {" "}
+          {t("settings.sections.modelConfig.migration.matrixHint")}
         </p>
         {migrationCorrectsValues && (
           <p className="mt-1 text-xs text-muted-foreground" data-testid="provider-migration-template-note">

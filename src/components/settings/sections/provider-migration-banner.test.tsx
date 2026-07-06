@@ -168,7 +168,7 @@ describe("ProviderMigrationBanner", () => {
         authStyle: "x-api-key",
         secretRef: "llm-wiki-profile-secret:22222222-2222-4222-8222-222222222222",
         enabled: true,
-        taskFamilies: ["chat"],
+        taskFamilies: ["chat", "ingest", "review", "synthesis"],
         maxConcurrency: 1,
       }),
     )
@@ -513,7 +513,7 @@ describe("ProviderMigrationBanner", () => {
     unmount(root)
   })
 
-  it("can keep the resolved endpoint while applying template api/auth corrections", async () => {
+  it("keeps the resolved endpoint with the resolved api/auth protocol tuple", async () => {
     useWikiStore.setState({
       activePresetId: "kimi",
       providerConfigs: {
@@ -532,7 +532,7 @@ describe("ProviderMigrationBanner", () => {
       displayName: "Migrated: kimi",
       providerId: "kimi",
       endpoint: "https://legacy.moonshot.example/anthropic",
-      apiMode: "anthropic-messages",
+      apiMode: "openai-chat-completions",
     }))
 
     const { container, root } = renderBanner()
@@ -550,6 +550,47 @@ describe("ProviderMigrationBanner", () => {
       expect.objectContaining({
         providerId: "kimi",
         endpoint: "https://legacy.moonshot.example/anthropic",
+        apiMode: "openai-chat-completions",
+        authStyle: "bearer",
+      }),
+    )
+    unmount(root)
+  })
+
+  it("uses the template endpoint with the template api/auth protocol tuple when not keeping the resolved endpoint", async () => {
+    useWikiStore.setState({
+      activePresetId: "kimi",
+      providerConfigs: {
+        kimi: {
+          model: "kimi-k2.7-code",
+          baseUrl: "https://legacy.moonshot.example/anthropic",
+        },
+      },
+    })
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [],
+    })
+    runtimeDbMocks.runtimeProfileCreate.mockResolvedValueOnce(runtimeProfile({
+      displayName: "Migrated: kimi",
+      providerId: "kimi",
+      endpoint: "https://api.moonshot.cn/anthropic",
+      apiMode: "anthropic-messages",
+    }))
+
+    const { container, root } = renderBanner()
+    await flush()
+
+    expect(container.querySelector("[data-testid='provider-migration-template-note']")).not.toBeNull()
+    const create = container.querySelector("[data-testid='provider-migration-create']")
+    if (!create) throw new Error("migration create button not found")
+    await click(create)
+
+    expect(runtimeDbMocks.runtimeProfileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "kimi",
+        endpoint: "https://api.moonshot.cn/anthropic",
         apiMode: "anthropic-messages",
         authStyle: "bearer",
       }),

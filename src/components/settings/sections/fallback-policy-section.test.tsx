@@ -184,6 +184,43 @@ describe("FallbackPolicySection", () => {
     unmount(root)
   })
 
+  it("warns when agent fallback candidates are not agent-run profiles without blocking add", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({
+          profileId: "profile-model-agent",
+          displayName: "Model-call agent",
+          kind: "model-call",
+          taskFamilies: ["agent"],
+        }),
+        runtimeProfile({
+          profileId: "profile-agent",
+          displayName: "Agent runner",
+          kind: "agent-run",
+          taskFamilies: ["agent"],
+        }),
+      ],
+    })
+    runtimeDbMocks.runtimeTaskPolicyList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      policies: [],
+    })
+    const { container, root } = renderSection()
+    await flush()
+
+    expect(container.querySelector("[data-testid='fallback-agent-kind-warning']")?.textContent)
+      .toContain("agent-run")
+    expect(container.querySelector("[data-testid='fallback-agent-kind-warning']")?.textContent)
+      .toContain("model-call")
+    const select = container.querySelector<HTMLSelectElement>("[data-testid='fallback-add-select-agent']")
+    expect(Array.from(select?.options ?? []).map((option) => option.value)).toContain("profile-model-agent")
+
+    unmount(root)
+  })
+
   it("keeps dirty edits during a save when an external refresh arrives", async () => {
     const pending = deferred<{
       policy: { taskFamily: string; profileOrder: string[]; autoFailover: boolean; updatedAtMs: number }
