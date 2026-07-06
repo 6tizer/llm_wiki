@@ -1,6 +1,6 @@
 # SPEC-13: 模型接入一站式重设计（Model Access Redesign）
 
-> 类型：阶段 SPEC | 状态：**设计已拍板（2026-07-05 用户三项裁定）/ ready for PR split** | 依赖：SPEC-4 + SPEC-4-FIX（probe/pool/agent-adapter 基座，全部已交付）、SPEC-12（设置 IA） | 吸收：#310（运行时任务族路由 + legacy 退役）、#312（迁移密钥 staleness）
+> 类型：阶段 SPEC | 状态：**completed（2026-07-06 closeout，报告见 [SPEC-13/closeout-report.md](./SPEC-13/closeout-report.md)）** | PR：#324/#325/#326/#327/#328 + M 节点 #331/#332/#333/#334/#336（验收 #341）+ PR4 #345 + closeout hotfix #348 | 依赖：SPEC-4 + SPEC-4-FIX（probe/pool/agent-adapter 基座，全部已交付）、SPEC-12（设置 IA） | 吸收：#310（运行时任务族路由 + legacy 退役）、#312（迁移密钥 staleness） | follow-up：#350/#351/#352
 
 ## 背景与病根（2026-07-05 用户实测反馈）
 
