@@ -116,14 +116,17 @@ pub fn start_api_server(app: AppHandle) {
             let method = request.method().clone();
             let url = request.url().to_string();
             let headers = request_headers(&request);
-            if let Some(action) = cors_short_circuit(&method, &headers) {
-                respond_cors_short_circuit(request, action, &headers);
-                continue;
-            }
-            let rate_limit_key = rate_limit_key(request.remote_addr());
-            if should_rate_limit(&method, &url) && !allow_request(&rate_limit_key) {
-                respond_error(request, 429, "Too many requests");
-                continue;
+            let client_key = rate_limit_key(request.remote_addr());
+            match request_gate(&method, &url, &headers, || allow_request(&client_key)) {
+                RequestGate::Cors(action) => {
+                    respond_cors_short_circuit(request, action, &headers);
+                    continue;
+                }
+                RequestGate::RateLimited(response) => {
+                    respond_json(request, response.status, response.body, &headers);
+                    continue;
+                }
+                RequestGate::Continue => {}
             }
             let Some(slot) = try_acquire_request_slot() else {
                 respond_error(request, 503, "API server is busy");
@@ -242,6 +245,12 @@ enum CorsShortCircuit {
     Rejected(ApiResponse),
 }
 
+enum RequestGate {
+    Cors(CorsShortCircuit),
+    RateLimited(ApiResponse),
+    Continue,
+}
+
 fn ok(body: Value) -> ApiResponse {
     ApiResponse { status: 200, body }
 }
@@ -260,6 +269,8 @@ fn handle_request(
     body: &str,
     headers: &[(String, String)],
 ) -> ApiResponse {
+    let app_state = load_app_state(app);
+    let app_state = app_state.as_ref();
     let (path, query) = split_url(url);
     match pre_auth_dispatch_response(&path) {
         PreDispatch::Health => {
@@ -272,23 +283,21 @@ fn handle_request(
                 "ok": true,
                 "status": get_api_status(),
                 "version": env!("CARGO_PKG_VERSION"),
-                "authRequired": api_auth_required(app),
-                "authConfigured": api_token(app).is_some(),
-                "tokenSource": api_token_source(app),
-                "enabled": api_enabled(app),
-                "mcpEnabled": api_mcp_enabled(app),
-                "allowUnauthenticated": api_allow_unauthenticated(app),
+                "authRequired": api_auth_required(app_state),
+                "authConfigured": api_token(app_state).is_some(),
+                "tokenSource": api_token_source(app_state),
+                "enabled": api_enabled(app_state),
+                "mcpEnabled": api_mcp_enabled(app_state),
+                "allowUnauthenticated": api_allow_unauthenticated(app_state),
             }));
         }
         PreDispatch::Response(response) => return response,
         PreDispatch::Continue => {}
     }
     let internal_agent_authorized = is_internal_agent_authorized(headers);
-    if let Some((status, message)) = request_access_denial(
-        api_enabled(app),
-        internal_agent_authorized,
-        internal_agent_authorized || is_authorized(app, query, headers),
-    ) {
+    if let Some((status, message)) =
+        api_access_denial(app_state, internal_agent_authorized, query, headers)
+    {
         return err(status, message);
     }
 
@@ -362,6 +371,37 @@ fn request_access_denial(
         return Some((401, "Unauthorized"));
     }
     None
+}
+
+fn api_access_denial(
+    app_state: Option<&Value>,
+    internal_agent_authorized: bool,
+    query: &str,
+    headers: &[(String, String)],
+) -> Option<(u16, &'static str)> {
+    request_access_denial(
+        api_enabled(app_state),
+        internal_agent_authorized,
+        internal_agent_authorized || is_authorized(app_state, query, headers),
+    )
+}
+
+fn request_gate<F>(
+    method: &Method,
+    url: &str,
+    headers: &[(String, String)],
+    mut allow_rate_limited_request: F,
+) -> RequestGate
+where
+    F: FnMut() -> bool,
+{
+    if let Some(action) = cors_short_circuit(method, headers) {
+        return RequestGate::Cors(action);
+    }
+    if should_rate_limit(method, url) && !allow_rate_limited_request() {
+        return RequestGate::RateLimited(err(429, "Too many requests"));
+    }
+    RequestGate::Continue
 }
 
 fn should_rate_limit(method: &Method, url: &str) -> bool {
@@ -641,11 +681,11 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn is_authorized(app: &AppHandle, query: &str, headers: &[(String, String)]) -> bool {
-    if !api_auth_required(app) {
+fn is_authorized(app_state: Option<&Value>, query: &str, headers: &[(String, String)]) -> bool {
+    if !api_auth_required(app_state) {
         return true;
     }
-    let Some(token) = api_token(app) else {
+    let Some(token) = api_token(app_state) else {
         return false;
     };
     let params = parse_query(query);
@@ -701,37 +741,28 @@ fn headers_contain_token(headers: &[(String, String)], header_name: &str, token:
     })
 }
 
-fn api_token(app: &AppHandle) -> Option<String> {
+fn api_token(app_state: Option<&Value>) -> Option<String> {
     if let Ok(token) = std::env::var("LLM_WIKI_API_TOKEN") {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
         }
     }
-    let parsed = load_app_state(app)?;
-    parsed
-        .get("apiConfig")
-        .and_then(|v| v.get("token"))
+    api_config_value(app_state, "token")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
 }
 
-fn api_token_source(app: &AppHandle) -> &'static str {
+fn api_token_source(app_state: Option<&Value>) -> &'static str {
     if let Ok(token) = std::env::var("LLM_WIKI_API_TOKEN") {
         if !token.trim().is_empty() {
             return "env";
         }
     }
-    if load_app_state(app)
-        .and_then(|parsed| {
-            parsed
-                .get("apiConfig")
-                .and_then(|v| v.get("token"))
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(|_| ())
-        })
+    if api_config_value(app_state, "token")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
         .is_some()
     {
         return "store";
@@ -739,17 +770,12 @@ fn api_token_source(app: &AppHandle) -> &'static str {
     "none"
 }
 
-fn api_auth_required(app: &AppHandle) -> bool {
-    !api_allow_unauthenticated(app)
+fn api_auth_required(app_state: Option<&Value>) -> bool {
+    !api_allow_unauthenticated(app_state)
 }
 
-fn api_allow_unauthenticated(app: &AppHandle) -> bool {
-    let Some(parsed) = load_app_state(app) else {
-        return false;
-    };
-    parsed
-        .get("apiConfig")
-        .and_then(|v| v.get("allowUnauthenticated"))
+fn api_allow_unauthenticated(app_state: Option<&Value>) -> bool {
+    api_config_value(app_state, "allowUnauthenticated")
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
@@ -761,27 +787,21 @@ fn api_allow_unauthenticated(app: &AppHandle) -> bool {
 /// after the kill-switch was introduced. New users still land in
 /// "enabled + no token = 401" which is fail-closed by virtue of the
 /// missing token, not the enable flag.
-fn api_enabled(app: &AppHandle) -> bool {
-    let Some(parsed) = load_app_state(app) else {
-        return true;
-    };
-    parsed
-        .get("apiConfig")
-        .and_then(|v| v.get("enabled"))
+fn api_enabled(app_state: Option<&Value>) -> bool {
+    api_config_value(app_state, "enabled")
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
 
-fn api_mcp_enabled(app: &AppHandle) -> bool {
+fn api_mcp_enabled(app_state: Option<&Value>) -> bool {
     // Metadata for MCP clients; raw HTTP routes are still gated only by enabled/auth.
-    let Some(parsed) = load_app_state(app) else {
-        return false;
-    };
-    parsed
-        .get("apiConfig")
-        .and_then(|v| v.get("mcpEnabled"))
+    api_config_value(app_state, "mcpEnabled")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+fn api_config_value<'a>(app_state: Option<&'a Value>, key: &str) -> Option<&'a Value> {
+    app_state?.get("apiConfig").and_then(|v| v.get(key))
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -1452,6 +1472,44 @@ mod tests {
     }
 
     #[test]
+    fn api_access_chain_allows_authenticated_enabled_request() {
+        let state = test_api_state(true, false, Some("store-token"));
+        let token = api_token(Some(&state)).unwrap();
+        let headers = vec![("x-llm-wiki-token".to_string(), token)];
+
+        assert!(api_access_denial(Some(&state), false, "", &headers).is_none());
+    }
+
+    #[test]
+    fn api_access_chain_denies_authenticated_request_when_api_disabled() {
+        let state = test_api_state(false, false, Some("store-token"));
+        let token = api_token(Some(&state)).unwrap();
+        let headers = vec![("x-llm-wiki-token".to_string(), token)];
+        let denial = api_access_denial(Some(&state), false, "", &headers).unwrap();
+
+        assert_eq!(denial.0, 503);
+        assert_eq!(denial.1, "API server is disabled in Settings → API Server");
+    }
+
+    #[test]
+    fn api_access_chain_allows_unauthenticated_when_configured() {
+        let state = test_api_state(true, true, None);
+
+        assert!(api_access_denial(Some(&state), false, "", &[]).is_none());
+    }
+
+    #[test]
+    fn api_access_chain_denies_unauthenticated_when_auth_required() {
+        let state = test_api_state(true, false, Some("store-token"));
+        let invalid = format!("{}-invalid", api_token(Some(&state)).unwrap());
+        let headers = vec![("x-llm-wiki-token".to_string(), invalid)];
+        let denial = api_access_denial(Some(&state), false, "", &headers).unwrap();
+
+        assert_eq!(denial.0, 401);
+        assert_eq!(denial.1, "Unauthorized");
+    }
+
+    #[test]
     fn rate_limit_skips_health_and_options_only() {
         assert!(!should_rate_limit(&Method::Get, "/api/v1/health"));
         assert!(!should_rate_limit(&Method::Options, "/api/v1/projects"));
@@ -1601,6 +1659,32 @@ mod tests {
     }
 
     #[test]
+    fn request_gate_short_circuits_cors_preflight_before_rate_limit() {
+        let mut rate_limit_checked = false;
+        let gate = request_gate(&Method::Options, "/api/v1/projects", &[], || {
+            rate_limit_checked = true;
+            false
+        });
+
+        assert!(matches!(
+            gate,
+            RequestGate::Cors(CorsShortCircuit::Preflight)
+        ));
+        assert!(!rate_limit_checked);
+    }
+
+    #[test]
+    fn request_gate_returns_rate_limited_429_after_cors_allows() {
+        let gate = request_gate(&Method::Get, "/api/v1/projects", &[], || false);
+        let RequestGate::RateLimited(response) = gate else {
+            panic!("expected rate-limited request gate");
+        };
+
+        assert_eq!(response.status, 429);
+        assert_eq!(response.body["error"], "Too many requests");
+    }
+
+    #[test]
     fn cors_headers_reject_malformed_localhost_ports() {
         let headers = vec![(
             "origin".to_string(),
@@ -1617,6 +1701,20 @@ mod tests {
             .filter(|header| header.field.as_str().to_string().eq_ignore_ascii_case(name))
             .map(|header| header.value.as_str().to_string())
             .collect()
+    }
+
+    fn test_api_state(enabled: bool, allow_unauthenticated: bool, token: Option<&str>) -> Value {
+        let mut api_config = serde_json::Map::new();
+        api_config.insert("enabled".to_string(), json!(enabled));
+        api_config.insert(
+            "allowUnauthenticated".to_string(),
+            json!(allow_unauthenticated),
+        );
+        api_config.insert("mcpEnabled".to_string(), json!(true));
+        if let Some(token) = token {
+            api_config.insert("token".to_string(), json!(token));
+        }
+        json!({ "apiConfig": Value::Object(api_config) })
     }
 
     #[test]
