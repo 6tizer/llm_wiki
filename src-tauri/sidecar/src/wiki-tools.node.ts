@@ -365,6 +365,7 @@ test("write tools clamp zero and negative resource limits", async () => {
 	const createEntity = toolByName("create_entity", {
 		projectPath,
 		maxFilesChanged: -1,
+		maxFilesChangedEnabled: true,
 	});
 	const update = toolByName("update_page", {
 		projectPath,
@@ -429,6 +430,7 @@ test("write tools enforce maxFilesChanged per tool context", async () => {
 	const context = {
 		projectPath,
 		maxFilesChanged: 1,
+		maxFilesChangedEnabled: true,
 		emitAgentEvent: (type: string, data: unknown) => sent.push({ type, data }),
 	};
 	const update = toolByName("update_page", context);
@@ -501,6 +503,7 @@ test("write tools reserve changed paths before async file writes", async () => {
 	const createEntity = toolByName("create_entity", {
 		projectPath,
 		maxFilesChanged: 1,
+		maxFilesChangedEnabled: true,
 		fs: fsLike,
 	});
 
@@ -528,9 +531,28 @@ test("write tools reserve changed paths before async file writes", async () => {
 	assert.equal(writeCalls, 1);
 });
 
-test("write tools default maxFilesChanged allows ten changed files", async () => {
+test("write tools default maxFilesChanged is disabled unless explicitly enabled", async () => {
 	const projectPath = await tempProject();
 	const createEntity = toolByName("create_entity", { projectPath });
+
+	for (let i = 0; i < 11; i += 1) {
+		const result = await createEntity.handler(
+			{
+				name: `Page ${i}`,
+				summary: `Allowed changed file ${i}.`,
+			},
+			{},
+		);
+		assert.equal(result.isError, undefined);
+	}
+});
+
+test("write tools enforce default maxFilesChanged when enabled", async () => {
+	const projectPath = await tempProject();
+	const createEntity = toolByName("create_entity", {
+		projectPath,
+		maxFilesChangedEnabled: true,
+	});
 
 	for (let i = 0; i < 10; i += 1) {
 		const result = await createEntity.handler(
@@ -862,6 +884,7 @@ test("app-level batch writes register changed paths before later writes are bloc
 		streamId: "stream-1",
 		enableWriteTools: true,
 		maxFilesChanged: 2,
+		maxFilesChangedEnabled: true,
 		changedPaths,
 		appToolBridge: {
 			async callTool(_streamId, toolName) {
@@ -884,6 +907,7 @@ test("app-level batch writes register changed paths before later writes are bloc
 		streamId: "stream-1",
 		enableWriteTools: true,
 		maxFilesChanged: 2,
+		maxFilesChangedEnabled: true,
 		changedPaths,
 		appToolBridge: {
 			async callTool(_streamId, toolName) {
@@ -945,6 +969,7 @@ test("save_query_page preflights maxFilesChanged before calling app bridge", asy
 	const save = toolByName("save_query_page", {
 		streamId: "stream-1",
 		maxFilesChanged: 1,
+		maxFilesChangedEnabled: true,
 		changedPaths,
 		emitAgentEvent: (type, data) => sent.push({ type, data }),
 		appToolBridge: {
@@ -982,6 +1007,35 @@ test("save_query_page preflights maxFilesChanged before calling app bridge", asy
 				recovery: "split_task",
 			},
 		},
+	]);
+});
+
+test("save_query_page ignores maxFilesChanged when enforcement is disabled", async () => {
+	const changedPaths = new Set<string>(["wiki/index.md"]);
+	let bridgeCalled = false;
+	const save = toolByName("save_query_page", {
+		streamId: "stream-1",
+		maxFilesChanged: 1,
+		maxFilesChangedEnabled: false,
+		changedPaths,
+		appToolBridge: {
+			async callTool() {
+				bridgeCalled = true;
+				return { ok: true, result: { relativePath: "wiki/queries/saved.md" } };
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const result = await save.handler({ content: "Saved answer", title: "Saved" }, {});
+
+	assert.equal(result.isError, undefined);
+	assert.equal(bridgeCalled, true);
+	assert.deepEqual(Array.from(changedPaths).sort(), [
+		"wiki/index.md",
+		"wiki/queries/saved.md",
 	]);
 });
 

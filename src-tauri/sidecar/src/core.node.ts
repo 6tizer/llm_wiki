@@ -1029,6 +1029,7 @@ test("query request forwards wiki write resource limits to MCP tools", async () 
 			enableWikiTools: true,
 			enableWriteTools: true,
 			maxFilesChanged: 1,
+			maxFilesChangedEnabled: true,
 			maxWriteBytes: 512,
 		},
 	});

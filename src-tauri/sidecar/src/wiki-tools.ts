@@ -271,26 +271,28 @@ async function appTool(
 				recovery: "settings_agent",
 			});
 		}
-		const maxFilesChanged = normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
-		const changedPaths = ensureChangedPaths(context);
-		if (changedPaths.size >= maxFilesChanged) {
-			const sortedPaths = Array.from(changedPaths).sort();
-			return resourceLimitResult(
-				context,
-				{
-					kind: "resource_limit",
-					limitKind: "max_files_changed",
-					limit: maxFilesChanged,
-					used: changedPaths.size,
-					attempted: changedPaths.size + 1,
-					changedPaths: sortedPaths,
-					path: "wiki/queries",
-					toolName,
-					message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
-					recovery: "split_task",
-				},
-				{ changedCount: changedPaths.size },
-			);
+		if (context.maxFilesChangedEnabled === true) {
+			const maxFilesChanged = normalizedLimit(context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
+			const changedPaths = ensureChangedPaths(context);
+			if (changedPaths.size >= maxFilesChanged) {
+				const sortedPaths = Array.from(changedPaths).sort();
+				return resourceLimitResult(
+					context,
+					{
+						kind: "resource_limit",
+						limitKind: "max_files_changed",
+						limit: maxFilesChanged,
+						used: changedPaths.size,
+						attempted: changedPaths.size + 1,
+						changedPaths: sortedPaths,
+						path: "wiki/queries",
+						toolName,
+						message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+						recovery: "split_task",
+					},
+					{ changedCount: changedPaths.size },
+				);
+			}
 		}
 	}
 
@@ -670,26 +672,28 @@ async function writePage(args: {
 
 	if (args.dryRun) return jsonResult(payload);
 
-	const maxFilesChanged = normalizedLimit(args.context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
 	const changedPaths = ensureChangedPaths(args.context);
 	const reservesChangedPath = !changedPaths.has(plan.relativePath);
-	if (reservesChangedPath && changedPaths.size >= maxFilesChanged) {
-		const sortedPaths = Array.from(changedPaths).sort();
-		return resourceLimitResult(
-			args.context,
-			{
-				kind: "resource_limit",
-				limitKind: "max_files_changed",
-				limit: maxFilesChanged,
-				used: changedPaths.size,
-				attempted: changedPaths.size + 1,
-				changedPaths: sortedPaths,
-				path: plan.relativePath,
-				message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
-				recovery: "split_task",
-			},
-			{ changedCount: changedPaths.size },
-		);
+	if (args.context.maxFilesChangedEnabled === true) {
+		const maxFilesChanged = normalizedLimit(args.context.maxFilesChanged, DEFAULT_MAX_FILES_CHANGED);
+		if (reservesChangedPath && changedPaths.size >= maxFilesChanged) {
+			const sortedPaths = Array.from(changedPaths).sort();
+			return resourceLimitResult(
+				args.context,
+				{
+					kind: "resource_limit",
+					limitKind: "max_files_changed",
+					limit: maxFilesChanged,
+					used: changedPaths.size,
+					attempted: changedPaths.size + 1,
+					changedPaths: sortedPaths,
+					path: plan.relativePath,
+					message: `Write would exceed maxFilesChanged (${maxFilesChanged})`,
+					recovery: "split_task",
+				},
+				{ changedCount: changedPaths.size },
+			);
+		}
 	}
 
 	if (reservesChangedPath) changedPaths.add(plan.relativePath);

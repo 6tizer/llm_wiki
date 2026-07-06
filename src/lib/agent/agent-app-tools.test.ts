@@ -817,7 +817,7 @@ describe("runAgentAppTool ingest parity tools", () => {
           humanItems: [],
         },
       },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -850,7 +850,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "autofill_properties",
       {},
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -882,7 +882,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "autofill_properties",
       { taxonomyAware: true, autoWriteHighConfidence: true },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(true)
@@ -923,7 +923,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "autofill_properties",
       { taxonomyAware: true, autoWriteHighConfidence: true },
-      { budget: { maxFilesChanged: 0, changedPaths: [] } },
+      { budget: { maxFilesChanged: 0, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -961,7 +961,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "autofill_properties",
       { taxonomyAware: true },
-      { budget: { maxFilesChanged: 0, changedPaths: [] } },
+      { budget: { maxFilesChanged: 0, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(true)
@@ -1030,7 +1030,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "okf_import",
       { sourceDir: "/source", apply: true },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(true)
@@ -1054,7 +1054,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "okf_import",
       { sourceDir: "/source", apply: true },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1112,7 +1112,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "taxonomy_apply",
       { action: "growth" },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(true)
@@ -1125,7 +1125,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "taxonomy_apply",
       { action: "bootstrap" },
-      { budget: { maxFilesChanged: 1, changedPaths: [".llm-wiki/tag-taxonomy.json"] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [".llm-wiki/tag-taxonomy.json"] } },
     )
 
     expect(response.ok).toBe(true)
@@ -1136,7 +1136,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "taxonomy_apply",
       { action: "bootstrap" },
-      { budget: { maxFilesChanged: 1, changedPaths: ["wiki/existing.md"] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: ["wiki/existing.md"] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1148,11 +1148,23 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(tagTaxonomyMock.applyTagTaxonomyBootstrap).not.toHaveBeenCalled()
   })
 
+  it("lets enumerated app writes pass when maxFilesChanged enforcement is disabled", async () => {
+    const response = await runAgentAppTool(
+      "taxonomy_apply",
+      { action: "bootstrap" },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: false, changedPaths: ["wiki/existing.md"] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(tagTaxonomyMock.applyTagTaxonomyBootstrap).toHaveBeenCalled()
+    expect(response.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
+  })
+
   it("rolls back taxonomy batches and reports sidecar path only when removed", async () => {
     const response = await runAgentAppTool(
       "taxonomy_rollback",
       {},
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(true)
@@ -1238,7 +1250,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "wiki_synthesis",
       {},
-      { budget: { maxFilesChanged: 1, changedPaths: ["wiki/existing.md"] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: ["wiki/existing.md"] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1247,6 +1259,17 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.resourceLimit.attempted).toBe(2)
     expect(response.resourceLimit.changedPaths).toEqual(["wiki/existing.md"])
     expect(wikiSynthesisMock.runWikiSynthesis).not.toHaveBeenCalled()
+  })
+
+  it("lets unknown-write app tools start when maxFilesChanged enforcement is disabled", async () => {
+    const response = await runAgentAppTool(
+      "wiki_synthesis",
+      {},
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: false, changedPaths: ["wiki/existing.md"] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(wikiSynthesisMock.runWikiSynthesis).toHaveBeenCalled()
   })
 
   it("exposes OKF validate/export as read-only app tools", async () => {
@@ -1301,7 +1324,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "okf_import",
       { sourceDir: "/source-okf", apply: true },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1333,7 +1356,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "okf_import",
       { sourceDir: "/source-okf", apply: true },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source-okf", "/project", { apply: true })
@@ -1349,12 +1372,12 @@ describe("runAgentAppTool ingest parity tools", () => {
     const apply = await runAgentAppTool(
       "taxonomy_apply",
       { action: "bootstrap" },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
     const rollback = await runAgentAppTool(
       "taxonomy_rollback",
       {},
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(tagTaxonomyMock.previewTagTaxonomyGrowth).toHaveBeenCalledWith("/project")
@@ -1371,7 +1394,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "taxonomy_apply",
       { action: "growth" },
-      { budget: { maxFilesChanged: 0, changedPaths: [] } },
+      { budget: { maxFilesChanged: 0, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1422,7 +1445,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "merge_duplicate_group",
       { slugs: ["a", "b"], canonicalSlug: "a", dryRun: false },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1441,7 +1464,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "ingest_source",
       { sourcePath: "source.pdf" },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)
@@ -1452,6 +1475,23 @@ describe("runAgentAppTool ingest parity tools", () => {
     ])
     expect(response.resourceLimit.message).toMatch(/exceeded maxFilesChanged/)
     expect(response.resourceLimit.attempted).toBe(2)
+  })
+
+  it("lets post-flight writes pass when maxFilesChanged enforcement is disabled", async () => {
+    ingestMock.autoIngest.mockResolvedValue(["wiki/sources/source.md", "wiki/entities/topic.md"])
+
+    const response = await runAgentAppTool(
+      "ingest_source",
+      { sourcePath: "source.pdf" },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: false, changedPaths: [] } },
+    )
+
+    expect(response.ok).toBe(true)
+    expect(response.wikiChanged).toEqual([
+      { path: "wiki/sources/source.md", operation: "update" },
+      { path: "wiki/entities/topic.md", operation: "update" },
+    ])
+    expect("resourceLimit" in response ? response.resourceLimit : undefined).toBeUndefined()
   })
 
   it("shares pipeline budget across internal steps and returns the blocking resource limit", async () => {
@@ -1490,7 +1530,7 @@ describe("runAgentAppTool ingest parity tools", () => {
     const response = await runAgentAppTool(
       "run_pipeline",
       { pipeline: "full-ingest" },
-      { budget: { maxFilesChanged: 1, changedPaths: [] } },
+      { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
     expect(response.ok).toBe(false)

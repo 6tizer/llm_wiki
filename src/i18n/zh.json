@@ -1050,6 +1050,7 @@
         "defaultPermissionPolicyHint": "对话内可临时覆盖。",
         "maxTurns": "最大轮数",
         "maxTurnsHint": "单次 Agent 运行允许的 SDK 最大轮数。调高后可完成更长的多步骤任务。",
+        "maxFilesChangedEnabled": "限制单次改动文件数",
         "maxFilesChanged": "最大改动文件数",
         "maxFilesChangedHint": "单次 Agent 运行最多可修改的不同 wiki 文件数量。",
         "maxWriteKiB": "单次写入大小上限（KiB）",
