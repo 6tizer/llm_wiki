@@ -298,6 +298,31 @@ describe("RuntimeJobsSection", () => {
     unmount(root)
   })
 
+  it("renders agent rewind session jobs read-only with the localized title", async () => {
+    const rewindJob: RuntimeJobRecord = {
+      ...job("rewind-job-1", "running"),
+      kind: "agent-rewind-session",
+      payload: JSON.stringify({
+        kind: "agent-rewind-session",
+        conversationId: "conv-1",
+        streamId: "stream-rewind-1",
+        targetUserMessageId: "user-uuid-1",
+      }),
+    }
+    runtimeDbMocks.runtimeJobList.mockResolvedValue(list([rewindJob]))
+
+    const { container, root } = renderHarness()
+    await flush()
+
+    const row = container.querySelector("[data-testid='runtime-job-row-rewind-job-1']")
+    expect(row?.textContent).toContain("Agent rewind session")
+    expect(row?.querySelector("button[aria-label='Pause']")).toBeNull()
+    expect(row?.querySelector("button[aria-label='Resume']")).toBeNull()
+    expect(row?.querySelector("button[aria-label='Cancel']")).toBeNull()
+
+    unmount(root)
+  })
+
   it("releases a cancelled derived-rebuild job's claimed markers as cancelled (closeout hotfix P1 #3)", async () => {
     const derivedRebuildJob: RuntimeJobRecord = {
       ...job("rebuild-1", "running"),

@@ -135,7 +135,7 @@ export async function runAgentRewind(args: {
         }
       }
       payload = await rewindAgentSession(
-        { ...options, resume: target.agentSessionId },
+        { ...options, conversationId: target.conversationId, resume: target.agentSessionId },
         target.userMessageId,
         target.assistantMessageId,
       )
