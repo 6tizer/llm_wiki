@@ -9,6 +9,7 @@ import { useLintStore } from "@/stores/lint-store"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
 import logoImg from "@/assets/logo.jpg"
+import { CLIP_SERVER_PORT } from "@/lib/clip-server-constants"
 import type { WikiState } from "@/stores/wiki-store"
 
 type NavView = WikiState["activeView"]
@@ -117,7 +118,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             <TooltipContent side="right">
               {daemonStatus === "running" && "Clip server running"}
               {daemonStatus === "starting" && "Clip server starting..."}
-              {daemonStatus === "port_conflict" && "Port 19827 is occupied. Web Clipper unavailable."}
+              {daemonStatus === "port_conflict" && `Port ${CLIP_SERVER_PORT} is occupied. Web Clipper unavailable.`}
               {daemonStatus === "error" && "Clip server error. Restarting..."}
             </TooltipContent>
           </Tooltip>

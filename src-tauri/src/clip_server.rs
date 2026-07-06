@@ -11,7 +11,7 @@ static PENDING_CLIPS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new()); // 
 /// Daemon status: 0=starting, 1=running, 2=port_conflict, 3=error
 static DAEMON_STATUS: AtomicU8 = AtomicU8::new(0);
 
-const PORT: u16 = 19827;
+const CLIP_SERVER_PORT: u16 = 19827;
 const MAX_BIND_RETRIES: u32 = 3;
 const MAX_RESTART_RETRIES: u32 = 10;
 const BIND_RETRY_DELAY_SECS: u64 = 2;
@@ -85,7 +85,7 @@ pub fn start_clip_server() {
                 let mut last_err = String::new();
                 let mut bound = None;
                 for attempt in 1..=MAX_BIND_RETRIES {
-                    match Server::http(format!("127.0.0.1:{}", PORT)) {
+                    match Server::http(format!("127.0.0.1:{}", CLIP_SERVER_PORT)) {
                         Ok(s) => {
                             bound = Some(s);
                             break;
@@ -109,7 +109,7 @@ pub fn start_clip_server() {
                     None => {
                         eprintln!(
                             "[Clip Server] Port {} unavailable after {} attempts: {}",
-                            PORT, MAX_BIND_RETRIES, last_err
+                            CLIP_SERVER_PORT, MAX_BIND_RETRIES, last_err
                         );
                         DAEMON_STATUS.store(2, Ordering::Relaxed); // port_conflict
                         return; // Don't retry on port conflict — needs user action
@@ -119,7 +119,10 @@ pub fn start_clip_server() {
 
             DAEMON_STATUS.store(1, Ordering::Relaxed); // running
             restart_count = 0; // Reset on successful bind
-            println!("[Clip Server] Listening on http://127.0.0.1:{}", PORT);
+            println!(
+                "[Clip Server] Listening on http://127.0.0.1:{}",
+                CLIP_SERVER_PORT
+            );
 
             for request in server.incoming_requests() {
                 if let Err(e) = crate::panic_guard::run_guarded("clip_server_request", move || {
@@ -165,22 +168,14 @@ fn handle_one_request(mut request: Request) {
 
     // Handle CORS preflight
     if request.method() == &Method::Options {
-        let mut response = Response::from_string("").with_status_code(204);
-        for h in &cors_headers {
-            response.add_header(h.clone());
-        }
-        let _ = request.respond(response);
+        respond_with_cors(request, "", Some(204), &cors_headers);
         return;
     }
 
     let is_status_probe = request.method() == &Method::Get && request.url() == "/status";
     if !is_status_probe && !origin_allowed(request.headers()) {
         let body = serde_json::json!({"ok": false, "error": "Origin not allowed"}).to_string();
-        let mut response = Response::from_string(body).with_status_code(403);
-        for h in &cors_headers {
-            response.add_header(h.clone());
-        }
-        let _ = request.respond(response);
+        respond_with_cors(request, body, Some(403), &cors_headers);
         return;
     }
 
@@ -189,11 +184,7 @@ fn handle_one_request(mut request: Request) {
     match (request.method(), url.as_str()) {
         (&Method::Get, "/status") => {
             let body = r#"{"ok":true,"version":"0.1.0"}"#;
-            let mut response = Response::from_string(body);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, body, None, &cors_headers);
         }
         (&Method::Get, "/project") => {
             let path = CURRENT_PROJECT
@@ -208,11 +199,7 @@ fn handle_one_request(mut request: Request) {
                 "path": path,
             })
             .to_string();
-            let mut response = Response::from_string(body);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, body, None, &cors_headers);
         }
         (&Method::Post, "/project") => {
             let mut body = String::new();
@@ -226,11 +213,7 @@ fn handle_one_request(mut request: Request) {
                     "error": format!("Failed to read body: {}", e),
                 })
                 .to_string();
-                let mut response = Response::from_string(err).with_status_code(400);
-                for h in &cors_headers {
-                    response.add_header(h.clone());
-                }
-                let _ = request.respond(response);
+                respond_with_cors(request, err, Some(400), &cors_headers);
                 return;
             }
 
@@ -240,11 +223,7 @@ fn handle_one_request(mut request: Request) {
             } else {
                 400
             };
-            let mut response = Response::from_string(result).with_status_code(status);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, result, Some(status), &cors_headers);
         }
         (&Method::Get, "/projects") => {
             let projects = ALL_PROJECTS
@@ -274,11 +253,7 @@ fn handle_one_request(mut request: Request) {
                 "projects": items,
             })
             .to_string();
-            let mut response = Response::from_string(body);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, body, None, &cors_headers);
         }
         (&Method::Post, "/projects") => {
             let mut body = String::new();
@@ -302,11 +277,7 @@ fn handle_one_request(mut request: Request) {
                     }
                 }
             }
-            let mut response = Response::from_string(r#"{"ok":true}"#);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, r#"{"ok":true}"#, None, &cors_headers);
         }
         (&Method::Get, "/clips/pending") => {
             let mut pending = PENDING_CLIPS.lock().unwrap_or_else(|e| e.into_inner());
@@ -329,11 +300,7 @@ fn handle_one_request(mut request: Request) {
             })
             .to_string();
             pending.clear();
-            let mut response = Response::from_string(body);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, body, None, &cors_headers);
         }
         (&Method::Post, "/clip") => {
             let mut body = String::new();
@@ -347,11 +314,7 @@ fn handle_one_request(mut request: Request) {
                     "error": format!("Failed to read body: {}", e),
                 })
                 .to_string();
-                let mut response = Response::from_string(err).with_status_code(400);
-                for h in &cors_headers {
-                    response.add_header(h.clone());
-                }
-                let _ = request.respond(response);
+                respond_with_cors(request, err, Some(400), &cors_headers);
                 return;
             }
 
@@ -361,21 +324,29 @@ fn handle_one_request(mut request: Request) {
             } else {
                 500
             };
-            let mut response = Response::from_string(result).with_status_code(status);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, result, Some(status), &cors_headers);
         }
         _ => {
             let body = r#"{"ok":false,"error":"Not found"}"#;
-            let mut response = Response::from_string(body).with_status_code(404);
-            for h in &cors_headers {
-                response.add_header(h.clone());
-            }
-            let _ = request.respond(response);
+            respond_with_cors(request, body, Some(404), &cors_headers);
         }
     }
+}
+
+fn respond_with_cors(
+    request: Request,
+    body: impl Into<String>,
+    status_code: Option<u16>,
+    cors_headers: &[Header],
+) {
+    let mut response = Response::from_string(body.into());
+    if let Some(status_code) = status_code {
+        response = response.with_status_code(status_code);
+    }
+    for h in cors_headers {
+        response.add_header(h.clone());
+    }
+    let _ = request.respond(response);
 }
 
 fn handle_set_project(body: &str) -> String {

@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import { apiServerStatus, clipServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { API_SERVER_HEALTH_URL, API_SERVER_PORT } from "@/lib/api-server-constants"
+import { CLIP_SERVER_PORT } from "@/lib/clip-server-constants"
 import { useUpdateStore, hasAvailableUpdate } from "@/stores/update-store"
 import {
   checkForUpdates,
@@ -145,7 +146,7 @@ export function AboutSection() {
       value: formatAppVersion(__APP_VERSION__, __APP_CHANNEL__),
       mono: true,
     },
-    { label: t("settings.sections.about.clipServer"), value: `${clipStatus}  @  127.0.0.1:19827`, mono: true },
+    { label: t("settings.sections.about.clipServer"), value: `${clipStatus}  @  127.0.0.1:${CLIP_SERVER_PORT}`, mono: true },
     { label: t("settings.sections.about.apiServer"), value: `${apiStatusDisplay}  @  127.0.0.1:${API_SERVER_PORT}`, mono: true },
   ]
 
