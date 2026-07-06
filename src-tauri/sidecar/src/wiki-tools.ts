@@ -98,6 +98,11 @@ function sanitizeSnapshotPath(relativePath: string): string {
 	return relativePath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "wiki-page";
 }
 
+function assertRewindSnapshotPath(input: string): string {
+	if (input === ".llm-wiki/tag-taxonomy.json") return input;
+	return assertWikiMarkdownPath(input);
+}
+
 async function writeRewindSnapshot(args: {
 	projectPath: string;
 	streamId?: string;
@@ -166,7 +171,7 @@ async function snapshotAppToolWikiChange(args: {
 		};
 	}
 	try {
-		assertWikiMarkdownPath(changed.path);
+		assertRewindSnapshotPath(changed.path);
 		// TOCTOU note: app tools report beforeText, while sidecar re-reads the
 		// post-write file here to compute afterSha256. If external mutation lands
 		// between the app write and this read, restore's sha/existence guard will

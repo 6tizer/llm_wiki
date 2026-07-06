@@ -29,6 +29,7 @@ import { importOkfBundle, previewOkfImport } from "@/lib/okf-import"
 import { validateOkfBundle } from "@/lib/okf-validate"
 import { isAbsolutePath, normalizePath } from "@/lib/path-utils"
 import { hasConfiguredDeepResearchSources, resolveSearchConfig } from "@/lib/web-search"
+import type { WikiWriteChange } from "@/lib/wiki-write-events"
 import { useResearchStore } from "@/stores/research-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -425,12 +426,6 @@ async function normalizeSourcePath(projectPath: string, input: string): Promise<
   return canonicalCandidate
 }
 
-function wikiChangedFromPaths(paths: string[]): AgentWikiChangedPayload[] {
-  return paths
-    .filter((path) => path.startsWith("wiki/"))
-    .map((path) => ({ path, operation: "update" as const }))
-}
-
 async function readBeforeChange(projectPath: string, relativePath: string): Promise<{
   existedBefore: boolean
   beforeText: string
@@ -474,6 +469,15 @@ function wikiChangedFromWrittenRecord(record: {
     operation: record.wasCreated ? "create" : "update",
     existedBefore: !record.wasCreated,
     beforeText: record.previousContent ?? "",
+  }
+}
+
+function wikiChangedFromWriteChange(change: WikiWriteChange): AgentWikiChangedPayload {
+  return {
+    path: change.path,
+    operation: change.operation,
+    existedBefore: change.existedBefore,
+    beforeText: change.beforeText,
   }
 }
 
@@ -989,35 +993,20 @@ async function handleFixLintResult(toolContext: AgentAppToolContext): Promise<Ag
     const changedPath = wikiPathForPage(result.page)
     const blocked = preflightBudget(toolName, budget, [changedPath])
     if (blocked) return blocked
-    if (result.type === "orphan") {
-      // Orphan fixes cascade through cascadeDeleteWikiPagesWithRefs, deleting
-      // the page and rewriting backlinks/index/frontmatter. PR-A has no
-      // per-rewritten-file beforeText hook there, so keep this fail-closed:
-      // do not emit wikiChanged, do not snapshot, and let rewind gate block
-      // this tool as uncovered. Full cascade snapshotting belongs in PR-B.
-      const fixed = await fixLintResult(projectPath, result, state.llmConfig)
-      if (fixed) {
-        state.setFileTree(await listDirectory(projectPath))
-        useWikiStore.getState().bumpDataVersion()
-      }
-      return {
-        ok: true,
-        result: { fixed, result },
-      }
-    }
-    const before = await readBeforeChange(projectPath, changedPath)
     const wikiChanged: AgentWikiChangedPayload[] = []
     try {
-      const ok = await fixLintResult(projectPath, result, state.llmConfig)
+      const ok = await fixLintResult(
+        projectPath,
+        result,
+        state.llmConfig,
+        (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+      )
       if (ok) {
-        wikiChanged.push(wikiChangedFromBefore({
-          path: changedPath,
-          operation: before.existedBefore ? "update" : "create",
-          before,
-        }))
         state.setFileTree(await listDirectory(projectPath))
         useWikiStore.getState().bumpDataVersion()
       }
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
       return {
         ok: true,
         result: { fixed: ok, result },
@@ -1038,19 +1027,29 @@ async function handleRunLintAndReport(toolContext: AgentAppToolContext): Promise
     const includeStructural = args.includeStructural !== false
     const includeSemantic = args.includeSemantic === true
     const autoFix = args.autoFix === true
-    const { report, reportPath, changedPaths } = await runLintAndReport(projectPath, state.llmConfig, fileTree, includeStructural, includeSemantic, autoFix)
-    state.setFileTree(await listDirectory(projectPath))
-    useWikiStore.getState().bumpDataVersion()
-    const wikiChanged = changedPaths.map((path) => ({
-      path,
-      operation: path === reportPath ? "create" as const : "update" as const,
-    }))
-    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
-    if (overBudget) return overBudget
-    return {
-      ok: true,
-      result: { report, reportPath },
-      wikiChanged,
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const { report, reportPath } = await runLintAndReport(
+        projectPath,
+        state.llmConfig,
+        fileTree,
+        includeStructural,
+        includeSemantic,
+        autoFix,
+        (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+      )
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
+      return {
+        ok: true,
+        result: { report, reportPath },
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -1067,18 +1066,27 @@ async function handleFixLintReport(toolContext: AgentAppToolContext): Promise<Ag
       ])
       const blocked = preflightBudget(toolName, budget, plannedPaths)
       if (blocked) return blocked
-      const { report: updatedReport, reportPath: updatedPath } = await fixLintReport(
-        projectPath,
-        report,
-        reportPath,
-        state.llmConfig,
-      )
-      state.setFileTree(await listDirectory(projectPath))
-      useWikiStore.getState().bumpDataVersion()
-      return {
-        ok: true,
-        result: { report: updatedReport, reportPath: updatedPath },
-        wikiChanged: plannedPaths.map((path) => ({ path, operation: "update" as const })),
+      const wikiChanged: AgentWikiChangedPayload[] = []
+      try {
+        const { report: updatedReport, reportPath: updatedPath } = await fixLintReport(
+          projectPath,
+          report,
+          reportPath,
+          state.llmConfig,
+          (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+        )
+        state.setFileTree(await listDirectory(projectPath))
+        useWikiStore.getState().bumpDataVersion()
+        const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+        if (overBudget) return overBudget
+        return {
+          ok: true,
+          result: { report: updatedReport, reportPath: updatedPath },
+          wikiChanged,
+        }
+      } catch (err) {
+        if (wikiChanged.length === 0) throw err
+        return partialWriteFailure(err, wikiChanged)
       }
     } finally {
       release()
@@ -1126,22 +1134,30 @@ async function handleAutofillProperties(toolContext: AgentAppToolContext): Promi
       : uniqueStrings(preview.details.map((detail) => detail.relativePath))
     const blocked = preflightBudget(toolName, budget, plannedPaths)
     if (blocked) return blocked
-    const result = taxonomyAware
-      ? await runAutofill(projectPath, {
-          dryRun: !autoWriteHighConfidence,
-          taxonomyAware,
-          autoWriteHighConfidence,
-        })
-      : await runAutofill(projectPath)
-    state.setFileTree(await listDirectory(projectPath))
-    useWikiStore.getState().bumpDataVersion()
-    const wikiChanged = taxonomyAware && !autoWriteHighConfidence
-      ? []
-      : wikiChangedFromPaths(result.details.map((detail) => detail.relativePath))
-    return {
-      ok: true,
-      result,
-      wikiChanged,
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const result = taxonomyAware
+        ? await runAutofill(projectPath, {
+            dryRun: !autoWriteHighConfidence,
+            taxonomyAware,
+            autoWriteHighConfidence,
+            onWikiChanged: (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+          })
+        : await runAutofill(projectPath, {
+            onWikiChanged: (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+          })
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
+      return {
+        ok: true,
+        result,
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -1173,16 +1189,24 @@ async function handleOkfImport(toolContext: AgentAppToolContext): Promise<AgentA
     const bytesBlocked = preflightWriteBytes(toolName, budget, preview.pages)
     if (bytesBlocked) return bytesBlocked
 
-    const result = await importOkfBundle(sourceDir, projectPath, { apply: true })
-    state.setFileTree(await listDirectory(projectPath))
-    useWikiStore.getState().bumpDataVersion()
-    const writtenPaths = result.pages
-      .filter((page) => page.action === "write")
-      .map((page) => page.targetRelativePath)
-    return {
-      ok: true,
-      result,
-      wikiChanged: writtenPaths.map((path) => ({ path, operation: "create" as const })),
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const result = await importOkfBundle(sourceDir, projectPath, {
+        apply: true,
+        onWikiChanged: (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+      })
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
+      return {
+        ok: true,
+        result,
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 
@@ -1203,6 +1227,7 @@ async function handleTaxonomyApply(toolContext: AgentAppToolContext): Promise<Ag
     const blocked = preflightBudget(toolName, budget, [sidecarPath])
     if (blocked) return blocked
     const action = taxonomyActionArg(args)
+    const before = await readBeforeChange(projectPath, sidecarPath)
     const result = action === "bootstrap"
       ? await applyTagTaxonomyBootstrap(projectPath)
       : await applyTagTaxonomyGrowth(projectPath)
@@ -1214,6 +1239,13 @@ async function handleTaxonomyApply(toolContext: AgentAppToolContext): Promise<Ag
       ok: true,
       result,
       changedPaths: result.wrote ? [sidecarPath] : [],
+      wikiChanged: result.wrote
+        ? [wikiChangedFromBefore({
+            path: sidecarPath,
+            operation: before.existedBefore ? "update" : "create",
+            before,
+          })]
+        : [],
     }
 }
 
@@ -1223,6 +1255,7 @@ async function handleTaxonomyRollback(toolContext: AgentAppToolContext): Promise
     const sidecarPath = ".llm-wiki/tag-taxonomy.json"
     const blocked = preflightBudget(toolName, budget, [sidecarPath])
     if (blocked) return blocked
+    const before = await readBeforeChange(projectPath, sidecarPath)
     const result = await rollbackLastTagTaxonomyBatch(projectPath)
     if (result.wrote) {
       state.setFileTree(await listDirectory(projectPath))
@@ -1232,6 +1265,16 @@ async function handleTaxonomyRollback(toolContext: AgentAppToolContext): Promise
       ok: true,
       result,
       changedPaths: result.wrote && result.removed > 0 ? [sidecarPath] : [],
+      // Rollback is itself recorded as a new update snapshot. We do not
+      // encode the nested taxonomy history; rewind restores this tool's
+      // before/after sidecar state like any other app-tool update.
+      wikiChanged: result.wrote
+        ? [wikiChangedFromBefore({
+            path: sidecarPath,
+            operation: "update",
+            before,
+          })]
+        : [],
     }
 }
 
@@ -1324,23 +1367,29 @@ async function handleWikiSynthesis(toolContext: AgentAppToolContext): Promise<Ag
     const dimension = typeof args.dimension === "number" ? args.dimension : undefined
     const minClusterSize = typeof args.minClusterSize === "number" ? args.minClusterSize : undefined
     const maxCandidates = typeof args.maxCandidates === "number" ? args.maxCandidates : undefined
-    const result = await runWikiSynthesis(projectPath, state.llmConfig, state.searchApiConfig, {
-      dimension: dimension === 1 || dimension === 2 || dimension === 3 || dimension === 4 ? dimension : undefined,
-      targetTag,
-      targetTags,
-      minClusterSize,
-      maxCandidates,
-    })
-    if (!result.ok) throw new Error(result.error)
-    state.setFileTree(await listDirectory(projectPath))
-    useWikiStore.getState().bumpDataVersion()
-    const wikiChanged = result.synthesisPath ? [{ path: result.synthesisPath, operation: "create" as const }] : []
-    const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
-    if (overBudget) return overBudget
-    return {
-      ok: true,
-      result,
-      wikiChanged,
+    const wikiChanged: AgentWikiChangedPayload[] = []
+    try {
+      const result = await runWikiSynthesis(projectPath, state.llmConfig, state.searchApiConfig, {
+        dimension: dimension === 1 || dimension === 2 || dimension === 3 || dimension === 4 ? dimension : undefined,
+        targetTag,
+        targetTags,
+        minClusterSize,
+        maxCandidates,
+        onWikiChanged: (change) => wikiChanged.push(wikiChangedFromWriteChange(change)),
+      })
+      if (!result.ok) throw new Error(result.error)
+      state.setFileTree(await listDirectory(projectPath))
+      useWikiStore.getState().bumpDataVersion()
+      const overBudget = postflightBudget(toolName, budget, [], wikiChanged)
+      if (overBudget) return overBudget
+      return {
+        ok: true,
+        result,
+        wikiChanged,
+      }
+    } catch (err) {
+      if (wikiChanged.length === 0) throw err
+      return partialWriteFailure(err, wikiChanged)
     }
 }
 

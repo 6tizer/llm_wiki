@@ -22,6 +22,12 @@ const CONDITIONAL_WRITE_WIKI_TOOLS = new Set<string>([
 	"mcp__llm_wiki__merge_duplicate_group",
 ]);
 
+const NON_WIKI_FILE_WRITE_TOOLS = new Set<string>([
+	// Agent policy still requires write permission for review-state mutation;
+	// rewind's wiki-file gate should ignore it until this tool mutates wiki files.
+	"mcp__llm_wiki__sweep_reviews",
+]);
+
 /**
  * Wiki tools verified (by reading each handler in agent-app-tools.ts) to
  * never write project files: collect_research_sources (network search only),
@@ -79,6 +85,7 @@ export const KNOWN_WIKI_TOOL_NAMES: readonly string[] = Array.from(
  */
 export function isWikiWriteToolCall(toolName: string): boolean {
 	if (!toolName.startsWith(WIKI_TOOL_PREFIX)) return false;
+	if (NON_WIKI_FILE_WRITE_TOOLS.has(toolName)) return false;
 	if (CONDITIONAL_WRITE_WIKI_TOOLS.has(toolName)) return true;
 	if (KNOWN_WRITE_WIKI_TOOLS.has(toolName)) return true;
 	if (VERIFIED_READ_ONLY_WIKI_TOOLS.has(toolName)) return false;

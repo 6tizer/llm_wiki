@@ -309,6 +309,66 @@ test("app-level wikiChanged beforeText writes rewind snapshots with shared monot
 	);
 });
 
+test("app-level taxonomy sidecar wikiChanged can write rewind snapshots", async () => {
+	const projectPath = await tempProject();
+	await fs.mkdir(path.join(projectPath, ".llm-wiki"), { recursive: true });
+	await fs.writeFile(path.join(projectPath, ".llm-wiki", "tag-taxonomy.json"), "{\"before\":true}", "utf8");
+	const changed: WikiChangedPayload[] = [];
+	const taxonomy = toolByName("taxonomy_apply", {
+		projectPath,
+		streamId: "stream-taxonomy",
+		getCurrentToolUseId: () => "tool-taxonomy",
+		onWikiChanged: (payload) => changed.push(payload),
+		appToolBridge: {
+			async callTool() {
+				await fs.writeFile(path.join(projectPath, ".llm-wiki", "tag-taxonomy.json"), "{\"after\":true}", "utf8");
+				return {
+					ok: true,
+					result: { wrote: true },
+					changedPaths: [".llm-wiki/tag-taxonomy.json"],
+					wikiChanged: [{
+						path: ".llm-wiki/tag-taxonomy.json",
+						operation: "update",
+						existedBefore: true,
+						beforeText: "{\"before\":true}",
+					}],
+				};
+			},
+			handleResponse() {},
+			rejectStream() {},
+			hasPending() { return false; },
+		},
+	});
+
+	const result = await taxonomy.handler({ action: "growth" }, {});
+
+	assert.equal(result.isError, undefined, resultText(result));
+	assert.deepEqual(
+		changed.map((payload) => ({
+			path: payload.path,
+			operation: payload.operation,
+			toolUseId: payload.toolUseId,
+			snapshotted: payload.snapshotted,
+		})),
+		[
+			{
+				path: ".llm-wiki/tag-taxonomy.json",
+				operation: "update",
+				toolUseId: "tool-taxonomy",
+				snapshotted: true,
+			},
+		],
+	);
+	const manifest = await readSnapshotManifest(projectPath, "stream-taxonomy");
+	assert.equal(manifest[0]?.path, ".llm-wiki/tag-taxonomy.json");
+	assert.equal(manifest[0]?.operation, "update");
+	const snapshot = await fs.readFile(
+		path.join(projectPath, ".llm-wiki", "rewind-snapshots", "stream-taxonomy", String(manifest[0]?.snapshotFile)),
+		"utf8",
+	);
+	assert.equal(snapshot, "{\"before\":true}");
+});
+
 test("create_entity records create snapshot as existedBefore false", async () => {
 	const projectPath = await tempProject();
 	const changed: WikiChangedPayload[] = [];

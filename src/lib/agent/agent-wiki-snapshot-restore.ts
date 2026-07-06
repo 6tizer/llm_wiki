@@ -134,6 +134,15 @@ function manifestEntryMatches(entry: SnapshotManifestEntry, args: {
   return entry.path === args.path && entry.toolUseId === args.toolUseId
 }
 
+export interface ExpectedSnapshotChange {
+  toolUseId: string
+  path: string
+}
+
+function expectedSnapshotKey(change: ExpectedSnapshotChange): string {
+  return `${change.toolUseId}\0${change.path}`
+}
+
 export async function restoreSingleAgentWikiSnapshot(args: {
   projectPath: string | undefined
   streamId: string
@@ -257,24 +266,25 @@ export async function restoreSingleAgentWikiSnapshot(args: {
 export function collectWikiSnapshotToolUseIds(args: {
   target: AgentRewindRequestRecord
   messages: DisplayMessage[]
-}): Map<string, string> {
+}): ExpectedSnapshotChange[] {
   const conversationMessages = args.messages
     .filter((m) => m.conversationId === args.target.conversationId)
     .sort((a, b) => a.timestamp - b.timestamp)
   const targetIndex = conversationMessages.findIndex(
     (m) => m.id === args.target.chatMessageId
   )
-  if (targetIndex === -1) return new Map()
+  if (targetIndex === -1) return []
 
-  const ids = new Map<string, string>()
+  const changes = new Map<string, ExpectedSnapshotChange>()
   for (const message of conversationMessages.slice(targetIndex)) {
     for (const change of message.wikiChanges ?? []) {
       if (change.snapshotted === true && change.toolUseId && !change.reverted) {
-        ids.set(change.toolUseId, change.path)
+        const item = { toolUseId: change.toolUseId, path: change.path }
+        changes.set(expectedSnapshotKey(item), item)
       }
     }
   }
-  return ids
+  return [...changes.values()]
 }
 
 export async function restoreAgentWikiSnapshots(args: {
@@ -286,15 +296,16 @@ export async function restoreAgentWikiSnapshots(args: {
     target: args.target,
     messages: args.messages,
   })
-  if (expectedToolUseIds.size === 0) {
+  if (expectedToolUseIds.length === 0) {
     return { ok: true, restoredPaths: [], failures: [] }
   }
+  const expectedByKey = new Map(expectedToolUseIds.map((item) => [expectedSnapshotKey(item), item]))
   if (!args.projectPath) {
     return {
       ok: false,
       restoredPaths: [],
-      failures: Array.from(expectedToolUseIds.values()).map((path) => ({
-        path,
+      failures: expectedToolUseIds.map((item) => ({
+        path: item.path,
         error: "No active project path for wiki snapshot restore",
       })),
     }
@@ -309,14 +320,14 @@ export async function restoreAgentWikiSnapshots(args: {
     return {
       ok: false,
       restoredPaths: [],
-      failures: Array.from(expectedToolUseIds.values()).map((path) => ({
-        path,
+      failures: expectedToolUseIds.map((item) => ({
+        path: item.path,
         error: err instanceof Error ? err.message : String(err),
       })),
     }
   }
 
-  const unmatched = new Map(expectedToolUseIds)
+  const unmatched = new Map(expectedByKey)
   const entriesBySeq = new Map<number, SnapshotManifestEntry>()
   const failures: WikiSnapshotRestoreFailure[] = []
 
@@ -324,8 +335,10 @@ export async function restoreAgentWikiSnapshots(args: {
     for (const line of manifest.split(/\r?\n/)) {
       if (!line.trim()) continue
       const entry = parseManifestEntry(line)
-      if (!entry.toolUseId || !expectedToolUseIds.has(entry.toolUseId)) continue
-      unmatched.delete(entry.toolUseId)
+      if (!entry.toolUseId) continue
+      const key = expectedSnapshotKey({ toolUseId: entry.toolUseId, path: entry.path })
+      if (!expectedByKey.has(key)) continue
+      unmatched.delete(key)
       entriesBySeq.set(entry.seq, entry)
     }
   } catch (err) {
@@ -339,8 +352,8 @@ export async function restoreAgentWikiSnapshots(args: {
     }
   }
 
-  for (const path of unmatched.values()) {
-    failures.push({ path, error: "Missing snapshot manifest entry for toolUseId" })
+  for (const item of unmatched.values()) {
+    failures.push({ path: item.path, error: "Missing snapshot manifest entry for toolUseId" })
   }
 
   const restoredPaths: string[] = []

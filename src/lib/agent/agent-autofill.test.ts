@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest"
+import type { WikiWriteChange } from "@/lib/wiki-write-events"
 import { runAutofill } from "./agent-autofill"
 
 const fsMock = vi.hoisted(() => ({
@@ -88,7 +89,10 @@ A neural network architecture based on self-attention.
 
 `)
 
-    const result = await runAutofill("/project")
+    const changes: WikiWriteChange[] = []
+    const result = await runAutofill("/project", {
+      onWikiChanged: (change) => changes.push(change),
+    })
     expect(result.pagesScanned).toBe(1)
     expect(result.statusPromoted).toBe(1)
     expect(result.details[0]).toEqual({
@@ -98,6 +102,20 @@ A neural network architecture based on self-attention.
       from: "draft",
       to: "Under Review",
     })
+    expect(changes).toEqual([
+      {
+        path: "wiki/concept.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: expect.stringContaining("status: Draft"),
+      },
+      {
+        path: "wiki/concept.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: expect.stringContaining("status: Under Review"),
+      },
+    ])
   })
 
   it("promotes to Reviewed when referenced by ≥2 summaries", async () => {

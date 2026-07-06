@@ -138,6 +138,51 @@ describe("restoreAgentWikiSnapshots", () => {
     expect(fsMocks.writeFile).not.toHaveBeenCalled()
   })
 
+  it("restores every path for a batch toolUseId", async () => {
+    const afterASha = await sha256Text("after a")
+    const afterBSha = await sha256Text("after b")
+    fsMocks.readFile.mockImplementation(async (path) => {
+      if (path.endsWith("manifest.jsonl")) {
+        return [
+          line({
+            seq: 1,
+            path: "wiki/a.md",
+            toolUseId: "tool-batch",
+            snapshotFile: "000001-a.md",
+            afterSha256: afterASha,
+          }),
+          line({
+            seq: 2,
+            path: "wiki/b.md",
+            toolUseId: "tool-batch",
+            snapshotFile: "000002-b.md",
+            afterSha256: afterBSha,
+          }),
+        ].join("\n")
+      }
+      if (path === "/proj/wiki/a.md") return "after a"
+      if (path === "/proj/wiki/b.md") return "after b"
+      if (path.endsWith("000001-a.md")) return "before a"
+      if (path.endsWith("000002-b.md")) return "before b"
+      throw new Error(`unexpected read ${path}`)
+    })
+
+    const result = await restoreAgentWikiSnapshots({
+      projectPath: "/proj",
+      target: target(),
+      messages: [
+        msg("m1", 1, [
+          { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-batch", snapshotted: true },
+          { path: "wiki/b.md", operation: "update", timestamp: 2, toolUseId: "tool-batch", snapshotted: true },
+        ]),
+      ],
+    })
+
+    expect(result).toEqual({ ok: true, restoredPaths: ["wiki/a.md", "wiki/b.md"], failures: [] })
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/a.md", "before a")
+    expect(fsMocks.writeFile).toHaveBeenCalledWith("/proj/wiki/b.md", "before b")
+  })
+
   it("deletes files created after the target", async () => {
     fsMocks.readFile.mockImplementation(async (path) => {
       if (path.endsWith("manifest.jsonl")) {

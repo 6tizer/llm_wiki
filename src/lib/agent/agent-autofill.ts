@@ -17,6 +17,7 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { getRelativePath, normalizePath } from "@/lib/path-utils"
 import type { FileNode } from "@/types/wiki"
 import { flattenMdFiles } from "@/lib/wiki-utils"
+import type { WikiWriteChangeCallback } from "@/lib/wiki-write-events"
 import {
   buildTagTaxonomyPageReport,
   loadTagTaxonomy,
@@ -44,6 +45,7 @@ export interface AutofillOptions {
   dryRun?: boolean
   taxonomyAware?: boolean
   autoWriteHighConfidence?: boolean
+  onWikiChanged?: WikiWriteChangeCallback
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -241,6 +243,7 @@ async function updateFrontmatterField(
   filePath: string,
   field: string,
   value: string | string[],
+  onWritten?: (beforeText: string) => void,
 ): Promise<void> {
   const content = await readFile(filePath)
   const { frontmatter, body } = parseFrontmatter(content)
@@ -266,6 +269,7 @@ async function updateFrontmatterField(
   // Reconstruct file: new frontmatter + original body
   const newContent = lines.join("\n") + "\n" + body
   await writeFile(filePath, newContent)
+  onWritten?.(content)
 }
 
 function formatYamlValue(val: string | string[]): string {
@@ -406,7 +410,16 @@ export async function runAutofill(projectPath: string, options: AutofillOptions 
       // Rule 1: Referenced by ≥2 summaries → Reviewed (highest priority)
       if (refCount >= 2) {
         try {
-          if (!effectiveDryRun) await updateFrontmatterField(page.path, "status", "Reviewed")
+          if (!effectiveDryRun) {
+            await updateFrontmatterField(page.path, "status", "Reviewed", (beforeText) => {
+              options.onWikiChanged?.({
+                path: getRelativePath(page.path, normalizePath(projectPath)),
+                operation: "update",
+                existedBefore: true,
+                beforeText,
+              })
+            })
+          }
           result.statusPromoted++
           result.details.push({
             path: page.slug,
@@ -424,7 +437,16 @@ export async function runAutofill(projectPath: string, options: AutofillOptions 
       // Rule 2: Draft ≥7 days + content complete → Under Review
       if (created && daysSince(created) >= 7 && isContentComplete(page.body)) {
         try {
-          if (!effectiveDryRun) await updateFrontmatterField(page.path, "status", "Under Review")
+          if (!effectiveDryRun) {
+            await updateFrontmatterField(page.path, "status", "Under Review", (beforeText) => {
+              options.onWikiChanged?.({
+                path: getRelativePath(page.path, normalizePath(projectPath)),
+                operation: "update",
+                existedBefore: true,
+                beforeText,
+              })
+            })
+          }
           result.statusPromoted++
           result.details.push({
             path: page.slug,
@@ -453,7 +475,16 @@ export async function runAutofill(projectPath: string, options: AutofillOptions 
 
       if (shouldWriteTaxonomyTags) {
         try {
-          if (!effectiveDryRun) await updateFrontmatterField(page.path, "tags", mergedTags)
+          if (!effectiveDryRun) {
+            await updateFrontmatterField(page.path, "tags", mergedTags, (beforeText) => {
+              options.onWikiChanged?.({
+                path: getRelativePath(page.path, normalizePath(projectPath)),
+                operation: "update",
+                existedBefore: true,
+                beforeText,
+              })
+            })
+          }
           result.tagsAssigned++
           result.details.push({
             path: page.slug,
@@ -471,7 +502,16 @@ export async function runAutofill(projectPath: string, options: AutofillOptions 
       const extractedTags = extractTagsFromContent(title, page.body)
       if (extractedTags.length > 0) {
         try {
-          if (!effectiveDryRun) await updateFrontmatterField(page.path, "tags", extractedTags)
+          if (!effectiveDryRun) {
+            await updateFrontmatterField(page.path, "tags", extractedTags, (beforeText) => {
+              options.onWikiChanged?.({
+                path: getRelativePath(page.path, normalizePath(projectPath)),
+                operation: "update",
+                existedBefore: true,
+                beforeText,
+              })
+            })
+          }
           result.tagsAssigned++
           result.details.push({
             path: page.slug,

@@ -10,6 +10,7 @@ import { getRelativePath, normalizePath } from "@/lib/path-utils";
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete";
 import { useActivityStore } from "@/stores/activity-store";
 import { lintFixMutex } from "@/lib/lint-fix-mutex";
+import type { WikiWriteChangeCallback } from "@/lib/wiki-write-events";
 import type { LlmConfig } from "@/stores/wiki-store";
 
 /**
@@ -47,20 +48,21 @@ export async function fixLintResult(
 	projectPath: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	const pp = normalizePath(projectPath);
 
 	switch (result.type) {
 		case "orphan":
-			return fixOrphan(pp, result);
+			return fixOrphan(pp, result, onWikiChanged);
 		case "broken-link":
-			return fixBrokenLink(pp, result, llmConfig);
+			return fixBrokenLink(pp, result, llmConfig, onWikiChanged);
 		case "no-outlinks":
-			return fixNoOutlinks(pp, result, llmConfig);
+			return fixNoOutlinks(pp, result, llmConfig, onWikiChanged);
 		case "source-unlinked":
 			return false;
 		case "semantic":
-			return fixSemantic(pp, result, llmConfig);
+			return fixSemantic(pp, result, llmConfig, onWikiChanged);
 		default:
 			return false;
 	}
@@ -99,11 +101,19 @@ export async function fixAllLintResults(
 
 // ── Fix strategies ──────────────────────────────────────────────────────────
 
-async function fixOrphan(pp: string, result: LintResult): Promise<boolean> {
+function wikiRelativePagePath(page: string): string {
+	return page.startsWith("wiki/") ? page : `wiki/${page}`;
+}
+
+async function fixOrphan(
+	pp: string,
+	result: LintResult,
+	onWikiChanged?: WikiWriteChangeCallback,
+): Promise<boolean> {
 	// Strategy: delete the orphan page (user can undo via git)
 	const pagePath = `${pp}/wiki/${result.page}`;
 	try {
-		await cascadeDeleteWikiPagesWithRefs(pp, [pagePath]);
+		await cascadeDeleteWikiPagesWithRefs(pp, [pagePath], onWikiChanged);
 		return true;
 	} catch {
 		return false;
@@ -114,6 +124,7 @@ async function fixBrokenLink(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	if (!hasUsableLlm(llmConfig)) return false;
 
@@ -238,6 +249,12 @@ async function fixBrokenLink(
 
 		const sanitized = sanitizeIngestedFileContent(raw);
 		await writeFile(pagePath, sanitized);
+		onWikiChanged?.({
+			path: wikiRelativePagePath(result.page),
+			operation: "update",
+			existedBefore: true,
+			beforeText: content,
+		});
 		activity.updateItem(activityId, {
 			status: "done",
 			detail: `Fixed broken link in ${result.page}`,
@@ -254,6 +271,7 @@ async function fixNoOutlinks(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	if (!hasUsableLlm(llmConfig)) return false;
 
@@ -342,6 +360,12 @@ async function fixNoOutlinks(
 
 		const sanitized = sanitizeIngestedFileContent(raw);
 		await writeFile(pagePath, sanitized);
+		onWikiChanged?.({
+			path: wikiRelativePagePath(result.page),
+			operation: "update",
+			existedBefore: true,
+			beforeText: content,
+		});
 		activity.updateItem(activityId, {
 			status: "done",
 			detail: `Added cross-refs to ${result.page}`,
@@ -358,6 +382,7 @@ async function fixSemantic(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	if (!hasUsableLlm(llmConfig)) return false;
 
@@ -366,19 +391,20 @@ async function fixSemantic(
 	const subType = subMatch ? subMatch[1] : "";
 
 	if (subType === "contradiction")
-		return fixContradiction(pp, result, llmConfig);
-	if (subType === "stale") return fixStale(pp, result, llmConfig);
-	if (subType === "missing-page") return fixMissingPage(pp, result, llmConfig);
+		return fixContradiction(pp, result, llmConfig, onWikiChanged);
+	if (subType === "stale") return fixStale(pp, result, llmConfig, onWikiChanged);
+	if (subType === "missing-page") return fixMissingPage(pp, result, llmConfig, onWikiChanged);
 	if (subType === "suggestion") return false;
 
 	// Generic semantic fix — best-effort LLM repair
-	return fixGenericSemantic(pp, result, llmConfig);
+	return fixGenericSemantic(pp, result, llmConfig, onWikiChanged);
 }
 
 async function fixContradiction(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	if (!result.affectedPages || result.affectedPages.length < 2) return false;
 
@@ -447,6 +473,7 @@ async function fixContradiction(
 			activityId,
 			result,
 			pages,
+			onWikiChanged,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -458,6 +485,7 @@ async function fixStale(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	const activity = useActivityStore.getState();
 	const activityId = activity.addItem({
@@ -525,6 +553,7 @@ async function fixStale(
 			activityId,
 			result,
 			pages,
+			onWikiChanged,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -536,6 +565,7 @@ async function fixMissingPage(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	const activity = useActivityStore.getState();
 	const activityId = activity.addItem({
@@ -593,6 +623,7 @@ async function fixMissingPage(
 			activityId,
 			result,
 			undefined,
+			onWikiChanged,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -604,6 +635,7 @@ async function fixGenericSemantic(
 	pp: string,
 	result: LintResult,
 	llmConfig: LlmConfig,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	const activity = useActivityStore.getState();
 	const activityId = activity.addItem({
@@ -669,6 +701,7 @@ async function fixGenericSemantic(
 			activityId,
 			result,
 			pages,
+			onWikiChanged,
 		);
 	} catch (err) {
 		activity.updateItem(activityId, { status: "error", detail: String(err) });
@@ -693,6 +726,7 @@ async function applyLlmFix(
 	 *  compare against, so the check falls back to the block's own content
 	 *  (which only enforces the absolute floor, not a ratio). */
 	originalPages?: Record<string, string>,
+	onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<boolean> {
 	let raw = "";
 	let hadError = false;
@@ -769,8 +803,22 @@ async function applyLlmFix(
 
 		const targetPath = `${pp}/${wikiRel}`;
 		const sanitized = sanitizeIngestedFileContent(block.content);
+		let beforeText = "";
+		let existedBefore = false;
+		try {
+			beforeText = await readFile(targetPath);
+			existedBefore = true;
+		} catch {
+			beforeText = "";
+		}
 		await writeFile(targetPath, sanitized);
 		filesWritten.push(getRelativePath(targetPath, pp));
+		onWikiChanged?.({
+			path: getRelativePath(targetPath, pp),
+			operation: existedBefore ? "update" : "create",
+			existedBefore,
+			beforeText,
+		});
 	}
 
 	if (filesWritten.length === 0) {
@@ -809,6 +857,7 @@ export async function fixLintReport(
   report: LintReport,
   reportPath: string,
   llmConfig: LlmConfig,
+  onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<FixLintReportResult> {
   const pp = normalizePath(projectPath)
   const activity = useActivityStore.getState()
@@ -820,7 +869,7 @@ export async function fixLintReport(
 
   for (const item of report.autoFixItems) {
     try {
-      const ok = await fixLintResult(pp, item, llmConfig)
+      const ok = await fixLintResult(pp, item, llmConfig, onWikiChanged)
       if (ok) {
         fixed.push(`[${item.type}] ${item.page}: ${item.detail.slice(0, 80)}`)
         changedPaths.add(item.page.startsWith("wiki/") ? item.page : `wiki/${item.page}`)
@@ -846,7 +895,21 @@ export async function fixLintReport(
   const markdown = lintReportToMarkdown(report, runId)
 
   const fullPath = `${pp}/${reportPath}`
+  let reportBeforeText = ""
+  let reportExistedBefore = false
+  try {
+    reportBeforeText = await readFile(fullPath)
+    reportExistedBefore = true
+  } catch {
+    reportBeforeText = ""
+  }
   await writeFile(fullPath, markdown)
+  onWikiChanged?.({
+    path: reportPath,
+    operation: reportExistedBefore ? "update" : "create",
+    existedBefore: reportExistedBefore,
+    beforeText: reportBeforeText,
+  })
 
   activity.addItem({
     type: "lint",
@@ -870,6 +933,7 @@ export async function runLintAndReport(
   includeStructural = true,
   includeSemantic = true,
   autoFix = false,
+  onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<{ report: LintReport; reportPath: string; changedPaths: string[] }> {
   const structural = includeStructural ? await runStructuralLint(projectPath) : []
   const semantic = includeSemantic ? await runSemanticLint(projectPath, llmConfig) : []
@@ -899,12 +963,26 @@ export async function runLintAndReport(
 
   const pp = normalizePath(projectPath)
   const fullPath = `${pp}/${reportPath}`
+  let reportBeforeText = ""
+  let reportExistedBefore = false
+  try {
+    reportBeforeText = await readFile(fullPath)
+    reportExistedBefore = true
+  } catch {
+    reportBeforeText = ""
+  }
   await writeFile(fullPath, markdown)
+  onWikiChanged?.({
+    path: reportPath,
+    operation: reportExistedBefore ? "update" : "create",
+    existedBefore: reportExistedBefore,
+    beforeText: reportBeforeText,
+  })
 
   if (autoFix && report.autoFixItems.length > 0) {
     const release = await lintFixMutex.acquire()
     try {
-      const fixedReport = await fixLintReport(projectPath, report, reportPath, llmConfig)
+      const fixedReport = await fixLintReport(projectPath, report, reportPath, llmConfig, onWikiChanged)
       return {
         report: fixedReport.report,
         reportPath: fixedReport.reportPath,

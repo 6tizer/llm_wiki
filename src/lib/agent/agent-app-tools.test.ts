@@ -564,7 +564,28 @@ describe("runAgentAppTool ingest parity tools", () => {
     ).rejects.toThrow(/traversal/)
   })
 
-  it("keeps orphan fix_lint_result uncovered by returning no wikiChanged", async () => {
+  it("emits orphan fix_lint_result cascade wikiChanged records", async () => {
+    lintFixerMock.fixLintResult.mockImplementationOnce(async (
+      _projectPath: string,
+      _result: unknown,
+      _llmConfig: unknown,
+      onWikiChanged?: (change: { path: string; operation: "create" | "update" | "delete"; existedBefore: boolean; beforeText: string }) => void,
+    ) => {
+      onWikiChanged?.({
+        path: "wiki/entities/orphan.md",
+        operation: "delete",
+        existedBefore: true,
+        beforeText: "# Orphan",
+      })
+      onWikiChanged?.({
+        path: "wiki/index.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "[[entities/orphan|Orphan]]",
+      })
+      return true
+    })
+
     const response = await runAgentAppTool("fix_lint_result", {
       result: { type: "orphan", severity: "info", page: "entities/orphan.md", detail: "orphan" },
     })
@@ -573,9 +594,23 @@ describe("runAgentAppTool ingest parity tools", () => {
       "/project",
       { type: "orphan", severity: "info", page: "entities/orphan.md", detail: "orphan", affectedPages: undefined },
       expect.objectContaining({ model: "gpt-test" }),
+      expect.any(Function),
     )
     expect(response.result).toMatchObject({ fixed: true })
-    expect(response.wikiChanged).toBeUndefined()
+    expect(response.wikiChanged).toEqual([
+      {
+        path: "wiki/entities/orphan.md",
+        operation: "delete",
+        existedBefore: true,
+        beforeText: "# Orphan",
+      },
+      {
+        path: "wiki/index.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "[[entities/orphan|Orphan]]",
+      },
+    ])
   })
 
   it("emits enrich_wikilinks wikiChanged only after the write callback succeeds", async () => {
@@ -1089,23 +1124,38 @@ describe("runAgentAppTool ingest parity tools", () => {
   })
 
   it("passes taxonomy-aware autofill options through the budget preview/apply path", async () => {
-    autofillMock.runAutofill.mockImplementation(async (_projectPath?: string, options?: { dryRun?: boolean; taxonomyAware?: boolean; autoWriteHighConfidence?: boolean }) => ({
-      pagesScanned: 1,
-      statusPromoted: 0,
-      tagsAssigned: options?.dryRun ? 0 : 1,
-      details: [
-        { path: "entities/topic", relativePath: "wiki/entities/topic.md", action: "tags" as const, from: "(empty)", to: "Artificial Intelligence" },
-      ],
-      taxonomy: {
-        enabled: true,
-        fallback: false,
-        dryRun: options?.dryRun === true,
-        autoWriteHighConfidence: options?.autoWriteHighConfidence === true,
-        reports: [],
-        proposalCount: 0,
-        issues: [],
-      },
-    }))
+    autofillMock.runAutofill.mockImplementation(async (_projectPath?: string, options?: {
+      dryRun?: boolean
+      taxonomyAware?: boolean
+      autoWriteHighConfidence?: boolean
+      onWikiChanged?: (change: { path: string; operation: "update"; existedBefore: boolean; beforeText: string }) => void
+    }) => {
+      if (!options?.dryRun) {
+        options?.onWikiChanged?.({
+          path: "wiki/entities/topic.md",
+          operation: "update",
+          existedBefore: true,
+          beforeText: "---\ntags: []\n---\n# Topic",
+        })
+      }
+      return {
+        pagesScanned: 1,
+        statusPromoted: 0,
+        tagsAssigned: options?.dryRun ? 0 : 1,
+        details: [
+          { path: "entities/topic", relativePath: "wiki/entities/topic.md", action: "tags" as const, from: "(empty)", to: "Artificial Intelligence" },
+        ],
+        taxonomy: {
+          enabled: true,
+          fallback: false,
+          dryRun: options?.dryRun === true,
+          autoWriteHighConfidence: options?.autoWriteHighConfidence === true,
+          reports: [],
+          proposalCount: 0,
+          issues: [],
+        },
+      }
+    })
 
     const response = await runAgentAppTool(
       "autofill_properties",
@@ -1123,9 +1173,15 @@ describe("runAgentAppTool ingest parity tools", () => {
       dryRun: false,
       taxonomyAware: true,
       autoWriteHighConfidence: true,
+      onWikiChanged: expect.any(Function),
     })
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/entities/topic.md", operation: "update" },
+      {
+        path: "wiki/entities/topic.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "---\ntags: []\n---\n# Topic",
+      },
     ])
   })
 
@@ -1202,6 +1258,7 @@ describe("runAgentAppTool ingest parity tools", () => {
       dryRun: true,
       taxonomyAware: true,
       autoWriteHighConfidence: false,
+      onWikiChanged: expect.any(Function),
     })
     expect(response.wikiChanged).toEqual([])
   })
@@ -1245,14 +1302,26 @@ describe("runAgentAppTool ingest parity tools", () => {
       issues: [],
       summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
     })
-    okfImportMock.importOkfBundle.mockResolvedValueOnce({
-      applied: true,
-      pages: [
-        { targetRelativePath: "wiki/entities/a.md", action: "write" },
-        { targetRelativePath: "wiki/entities/b.md", action: "skip" },
-      ],
-      issues: [],
-      summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+    okfImportMock.importOkfBundle.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const options = callArgs[2] as {
+        apply?: boolean
+        onWikiChanged?: (change: { path: string; operation: "create"; existedBefore: boolean; beforeText: string }) => void
+      } | undefined
+      options?.onWikiChanged?.({
+        path: "wiki/entities/a.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      })
+      return {
+        applied: true,
+        pages: [
+          { targetRelativePath: "wiki/entities/a.md", action: "write" as const },
+          { targetRelativePath: "wiki/entities/b.md", action: "skip" as const },
+        ],
+        issues: [],
+        summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+      }
     })
 
     const response = await runAgentAppTool(
@@ -1262,9 +1331,12 @@ describe("runAgentAppTool ingest parity tools", () => {
     )
 
     expect(response.ok).toBe(true)
-    expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source", "/project", { apply: true })
+    expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source", "/project", {
+      apply: true,
+      onWikiChanged: expect.any(Function),
+    })
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/entities/a.md", operation: "create" },
+      { path: "wiki/entities/a.md", operation: "create", existedBefore: false, beforeText: "" },
     ])
   })
 
@@ -1336,7 +1408,9 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(tagTaxonomyMock.previewTagTaxonomyGrowth).toHaveBeenCalledWith("/project")
   })
 
-  it("applies taxonomy changes with sidecar changedPaths only", async () => {
+  it("applies taxonomy changes with sidecar snapshot metadata", async () => {
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", "{\"nodes\":[]}")
+
     const response = await runAgentAppTool(
       "taxonomy_apply",
       { action: "growth" },
@@ -1346,7 +1420,14 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.ok).toBe(true)
     expect(tagTaxonomyMock.applyTagTaxonomyGrowth).toHaveBeenCalledWith("/project")
     expect(response.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
-    expect(response.wikiChanged).toBeUndefined()
+    expect(response.wikiChanged).toEqual([
+      {
+        path: ".llm-wiki/tag-taxonomy.json",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "{\"nodes\":[]}",
+      },
+    ])
   })
 
   it("blocks taxonomy_apply before sidecar write when budget is exhausted", async () => {
@@ -1388,7 +1469,9 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
   })
 
-  it("rolls back taxonomy batches and reports sidecar path only when removed", async () => {
+  it("rolls back taxonomy batches with nested update snapshot semantics", async () => {
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", "{\"history\":[1]}")
+
     const response = await runAgentAppTool(
       "taxonomy_rollback",
       {},
@@ -1398,7 +1481,14 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(response.ok).toBe(true)
     expect(tagTaxonomyMock.rollbackLastTagTaxonomyBatch).toHaveBeenCalledWith("/project")
     expect(response.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
-    expect(response.wikiChanged).toBeUndefined()
+    expect(response.wikiChanged).toEqual([
+      {
+        path: ".llm-wiki/tag-taxonomy.json",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "{\"history\":[1]}",
+      },
+    ])
   })
 
   it("keeps taxonomy_rollback changedPaths empty when no nodes were removed", async () => {
@@ -1408,6 +1498,14 @@ describe("runAgentAppTool ingest parity tools", () => {
 
     expect(response.ok).toBe(true)
     expect(response.changedPaths).toEqual([])
+    expect(response.wikiChanged).toEqual([
+      {
+        path: ".llm-wiki/tag-taxonomy.json",
+        operation: "update",
+        existedBefore: false,
+        beforeText: "",
+      },
+    ])
   })
 
   it("previews synthesis candidates without calling generation", async () => {
@@ -1484,6 +1582,25 @@ describe("runAgentAppTool ingest parity tools", () => {
   })
 
   it("passes multi-dimensional synthesis options to wiki_synthesis", async () => {
+    wikiSynthesisMock.runWikiSynthesis.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const options = callArgs[3] as {
+        onWikiChanged?: (change: { path: string; operation: "create"; existedBefore: boolean; beforeText: string }) => void
+      } | undefined
+      options?.onWikiChanged?.({
+        path: "wiki/synthesis/test-synthesis.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      })
+      return {
+        ok: true,
+        topic: "test",
+        clusterSize: 3,
+        synthesisPath: "wiki/synthesis/test-synthesis.md",
+        externalSources: 0,
+      } as Awaited<ReturnType<typeof import("@/lib/wiki-synthesis").runWikiSynthesis>>
+    })
+
     const response = await runAgentAppTool("wiki_synthesis", {
       dimension: 2,
       targetTags: ["ai", "systems"],
@@ -1503,8 +1620,17 @@ describe("runAgentAppTool ingest parity tools", () => {
         targetTags: ["ai", "systems"],
         minClusterSize: 4,
         maxCandidates: 12,
+        onWikiChanged: expect.any(Function),
       },
     )
+    expect(response.wikiChanged).toEqual([
+      {
+        path: "wiki/synthesis/test-synthesis.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      },
+    ])
   })
 
   it("throws wiki_synthesis errors returned by runWikiSynthesis", async () => {
@@ -1610,14 +1736,26 @@ describe("runAgentAppTool ingest parity tools", () => {
       issues: [],
       summary: { totalPages: 1, writeCount: 1, skippedCount: 0, issueCount: 0 },
     })
-    okfImportMock.importOkfBundle.mockResolvedValueOnce({
-      applied: true,
-      pages: [
-        { action: "write", targetRelativePath: "wiki/entities/topic.md" },
-        { action: "skip", targetRelativePath: "wiki/entities/same.md" },
-      ],
-      issues: [],
-      summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+    okfImportMock.importOkfBundle.mockImplementationOnce(async (...callArgs: unknown[]) => {
+      const options = callArgs[2] as {
+        apply?: boolean
+        onWikiChanged?: (change: { path: string; operation: "create"; existedBefore: boolean; beforeText: string }) => void
+      } | undefined
+      options?.onWikiChanged?.({
+        path: "wiki/entities/topic.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      })
+      return {
+        applied: true,
+        pages: [
+          { action: "write" as const, targetRelativePath: "wiki/entities/topic.md" },
+          { action: "skip" as const, targetRelativePath: "wiki/entities/same.md" },
+        ],
+        issues: [],
+        summary: { totalPages: 2, writeCount: 1, skippedCount: 1, issueCount: 0 },
+      }
     })
 
     const response = await runAgentAppTool(
@@ -1626,15 +1764,20 @@ describe("runAgentAppTool ingest parity tools", () => {
       { budget: { maxFilesChanged: 1, maxFilesChangedEnabled: true, changedPaths: [] } },
     )
 
-    expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source-okf", "/project", { apply: true })
+    expect(okfImportMock.importOkfBundle).toHaveBeenCalledWith("/source-okf", "/project", {
+      apply: true,
+      onWikiChanged: expect.any(Function),
+    })
     expect(response.wikiChanged).toEqual([
-      { path: "wiki/entities/topic.md", operation: "create" },
+      { path: "wiki/entities/topic.md", operation: "create", existedBefore: false, beforeText: "" },
     ])
     expect(useWikiStore.getState().fileTree).toEqual(fsMock.tree)
     expect(useWikiStore.getState().dataVersion).toBe(1)
   })
 
-  it("previews and applies taxonomy sidecar changes without wikiChanged", async () => {
+  it("previews and applies taxonomy sidecar changes with wikiChanged", async () => {
+    fsMock.files.set("/project/.llm-wiki/tag-taxonomy.json", "{\"before\":true}")
+
     const preview = await runAgentAppTool("taxonomy_preview", { action: "growth" })
     const apply = await runAgentAppTool(
       "taxonomy_apply",
@@ -1651,10 +1794,24 @@ describe("runAgentAppTool ingest parity tools", () => {
     expect(preview.result).toMatchObject({ action: "growth", dryRun: true })
     expect(tagTaxonomyMock.applyTagTaxonomyBootstrap).toHaveBeenCalledWith("/project")
     expect(apply.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
-    expect(apply.wikiChanged).toBeUndefined()
+    expect(apply.wikiChanged).toEqual([
+      {
+        path: ".llm-wiki/tag-taxonomy.json",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "{\"before\":true}",
+      },
+    ])
     expect(tagTaxonomyMock.rollbackLastTagTaxonomyBatch).toHaveBeenCalledWith("/project")
     expect(rollback.changedPaths).toEqual([".llm-wiki/tag-taxonomy.json"])
-    expect(rollback.wikiChanged).toBeUndefined()
+    expect(rollback.wikiChanged).toEqual([
+      {
+        path: ".llm-wiki/tag-taxonomy.json",
+        operation: "update",
+        existedBefore: true,
+        beforeText: "{\"before\":true}",
+      },
+    ])
   })
 
   it("blocks taxonomy sidecar writes through the app budget", async () => {

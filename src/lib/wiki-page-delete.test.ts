@@ -324,6 +324,62 @@ describe("cascadeDeleteWikiPagesWithRefs", () => {
     expect(written).toContain("Bob worked with alice-chen on the migration.")
   })
 
+  it("emits delete and rewritten-file changes with beforeText after each successful write", async () => {
+    const target = `${PROJECT}/wiki/entities/alice-chen.md`
+    const targetBefore = `---\ntitle: "Alice Chen"\n---\n\n# Alice`
+    const bobBefore = `---\ntitle: Bob\n---\n\nBob worked with [[alice-chen|Alice]].`
+    const indexBefore = [
+      "# Wiki Index",
+      "",
+      "- [[alice-chen]] — engineering lead",
+      "- [[bob]] — designer",
+    ].join("\n")
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === target) return targetBefore
+      if (p === `${PROJECT}/wiki/entities/bob.md`) return bobBefore
+      if (p === `${PROJECT}/wiki/index.md`) return indexBefore
+      throw new Error(`unexpected read ${p}`)
+    })
+    mockListDirectory.mockResolvedValueOnce([
+      dirNode("wiki", [
+        fileNode("wiki/index.md"),
+        dirNode("wiki/entities", [
+          fileNode("wiki/entities/alice-chen.md"),
+          fileNode("wiki/entities/bob.md"),
+        ]),
+      ]),
+    ])
+    const changes: Array<{
+      path: string
+      operation: "update" | "create" | "delete"
+      existedBefore: boolean
+      beforeText: string
+    }> = []
+
+    await cascadeDeleteWikiPagesWithRefs(PROJECT, [target], (change) => changes.push(change))
+
+    expect(changes).toEqual([
+      {
+        path: "wiki/entities/alice-chen.md",
+        operation: "delete",
+        existedBefore: true,
+        beforeText: targetBefore,
+      },
+      {
+        path: "wiki/index.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: indexBefore,
+      },
+      {
+        path: "wiki/entities/bob.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: bobBefore,
+      },
+    ])
+  })
+
   it("strips title-form [[Alice Chen]] wikilinks too", async () => {
     const target = `${PROJECT}/wiki/entities/alice-chen.md`
     mockReadFile.mockImplementation(async (p: string) => {

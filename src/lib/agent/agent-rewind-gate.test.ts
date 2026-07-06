@@ -270,10 +270,108 @@ describe("computeAgentRewindGateDecision", () => {
     ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
-  it("keeps orphan fix_lint_result uncovered because cascade rewrites are not snapshotted in PR-A", () => {
+  it("allows a batch toolUseId only when every changed path is snapshotted", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__run_pipeline", toolUseId: "tool-batch", phase: "post", ok: true }],
+        [
+          { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-batch", snapshotted: true },
+          { path: "wiki/b.md", operation: "create", timestamp: 2, toolUseId: "tool-batch", snapshotted: true },
+          { path: "wiki/c.md", operation: "delete", timestamp: 3, toolUseId: "tool-batch", snapshotted: true },
+        ],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("blocks a batch toolUseId when any changed path is not snapshotted", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__run_pipeline", toolUseId: "tool-batch", phase: "post", ok: true }],
+        [
+          { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-batch", snapshotted: true },
+          { path: "wiki/b.md", operation: "create", timestamp: 2, toolUseId: "tool-batch", snapshotted: false },
+          { path: "wiki/c.md", operation: "delete", timestamp: 3, toolUseId: "tool-batch", snapshotted: true },
+        ],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "ambiguous" })
+  })
+
+  it("allows orphan fix_lint_result when cascade delete and rewritten refs are snapshotted", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [{ toolName: "mcp__llm_wiki__fix_lint_result", toolUseId: "tool-orphan", phase: "post", ok: true }],
+        [
+          { path: "wiki/entities/orphan.md", operation: "delete", timestamp: 1, toolUseId: "tool-orphan", snapshotted: true },
+          { path: "wiki/index.md", operation: "update", timestamp: 2, toolUseId: "tool-orphan", snapshotted: true },
+        ],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("allows covered mixed appTool batch and direct sidecar wiki writes", () => {
+    const messages = [
+      msg(
+        "m1",
+        1,
+        [
+          { toolName: "mcp__llm_wiki__run_pipeline", toolUseId: "tool-batch", phase: "post", ok: true },
+          { toolName: "mcp__llm_wiki__update_page", toolUseId: "tool-direct", phase: "post", ok: true },
+        ],
+        [
+          { path: "wiki/a.md", operation: "update", timestamp: 1, toolUseId: "tool-batch", snapshotted: true },
+          { path: "wiki/b.md", operation: "create", timestamp: 2, toolUseId: "tool-batch", snapshotted: true },
+          { path: "wiki/c.md", operation: "update", timestamp: 3, toolUseId: "tool-direct", snapshotted: true },
+        ],
+      ),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: true })
+  })
+
+  it("ignores sweep_reviews because it does not mutate wiki files", () => {
     const messages = [
       msg("m1", 1, [
-        { toolName: "mcp__llm_wiki__fix_lint_result", toolUseId: "tool-orphan", phase: "post", ok: true },
+        { toolName: "mcp__llm_wiki__sweep_reviews", toolUseId: "tool-sweep", phase: "post", ok: true },
       ]),
     ]
     expect(
@@ -284,7 +382,7 @@ describe("computeAgentRewindGateDecision", () => {
         isStreaming: false,
         rewindLocked: false,
       })
-    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
+    ).toEqual({ allowed: true })
   })
 
   it("blocks when a wiki write tool call lands on a LATER message (A2)", () => {
