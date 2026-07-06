@@ -95,7 +95,7 @@ describe("SPEC-1 store boundary inventory", () => {
   })
 
   it("guards Rust reader tokens instead of relying only on the ADR", () => {
-    const apiServer = repoFile("src-tauri/src/api_server.rs")
+    const apiServer = repoFile("src-tauri/src/api_server/mod.rs")
     const rustLib = repoFile("src-tauri/src/lib.rs")
     const proxy = repoFile("src-tauri/src/proxy.rs")
 
