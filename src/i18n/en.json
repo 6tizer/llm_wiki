@@ -6,6 +6,7 @@
   "common": {
     "back": "Back",
     "cancel": "Cancel",
+    "dismiss": "Dismiss",
     "next": "Next"
   },
   "fallbackPolicy": {
@@ -1287,7 +1288,9 @@
     "clearCompleted": "Clear completed"
   },
   "fileTree": {
-    "noProject": "No project open"
+    "noProject": "No project open",
+    "openProjectFolder": "Open project folder",
+    "openProjectFolderFailed": "Failed to open the project folder."
   },
   "graph": {
     "openProject": "Open a project to view the graph",
