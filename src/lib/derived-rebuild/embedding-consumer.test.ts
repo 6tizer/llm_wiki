@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { WikiProject } from "@/types/wiki"
 import { DERIVED_REBUILD_JOB_KIND } from "@/core-runtime/derived-rebuild"
 import { JOB_RUNTIME_DEFAULTS } from "@/core-runtime/contract"
+import { withProjectLock, __resetProjectLocksForTesting } from "@/lib/project-mutex"
 
 const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
@@ -52,6 +53,20 @@ import { useWikiStore } from "@/stores/wiki-store"
 const PROJECT: WikiProject = { id: "p1", name: "P", path: "/proj" }
 const NO_QUEUED_JOB = new Error("no-queued-job: no queued runtime job is available")
 
+function defer<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
+  let resolve!: (value: T) => void
+  let reject!: (err: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+async function drainMicrotasks(times = 5): Promise<void> {
+  for (let i = 0; i < times; i += 1) await Promise.resolve()
+}
+
 function emptyJobList() {
   return { enabled: true, status: "healthy" as const, jobs: [], leases: [] }
 }
@@ -85,6 +100,7 @@ function claimFor(jobId: string, payload: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  __resetProjectLocksForTesting()
   vi.clearAllMocks()
   mocks.getQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, completed: 0, total: 0 })
   mocks.getDedupQueueSummary.mockReturnValue({ pending: 0, processing: 0, failed: 0, total: 0 })
@@ -99,6 +115,7 @@ beforeEach(() => {
 
 afterEach(() => {
   stopEmbeddingConsumer()
+  __resetProjectLocksForTesting()
   vi.useRealTimers()
 })
 
@@ -315,6 +332,150 @@ describe("embedding-consumer — delete intent", () => {
       leaseId: "job-5-lease",
       markerIds: ["m5"],
     })
+  })
+})
+
+describe("embedding-consumer — project lock serialization", () => {
+  it("holds the project lock from claimed read through embedding completion, so a concurrent delete waits", async () => {
+    const order: string[] = []
+    const claim = claimFor("job-lock-consumer-first", {
+      layer: "embedding",
+      affectedPath: "wiki/racy.md",
+      markerIds: ["m-lock"],
+      baseVersion: "h-lock",
+      inputHash: "h-lock",
+      reason: "commit",
+    })
+    const embedEntered = defer()
+    const releaseEmbed = defer<{ indexed: number; failed: number }>()
+    mocks.runtimeJobClaimByKind.mockResolvedValueOnce(claim)
+    mocks.readFile.mockImplementationOnce(async () => {
+      order.push("consumer:read")
+      return "# Racy\n\nbody"
+    })
+    mocks.embedPage.mockImplementationOnce(async () => {
+      order.push("consumer:embed:start")
+      embedEntered.resolve(undefined)
+      return releaseEmbed.promise
+    })
+    mocks.runtimeDerivedMarkerCompleteBatch.mockImplementationOnce(async () => {
+      order.push("consumer:complete")
+      return { job: {}, markers: [] }
+    })
+
+    startEmbeddingConsumer(PROJECT)
+    await embedEntered.promise
+
+    const deleteEntered = defer()
+    const deleteCall = withProjectLock(PROJECT.path, async () => {
+      order.push("delete:entered")
+      deleteEntered.resolve(undefined)
+    })
+
+    const preCompleteRace = await Promise.race([
+      deleteEntered.promise.then(() => "delete-entered" as const),
+      new Promise<"still-blocked">((resolve) => setTimeout(() => resolve("still-blocked"), 50)),
+    ])
+    expect(preCompleteRace).toBe("still-blocked")
+    expect(order).toEqual(["consumer:read", "consumer:embed:start"])
+
+    releaseEmbed.resolve({ indexed: 1, failed: 0 })
+    await deleteCall
+
+    expect(order).toEqual(["consumer:read", "consumer:embed:start", "consumer:complete", "delete:entered"])
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalledWith({
+      jobId: "job-lock-consumer-first",
+      leaseId: "job-lock-consumer-first-lease",
+      markerIds: ["m-lock"],
+    })
+  })
+
+  it("waits behind an existing project lock after claim, before reading the wiki file", async () => {
+    const claim = claimFor("job-lock-delete-first", {
+      layer: "embedding",
+      affectedPath: "wiki/wait.md",
+      markerIds: ["m-wait"],
+      baseVersion: "h-wait",
+      inputHash: "h-wait",
+      reason: "commit",
+    })
+    const holderEntered = defer()
+    const releaseHolder = defer()
+    const holder = withProjectLock(PROJECT.path, async () => {
+      holderEntered.resolve(undefined)
+      await releaseHolder.promise
+    })
+    await holderEntered.promise
+
+    mocks.runtimeJobClaimByKind.mockResolvedValueOnce(claim)
+    mocks.readFile.mockResolvedValueOnce("# Wait\n\nbody")
+    mocks.embedPage.mockResolvedValueOnce({ indexed: 1, failed: 0 })
+
+    startEmbeddingConsumer(PROJECT)
+    await vi.waitFor(() => expect(mocks.runtimeJobClaimByKind).toHaveBeenCalled())
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mocks.readFile).not.toHaveBeenCalled()
+
+    releaseHolder.resolve(undefined)
+    await holder
+    await vi.waitFor(() => expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalled())
+
+    expect(mocks.readFile).toHaveBeenCalledWith("/proj/wiki/wait.md")
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).toHaveBeenCalledWith({
+      jobId: "job-lock-delete-first",
+      leaseId: "job-lock-delete-first-lease",
+      markerIds: ["m-wait"],
+    })
+  })
+
+  it("keeps safeFailClaim under the project lock and releases the lock afterward when embedding throws", async () => {
+    const order: string[] = []
+    const claim = claimFor("job-lock-fail", {
+      layer: "embedding",
+      affectedPath: "wiki/fail.md",
+      markerIds: ["m-fail"],
+      baseVersion: "h-fail",
+      inputHash: "h-fail",
+      reason: "commit",
+    })
+    const embedEntered = defer()
+    const releaseEmbedFailure = defer<{ indexed: number; failed: number }>()
+    mocks.runtimeJobClaimByKind.mockResolvedValueOnce(claim)
+    mocks.readFile.mockResolvedValueOnce("# Fail\n\nbody")
+    mocks.embedPage.mockImplementationOnce(async () => {
+      order.push("consumer:embed:start")
+      embedEntered.resolve(undefined)
+      return releaseEmbedFailure.promise
+    })
+    mocks.runtimeJobFail.mockImplementationOnce(async () => {
+      order.push("consumer:fail")
+      return { state: "retry-wait" }
+    })
+
+    startEmbeddingConsumer(PROJECT)
+    await embedEntered.promise
+
+    const deleteEntered = defer()
+    const deleteCall = withProjectLock(PROJECT.path, async () => {
+      order.push("delete:entered")
+      deleteEntered.resolve(undefined)
+    })
+
+    const preFailRace = await Promise.race([
+      deleteEntered.promise.then(() => "delete-entered" as const),
+      new Promise<"still-blocked">((resolve) => setTimeout(() => resolve("still-blocked"), 50)),
+    ])
+    expect(preFailRace).toBe("still-blocked")
+
+    releaseEmbedFailure.reject(new Error("embed boom"))
+    await deleteCall
+
+    expect(order).toEqual(["consumer:embed:start", "consumer:fail", "delete:entered"])
+    expect(mocks.runtimeJobFail).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "job-lock-fail", leaseId: "job-lock-fail-lease", error: "embed boom" }),
+    )
+    expect(mocks.runtimeDerivedMarkerCompleteBatch).not.toHaveBeenCalled()
   })
 })
 
@@ -842,8 +1003,8 @@ describe("embedding-consumer — project switch / generation lifecycle (SPEC-11 
     await vi.advanceTimersByTimeAsync(0)
     expect(mocks.readFile).toHaveBeenCalledTimes(1)
 
-    // Generation 2 (new, same project): claims a DIFFERENT job and ALSO
-    // stalls on its own readFile, independently of generation 1.
+    // Generation 2 (new, same project): claims a DIFFERENT job, then waits
+    // behind generation 1's still-held project lock before reading.
     stopEmbeddingConsumer()
     const newClaim = claimFor("job-new", {
       layer: "embedding",
@@ -866,16 +1027,19 @@ describe("embedding-consumer — project switch / generation lifecycle (SPEC-11 
     startEmbeddingConsumer(PROJECT)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
-    expect(mocks.readFile).toHaveBeenCalledTimes(2)
-    const claimCallsAfterGen2Start = mocks.runtimeJobClaimByKind.mock.calls.length
+    await drainMicrotasks()
+    expect(mocks.runtimeJobClaimByKind).toHaveBeenCalledTimes(1)
+    expect(mocks.readFile).toHaveBeenCalledTimes(1)
 
     // Let generation 1's stalled read resolve now — its tick hits
-    // assertCurrentRun and self-aborts, running ITS OWN finally block.
+    // assertCurrentRun, self-aborts, and releases the project lock.
     // Under the pre-fix single shared boolean, this finally would have
     // cleared generation 2's reentrancy flag too.
     resolveOldRead("old body")
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
+    await drainMicrotasks()
+    expect(mocks.readFile).toHaveBeenCalledTimes(2)
     expect(mocks.runtimeDerivedMarkerCompleteBatch).not.toHaveBeenCalled()
     expect(mocks.runtimeJobFail).not.toHaveBeenCalled()
 
@@ -887,7 +1051,7 @@ describe("embedding-consumer — project switch / generation lifecycle (SPEC-11 
     // second, overlapping tick right now.
     await vi.advanceTimersByTimeAsync(3_000)
     await vi.advanceTimersByTimeAsync(0)
-    expect(mocks.runtimeJobClaimByKind.mock.calls.length).toBe(claimCallsAfterGen2Start)
+    expect(mocks.runtimeJobClaimByKind.mock.calls.length).toBe(1)
 
     // Generation 2 finishes normally once its own read resolves.
     resolveNewRead("new body")

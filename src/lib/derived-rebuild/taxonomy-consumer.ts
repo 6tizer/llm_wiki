@@ -72,6 +72,7 @@ import { applyTagTaxonomyGrowth, type TagTaxonomyOperationReport } from "@/lib/a
 import { getQueueSummary as getIngestQueueSummary } from "@/lib/ingest-queue"
 import { getQueueSummary as getDedupQueueSummary } from "@/lib/dedup-queue"
 import { normalizePath } from "@/lib/path-utils"
+import { withProjectLock } from "@/lib/project-mutex"
 import type { WikiProject } from "@/types/wiki"
 
 const TICK_INTERVAL_MS = 3_000
@@ -304,6 +305,20 @@ async function runAggregatedGrowth(
 ): Promise<void> {
   const stopHeartbeats = claimed.map(({ claim }) => startHeartbeat(claim))
   try {
+    return await withProjectLock(projectPath, () => runAggregatedGrowthUnlocked(projectPath, claimed, generation))
+  } finally {
+    stopHeartbeats.forEach((stop) => stop())
+  }
+}
+
+// Split so withProjectLock covers the claimed growth/finalize window;
+// heartbeat stays outside the lock to avoid lease expiry. Do not make this reentrant.
+async function runAggregatedGrowthUnlocked(
+  projectPath: string,
+  claimed: readonly ClaimedTaxonomyJob[],
+  generation: number,
+): Promise<void> {
+  try {
     let report: TagTaxonomyOperationReport | null = null
     let growthError: string | null = null
     try {
@@ -342,8 +357,6 @@ async function runAggregatedGrowth(
     for (const { claim, payload } of claimed) {
       await safeFailClaim(claim, payload.markerIds, errorMessage(err))
     }
-  } finally {
-    stopHeartbeats.forEach((stop) => stop())
   }
 }
 
