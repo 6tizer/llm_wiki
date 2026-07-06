@@ -562,6 +562,8 @@ export function ChatPanel() {
 	const [agentRunProfileCandidates, setAgentRunProfileCandidates] = useState<
 		RuntimeProfileRecord[]
 	>([]);
+	const [agentRunProfileCandidatesLoaded, setAgentRunProfileCandidatesLoaded] =
+		useState(false);
 	const [agentRunCandidateResolved, setAgentRunCandidateResolved] =
 		useState(false);
 	const [agentRouteMenuOpen, setAgentRouteMenuOpen] = useState(false);
@@ -578,12 +580,14 @@ export function ChatPanel() {
 			setAgentRunProfileCandidates(candidates);
 			setHasAgentRunCandidate(candidates.length > 0);
 			setHasModelCallChatCandidate(chatCandidates.length > 0);
+			setAgentRunProfileCandidatesLoaded(true);
 			setAgentRunCandidateResolved(true);
 			return { agentCandidates: candidates, chatCandidates };
 		} catch {
 			setAgentRunProfileCandidates([]);
 			setHasAgentRunCandidate(false);
 			setHasModelCallChatCandidate(false);
+			setAgentRunProfileCandidatesLoaded(false);
 			setAgentRunCandidateResolved(true);
 			return { agentCandidates: [], chatCandidates: [] };
 		}
@@ -598,6 +602,7 @@ export function ChatPanel() {
 				setAgentRunProfileCandidates(candidates);
 				setHasAgentRunCandidate(candidates.length > 0);
 				setHasModelCallChatCandidate(chatCandidates.length > 0);
+				setAgentRunProfileCandidatesLoaded(true);
 				setAgentRunCandidateResolved(true);
 			})
 			.catch(() => {
@@ -605,6 +610,7 @@ export function ChatPanel() {
 					setAgentRunProfileCandidates([]);
 					setHasAgentRunCandidate(false);
 					setHasModelCallChatCandidate(false);
+					setAgentRunProfileCandidatesLoaded(false);
 					setAgentRunCandidateResolved(true);
 				}
 			});
@@ -1334,6 +1340,27 @@ export function ChatPanel() {
 				(profile) => profile.profileId === selectedProfileId,
 			)
 		: undefined;
+	useEffect(() => {
+		if (
+			!activeConversationId ||
+			!agentRunProfileCandidatesLoaded ||
+			!selectedProfileId ||
+			selectedProfileRecord
+		) {
+			return;
+		}
+		console.warn(
+			`[chat] clearing missing agent profile override: ${selectedProfileId}`,
+		);
+		setConversationAgentProfileOverride(activeConversationId, undefined);
+	}, [
+		activeConversationId,
+		agentRunProfileCandidates,
+		agentRunProfileCandidatesLoaded,
+		selectedProfileId,
+		selectedProfileRecord,
+		setConversationAgentProfileOverride,
+	]);
 	const resolvedProfileRecord = activeRunProfile
 		? agentRunProfileCandidates.find(
 				(profile) => profile.profileId === activeRunProfile.profileId,

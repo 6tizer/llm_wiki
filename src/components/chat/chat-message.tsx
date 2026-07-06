@@ -364,9 +364,12 @@ function AgentSessionCompactNotice() {
 function AgentWikiChangeList({ changes }: { changes: AgentWikiChangeRecord[] }) {
   const { t } = useTranslation()
   const setActiveView = useWikiStore((s) => s.setActiveView)
+  const setPendingWikiHealthTab = useWikiStore((s) => s.setPendingWikiHealthTab)
   const handleReview = useCallback((change: AgentWikiChangeRecord) => {
+    setPendingWikiHealthTab("review")
     setActiveView("wiki-health")
-    window.setTimeout(() => {
+    const scheduleFrame = window.requestAnimationFrame ?? ((cb: FrameRequestCallback) => window.setTimeout(cb, 0))
+    scheduleFrame(() => scheduleFrame(() => {
       const candidates = Array.from(
         document.querySelectorAll<HTMLElement>("[data-agent-write-path]")
       )
@@ -384,8 +387,8 @@ function AgentWikiChangeList({ changes }: { changes: AgentWikiChangeRecord[] }) 
             Number(a.dataset.agentWriteTimestamp ?? 0)
           )[0]
       target?.scrollIntoView({ block: "center" })
-    }, 0)
-  }, [setActiveView])
+    }))
+  }, [setActiveView, setPendingWikiHealthTab])
 
   return (
     <div className="rounded-md border border-border/60 bg-background/80 px-2 py-1.5 text-xs">

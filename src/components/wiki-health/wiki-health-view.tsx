@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Gauge, RefreshCw, Wrench, Zap } from "lucide-react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { LintView } from "@/components/lint/lint-view"
@@ -19,10 +19,9 @@ import { useDerivedLayerStore } from "@/stores/derived-layer-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
+import type { WikiHealthTab } from "@/stores/wiki-store"
 import type { DerivedStaleMarkerLayer } from "@/core-runtime/contract"
 import type { FileNode } from "@/types/wiki"
-
-type WikiHealthTab = "dashboard" | "lint" | "review" | "derived" | "governance"
 
 const WIKI_HEALTH_TABS: Array<{ id: WikiHealthTab; labelKey: string }> = [
   { id: "dashboard", labelKey: "wikiHealth.tabs.dashboard" },
@@ -70,15 +69,33 @@ export function WikiHealthView() {
 
   const project = useWikiStore((state) => state.project)
   const fileTree = useWikiStore((state) => state.fileTree)
+  const pendingWikiHealthTab = useWikiStore((state) => state.pendingWikiHealthTab)
+  const setPendingWikiHealthTab = useWikiStore((state) => state.setPendingWikiHealthTab)
   const lintItems = useLintStore((state) => state.items)
   const reviewItems = useReviewStore((state) => state.items)
   const derivedBuckets = useDerivedLayerStore((state) => state.buckets)
+  const loadDerivedSnapshot = useDerivedLayerStore((state) => state.loadSnapshot)
   const {
     fixingId: fixingLintId,
     fixingAll: fixingAllLint,
     fixLintItem,
     fixAllLintItems,
   } = useLintFixActions()
+  const projectId = project?.id ?? null
+
+  useEffect(() => {
+    if (!projectId) {
+      useDerivedLayerStore.setState({ buckets: null, capturedAtMs: null, error: null, runtimeDisabled: false })
+      return
+    }
+    void loadDerivedSnapshot()
+  }, [projectId, loadDerivedSnapshot])
+
+  useEffect(() => {
+    if (!pendingWikiHealthTab) return
+    setActiveTab(pendingWikiHealthTab)
+    setPendingWikiHealthTab(null)
+  }, [pendingWikiHealthTab, setPendingWikiHealthTab])
 
   const totalPages = useMemo(() => countWikiPages(fileTree), [fileTree])
   const pendingReviewItems = useMemo(
@@ -181,6 +198,7 @@ export function WikiHealthView() {
 
   const lintBadge = lintItems.length
   const reviewBadge = pendingReviewCount
+  const derivedSnapshotKnown = derivedBuckets !== null
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" data-testid="wiki-health-view">
@@ -219,6 +237,7 @@ export function WikiHealthView() {
               lintScore={healthScore.lintScore}
               derivedPenalty={healthScore.derivedPenalty}
               reviewPenalty={healthScore.reviewPenalty}
+              derivedSnapshotKnown={derivedSnapshotKnown}
               totalIssues={issues.length}
               warningIssues={groupedIssues.warning}
               infoIssues={groupedIssues.info}
@@ -265,6 +284,7 @@ function DashboardPanel({
   lintScore,
   derivedPenalty,
   reviewPenalty,
+  derivedSnapshotKnown,
   totalIssues,
   warningIssues,
   infoIssues,
@@ -278,6 +298,7 @@ function DashboardPanel({
   lintScore: number
   derivedPenalty: number
   reviewPenalty: number
+  derivedSnapshotKnown: boolean
   totalIssues: number
   warningIssues: DashboardIssue[]
   infoIssues: DashboardIssue[]
@@ -295,15 +316,21 @@ function DashboardPanel({
             <Gauge className="h-4 w-4" />
             {t("wikiHealth.dashboard.healthScore")}
           </div>
-          <div className={`mt-4 text-5xl font-semibold ${scoreTone(score)}`} data-testid="wiki-health-score">
-            {score}
+          <div
+            className={`mt-4 text-5xl font-semibold ${derivedSnapshotKnown ? scoreTone(score) : "text-muted-foreground"}`}
+            data-testid="wiki-health-score"
+          >
+            {derivedSnapshotKnown ? score : t("wikiHealth.dashboard.unknownScore")}
           </div>
           <div className="mt-2 text-sm text-muted-foreground">/100</div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
           <MetricCard label={t("wikiHealth.dashboard.lintScore")} value={lintScore} />
-          <MetricCard label={t("wikiHealth.dashboard.derivedPenalty")} value={derivedPenalty} />
+          <MetricCard
+            label={t("wikiHealth.dashboard.derivedPenalty")}
+            value={derivedSnapshotKnown ? derivedPenalty : t("wikiHealth.dashboard.unknownMetric")}
+          />
           <MetricCard label={t("wikiHealth.dashboard.reviewPenalty")} value={reviewPenalty} />
         </div>
       </section>
@@ -336,10 +363,15 @@ function DashboardPanel({
           </div>
         </div>
 
-        {totalIssues === 0 ? (
+        {totalIssues === 0 && derivedSnapshotKnown ? (
           <div className="flex flex-col items-center justify-center gap-2 px-4 py-10 text-center text-sm text-muted-foreground">
             <CheckCircle2 className="h-8 w-8 text-emerald-500/60" />
             <p className="font-medium text-emerald-600 dark:text-emerald-400">{t("wikiHealth.dashboard.noIssues")}</p>
+          </div>
+        ) : totalIssues === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 px-4 py-10 text-center text-sm text-muted-foreground">
+            <RefreshCw className="h-8 w-8 text-muted-foreground/60" />
+            <p className="font-medium">{t("wikiHealth.dashboard.derivedUnknown")}</p>
           </div>
         ) : (
           <div className="divide-y">
@@ -352,7 +384,7 @@ function DashboardPanel({
   )
 }
 
-function MetricCard({ label, value }: { label: string; value: number }) {
+function MetricCard({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-md border border-border/70 p-4">
       <div className="text-xs font-medium text-muted-foreground">{label}</div>

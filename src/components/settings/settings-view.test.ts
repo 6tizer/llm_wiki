@@ -347,7 +347,7 @@ describe("SettingsView category rendering", () => {
   })
 
   it("routes Derived Status manage links to the Wiki Health center", async () => {
-    useWikiStore.setState({ activeView: "settings" })
+    useWikiStore.setState({ activeView: "settings", pendingWikiHealthTab: null })
     const { container, root } = renderSettingsView()
     await flush()
 
@@ -361,6 +361,7 @@ describe("SettingsView category rendering", () => {
     await click(manage)
 
     expect(useWikiStore.getState().activeView).toBe("wiki-health")
+    expect(useWikiStore.getState().pendingWikiHealthTab).toBe("governance")
 
     unmount(root)
   })

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest"
 import "@/i18n"
 import { ChatMessage } from "./chat-message"
 import type { DisplayMessage } from "@/stores/chat-store"
+import { useWikiStore } from "@/stores/wiki-store"
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
@@ -63,6 +64,10 @@ describe("ChatMessage hover actions", () => {
   })
 
   it("jumps to the newest matching agent-write review when a wiki change has no toolUseId", async () => {
+    useWikiStore.setState({ activeView: "wiki", pendingWikiHealthTab: null })
+    const originalRequestAnimationFrame = window.requestAnimationFrame
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      window.setTimeout(() => callback(Date.now()), 0)) as typeof window.requestAnimationFrame
     const older = document.createElement("div")
     older.dataset.agentWritePath = "wiki/page.md"
     older.dataset.agentWriteTimestamp = "1"
@@ -90,8 +95,11 @@ describe("ChatMessage hover actions", () => {
     await act(async () => {
       reviewButton.dispatchEvent(new MouseEvent("click", { bubbles: true }))
       await new Promise((resolve) => window.setTimeout(resolve, 0))
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
     })
 
+    expect(useWikiStore.getState().activeView).toBe("wiki-health")
+    expect(useWikiStore.getState().pendingWikiHealthTab).toBe("review")
     expect(newer.scrollIntoView).toHaveBeenCalledWith({ block: "center" })
     expect(older.scrollIntoView).not.toHaveBeenCalled()
 
@@ -99,5 +107,6 @@ describe("ChatMessage hover actions", () => {
     container.remove()
     older.remove()
     newer.remove()
+    window.requestAnimationFrame = originalRequestAnimationFrame
   })
 })

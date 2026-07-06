@@ -13,6 +13,7 @@ import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useResearchStore } from "@/stores/research-store"
 import { useLintStore } from "@/stores/lint-store"
+import { useDerivedLayerStore } from "@/stores/derived-layer-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { flushAutoSave, cancelAutoSaveTimers } from "@/lib/auto-save"
 
@@ -73,6 +74,12 @@ export async function resetProjectState(): Promise<void> {
   })
 
   useLintStore.getState().clearItems()
+  useDerivedLayerStore.setState({
+    buckets: null,
+    capturedAtMs: null,
+    error: null,
+    runtimeDisabled: false,
+  })
 
   // The clears above look like real edits to auto-save's subscribers,
   // which would otherwise re-queue an empty-array write for the outgoing
