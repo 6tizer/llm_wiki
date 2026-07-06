@@ -54,13 +54,14 @@ export async function importOkfBundle(
   targetProjectPath: string,
   options: OkfImportOptions = {},
 ): Promise<OkfImportPlan> {
-  return buildOkfImportPlan(sourceDir, targetProjectPath, options.apply === true)
+  return buildOkfImportPlan(sourceDir, targetProjectPath, options.apply === true, options.onWikiChanged)
 }
 
 async function buildOkfImportPlan(
   sourceDir: string,
   targetProjectPath: string,
   apply: boolean,
+  onWikiChanged?: OkfImportOptions["onWikiChanged"],
 ): Promise<OkfImportPlan> {
   const normalizedSourceDir = normalizeRootPath(sourceDir)
   const normalizedTargetProjectPath = normalizeRootPath(targetProjectPath)
@@ -130,7 +131,22 @@ async function buildOkfImportPlan(
     }
     for (const page of planPages) {
       if (page.action !== "write") continue
-      await writeFileAtomic(joinPath(normalizedTargetProjectPath, page.targetRelativePath), page.content)
+      const targetPath = joinPath(normalizedTargetProjectPath, page.targetRelativePath)
+      let beforeText = ""
+      let existedBefore = false
+      try {
+        beforeText = await readFile(targetPath)
+        existedBefore = true
+      } catch {
+        beforeText = ""
+      }
+      await writeFileAtomic(targetPath, page.content)
+      onWikiChanged?.({
+        path: page.targetRelativePath,
+        operation: existedBefore ? "update" : "create",
+        existedBefore,
+        beforeText,
+      })
     }
   }
 

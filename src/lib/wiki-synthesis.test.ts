@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest"
+import type { WikiWriteChange } from "@/lib/wiki-write-events"
 import { buildSynthesisPrompt, discoverSynthesisCandidates, runWikiSynthesis } from "./wiki-synthesis"
 
 const fsMock = vi.hoisted(() => ({
@@ -254,12 +255,26 @@ describe("runWikiSynthesis", () => {
     const children: Array<{ name: string; path: string; is_dir: boolean }> = []
     makeCluster(children, "ai", 4)
     fsMock.tree = [{ name: "wiki", path: "/project/wiki", is_dir: true, children }]
+    const changes: WikiWriteChange[] = []
 
-    const result = await runWikiSynthesis("/project", { model: "test" } as never, { provider: "none" } as never, undefined, 3)
+    const result = await runWikiSynthesis(
+      "/project",
+      { model: "test" } as never,
+      { provider: "none" } as never,
+      { minClusterSize: 3, onWikiChanged: (change) => changes.push(change) },
+    )
     expect(result.ok).toBe(true)
     expect(result.topic).toBeTruthy()
     expect(result.clusterSize).toBeGreaterThanOrEqual(3)
     expect(result.synthesisPath).toContain("synthesis")
+    expect(changes).toEqual([
+      {
+        path: "wiki/synthesis/ai-synthesis.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      },
+    ])
   })
 
   it("uses the largest candidate when an options object has no explicit target", async () => {

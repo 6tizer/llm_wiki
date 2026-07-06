@@ -52,6 +52,12 @@ const CONDITIONAL_WRITE_WIKI_TOOLS = new Set<string>([
 	"mcp__llm_wiki__merge_duplicate_group",
 ]);
 
+const NON_WIKI_FILE_WRITE_TOOLS = new Set<string>([
+	// Permission policy treats this as a write because it resolves review
+	// state, but the current implementation does not mutate wiki files.
+	"mcp__llm_wiki__sweep_reviews",
+]);
+
 const VERIFIED_READ_ONLY_WIKI_TOOLS = new Set<string>([
 	"mcp__llm_wiki__list_projects",
 	"mcp__llm_wiki__list_pages",
@@ -81,6 +87,7 @@ const VERIFIED_READ_ONLY_WIKI_TOOLS = new Set<string>([
  */
 export function isWikiWriteToolCall(toolName: string): boolean {
 	if (!toolName.startsWith(WIKI_TOOL_PREFIX)) return false;
+	if (NON_WIKI_FILE_WRITE_TOOLS.has(toolName)) return false;
 	if (CONDITIONAL_WRITE_WIKI_TOOLS.has(toolName)) return true;
 	if (WRITE_WIKI_TOOLS.has(toolName)) return true;
 	if (VERIFIED_READ_ONLY_WIKI_TOOLS.has(toolName)) return false;

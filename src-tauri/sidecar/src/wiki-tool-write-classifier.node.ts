@@ -13,6 +13,7 @@ test("verified read-only wiki tools are classified as reads (A17 verification se
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__optimize_research_topic"), false);
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__taxonomy_preview"), false);
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__synthesis_preview"), false);
+	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__sweep_reviews"), false);
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__list_pages"), false);
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__read_page"), false);
 });

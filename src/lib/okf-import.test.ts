@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { importOkfBundle, previewOkfImport } from "./okf-import"
+import type { WikiWriteChange } from "@/lib/wiki-write-events"
 import type { FileNode } from "@/types/wiki"
 
 const fsMock = vi.hoisted(() => ({
@@ -146,6 +147,29 @@ describe("OKF import", () => {
       routingStrategy: "root",
     })
     expect(plan.pages[0]?.content).toContain("type: method")
+  })
+
+  it("emits onWikiChanged after each applied write with captured beforeText", async () => {
+    setSourceFiles({
+      "wiki/custom/topic.md": "---\ntype: entity\ntitle: Topic\n---\n\n# Topic",
+    })
+    const changes: WikiWriteChange[] = []
+
+    const plan = await importOkfBundle("/source", "/project", {
+      apply: true,
+      onWikiChanged: (change) => changes.push(change),
+    })
+
+    expect(plan.applied).toBe(true)
+    expect(fsMock.writes.has("/project/wiki/entities/topic.md")).toBe(true)
+    expect(changes).toEqual([
+      {
+        path: "wiki/entities/topic.md",
+        operation: "create",
+        existedBefore: false,
+        beforeText: "",
+      },
+    ])
   })
 
   it("does not create directories or write files during preview", async () => {

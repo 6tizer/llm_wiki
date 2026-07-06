@@ -1,4 +1,5 @@
 import type { FrontmatterValue } from "@/lib/frontmatter"
+import type { WikiWriteChangeCallback } from "@/lib/wiki-write-events"
 
 export type OkfValidationSeverity = "error" | "warn"
 
@@ -114,4 +115,5 @@ export interface OkfImportPlan {
 
 export interface OkfImportOptions {
   apply?: boolean
+  onWikiChanged?: WikiWriteChangeCallback
 }

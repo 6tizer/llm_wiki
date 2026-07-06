@@ -40,6 +40,7 @@ import {
 } from "@/lib/sources-merge"
 import { withProjectLock } from "@/lib/project-mutex"
 import { flattenMdFiles } from "@/lib/wiki-utils"
+import type { WikiWriteChangeCallback } from "@/lib/wiki-write-events"
 
 /**
  * Detect whether a wiki page lives under `wiki/sources/`. We treat
@@ -165,9 +166,10 @@ export interface CascadeDeleteResult {
 export async function cascadeDeleteWikiPagesWithRefs(
   projectPath: string,
   pagePaths: readonly string[],
+  onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<CascadeDeleteResult> {
   return withProjectLock(normalizePath(projectPath), () =>
-    cascadeDeleteWikiPagesWithRefsUnlocked(projectPath, pagePaths),
+    cascadeDeleteWikiPagesWithRefsUnlocked(projectPath, pagePaths, onWikiChanged),
   )
 }
 
@@ -177,6 +179,7 @@ export async function cascadeDeleteWikiPagesWithRefs(
 export async function cascadeDeleteWikiPagesWithRefsUnlocked(
   projectPath: string,
   pagePaths: readonly string[],
+  onWikiChanged?: WikiWriteChangeCallback,
 ): Promise<CascadeDeleteResult> {
   const pp = normalizePath(projectPath)
   const result: CascadeDeleteResult = {
@@ -187,15 +190,20 @@ export async function cascadeDeleteWikiPagesWithRefsUnlocked(
   // 1. Read each target's title so the cleanup keyset includes both
   //    slug-form and title-form. Capture before delete.
   const infosByPath = new Map<string, DeletedPageInfo>()
+  const beforeByPath = new Map<string, { existedBefore: boolean; beforeText: string }>()
   for (const pagePath of pagePaths) {
     let title = ""
+    let content = ""
+    let existedBefore = false
     try {
-      const content = await readFile(pagePath)
+      content = await readFile(pagePath)
+      existedBefore = true
       title = extractFrontmatterTitle(content)
     } catch {
       // file may have been deleted between selection + action; the
       // slug-form key alone will still work.
     }
+    beforeByPath.set(pagePath, { existedBefore, beforeText: content })
     const slug = getFileStem(pagePath)
     if (slug.length > 0) infosByPath.set(pagePath, { slug, title })
   }
@@ -205,6 +213,13 @@ export async function cascadeDeleteWikiPagesWithRefsUnlocked(
     try {
       await cascadeDeleteWikiPage(pp, pagePath)
       result.deletedPaths.push(pagePath)
+      const before = beforeByPath.get(pagePath) ?? { existedBefore: false, beforeText: "" }
+      onWikiChanged?.({
+        path: getRelativePath(pagePath, pp),
+        operation: "delete",
+        existedBefore: before.existedBefore,
+        beforeText: before.beforeText,
+      })
     } catch (err) {
       console.warn(`[wiki-delete] failed to delete ${pagePath}:`, err)
     }
@@ -254,6 +269,12 @@ export async function cascadeDeleteWikiPagesWithRefsUnlocked(
       try {
         await writeFile(file.path, updated)
         result.rewrittenFiles++
+        onWikiChanged?.({
+          path: getRelativePath(file.path, pp),
+          operation: "update",
+          existedBefore: true,
+          beforeText: content,
+        })
       } catch (err) {
         console.warn(`[wiki-delete] failed to rewrite ${file.path}:`, err)
       }

@@ -24,11 +24,13 @@ vi.mock("@/lib/wiki-page-delete", () => ({
   cascadeDeleteWikiPagesWithRefs: vi.fn(),
 }))
 
-import { isFixable } from "@/lib/lint-fixer"
+import { fixLintResult, isFixable } from "@/lib/lint-fixer"
 import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { cascadeDeleteWikiPagesWithRefs } from "@/lib/wiki-page-delete"
 
 const mockCascadeDelete = vi.mocked(cascadeDeleteWikiPagesWithRefs)
+const ORPHAN_BEFORE = "---\ntitle: Orphan\n---\n# Orphan"
+const INDEX_BEFORE = "- [[orphan]]"
 
 function orphanResult(): LintResult {
   return {
@@ -115,6 +117,37 @@ describe("lint-view.tsx onAutoFix gate for orphan (correctness BLOCK regression)
 
     expect(hasUsableLlm(llmConfig)).toBe(true)
     expect(autoFixButtonWired).toBe(false)
+  })
+
+  it("passes orphan cascade wiki changes through the optional snapshot callback", async () => {
+    mockCascadeDelete.mockImplementationOnce(async (
+      _projectPath: string,
+      _pagePaths: readonly string[],
+      onWikiChanged?: (change: { path: string; operation: "update" | "create" | "delete"; existedBefore: boolean; beforeText: string }) => void,
+    ) => {
+      onWikiChanged?.({
+        path: "wiki/orphan.md",
+        operation: "delete",
+        existedBefore: true,
+        beforeText: ORPHAN_BEFORE,
+      })
+      onWikiChanged?.({
+        path: "wiki/index.md",
+        operation: "update",
+        existedBefore: true,
+        beforeText: INDEX_BEFORE,
+      })
+      return { deletedPaths: ["/project/wiki/orphan.md"], rewrittenFiles: 1 }
+    })
+    const changes: Array<{ path: string; operation: "update" | "create" | "delete"; existedBefore: boolean; beforeText: string }> = []
+
+    const ok = await fixLintResult("/project", orphanResult(), usableLlmConfig(), (change) => changes.push(change))
+
+    expect(ok).toBe(true)
+    expect(changes).toEqual([
+      { path: "wiki/orphan.md", operation: "delete", existedBefore: true, beforeText: ORPHAN_BEFORE },
+      { path: "wiki/index.md", operation: "update", existedBefore: true, beforeText: INDEX_BEFORE },
+    ])
   })
 
   it("never reaches cascadeDeleteWikiPagesWithRefs for an orphan when only items passing isFixable are auto-fixed", async () => {

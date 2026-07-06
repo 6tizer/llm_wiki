@@ -97,20 +97,17 @@ export function computeAgentRewindGateDecision(args: {
       const matchingChanges = (message.wikiChanges ?? []).filter((change) =>
         change.toolUseId === call.toolUseId
       )
-      if (
-        Boolean(call.toolUseId) &&
-        matchingChanges.length > 0 &&
-        matchingChanges.every((change) => change.reverted)
-      ) {
+      const activeChanges = matchingChanges.filter((change) => !change.reverted)
+      if (Boolean(call.toolUseId) && matchingChanges.length > 0 && activeChanges.length === 0) {
         continue
       }
-      const covered = Boolean(call.toolUseId) && matchingChanges.some((change) =>
-        change.snapshotted === true && !change.reverted
-      )
+      const covered = Boolean(call.toolUseId) &&
+        activeChanges.length > 0 &&
+        activeChanges.every((change) => change.snapshotted === true)
       if (covered) {
         hasSnapshottedWikiWriteAfterTarget = true
       } else {
-        if (matchingChanges.length > 0) {
+        if (activeChanges.length > 0) {
           hasAmbiguousWikiWriteAfterTarget = true
         } else {
           hasUncoveredWikiWriteAfterTarget = true
@@ -120,8 +117,10 @@ export function computeAgentRewindGateDecision(args: {
   }
   // Native SDK checkpoints and sidecar wiki snapshots each work alone. Their
   // cross-channel composition for the same file is undefined, and this gate
-  // has no reliable path-level ordering knowledge, so mixed post-target writes
-  // stay fail-closed until a later phase defines composite restore semantics.
+  // has no reliable path-level ordering knowledge. Commander explicitly
+  // deferred the "allow path-disjoint mixed writes" relaxation: its value is
+  // low until we have cross-channel ordering semantics, so mixed post-target
+  // writes stay fail-closed.
   if (hasNativeWriteAfterTarget && hasSnapshottedWikiWriteAfterTarget) {
     return { allowed: false, reason: "wiki_write_after_target", detail: "mixed" }
   }

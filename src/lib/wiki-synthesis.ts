@@ -16,6 +16,7 @@ import { buildLanguageDirective } from "@/lib/output-language"
 import { composeAgentPrompt } from "@/lib/agent/prompt-registry"
 import type { FileNode } from "@/types/wiki"
 import type { LlmConfig, SearchApiConfig } from "@/stores/wiki-store"
+import type { WikiWriteChangeCallback } from "@/lib/wiki-write-events"
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +94,7 @@ export interface RunWikiSynthesisOptions extends SynthesisDiscoveryOptions {
   targetTag?: string
   targetTags?: string[]
   guidance?: string
+  onWikiChanged?: WikiWriteChangeCallback
 }
 
 /** Default and hard upper bounds for synthesis discovery controls. */
@@ -543,7 +545,21 @@ export async function runWikiSynthesis(
   // Ensure synthesis directory exists (PR#35 finding #1)
   const synthesisDir = `${pp}/wiki/synthesis`
   await createDirectory(synthesisDir)
+  let beforeText = ""
+  let existedBefore = false
+  try {
+    beforeText = await readFile(fullPath)
+    existedBefore = true
+  } catch {
+    beforeText = ""
+  }
   await writeFile(fullPath, accumulated.trim())
+  runOptions.onWikiChanged?.({
+    path: synthesisPath,
+    operation: existedBefore ? "update" : "create",
+    existedBefore,
+    beforeText,
+  })
 
   return {
     ok: true,
