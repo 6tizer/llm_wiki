@@ -50,6 +50,41 @@ const migratedCandidateSourceByCallSite = new Map<string, string>([
   ["getLastProject", "src/lib/bootstrap/init-config-hydration.ts"],
   ["openProject", "src/lib/bootstrap/init-config-hydration.ts"],
   ["handleProjectOpened", "src/lib/bootstrap/init-config-hydration.ts"],
+  ["resetProjectState", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setProject", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadOutputLanguage", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setSelectedFile", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setActiveView", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["bumpDataVersion", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["saveLastProject", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["restoreQueue", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["ingest-queue", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["dedup-queue", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadScheduledImportConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setScheduledImportConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["startScheduledImport", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadSourceWatchConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setSourceWatchConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["startProjectFileSync", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["stopProjectFileSync", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["CLIP_SERVER_BASE_URL}/project", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["CLIP_SERVER_BASE_URL}/projects", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["getRecentProjects", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["listDirectory", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setFileTree", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadReviewItems", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadLintItems", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadChatHistory", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setItems", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setConversations", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["loadAgentResourceConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setResourceConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["cleanExpiredAgentSessions", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["stopScheduledImport", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["saveScheduledImportConfig", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setProject(null)", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setFileTree([])", "src/lib/hooks/use-project-lifecycle.ts"],
+  ["setSelectedFile(null)", "src/lib/hooks/use-project-lifecycle.ts"],
   ["setupAutoSave", "src/lib/hooks/use-app-mount-services.ts"],
   ["startClipWatcher", "src/lib/hooks/use-app-mount-services.ts"],
   ["setTimeout", "src/lib/hooks/use-update-check-bootstrap.ts"],
@@ -141,16 +176,16 @@ describe("SPEC-1 bootstrap boundary inventory", () => {
   })
 
   it("protects the current App bootstrap ordering invariants", () => {
-    const appSource = repoFile("src/App.tsx")
+    const projectLifecycleSource = repoFile("src/lib/hooks/use-project-lifecycle.ts")
     const projectOpenSource = sourceBetween(
-      appSource,
+      projectLifecycleSource,
       "async function handleProjectOpened",
-      "async function handleSelectRecent",
+      "function beginAcceptedOpen",
     )
     const projectSwitchSource = sourceBetween(
-      appSource,
+      projectLifecycleSource,
       "async function handleSwitchProject",
-      "if (loading)",
+      "return {",
     )
     const updateCheckSource = repoFile("src/lib/hooks/use-update-check-bootstrap.ts")
 

@@ -144,7 +144,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
       "bumpDataVersion",
       "saveLastProject",
     ],
-    migrationNote: "resetProjectState must complete before any new project data populates stores.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; resetProjectState must complete before any new project data populates stores.",
   },
   {
     id: "project-queue-restore",
@@ -153,7 +154,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     targetBoundary: "job-runtime-family",
     currentResponsibilities: ["Restore ingest queue", "Restore dedup queue"],
     currentCallSites: ["restoreQueue", "ingest-queue", "dedup-queue"],
-    migrationNote: "Ingest queue restore must complete before project file sync can enqueue watcher tasks.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; ingest queue restore must complete before project file sync can enqueue watcher tasks.",
   },
   {
     id: "project-periodic-work",
@@ -170,7 +172,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
       "startProjectFileSync",
       "stopProjectFileSync",
     ],
-    migrationNote: "Watcher startup must stay after queue restore to avoid project queue races.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; watcher startup must stay after queue restore to avoid project queue races.",
   },
   {
     id: "project-shell-notify",
@@ -183,7 +186,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
       "CLIP_SERVER_BASE_URL}/projects",
       "getRecentProjects",
     ],
-    migrationNote: "Clip server notification is shell/platform integration, not core project truth.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; clip server notification is shell/platform integration, not core project truth.",
   },
   {
     id: "project-file-tree-load",
@@ -192,7 +196,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     targetBoundary: "file-platform-family",
     currentResponsibilities: ["Read project file tree", "Populate UI file tree"],
     currentCallSites: ["listDirectory", "setFileTree"],
-    migrationNote: "listDirectory is a live platform file read and must not be categorized as persisted UI state.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; listDirectory is a live platform file read and must not be categorized as persisted UI state.",
   },
   {
     id: "project-persisted-ui-state",
@@ -201,7 +206,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     targetBoundary: "ui-shell",
     currentResponsibilities: ["Load persisted review items", "Load persisted lint items", "Load persisted chat history"],
     currentCallSites: ["loadReviewItems", "loadLintItems", "loadChatHistory", "setItems", "setConversations"],
-    migrationNote: "These are current shell view-state restores until runtime ownership is split.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; these are current shell view-state restores until runtime ownership is split.",
   },
   {
     id: "project-agent-state",
@@ -211,7 +217,7 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
     currentResponsibilities: ["Hydrate agent resource config", "Clean expired agent sessions"],
     currentCallSites: ["loadAgentResourceConfig", "setResourceConfig", "cleanExpiredAgentSessions"],
     migrationNote:
-      "Keep agent adapter state separate from generic project UI persisted state; resource config hydrate is near the project-open head, while expired session cleanup runs near the tail.",
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; keep agent adapter state separate from generic project UI persisted state; resource config hydrate is near the project-open head, while expired session cleanup runs near the tail.",
   },
   {
     id: "project-switch-cleanup",
@@ -232,7 +238,8 @@ export const APP_BOOTSTRAP_BOUNDARY_CANDIDATES: readonly BootstrapBoundaryCandid
       "setFileTree([])",
       "setSelectedFile(null)",
     ],
-    migrationNote: "Reset must happen before returning the shell to no-project UI.",
+    migrationNote:
+      "Migrated to src/lib/hooks/use-project-lifecycle.ts; reset must happen before returning the shell to no-project UI.",
   },
   {
     id: "ui-shell-excluded-effects",
