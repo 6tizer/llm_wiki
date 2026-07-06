@@ -5,23 +5,16 @@ import { Button } from "@/components/ui/button"
 import { usePolling } from "@/lib/hooks/use-polling"
 import { persistSetting } from "@/lib/store-helpers"
 import { useDerivedLayerStore } from "@/stores/derived-layer-store"
-import { mintManualRebuildForLayer } from "@/lib/derived-rebuild/manual-rebuild-marker"
+import { isRebuildableLayer, mintManualRebuildForLayer } from "@/lib/derived-rebuild/manual-rebuild-marker"
 import { VISIBLE_DERIVED_LAYERS, type DerivedLayerBucket, type DerivedLayerBucketStatus } from "@/lib/derived-rebuild/status"
 import type { DerivedStaleMarkerLayer } from "@/core-runtime/contract"
 import type { WikiProject } from "@/types/wiki"
 
 const POLL_INTERVAL_MS = 5_000
-const REBUILDABLE_LAYERS = new Set<DerivedStaleMarkerLayer>(["embedding", "taxonomy"])
-type DerivedNavigateTarget = "synthesis" | "index-overview"
-const NAVIGATE_TARGET: Partial<Record<DerivedStaleMarkerLayer, DerivedNavigateTarget>> = {
-  synthesis: "synthesis",
-  index_export: "index-overview",
-  overview: "index-overview",
-}
 
 interface Props {
   project?: Pick<WikiProject, "id" | "path"> | null
-  onNavigate?: (target: DerivedNavigateTarget) => void
+  onNavigate?: () => void
 }
 
 function readyBucket(layer: DerivedStaleMarkerLayer): DerivedLayerBucket {
@@ -32,9 +25,8 @@ function readyBucket(layer: DerivedStaleMarkerLayer): DerivedLayerBucket {
  * SPEC-6 PR6 decision 6: one status card per visible derived layer, sourced
  * from `useDerivedLayerStore` (single full-snapshot fetch, decision 3).
  * `embedding`/`taxonomy` get a Rebuild button (decision 5's mint-only manual
- * rebuild); `synthesis`/`index_export`/`overview` point at their own
- * existing section instead of duplicating a button (they already have one
- * there).
+ * rebuild); `synthesis`/`index_export`/`overview` point at the governance
+ * workbench instead of duplicating rebuild controls.
  */
 export function DerivedStatusSection({ project, onNavigate }: Props) {
   const { t } = useTranslation()
@@ -116,15 +108,14 @@ function LayerCard({
   layer: DerivedStaleMarkerLayer
   bucket: DerivedLayerBucket
   projectPath: string
-  onNavigate?: (target: DerivedNavigateTarget) => void
+  onNavigate?: () => void
 }) {
   const { t } = useTranslation()
   const [running, setRunning] = useState(false)
   const [resultText, setResultText] = useState("")
   const [errorText, setErrorText] = useState("")
 
-  const canRebuild = REBUILDABLE_LAYERS.has(layer)
-  const navigateTarget = NAVIGATE_TARGET[layer]
+  const canRebuild = isRebuildableLayer(layer)
 
   /**
    * Optimistic "building" badge (internal-review P2, accepted trade-off):
@@ -141,7 +132,7 @@ function LayerCard({
    * seconds of a "too early" badge that then self-corrects twice.
    */
   async function handleRebuild(): Promise<void> {
-    if (running || layer !== "embedding" && layer !== "taxonomy") return
+    if (running || !isRebuildableLayer(layer)) return
     setRunning(true)
     setResultText("")
     setErrorText("")
@@ -193,14 +184,14 @@ function LayerCard({
         </div>
       )}
 
-      {navigateTarget && onNavigate && (
+      {!canRebuild && onNavigate && (
         <button
           type="button"
-          onClick={() => onNavigate(navigateTarget)}
+          onClick={onNavigate}
           className="text-xs text-primary underline-offset-2 hover:underline"
           data-testid={`derived-status-navigate-${layer}`}
         >
-          {t("settings.sections.derivedStatus.manageIn", { section: t(`wikiHealth.actions.${navigateTarget}`) })}
+          {t("settings.sections.derivedStatus.manageIn", { section: t("wikiHealth.tabs.governance") })}
         </button>
       )}
 

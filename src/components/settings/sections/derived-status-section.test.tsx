@@ -16,6 +16,7 @@ vi.mock("@/commands/runtime-db", () => ({
 
 vi.mock("@/lib/derived-rebuild/manual-rebuild-marker", () => ({
   mintManualRebuildForLayer: mocks.mintManualRebuildForLayer,
+  isRebuildableLayer: (layer: string) => layer === "embedding" || layer === "taxonomy",
 }))
 
 import { DerivedStatusSection } from "./derived-status-section"
@@ -135,19 +136,19 @@ describe("DerivedStatusSection", () => {
     unmount(root)
   })
 
-  it("clicking a navigate link calls onNavigate with the right health workbench target", async () => {
+  it("clicking a navigate link calls onNavigate", async () => {
     const onNavigate = vi.fn()
     const { container, root } = renderSection({ project, onNavigate })
     await flush()
 
     await click(container.querySelector("[data-testid='derived-status-navigate-synthesis']")!)
-    expect(onNavigate).toHaveBeenCalledWith("synthesis")
+    expect(onNavigate).toHaveBeenCalledTimes(1)
 
     await click(container.querySelector("[data-testid='derived-status-navigate-index_export']")!)
-    expect(onNavigate).toHaveBeenCalledWith("index-overview")
+    expect(onNavigate).toHaveBeenCalledTimes(2)
 
     await click(container.querySelector("[data-testid='derived-status-navigate-overview']")!)
-    expect(onNavigate).toHaveBeenCalledWith("index-overview")
+    expect(onNavigate).toHaveBeenCalledTimes(3)
 
     unmount(root)
   })

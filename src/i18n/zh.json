@@ -81,14 +81,34 @@
     }
   },
   "wikiHealth": {
-    "sections": {
-      "overview": "总览",
-      "todo": "待办",
-      "actions": "操作"
+    "tabs": {
+      "navLabel": "Wiki 健康工具",
+      "dashboard": "Dashboard",
+      "lint": "Lint",
+      "review": "审阅",
+      "derived": "派生状态",
+      "governance": "治理"
     },
-    "actions": {
-      "synthesis": "综合",
-      "index-overview": "索引 / 总览"
+    "dashboard": {
+      "healthScore": "健康分",
+      "lintScore": "Lint 子分",
+      "derivedPenalty": "派生惩罚",
+      "reviewPenalty": "审阅惩罚",
+      "issuesFound": "发现 {{count}} 个问题",
+      "noIssues": "未发现问题",
+      "fixNow": "修复",
+      "fixAll": "修复 {{count}} 项",
+      "fixing": "修复中...",
+      "goTo": "去处理",
+      "goToLint": "打开 Lint",
+      "rebuild": "重建",
+      "lintIssue": "Lint：{{page}}",
+      "derivedIssue": "{{layer}} 为 {{status}}",
+      "derivedIssueDetail": "该派生层需要处理，Wiki 才能保持最新。",
+      "severity": {
+        "warning": "警告（{{count}}）",
+        "info": "信息（{{count}}）"
+      }
     }
   },
   "research": {

@@ -85,13 +85,13 @@ vi.mock("./sections/model-config-section", () => ({
 vi.mock("./sections/derived-status-section", async () => {
   const React = await vi.importActual<typeof import("react")>("react")
   return {
-    DerivedStatusSection: ({ onNavigate }: { onNavigate?: (target: "synthesis" | "index-overview") => void }) =>
+    DerivedStatusSection: ({ onNavigate }: { onNavigate?: () => void }) =>
       React.createElement(
         "button",
         {
           type: "button",
           "data-testid": "mock-derived-status-manage",
-          onClick: () => onNavigate?.("synthesis"),
+          onClick: () => onNavigate?.(),
         },
         "Manage synthesis",
       ),

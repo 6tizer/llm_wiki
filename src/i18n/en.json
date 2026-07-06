@@ -81,14 +81,34 @@
     }
   },
   "wikiHealth": {
-    "sections": {
-      "overview": "Overview",
-      "todo": "To-do",
-      "actions": "Actions"
+    "tabs": {
+      "navLabel": "Wiki Health tools",
+      "dashboard": "Dashboard",
+      "lint": "Lint",
+      "review": "Review",
+      "derived": "Derived Status",
+      "governance": "Governance"
     },
-    "actions": {
-      "synthesis": "Synthesis",
-      "index-overview": "Index / Overview"
+    "dashboard": {
+      "healthScore": "Health score",
+      "lintScore": "Lint score",
+      "derivedPenalty": "Derived penalty",
+      "reviewPenalty": "Review penalty",
+      "issuesFound": "{{count}} issues found",
+      "noIssues": "No issues found",
+      "fixNow": "Fix",
+      "fixAll": "Fix {{count}}",
+      "fixing": "Fixing...",
+      "goTo": "Go to",
+      "goToLint": "Open lint",
+      "rebuild": "Rebuild",
+      "lintIssue": "Lint: {{page}}",
+      "derivedIssue": "{{layer}} is {{status}}",
+      "derivedIssueDetail": "The derived layer needs attention before the wiki is fully fresh.",
+      "severity": {
+        "warning": "Warnings ({{count}})",
+        "info": "Info ({{count}})"
+      }
     }
   },
   "research": {
