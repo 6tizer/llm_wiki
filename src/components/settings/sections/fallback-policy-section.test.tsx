@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "@/i18n"
 import {
   addProfileToOrder,
+  draftsFromPolicies,
   FallbackPolicySection,
   moveProfileInOrder,
   removeProfileFromOrder,
 } from "./fallback-policy-section"
-import type { RuntimeProfileRecord } from "@/commands/runtime-db"
+import type { RuntimeProfileRecord, RuntimeTaskFamilyPolicyRecord } from "@/commands/runtime-db"
 
 const runtimeDbMocks = vi.hoisted(() => ({
   runtimeProfileBreakerClear: vi.fn(),
@@ -48,6 +49,16 @@ function runtimeProfile(patch: Partial<RuntimeProfileRecord> = {}): RuntimeProfi
     probeBackoffUntilMs: null,
     lastCapabilityError: null,
     createdAtMs: 1,
+    updatedAtMs: 1,
+    ...patch,
+  }
+}
+
+function runtimePolicy(patch: Partial<RuntimeTaskFamilyPolicyRecord> = {}): RuntimeTaskFamilyPolicyRecord {
+  return {
+    taskFamily: "chat",
+    profileOrder: ["profile-1"],
+    autoFailover: true,
     updatedAtMs: 1,
     ...patch,
   }
@@ -114,6 +125,17 @@ describe("FallbackPolicySection helpers", () => {
     expect(removeProfileFromOrder(["profile-1", "profile-2"], "profile-1")).toEqual(["profile-2"])
     expect(moveProfileInOrder(["profile-1", "profile-2"], "profile-1", 1)).toEqual(["profile-2", "profile-1"])
     expect(moveProfileInOrder(["profile-1", "profile-2"], "profile-1", -1)).toEqual(["profile-1", "profile-2"])
+  })
+
+  it("maps absent, empty, and populated policies to distinct config states", () => {
+    const drafts = draftsFromPolicies([
+      runtimePolicy({ taskFamily: "ingest", profileOrder: [] }),
+      runtimePolicy({ taskFamily: "chat", profileOrder: ["profile-1"] }),
+    ])
+
+    expect(drafts.chat).toMatchObject({ configState: "configured", profileOrder: ["profile-1"] })
+    expect(drafts.ingest).toMatchObject({ configState: "empty", profileOrder: [] })
+    expect(drafts.agent).toMatchObject({ configState: "auto", profileOrder: [] })
   })
 })
 
@@ -264,6 +286,83 @@ describe("FallbackPolicySection", () => {
       .toContain("model-call")
     const select = container.querySelector<HTMLSelectElement>("[data-testid='fallback-add-select-agent']")
     expect(Array.from(select?.options ?? []).map((option) => option.value)).toContain("profile-model-agent")
+
+    unmount(root)
+  })
+
+  it("renders not-configured empty queues as automatic selection", async () => {
+    runtimeDbMocks.runtimeTaskPolicyList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      policies: [],
+    })
+    const { container, root } = renderSection()
+    await flush()
+
+    expect(container.textContent).toContain("Not configured: automatically selects an available profile")
+    expect(container.textContent).not.toContain("Queue explicitly cleared")
+
+    unmount(root)
+  })
+
+  it("renders explicit empty policy rows as cleared queues", async () => {
+    runtimeDbMocks.runtimeTaskPolicyList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      policies: [runtimePolicy({ taskFamily: "chat", profileOrder: [] })],
+    })
+    const { container, root } = renderSection()
+    await flush()
+
+    expect(container.textContent).toContain("Queue explicitly cleared")
+
+    unmount(root)
+  })
+
+  it("generates a default queue from enabled profiles that support the family", async () => {
+    runtimeDbMocks.runtimeProfileList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      profiles: [
+        runtimeProfile({ profileId: "profile-1", displayName: "Primary profile", taskFamilies: ["chat"] }),
+        runtimeProfile({ profileId: "profile-2", displayName: "Backup profile", taskFamilies: ["chat", "ingest"] }),
+        runtimeProfile({ profileId: "disabled", displayName: "Disabled", enabled: false, taskFamilies: ["chat"] }),
+      ],
+    })
+    runtimeDbMocks.runtimeTaskPolicyList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      policies: [],
+    })
+    const { container, root } = renderSection()
+    await flush()
+
+    const generate = container.querySelector("[data-testid='fallback-default-chat']")
+    if (!generate) throw new Error("generate default button not found")
+    await click(generate)
+
+    expect(runtimeDbMocks.runtimeTaskPolicySet).toHaveBeenCalledWith({
+      taskFamily: "chat",
+      profileOrder: ["profile-1", "profile-2"],
+      autoFailover: true,
+    })
+
+    unmount(root)
+  })
+
+  it("disables default queue generation when no enabled profile supports the family", async () => {
+    runtimeDbMocks.runtimeTaskPolicyList.mockResolvedValueOnce({
+      enabled: true,
+      status: "healthy",
+      policies: [],
+    })
+    const { container, root } = renderSection()
+    await flush()
+
+    const generate = container.querySelector<HTMLButtonElement>("[data-testid='fallback-default-ingest']")
+    expect(generate?.disabled).toBe(true)
+    expect(container.querySelector("[data-testid='fallback-default-hint-ingest']")?.textContent)
+      .toContain("No enabled profiles support this task family")
 
     unmount(root)
   })

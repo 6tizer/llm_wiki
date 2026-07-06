@@ -27,6 +27,7 @@ import { saveAgentResourceConfig } from "@/lib/agent/agent-settings"
 import { activateThemePreference, readThemeMirror, type AppTheme } from "@/lib/theme"
 import { persistSetting } from "@/lib/store-helpers"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
+import type { CategoryId } from "./settings-category"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { ModelConfigSection } from "./sections/model-config-section"
 import { OutputSection } from "./sections/output-section"
@@ -47,19 +48,7 @@ import {
   MINERU_DEFAULT_POLL_TIMEOUT_MS,
 } from "@/lib/mineru-config"
 
-export type CategoryId =
-  | "model-config"
-  | "import"
-  | "network"
-  | "api-server"
-  | "agent"
-  | "knowledge-agents"
-  | "derived-status"
-  | "general"
-  | "output"
-  | "interface"
-  | "changelog"
-  | "about"
+export type { CategoryId } from "./settings-category"
 
 interface RuntimeNavigatorLike {
   platform?: string
@@ -332,6 +321,8 @@ export function SettingsView() {
   const project = useWikiStore((s) => s.project)
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const setPendingWikiHealthTab = useWikiStore((s) => s.setPendingWikiHealthTab)
+  const pendingSettingsCategory = useWikiStore((s) => s.pendingSettingsCategory)
+  const setPendingSettingsCategory = useWikiStore((s) => s.setPendingSettingsCategory)
   const outputLanguage = useWikiStore((s) => s.outputLanguage)
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
   const proxyConfig = useWikiStore((s) => s.proxyConfig)
@@ -487,6 +478,12 @@ export function SettingsView() {
       setActive(activeCategory)
     }
   }, [active, activeCategory])
+
+  useEffect(() => {
+    if (!pendingSettingsCategory) return
+    setActive(coerceSettingsCategory(pendingSettingsCategory, categories))
+    setPendingSettingsCategory(null)
+  }, [categories, pendingSettingsCategory, setPendingSettingsCategory])
 
   const handleSave = useCallback(async () => {
     const {

@@ -159,6 +159,9 @@ function unmount(root: Root): void {
 beforeEach(() => {
   useWikiStore.setState({
     project: { id: "p1", name: "Project", path: "/project" },
+    activeView: "settings",
+    pendingSettingsCategory: null,
+    pendingWikiHealthTab: null,
   })
   useAgentSettingsStore.setState({
     resourceConfig: {
@@ -362,6 +365,20 @@ describe("SettingsView category rendering", () => {
 
     expect(useWikiStore.getState().activeView).toBe("wiki-health")
     expect(useWikiStore.getState().pendingWikiHealthTab).toBe("governance")
+
+    unmount(root)
+  })
+
+  it("consumes a pending settings category once on mount", async () => {
+    useWikiStore.setState({ pendingSettingsCategory: "knowledge-agents" })
+
+    const { container, root } = renderSettingsView()
+    await flush()
+
+    expect(container.querySelector("[data-testid='settings-category-knowledge-agents']")?.getAttribute("aria-current"))
+      .toBe("page")
+    expect(container.textContent).toContain("Pipeline Agents")
+    expect(useWikiStore.getState().pendingSettingsCategory).toBeNull()
 
     unmount(root)
   })

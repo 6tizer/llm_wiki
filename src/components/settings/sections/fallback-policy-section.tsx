@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, ChevronUp, Loader2, RefreshCw, Save, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronUp, ListPlus, Loader2, RefreshCw, Save, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import {
   runtimeProfileBreakerClear,
@@ -24,9 +24,12 @@ type LoadState =
   | { kind: "ready"; enabled: boolean; status: RuntimeDbHealthState }
   | { kind: "error"; message: string }
 
+export type PolicyConfigState = "auto" | "empty" | "configured"
+
 interface PolicyDraft {
   profileOrder: string[]
   autoFailover: boolean
+  configState: PolicyConfigState
 }
 
 interface PoolSnapshot {
@@ -56,7 +59,7 @@ function taskFamilyLabelKey(family: string): string {
 }
 
 function defaultDraft(): PolicyDraft {
-  return { profileOrder: [], autoFailover: true }
+  return { profileOrder: [], autoFailover: true, configState: "auto" }
 }
 
 export function addProfileToOrder(order: string[], profileId: string): string[] {
@@ -79,7 +82,13 @@ export function moveProfileInOrder(order: string[], profileId: string, direction
   return next
 }
 
-function draftsFromPolicies(
+function policyConfigState(policy: RuntimeTaskFamilyPolicyRecord | undefined): PolicyConfigState {
+  if (!policy) return "auto"
+  return policy.profileOrder.length > 0 ? "configured" : "empty"
+}
+
+/** Builds editable policy drafts while preserving whether empty means auto fallback or explicit empty. */
+export function draftsFromPolicies(
   policies: RuntimeTaskFamilyPolicyRecord[],
   existingDrafts: Record<string, PolicyDraft> = {},
   dirtyFamilies: Set<string> = new Set(),
@@ -92,7 +101,11 @@ function draftsFromPolicies(
     }
     const policy = policies.find((item) => item.taskFamily === family)
     drafts[family] = policy
-      ? { profileOrder: policy.profileOrder, autoFailover: policy.autoFailover }
+      ? {
+          profileOrder: policy.profileOrder,
+          autoFailover: policy.autoFailover,
+          configState: policyConfigState(policy),
+        }
       : defaultDraft()
   }
   return drafts
@@ -250,8 +263,8 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
     })
   }
 
-  async function saveFamily(family: string) {
-    const draft = drafts[family] ?? defaultDraft()
+  async function saveFamily(family: string, overrideDraft?: PolicyDraft) {
+    const draft = overrideDraft ?? drafts[family] ?? defaultDraft()
     setSavingFamilies((current) => new Set([...current, family]))
     setMessage(null)
     try {
@@ -261,12 +274,14 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
         autoFailover: draft.autoFailover,
       })
       setDrafts((current) => {
+        const nextDraft: PolicyDraft = {
+          profileOrder: result.policy.profileOrder,
+          autoFailover: result.policy.autoFailover,
+          configState: result.policy.profileOrder.length > 0 ? "configured" : "empty",
+        }
         const next = {
           ...current,
-          [family]: {
-            profileOrder: result.policy.profileOrder,
-            autoFailover: result.policy.autoFailover,
-          },
+          [family]: nextDraft,
         }
         draftsRef.current = next
         return next
@@ -286,6 +301,18 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
         return next
       })
     }
+  }
+
+  async function saveDefaultQueue(family: string) {
+    const eligibleProfileIds = profilesRef.current
+      .filter((profile) => profile.enabled && profile.taskFamilies.includes(family))
+      .map((profile) => profile.profileId)
+    if (eligibleProfileIds.length === 0) return
+    await saveFamily(family, {
+      profileOrder: eligibleProfileIds,
+      autoFailover: true,
+      configState: "configured",
+    })
   }
 
   async function clearBreaker(profileId: string) {
@@ -349,6 +376,9 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
               const addableProfiles = profiles.filter((profile) => (
                 profile.enabled && profile.taskFamilies.includes(family) && !orderSet.has(profile.profileId)
               ))
+              const defaultProfileCount = profiles.filter((profile) => (
+                profile.enabled && profile.taskFamilies.includes(family)
+              )).length
               const addableAgentKindWarning = family === "agent"
                 ? addableProfiles.find((profile) => profile.kind !== "agent-run")
                 : undefined
@@ -376,8 +406,17 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
 
                   <div className="space-y-2">
                     {draft.profileOrder.length === 0 && (
-                      <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                        {t("fallbackPolicy.emptyQueue")}
+                      <div className="space-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                        <div>
+                          {draft.configState === "auto"
+                            ? t("fallbackPolicy.autoQueue")
+                            : t("fallbackPolicy.explicitEmptyQueue")}
+                        </div>
+                        {defaultProfileCount === 0 && (
+                          <div data-testid={`fallback-default-hint-${family}`}>
+                            {t("fallbackPolicy.noDefaultProfiles")}
+                          </div>
+                        )}
                       </div>
                     )}
                     {draft.profileOrder.map((profileId, index) => {
@@ -437,6 +476,18 @@ export function FallbackPolicySection({ refreshToken = 0 }: Props) {
                   </div>
 
                   <div className="flex flex-wrap gap-2">
+                    {draft.profileOrder.length === 0 && (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-60"
+                        disabled={familySaving || defaultProfileCount === 0}
+                        onClick={() => void saveDefaultQueue(family)}
+                        data-testid={`fallback-default-${family}`}
+                      >
+                        {familySaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListPlus className="h-3.5 w-3.5" />}
+                        {t("fallbackPolicy.createDefaultQueue")}
+                      </button>
+                    )}
                     <select
                       className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1.5 text-xs"
                       data-testid={`fallback-add-select-${family}`}
