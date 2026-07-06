@@ -62,6 +62,8 @@ import type { WikiProject } from "@/types/wiki"
 
 const TICK_INTERVAL_MS = 3_000
 const MAX_JOBS_PER_TICK = 25
+const MAX_PENDING_MARKER_PAGES_PER_TICK = 20
+const PENDING_MARKER_PAGE_LIMIT = 100
 const HOLDER = "embedding-consumer"
 const RUNTIME_DISABLED_ERROR_PREFIX = "runtime-disabled:"
 const NO_QUEUED_JOB_ERROR_PREFIX = "no-queued-job:"
@@ -231,20 +233,33 @@ async function recoverRetryWaitJobs(generation: number): Promise<void> {
 
 /** Signal 1 of the PR1 consumer contract: fold newly pending markers into queued jobs. */
 async function foldPendingMarkers(generation: number): Promise<void> {
-  const list = await runtimeDerivedStaleMarkerList({ layer: "embedding", status: "pending" })
-  assertCurrentRun(generation)
-  const affectedPaths = Array.from(new Set(list.markers.map((marker) => marker.affectedPath)))
-
-  for (const affectedPath of affectedPaths) {
+  let sinceMarkedAtMs: number | undefined
+  let sinceMarkerId: string | undefined
+  for (let page = 0; page < MAX_PENDING_MARKER_PAGES_PER_TICK; page += 1) {
+    const list = await runtimeDerivedStaleMarkerList({
+      layer: "embedding",
+      status: "pending",
+      limit: PENDING_MARKER_PAGE_LIMIT,
+      sinceMarkedAtMs,
+      sinceMarkerId,
+    })
     assertCurrentRun(generation)
-    try {
-      await runtimeDerivedMarkerClaimBatch({ layer: "embedding", affectedPath })
-    } catch (err) {
-      if (isRuntimeDisabledError(err)) throw err
-      // Benign: another tick already folded this group, or the pending
-      // snapshot changed between list() and claim_batch() landing.
-      continue
+    const affectedPaths = Array.from(new Set(list.markers.map((marker) => marker.affectedPath)))
+
+    for (const affectedPath of affectedPaths) {
+      assertCurrentRun(generation)
+      try {
+        await runtimeDerivedMarkerClaimBatch({ layer: "embedding", affectedPath })
+      } catch (err) {
+        if (isRuntimeDisabledError(err)) throw err
+        // Benign: another tick already folded this group, or the pending
+        // snapshot changed between list() and claim_batch() landing.
+        continue
+      }
     }
+    if (!list.nextCursor) break
+    sinceMarkedAtMs = list.nextCursor.markedAtMs
+    sinceMarkerId = list.nextCursor.markerId
   }
 }
 

@@ -1,11 +1,13 @@
 use crate::commands::file_sync::ProjectRootState;
 use rusqlite::{params, Connection, OpenFlags};
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use super::*;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 /// Expire an active running lease for a specific job/lease pair, moving the
 /// job to `retry-wait` (attempts remain) or `failed` (attempts exhausted) and
@@ -192,11 +194,37 @@ fn read_expired_running_lease_candidates(
 /// must not be swallowed silently.
 const BENIGN_LEASE_RECLAIM_RACE_PREFIXES: [&str; 3] =
     ["invalid-transition", "inactive-lease", "lease-not-expired"];
+const ANCHOR_JOB_KINDS: [&str; 2] = ["auto-ingest-marker-event", "manual-rebuild-marker-event"];
+const BENIGN_ORPHAN_RECONCILE_RACE_PREFIXES: [&str; 2] =
+    ["invalid-transition", "queued-job-not-stale"];
+static LAST_DERIVED_MARKER_GC_MS_BY_PROJECT: OnceLock<Mutex<HashMap<PathBuf, i64>>> =
+    OnceLock::new();
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeOrphanReconcileStats {
+    queued_derived_jobs_cancelled: usize,
+    queued_anchor_jobs_cancelled: usize,
+    terminal_jobs_reconciled: usize,
+    queued_markers_reconciled: usize,
+    terminal_markers_reconciled: usize,
+    markers_reconciled: usize,
+    marker_gc_deleted: usize,
+}
 
 fn is_benign_lease_reclaim_race(err: &str) -> bool {
     BENIGN_LEASE_RECLAIM_RACE_PREFIXES
         .iter()
         .any(|prefix| err.starts_with(prefix))
+}
+
+fn is_benign_orphan_reconcile_race(err: &str) -> bool {
+    BENIGN_ORPHAN_RECONCILE_RACE_PREFIXES
+        .iter()
+        .any(|prefix| err.starts_with(prefix))
+}
+
+fn derived_marker_gc_throttle_by_project() -> &'static Mutex<HashMap<PathBuf, i64>> {
+    LAST_DERIVED_MARKER_GC_MS_BY_PROJECT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Reclaim every `running` job in the project whose active lease has expired:
@@ -262,6 +290,476 @@ fn runtime_job_lease_reclaim_tick(
     runtime_job_lease_reclaim_scan_for_project(Some(project_root), true, now)
 }
 
+fn read_stale_queued_orphan_candidates(
+    project_root: &Path,
+    now: i64,
+) -> Result<Vec<String>, String> {
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("orphan-reconcile-queued-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_jobs")? {
+        return Ok(Vec::new());
+    }
+    let has_leases_table = table_exists(&connection, "runtime_job_leases")?;
+    let cutoff = now.saturating_sub(ORPHAN_QUEUED_JOB_THRESHOLD_MS);
+    let sql = if has_leases_table {
+        "SELECT job_id
+         FROM runtime_jobs
+         WHERE state = 'queued'
+           AND COALESCE(queued_at_ms, created_at_ms) <= ?1
+           AND (
+             kind = ?2
+             OR (
+               (kind = ?3 OR kind = ?4)
+               AND attempt = 0
+               AND NOT EXISTS (
+                 SELECT 1 FROM runtime_job_leases l WHERE l.job_id = runtime_jobs.job_id
+               )
+             )
+           )
+         ORDER BY COALESCE(queued_at_ms, created_at_ms) ASC, job_id ASC"
+    } else {
+        "SELECT job_id
+         FROM runtime_jobs
+         WHERE state = 'queued'
+           AND COALESCE(queued_at_ms, created_at_ms) <= ?1
+           AND kind = ?2
+         ORDER BY COALESCE(queued_at_ms, created_at_ms) ASC, job_id ASC"
+    };
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|err| format!("orphan-reconcile-queued-prepare-failed: {err}"))?;
+    if has_leases_table {
+        let rows = statement
+            .query_map(
+                params![
+                    cutoff,
+                    DERIVED_REBUILD_JOB_KIND,
+                    ANCHOR_JOB_KINDS[0],
+                    ANCHOR_JOB_KINDS[1]
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|err| format!("orphan-reconcile-queued-query-failed: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("orphan-reconcile-queued-query-failed: {err}"))
+    } else {
+        let rows = statement
+            .query_map(params![cutoff, DERIVED_REBUILD_JOB_KIND], |row| row.get(0))
+            .map_err(|err| format!("orphan-reconcile-queued-query-failed: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("orphan-reconcile-queued-query-failed: {err}"))
+    }
+}
+
+fn read_terminal_derived_rebuild_candidates(project_root: &Path) -> Result<Vec<String>, String> {
+    let db_path = runtime_db_path(project_root);
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|err| format!("orphan-reconcile-terminal-open-failed: {err}"))?;
+    if !table_exists(&connection, "runtime_jobs")?
+        || !table_exists(&connection, "runtime_derived_stale_markers")?
+    {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT job_id
+             FROM runtime_jobs
+             WHERE kind = ?1 AND state IN ('failed', 'cancelled', 'completed')
+             ORDER BY updated_at_ms ASC, job_id ASC",
+        )
+        .map_err(|err| format!("orphan-reconcile-terminal-prepare-failed: {err}"))?;
+    let rows = statement
+        .query_map(params![DERIVED_REBUILD_JOB_KIND], |row| row.get(0))
+        .map_err(|err| format!("orphan-reconcile-terminal-query-failed: {err}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("orphan-reconcile-terminal-query-failed: {err}"))
+}
+
+fn read_job_payload(connection: &Connection, job_id: &str) -> Result<String, String> {
+    connection
+        .query_row(
+            "SELECT payload FROM runtime_jobs WHERE job_id = ?1",
+            params![job_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| format!("orphan-reconcile-job-read-failed: {err}"))
+}
+
+fn reconcile_stale_queued_orphan_job_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    job_id: &str,
+    now: i64,
+) -> Result<RuntimeOrphanReconcileStats, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    with_runtime_writer(|| {
+        let mut connection = open_derived_stale_markers_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let job = read_job_tx(&tx, job_id)?;
+        if job.state != "queued" {
+            return Err(format!(
+                "invalid-transition: queued orphan reconcile requires queued job, got '{}'",
+                job.state
+            ));
+        }
+        if now.saturating_sub(job.queued_at_ms.unwrap_or(job.created_at_ms))
+            < ORPHAN_QUEUED_JOB_THRESHOLD_MS
+        {
+            return Err("queued-job-not-stale: queued job is still inside orphan threshold".into());
+        }
+        if job.kind != DERIVED_REBUILD_JOB_KIND && !ANCHOR_JOB_KINDS.contains(&job.kind.as_str()) {
+            return Err(format!(
+                "invalid-kind: queued orphan reconcile does not support kind '{}'",
+                job.kind
+            ));
+        }
+        if ANCHOR_JOB_KINDS.contains(&job.kind.as_str()) {
+            let lease_history: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM runtime_job_leases WHERE job_id = ?1",
+                    params![job_id],
+                    |row| row.get(0),
+                )
+                .map_err(|err| format!("orphan-reconcile-anchor-lease-check-failed: {err}"))?;
+            if job.attempt != 0 || lease_history != 0 {
+                return Err("queued-job-not-stale: anchor job has attempt or lease history".into());
+            }
+        }
+
+        let marker_ids = if job.kind == DERIVED_REBUILD_JOB_KIND {
+            parse_derived_rebuild_marker_ids(&job)?
+        } else {
+            Vec::new()
+        };
+        let updated = tx
+            .execute(
+                "UPDATE runtime_jobs
+                 SET state = 'cancelled',
+                     cancelled_at_ms = ?2,
+                     updated_at_ms = ?2,
+                     last_error = ?3
+                 WHERE job_id = ?1 AND state = 'queued'",
+                params![
+                    job_id,
+                    now,
+                    "orphan-reconcile: queued job exceeded lease-derived threshold without a lease"
+                ],
+            )
+            .map_err(|err| format!("orphan-reconcile-queued-job-update-failed: {err}"))?;
+        if updated == 0 {
+            return Err("invalid-transition: queued orphan changed state before reconcile".into());
+        }
+
+        // Best-effort by design, unlike explicit claim/complete/release
+        // commands: the queued orphan path is repairing a stale ownership
+        // record, and normal consumers may have already moved some markers
+        // out of `claimed`.
+        let markers_reconciled = update_markers_status_tx(
+            &tx,
+            &marker_ids,
+            CLAIMED_MARKER_STATUS,
+            PENDING_MARKER_STATUS,
+            now,
+            None,
+        )?;
+        if !marker_ids.is_empty() && markers_reconciled != marker_ids.len() {
+            eprintln!(
+                "[orphan-reconcile] queued job_id={job_id} reconciled {markers_reconciled}/{} marker(s); best-effort because markers may have raced out of claimed",
+                marker_ids.len()
+            );
+        }
+        tx.commit().map_err(tx_err)?;
+
+        Ok(RuntimeOrphanReconcileStats {
+            queued_derived_jobs_cancelled: usize::from(job.kind == DERIVED_REBUILD_JOB_KIND),
+            queued_anchor_jobs_cancelled: usize::from(
+                ANCHOR_JOB_KINDS.contains(&job.kind.as_str()),
+            ),
+            terminal_jobs_reconciled: 0,
+            queued_markers_reconciled: markers_reconciled,
+            terminal_markers_reconciled: 0,
+            markers_reconciled,
+            marker_gc_deleted: 0,
+        })
+    })
+}
+
+pub(crate) fn reconcile_terminal_derived_rebuild_job_markers_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    job_id: &str,
+    now: i64,
+) -> Result<usize, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    with_runtime_writer(|| {
+        let mut connection = open_derived_stale_markers_runtime_locked(project_root)?;
+        let tx = connection.transaction().map_err(tx_err)?;
+        let job = read_job_tx(&tx, job_id)?;
+        if job.kind != DERIVED_REBUILD_JOB_KIND {
+            return Err("invalid-kind: job is not a derived-rebuild job".to_string());
+        }
+        let (target_status, error) = match job.state.as_str() {
+            "failed" => (
+                FAILED_MARKER_STATUS,
+                Some("derived-rebuild-terminal-reconcile: runtime job failed"),
+            ),
+            "cancelled" => (
+                CANCELLED_MARKER_STATUS,
+                Some("derived-rebuild-terminal-reconcile: runtime job cancelled"),
+            ),
+            "completed" => (DONE_MARKER_STATUS, None),
+            other => {
+                return Err(format!(
+                    "invalid-transition: terminal marker reconcile requires terminal job, got '{other}'"
+                ));
+            }
+        };
+        let marker_ids = parse_derived_rebuild_marker_ids(&job)?;
+        // Best-effort by design, unlike explicit claim/complete/release
+        // commands: the reconcile tick is repairing stale state and a normal
+        // consumer may have already moved some markers out of `claimed`.
+        let updated = update_markers_status_tx(
+            &tx,
+            &marker_ids,
+            CLAIMED_MARKER_STATUS,
+            target_status,
+            now,
+            error,
+        )?;
+        if updated != marker_ids.len() {
+            eprintln!(
+                "[orphan-reconcile] terminal job_id={job_id} reconciled {updated}/{} marker(s); best-effort because markers may have raced out of claimed",
+                marker_ids.len()
+            );
+        }
+        tx.commit().map_err(tx_err)?;
+        Ok(updated)
+    })
+}
+
+pub(crate) fn reconcile_terminal_derived_rebuild_markers_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    request: RuntimeDerivedMarkerReconcileRequest,
+    now: i64,
+) -> Result<usize, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let layer = request
+        .layer
+        .as_deref()
+        .map(normalize_marker_layer)
+        .transpose()?;
+    let affected_path = request
+        .affected_path
+        .as_deref()
+        .map(normalize_affected_path)
+        .transpose()?
+        .map(|path| path.display_key);
+    let candidates = read_terminal_derived_rebuild_candidates(project_root)?;
+    let payload_connection = if layer.is_some() || affected_path.is_some() {
+        Some(
+            Connection::open_with_flags(
+                runtime_db_path(project_root),
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(|err| format!("orphan-reconcile-job-open-failed: {err}"))?,
+        )
+    } else {
+        None
+    };
+    let mut markers_reconciled = 0;
+    for job_id in candidates {
+        if layer.is_some() || affected_path.is_some() {
+            let Some(connection) = payload_connection.as_ref() else {
+                continue;
+            };
+            let Ok(payload) = read_job_payload(connection, &job_id) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                continue;
+            };
+            if let Some(layer) = layer.as_deref() {
+                if value.get("layer").and_then(serde_json::Value::as_str) != Some(layer) {
+                    continue;
+                }
+            }
+            if let Some(path) = affected_path.as_deref() {
+                if value
+                    .get("affectedPath")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(path)
+                {
+                    continue;
+                }
+            }
+        }
+        match reconcile_terminal_derived_rebuild_job_markers_for_project(
+            Some(project_root),
+            enabled,
+            &job_id,
+            now,
+        ) {
+            Ok(updated) => markers_reconciled += updated,
+            Err(err) if is_benign_orphan_reconcile_race(&err) => {}
+            Err(err) => {
+                eprintln!(
+                    "[orphan-reconcile] terminal job_id={job_id} failed to reconcile markers: {err}"
+                );
+            }
+        }
+    }
+    Ok(markers_reconciled)
+}
+
+fn runtime_orphan_reconcile_scan_for_project(
+    project_root: Option<&Path>,
+    enabled: bool,
+    now: i64,
+) -> Result<RuntimeOrphanReconcileStats, String> {
+    let project_root = require_enabled_project(project_root, enabled)?;
+    let mut stats = RuntimeOrphanReconcileStats::default();
+
+    for job_id in read_stale_queued_orphan_candidates(project_root, now)? {
+        match reconcile_stale_queued_orphan_job_for_project(
+            Some(project_root),
+            enabled,
+            &job_id,
+            now,
+        ) {
+            Ok(result) => {
+                stats.queued_derived_jobs_cancelled += result.queued_derived_jobs_cancelled;
+                stats.queued_anchor_jobs_cancelled += result.queued_anchor_jobs_cancelled;
+                stats.queued_markers_reconciled += result.queued_markers_reconciled;
+                stats.markers_reconciled += result.markers_reconciled;
+            }
+            Err(err) if is_benign_orphan_reconcile_race(&err) => {}
+            Err(err) => {
+                eprintln!("[orphan-reconcile] queued job_id={job_id} failed to reconcile: {err}");
+            }
+        }
+    }
+
+    for job_id in read_terminal_derived_rebuild_candidates(project_root)? {
+        match reconcile_terminal_derived_rebuild_job_markers_for_project(
+            Some(project_root),
+            enabled,
+            &job_id,
+            now,
+        ) {
+            Ok(updated) if updated > 0 => {
+                stats.terminal_jobs_reconciled += 1;
+                stats.terminal_markers_reconciled += updated;
+                stats.markers_reconciled += updated;
+            }
+            Ok(_) => {}
+            Err(err) if is_benign_orphan_reconcile_race(&err) => {}
+            Err(err) => {
+                eprintln!(
+                    "[orphan-reconcile] terminal job_id={job_id} failed to reconcile markers: {err}"
+                );
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
+fn runtime_derived_marker_gc_tick(
+    project_root: Option<&Path>,
+    enabled: bool,
+    now: i64,
+) -> Result<usize, String> {
+    let Some(project_root) = project_root else {
+        return Ok(0);
+    };
+    if !enabled {
+        return Ok(0);
+    }
+    let project_key = project_root.to_path_buf();
+    let previous_last = {
+        let mut throttle = derived_marker_gc_throttle_by_project()
+            .lock()
+            .map_err(|err| format!("derived-marker-gc-throttle-lock-failed: {err}"))?;
+        let previous_last = throttle.get(&project_key).copied();
+        if let Some(last) = previous_last {
+            if now.saturating_sub(last) < DERIVED_MARKER_GC_INTERVAL_MS {
+                return Ok(0);
+            }
+        }
+        throttle.insert(project_key.clone(), now);
+        previous_last
+    };
+
+    match runtime_derived_marker_gc_for_project(Some(project_root), enabled, now) {
+        Ok(gc) => Ok(gc.deleted.len()),
+        Err(err) => {
+            if let Ok(mut throttle) = derived_marker_gc_throttle_by_project().lock() {
+                if throttle.get(&project_key).copied() == Some(now) {
+                    if let Some(last) = previous_last {
+                        throttle.insert(project_key, last);
+                    } else {
+                        throttle.remove(&project_key);
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+fn runtime_orphan_reconcile_tick(
+    project_root: Option<&Path>,
+) -> Result<RuntimeOrphanReconcileStats, String> {
+    let Some(project_root) = project_root else {
+        return Ok(RuntimeOrphanReconcileStats::default());
+    };
+    if !work_runtime_enabled_from_env() {
+        return Ok(RuntimeOrphanReconcileStats::default());
+    }
+    let now = now_ms()?;
+    let mut stats = runtime_orphan_reconcile_scan_for_project(Some(project_root), true, now)?;
+    stats.marker_gc_deleted = runtime_derived_marker_gc_tick(Some(project_root), true, now)?;
+    Ok(stats)
+}
+
+/// Reconcile terminal `derived-rebuild` jobs whose claimed markers did not
+/// receive the second IPC release/complete call.
+#[tauri::command]
+pub fn runtime_derived_marker_reconcile_terminal_jobs(
+    request: Option<RuntimeDerivedMarkerReconcileRequest>,
+    root_state: State<'_, ProjectRootState>,
+) -> Result<usize, String> {
+    run_project_write(
+        "runtime_derived_marker_reconcile_terminal_jobs",
+        root_state,
+        |project_root, enabled, now| {
+            reconcile_terminal_derived_rebuild_markers_for_project(
+                project_root,
+                enabled,
+                request.unwrap_or(RuntimeDerivedMarkerReconcileRequest {
+                    layer: None,
+                    affected_path: None,
+                }),
+                now,
+            )
+        },
+    )
+}
+
 /// Spawn the core-runtime background scheduler that periodically reclaims
 /// `running` jobs whose active lease expired (crashed worker, stalled
 /// heartbeat). Spawned once for the whole app process from `lib.rs::run()`
@@ -287,6 +785,24 @@ pub fn start_lease_reclaim_scheduler(app: AppHandle) {
                 eprintln!("[lease-reclaim] tick failed: {err}");
             }
         }
+        match runtime_orphan_reconcile_tick(project_root.as_deref()) {
+            Ok(stats) if stats != RuntimeOrphanReconcileStats::default() => {
+                eprintln!(
+                    "[orphan-reconcile] queued_derived_cancelled={} queued_anchor_cancelled={} terminal_jobs_reconciled={} queued_markers_reconciled={} terminal_markers_reconciled={} markers_reconciled={} marker_gc_deleted={}",
+                    stats.queued_derived_jobs_cancelled,
+                    stats.queued_anchor_jobs_cancelled,
+                    stats.terminal_jobs_reconciled,
+                    stats.queued_markers_reconciled,
+                    stats.terminal_markers_reconciled,
+                    stats.markers_reconciled,
+                    stats.marker_gc_deleted
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("[orphan-reconcile] tick failed: {err}");
+            }
+        }
     });
 }
 
@@ -294,9 +810,119 @@ pub fn start_lease_reclaim_scheduler(app: AppHandle) {
 mod tests {
     use super::*;
 
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
 
     use std::fs;
+
+    fn derived_job_request(
+        job_id: &str,
+        layer: &str,
+        affected_path: &str,
+        marker_ids: &[&str],
+    ) -> RuntimeJobCreateRequest {
+        RuntimeJobCreateRequest {
+            job_id: Some(job_id.to_string()),
+            kind: DERIVED_REBUILD_JOB_KIND.to_string(),
+            payload: serde_json::json!({
+                "layer": layer,
+                "affectedPath": affected_path,
+                "markerIds": marker_ids,
+                "baseVersion": "hash1",
+                "inputHash": "sha256:hash1",
+                "reason": "commit",
+            })
+            .to_string(),
+            max_attempts: None,
+            priority: None,
+        }
+    }
+
+    fn anchor_job_request(job_id: &str, kind: &str) -> RuntimeJobCreateRequest {
+        RuntimeJobCreateRequest {
+            job_id: Some(job_id.to_string()),
+            kind: kind.to_string(),
+            payload: serde_json::json!({
+                "layer": "embedding",
+                "affectedPath": "wiki/a.md",
+            })
+            .to_string(),
+            max_attempts: Some(1),
+            priority: None,
+        }
+    }
+
+    fn setup_claimed_marker_project(label: &str, marker_id: &str) -> std::path::PathBuf {
+        let project = temp_project(label);
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(Some(&project), true, create_request("parent-job"), 0)
+            .expect("create parent job");
+        runtime_event_append_for_project(
+            Some(&project),
+            true,
+            event_request(Some("parent-job"), "event-1", "{}"),
+            10,
+        )
+        .expect("append event");
+        let connection =
+            open_derived_stale_markers_runtime_locked(&project).expect("open marker runtime");
+        connection
+            .execute(
+                "INSERT INTO runtime_derived_stale_markers (
+                    marker_id, layer, affected_path, input_hash, base_version,
+                    marked_at_ms, reason, source_event_id, status, updated_at_ms, last_error
+                ) VALUES (?1, 'embedding', 'wiki/a.md', 'sha256:hash1', 'hash1',
+                    20, 'commit', 'event-1', 'claimed', 30, NULL)",
+                params![marker_id],
+            )
+            .expect("insert claimed marker");
+        project
+    }
+
+    fn marker_status(project: &Path, marker_id: &str) -> String {
+        let connection = Connection::open(runtime_db_path(project)).expect("open runtime db");
+        connection
+            .query_row(
+                "SELECT status FROM runtime_derived_stale_markers WHERE marker_id = ?1",
+                params![marker_id],
+                |row| row.get(0),
+            )
+            .expect("read marker status")
+    }
+
+    fn marker_exists(project: &Path, marker_id: &str) -> bool {
+        let connection = Connection::open(runtime_db_path(project)).expect("open runtime db");
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM runtime_derived_stale_markers WHERE marker_id = ?1",
+                params![marker_id],
+                |row| row.get(0),
+            )
+            .expect("read marker count");
+        count > 0
+    }
+
+    fn mark_marker_done(project: &Path, marker_id: &str) {
+        let connection = Connection::open(runtime_db_path(project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_derived_stale_markers
+                 SET status = 'done', updated_at_ms = 100
+                 WHERE marker_id = ?1",
+                params![marker_id],
+            )
+            .expect("make marker terminal");
+    }
+
+    fn job_state(project: &Path, job_id: &str) -> String {
+        let connection = Connection::open(runtime_db_path(project)).expect("open runtime db");
+        connection
+            .query_row(
+                "SELECT state FROM runtime_jobs WHERE job_id = ?1",
+                params![job_id],
+                |row| row.get(0),
+            )
+            .expect("read job state")
+    }
 
     #[test]
     fn lease_timeout_moves_running_job_to_retry_wait_or_failed() {
@@ -636,5 +1262,287 @@ mod tests {
             "a real fault must leave the candidate's lease untouched, not silently resolved"
         );
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn orphan_reconcile_cancels_stale_queued_derived_job_and_returns_marker_pending() {
+        let project = setup_claimed_marker_project("orphan-queued-derived", "marker-1");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            derived_job_request("derived-job", "embedding", "wiki/a.md", &["marker-1"]),
+            100,
+        )
+        .expect("create queued derived job");
+
+        let stats = runtime_orphan_reconcile_scan_for_project(
+            Some(&project),
+            true,
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS,
+        )
+        .expect("orphan reconcile");
+
+        assert_eq!(stats.queued_derived_jobs_cancelled, 1);
+        assert_eq!(stats.markers_reconciled, 1);
+        assert_eq!(job_state(&project, "derived-job"), "cancelled");
+        assert_eq!(marker_status(&project, "marker-1"), PENDING_MARKER_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn orphan_reconcile_cancels_stale_queued_anchor_job_without_marker_release() {
+        let project = temp_project("orphan-queued-anchor");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            anchor_job_request("anchor-job", ANCHOR_JOB_KINDS[0]),
+            100,
+        )
+        .expect("create queued anchor job");
+
+        let stats = runtime_orphan_reconcile_scan_for_project(
+            Some(&project),
+            true,
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS,
+        )
+        .expect("orphan reconcile");
+
+        assert_eq!(stats.queued_anchor_jobs_cancelled, 1);
+        assert_eq!(stats.markers_reconciled, 0);
+        assert_eq!(job_state(&project, "anchor-job"), "cancelled");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn orphan_reconcile_leaves_resumed_anchor_job_queued() {
+        let project = temp_project("orphan-anchor-resumed");
+        fs::create_dir_all(&project).expect("create temp project");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            anchor_job_request("anchor-job", ANCHOR_JOB_KINDS[0]),
+            100,
+        )
+        .expect("create queued anchor job");
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "UPDATE runtime_jobs
+                 SET attempt = 1, queued_at_ms = 100, updated_at_ms = 200
+                 WHERE job_id = 'anchor-job'",
+                [],
+            )
+            .expect("mark anchor as resumed");
+        drop(connection);
+
+        let stats = runtime_orphan_reconcile_scan_for_project(
+            Some(&project),
+            true,
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS,
+        )
+        .expect("orphan reconcile");
+
+        assert_eq!(stats, RuntimeOrphanReconcileStats::default());
+        assert_eq!(job_state(&project, "anchor-job"), "queued");
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn orphan_reconcile_converges_terminal_derived_jobs_to_marker_terminal_statuses() {
+        for (terminal_state, expected_marker_status) in [
+            ("failed", FAILED_MARKER_STATUS),
+            ("cancelled", CANCELLED_MARKER_STATUS),
+            ("completed", DONE_MARKER_STATUS),
+        ] {
+            let project = setup_claimed_marker_project(
+                &format!("orphan-terminal-{terminal_state}"),
+                "marker-1",
+            );
+            runtime_job_create_for_project(
+                Some(&project),
+                true,
+                derived_job_request("derived-job", "embedding", "wiki/a.md", &["marker-1"]),
+                100,
+            )
+            .expect("create derived job");
+            let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+            connection
+                .execute(
+                    "UPDATE runtime_jobs SET state = ?2, updated_at_ms = 200 WHERE job_id = ?1",
+                    params!["derived-job", terminal_state],
+                )
+                .expect("force terminal state");
+            drop(connection);
+
+            let stats = runtime_orphan_reconcile_scan_for_project(Some(&project), true, 300)
+                .expect("orphan reconcile");
+
+            assert_eq!(stats.terminal_jobs_reconciled, 1);
+            assert_eq!(stats.markers_reconciled, 1);
+            assert_eq!(marker_status(&project, "marker-1"), expected_marker_status);
+            let _ = fs::remove_dir_all(project);
+        }
+    }
+
+    #[test]
+    fn orphan_reconcile_leaves_fresh_queued_job_inside_threshold() {
+        let project = setup_claimed_marker_project("orphan-fresh-queued", "marker-1");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            derived_job_request("derived-job", "embedding", "wiki/a.md", &["marker-1"]),
+            100,
+        )
+        .expect("create queued derived job");
+
+        let stats = runtime_orphan_reconcile_scan_for_project(
+            Some(&project),
+            true,
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS - 1,
+        )
+        .expect("orphan reconcile before threshold");
+
+        assert_eq!(stats, RuntimeOrphanReconcileStats::default());
+        assert_eq!(job_state(&project, "derived-job"), "queued");
+        assert_eq!(marker_status(&project, "marker-1"), CLAIMED_MARKER_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn orphan_reconcile_leaves_burst_derived_backlog_inside_threshold() {
+        let project = temp_project("orphan-derived-burst");
+        fs::create_dir_all(&project).expect("create temp project");
+        for index in 0..25 {
+            runtime_job_create_for_project(
+                Some(&project),
+                true,
+                derived_job_request(
+                    &format!("derived-job-{index}"),
+                    "embedding",
+                    &format!("wiki/page-{index}.md"),
+                    &[&format!("marker-{index}")],
+                ),
+                100,
+            )
+            .expect("create queued derived job");
+        }
+
+        let stats = runtime_orphan_reconcile_scan_for_project(
+            Some(&project),
+            true,
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS - 1,
+        )
+        .expect("orphan reconcile before threshold");
+
+        assert_eq!(stats, RuntimeOrphanReconcileStats::default());
+        for index in 0..25 {
+            assert_eq!(
+                job_state(&project, &format!("derived-job-{index}")),
+                "queued"
+            );
+        }
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn orphan_reconcile_treats_normal_claim_race_as_benign() {
+        let project = setup_claimed_marker_project("orphan-claim-race", "marker-1");
+        runtime_job_create_for_project(
+            Some(&project),
+            true,
+            derived_job_request("derived-job", "embedding", "wiki/a.md", &["marker-1"]),
+            100,
+        )
+        .expect("create queued derived job");
+        runtime_job_claim_for_project(
+            Some(&project),
+            true,
+            claim_request_with_job_id("worker-a", "lease-1", "derived-job"),
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS,
+        )
+        .expect("normal consumer claims job first");
+
+        let err = reconcile_stale_queued_orphan_job_for_project(
+            Some(&project),
+            true,
+            "derived-job",
+            100 + ORPHAN_QUEUED_JOB_THRESHOLD_MS,
+        )
+        .expect_err("running job is no longer a queued orphan");
+
+        assert!(is_benign_orphan_reconcile_race(&err));
+        assert_eq!(job_state(&project, "derived-job"), "running");
+        assert_eq!(marker_status(&project, "marker-1"), CLAIMED_MARKER_STATUS);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_marker_gc_tick_runs_at_most_once_per_interval() {
+        let project = setup_claimed_marker_project("scheduler-marker-gc", "marker-1");
+        let now = DEFAULT_DERIVED_MARKER_TERMINAL_TTL_MS + 1_000;
+        mark_marker_done(&project, "marker-1");
+
+        let first_deleted =
+            runtime_derived_marker_gc_tick(Some(&project), true, now).expect("first gc tick");
+        assert_eq!(first_deleted, 1);
+        assert!(!marker_exists(&project, "marker-1"));
+
+        let connection = Connection::open(runtime_db_path(&project)).expect("open runtime db");
+        connection
+            .execute(
+                "INSERT INTO runtime_derived_stale_markers (
+                    marker_id, layer, affected_path, input_hash, base_version,
+                    marked_at_ms, reason, source_event_id, status, updated_at_ms, last_error
+                ) VALUES (
+                    'marker-2', 'embedding', 'wiki/b.md', 'sha256:hash2', 'hash2',
+                    20, 'commit', 'event-1', 'done', 100, NULL
+                )",
+                [],
+            )
+            .expect("insert second terminal marker");
+        drop(connection);
+
+        let throttled_deleted = runtime_derived_marker_gc_tick(
+            Some(&project),
+            true,
+            now + DERIVED_MARKER_GC_INTERVAL_MS - 1,
+        )
+        .expect("throttled gc tick");
+        assert_eq!(throttled_deleted, 0);
+        assert!(marker_exists(&project, "marker-2"));
+
+        let second_deleted = runtime_derived_marker_gc_tick(
+            Some(&project),
+            true,
+            now + DERIVED_MARKER_GC_INTERVAL_MS,
+        )
+        .expect("second gc tick");
+        assert_eq!(second_deleted, 1);
+        assert!(!marker_exists(&project, "marker-2"));
+
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn derived_marker_gc_tick_is_throttled_per_project_root() {
+        let project_a = setup_claimed_marker_project("scheduler-marker-gc-project-a", "marker-a");
+        let project_b = setup_claimed_marker_project("scheduler-marker-gc-project-b", "marker-b");
+        let now = DEFAULT_DERIVED_MARKER_TERMINAL_TTL_MS + 1_000;
+        mark_marker_done(&project_a, "marker-a");
+        mark_marker_done(&project_b, "marker-b");
+
+        let a_deleted =
+            runtime_derived_marker_gc_tick(Some(&project_a), true, now).expect("project a gc tick");
+        assert_eq!(a_deleted, 1);
+        assert!(!marker_exists(&project_a, "marker-a"));
+
+        let b_deleted =
+            runtime_derived_marker_gc_tick(Some(&project_b), true, now).expect("project b gc tick");
+        assert_eq!(b_deleted, 1);
+        assert!(!marker_exists(&project_b, "marker-b"));
+
+        let _ = fs::remove_dir_all(project_a);
+        let _ = fs::remove_dir_all(project_b);
     }
 }

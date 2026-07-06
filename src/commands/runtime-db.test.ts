@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   runtimeDerivedMarkerClaimBatch,
   runtimeDerivedMarkerCompleteBatch,
+  runtimeDerivedMarkerGc,
+  runtimeDerivedMarkerReconcileTerminalJobs,
   runtimeDerivedMarkerReleaseBatch,
+  runtimeDerivedMarkerStatusCounts,
   runtimeDerivedStaleMarkerList,
   runtimeDerivedStaleMarkerRecord,
   runtimeCommitBudgetClaim,
@@ -509,7 +512,7 @@ describe("runtime-db commands", () => {
 
   it("sends derived stale marker record and list payloads", async () => {
     const record = { markerId: "marker-1" }
-    const list = { enabled: true, status: "healthy", markers: [record] }
+    const list = { enabled: true, status: "healthy", markers: [record], nextCursor: null, truncated: false }
     tauriMocks.invoke.mockResolvedValueOnce(record).mockResolvedValueOnce(list)
 
     await expect(
@@ -560,7 +563,7 @@ describe("runtime-db commands", () => {
   })
 
   it("sends derived stale marker list cursor payloads", async () => {
-    const list = { enabled: true, status: "healthy", markers: [], nextCursor: null }
+    const list = { enabled: true, status: "healthy", markers: [], nextCursor: null, truncated: false }
     tauriMocks.invoke.mockResolvedValue(list)
 
     await expect(
@@ -576,6 +579,35 @@ describe("runtime-db commands", () => {
         sinceMarkerId: "marker-1",
       },
     })
+  })
+
+  it("sends derived marker diagnostics, gc, and terminal reconcile commands", async () => {
+    const counts = { enabled: true, status: "healthy", groups: [] }
+    const gc = { deleted: [] }
+    tauriMocks.invoke
+      .mockResolvedValueOnce(counts)
+      .mockResolvedValueOnce(gc)
+      .mockResolvedValueOnce(3)
+
+    await expect(runtimeDerivedMarkerStatusCounts()).resolves.toBe(counts)
+    await expect(runtimeDerivedMarkerGc()).resolves.toBe(gc)
+    await expect(
+      runtimeDerivedMarkerReconcileTerminalJobs({
+        layer: "embedding",
+        affectedPath: "wiki/Page.md",
+      }),
+    ).resolves.toBe(3)
+
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(
+      1,
+      "runtime_derived_marker_status_counts",
+    )
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(2, "runtime_derived_marker_gc")
+    expect(tauriMocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "runtime_derived_marker_reconcile_terminal_jobs",
+      { request: { layer: "embedding", affectedPath: "wiki/Page.md" } },
+    )
   })
 
   it("sends derived marker claim/complete/release batch payloads", async () => {

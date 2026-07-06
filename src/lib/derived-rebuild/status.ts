@@ -172,6 +172,7 @@ export interface FetchAllDerivedStaleMarkersResult {
   readonly markers: RuntimeDerivedStaleMarkerRecord[]
   readonly enabled: boolean
   readonly status: RuntimeDbHealthState
+  readonly truncated: boolean
 }
 
 /**
@@ -190,6 +191,7 @@ export async function fetchAllDerivedStaleMarkers(
   let sinceMarkerId: string | undefined
   let enabled = true
   let status: RuntimeDbHealthState = "healthy"
+  let truncated = false
 
   for (let page = 0; page < maxPages; page += 1) {
     const response = await options.list({
@@ -202,10 +204,15 @@ export async function fetchAllDerivedStaleMarkers(
       status = response.status
     }
     all.push(...response.markers)
-    if (!response.nextCursor) break
+    const pageTruncated = response.truncated ?? false
+    if (!response.nextCursor) {
+      truncated = pageTruncated
+      break
+    }
+    truncated = page === maxPages - 1 || pageTruncated
     sinceMarkedAtMs = response.nextCursor.markedAtMs
     sinceMarkerId = response.nextCursor.markerId
   }
 
-  return { markers: all, enabled, status }
+  return { markers: all, enabled, status, truncated }
 }
