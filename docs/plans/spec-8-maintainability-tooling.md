@@ -1,6 +1,8 @@
 # SPEC-8: Maintainability / Tooling / QA Fixture
 
-> 类型：阶段 SPEC | 状态：reviewed / augmented by 2026-07 review / ready for PR split | 覆盖：#183、#182 + `spec-5-8-post-review-findings.md` 五（精简清单）
+> 类型：阶段 SPEC | 状态：**completed（2026-07-06，11 PR：#343/#346/#349/#356/#358/#360/#364/#365/#366/#367/#368；closeout 报告见 [SPEC-8/closeout-report.md](./SPEC-8/closeout-report.md)，deferred 项与 P3 长尾随 #183 追踪）** | 覆盖：#183、#182 + `spec-5-8-post-review-findings.md` 五（精简清单）
+>
+> 范围勘误（closeout）：第 11 项 StatusPill 去重子项作废（组件已在更早重构中消失）；「需先补测试」5 项 deferred；第 10 项 schema init 缓存/事务内部收敛/profiles 引用计数 deferred（#356「语义存疑不动」裁定）。
 
 ## 2026-07 Review 补充（必读）
 
