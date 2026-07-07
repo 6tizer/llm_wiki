@@ -48,7 +48,19 @@ describe("wiki-change-notifier", () => {
 
     expect(mockedEnqueueAgentStructuralLint).toHaveBeenCalledWith(
       "/project",
-      ["wiki/a.md", "wiki/b.md"],
+      ["a.md", "b.md"],
+    )
+    expect(mockedSweepResolvedReviews).toHaveBeenCalledWith("/project", expect.any(AbortSignal))
+  })
+
+  it("normalizes mixed wiki-prefixed and wiki-root-relative paths before enqueueing", async () => {
+    notifyWikiPathsChanged("/project", ["concepts/LLM.md", "wiki/concepts/LLM.md"], 10)
+
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(mockedEnqueueAgentStructuralLint).toHaveBeenCalledWith(
+      "/project",
+      ["concepts/LLM.md"],
     )
     expect(mockedSweepResolvedReviews).toHaveBeenCalledWith("/project", expect.any(AbortSignal))
   })
@@ -73,7 +85,7 @@ describe("wiki-change-notifier", () => {
     await Promise.resolve()
     await vi.runOnlyPendingTimersAsync()
 
-    expect(mockedEnqueueAgentStructuralLint).toHaveBeenNthCalledWith(2, "/project", ["wiki/b.md"])
+    expect(mockedEnqueueAgentStructuralLint).toHaveBeenNthCalledWith(2, "/project", ["b.md"])
     expect(mockedSweepResolvedReviews).toHaveBeenCalledTimes(2)
   })
 
