@@ -143,7 +143,7 @@
 
 0. **1.0 门槛已达成（2026-07-06）**：SPEC-13/14/8 全部 completed，F 终验三项（M 冒烟/IA 走查/SPEC-8 行为无变化抽查）真机通过——报告见 [release-1.0-final-acceptance.md](./release-1.0-final-acceptance.md)。
 0.5. **post-1.0 入口（2026-07-06 对账后）**：全部 open issues 已四池归位，见 [post-1.0-backlog-triage.md](./post-1.0-backlog-triage.md)——池 A=SPEC-15 Agent 干活可用性（最高优先级，用户真机实测反馈驱动）、池 B=SPEC-16 UI 交互质量二轮、池 C=runtime 长尾（#286/#287/#289/#309/#311/#313/#314/#350/#351/#353，凑波次执行）、池 D=#183 维护性穿插；SPEC-9 维持 deferred。#294/#310/#330/#342/#227/#229/#243/#184/#189/#190/#191/#68 已带理由关闭。
-0.7. **⚡ 三轨清仓 GOAL 已达成（2026-07-06）**：四池全清——SPEC-15/16 completed、池 C 十 issue 全合并、池 D #183 收口。27 PR（#380–#406）。backlog 只剩 SPEC-9（deferred）+ 新拆 follow-up #405/#407。总报告见 [three-track-cleanup-final.md](./three-track-cleanup-final.md)。
+0.7. **⚡ 三轨清仓 GOAL 已达成（2026-07-06）+ follow-up 收尾（2026-07-07）**：四池全清——SPEC-15/16 completed、池 C 十 issue 全合并、池 D #183 收口（27 PR #380–#406）；两个新拆 follow-up 也已双轨清掉（#410 关 #405 rewind 方案 B、#411 关 #407 两条 P3）。**open backlog 彻底清零，仅剩 SPEC-9（Swift，deferred）**。总报告见 [three-track-cleanup-final.md](./three-track-cleanup-final.md)。
 
 历史优先级记录：
 

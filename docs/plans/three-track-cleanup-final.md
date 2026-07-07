@@ -9,6 +9,8 @@
 
 **✅ 达成**：27 PR（#380–#406）全部合并；四池全清；backlog 净剩 SPEC-9（deferred）+ 本 GOAL 新拆的两个 follow-up（#405/#407）。
 
+> **2026-07-07 收尾**：两个 follow-up 也已双轨清掉（#410 关 #405 rewind 方案 B、#411 关 #407 两条 P3），main=`7a971ffc`。**open backlog 彻底清零，仅剩 SPEC-9（deferred，charter spec-9-swift-shell-reentry.md，deferred/gated，非 open issue）**。详见 §「follow-up 收尾」。
+
 ## 三轨交付
 
 | 轨 | 范围 | Issue/PR | 状态 |
@@ -41,8 +43,15 @@
 ## backlog 终态
 
 - **SPEC-9**（Swift/native）：按用户裁定继续 deferred，唯一剩余门槛外项。
-- **新拆 follow-up**（本 GOAL 产出，非未清 backlog）：#405（run_deep_research 异步写 rewind 设计）、#407（P3 倒计时复用 + notifier 路径归一）。
+- **新拆 follow-up**（本 GOAL 产出，非未清 backlog）：#405（run_deep_research 异步写 rewind 设计）、#407（P3 倒计时复用 + notifier 路径归一）——**均已于 2026-07-07 双轨清掉，见下节**。
 - 四池对账文档翻转完成（[triage §3/§4](./post-1.0-backlog-triage.md)）。
+
+## follow-up 收尾（2026-07-07 双轨）
+
+#407（纯前端）与 #405（纯 sidecar/rewind gate）文件零交集 → 双 worktree 并行、墙钟减半；gate 纪律按域分级。
+
+- **#410 关 #405**（rewind 完整性 CRITICAL 域，内审 opus + 外审 ZCode 双 PASS）：调查证实 `run_deep_research` 工具完成=任务入队，真实写入发生在 `deep-research.ts` `executeResearch` 的异步 `writeFile`（+ autoIngest fire-and-forget），**不走** appTool wikiChanges / sidecar snapshot 通道 → 方案 A（造异步快照锚点）不安全且性价比低，**用户拍板 rewind 略鸡肋 → 选方案 B**：gate 显式承认该通道不参与 rewind，新增 `deep_research_async` 专用 detail + en/zh 文案，保持 fail-closed。优先级 `mixed > ambiguous > uncovered > deep_research_async > allowed`——deep_research + 任意普通 uncovered 仍按 uncovered 阻断，不弱化任何现有判定；仍留写工具名单（drift guard 双侧一致）。
+- **#411 关 #407**（P3，内审 opus PASS）：① permission-dialog 复用 `useCountdown`（保留暂停语义：暂停态传 `deadlineMs=null` 显示冻结 `pausedRemainingMs`，朴素替换会破坏暂停）；② wiki-change-notifier 边界归一 paths 为 wiki 根相对（去 `wiki/` 前缀），此前 inert，防未来按 path 过滤 / 渲染 `agentLint.paths` 触雷。
 
 ## 结论
 

@@ -60,5 +60,5 @@
 **A1 五项验收全部通过，且以确定性信号（真实 API run + runtime.db 直查）验证——A1 本质是运行时数据正确性，与 DB 信号完美契合**。加全 PR gate 绿 + 组合深审零阻塞 + 构建冒烟。#371（「Agent 干不动」的头号根因）经两次真实 run completed 行为级实锤。SPEC-15 标记 completed。
 
 ## Follow-up
-- #405 run_deep_research 异步写 rewind 设计
-- #407 permission-dialog 倒计时复用 + notifier 路径形状归一（P3）
+- ~~#405 run_deep_research 异步写 rewind 设计~~ → **已交付（#410，2026-07-07）**：方案 B 显式豁免（`deep_research_async` gate reason），CRITICAL 域内审 opus + 外审 ZCode 双 PASS。
+- ~~#407 permission-dialog 倒计时复用 + notifier 路径形状归一（P3）~~ → **已交付（#411，2026-07-07）**：useCountdown 复用（保留暂停语义）+ notifier 边界归一 wiki 根相对。
