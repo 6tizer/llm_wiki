@@ -44,6 +44,7 @@ function gateBlockedI18nKey(gate: Exclude<AgentRewindGateDecision, { allowed: tr
   if (gate.reason === "wiki_write_after_target") {
     if (gate.detail === "mixed") return "agent.rewind.blockedWikiWriteMixed"
     if (gate.detail === "ambiguous") return "agent.rewind.blockedWikiWriteAmbiguous"
+    if (gate.detail === "deep_research_async") return "agent.rewind.blockedWikiWriteDeepResearchAsync"
     return "agent.rewind.blockedWikiWriteUncovered"
   }
   if (gate.reason === "cross_fork") return "agent.rewind.blockedCrossFork"

@@ -270,6 +270,41 @@ describe("computeAgentRewindGateDecision", () => {
     ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
   })
 
+  it("blocks run_deep_research with its explicit async-write reason", () => {
+    const messages = [
+      msg("m1", 1, [
+        { toolName: "mcp__llm_wiki__run_deep_research", toolUseId: "tool-deep", phase: "post", ok: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "deep_research_async" })
+  })
+
+  it("keeps ordinary uncovered wiki writes classified as uncovered when run_deep_research is also present", () => {
+    const messages = [
+      msg("m1", 1, [
+        { toolName: "mcp__llm_wiki__run_deep_research", toolUseId: "tool-deep", phase: "post", ok: true },
+        { toolName: "mcp__llm_wiki__run_pipeline", toolUseId: "tool-1", phase: "post", ok: true },
+      ]),
+    ]
+    expect(
+      computeAgentRewindGateDecision({
+        target: target(),
+        conversation,
+        messages,
+        isStreaming: false,
+        rewindLocked: false,
+      })
+    ).toEqual({ allowed: false, reason: "wiki_write_after_target", detail: "uncovered" })
+  })
+
   it("allows a batch toolUseId only when every changed path is snapshotted", () => {
     const messages = [
       msg(

@@ -5,6 +5,7 @@ import { isWikiWriteToolCall } from "./wiki-tool-write-classifier.js";
 test("known write wiki tools are classified as writes", () => {
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__update_page"), true);
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__create_entity"), true);
+	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__run_deep_research"), true);
 	assert.equal(isWikiWriteToolCall("mcp__llm_wiki__run_pipeline"), true);
 });
 
