@@ -520,6 +520,7 @@
       "blockedWikiWriteUncovered": "Rewind is disabled: a wiki write after this point has no safe snapshot coverage. Undoing here could leave files in the wrong state while reporting success.",
       "blockedWikiWriteAmbiguous": "Rewind is disabled: wiki write records after this point are ambiguous, so the app cannot prove which files should be restored.",
       "blockedWikiWriteMixed": "Rewind is disabled: native file writes and wiki snapshot writes were mixed after this point. Their combined restore order is not safe.",
+      "blockedWikiWriteDeepResearchAsync": "Rewind is disabled: Deep Research queued asynchronous wiki writes after this point, and those writes cannot be safely rewound.",
       "blockedCrossFork": "Rewind is disabled: this checkpoint belongs to a session that has since moved on (a fork happened after it), so it can no longer be safely rewound.",
       "blockedLocked": "Rewind is unavailable right now — this conversation is busy (a send or another rewind is in progress).",
       "persistWarning": "Files were rewound, but saving the updated conversation failed: {{error}}. If the app closes before this succeeds, the rewind may not stick after restart.",

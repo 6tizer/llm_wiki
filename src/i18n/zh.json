@@ -520,6 +520,7 @@
       "blockedWikiWriteUncovered": "回滚不可用：此回滚点之后存在未被安全快照覆盖的 wiki 写入。继续回滚可能导致文件状态错误但界面显示成功。",
       "blockedWikiWriteAmbiguous": "回滚不可用：此回滚点之后的 wiki 写入记录存在歧义，应用无法确认应恢复哪些文件。",
       "blockedWikiWriteMixed": "回滚不可用：此回滚点之后混合了原生文件写入和 wiki 快照写入，组合恢复顺序尚不安全。",
+      "blockedWikiWriteDeepResearchAsync": "回滚不可用：此回滚点之后 Deep Research 已排队异步 wiki 写入，该异步写入无法被安全回滚。",
       "blockedCrossFork": "回滚不可用：此回滚点所属的会话已发生分支（fork），无法再安全回滚。",
       "blockedLocked": "当前无法回滚：该会话正忙（有发送或另一次回滚正在进行）。",
       "persistWarning": "文件已回滚，但保存更新后的会话失败：{{error}}。如果在此问题解决前应用退出，回滚状态可能在重启后丢失。",

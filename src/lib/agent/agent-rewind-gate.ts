@@ -12,12 +12,14 @@ const NATIVE_FILE_WRITE_TOOL_NAMES = new Set([
   "NotebookEdit",
 ])
 
+const DEEP_RESEARCH_TOOL_NAME = "mcp__llm_wiki__run_deep_research"
+
 export type AgentRewindGateDecision =
   | { allowed: true }
   | {
       allowed: false
       reason: "wiki_write_after_target"
-      detail: "uncovered" | "ambiguous" | "mixed"
+      detail: "uncovered" | "ambiguous" | "mixed" | "deep_research_async"
     }
   | { allowed: false; reason: "cross_fork" }
   | { allowed: false; reason: "locked" }
@@ -37,7 +39,11 @@ export type AgentRewindGateDecision =
  *     snapshot coverage may proceed; missing/false snapshot coverage still
  *     blocks. The A16 batch tool-event merge fix (chat-panel.tsx) is what
  *     makes this scan see every recorded tool call, not just the latest
- *     batch.
+ *     batch. Deep Research is an explicit exception to the normal
+ *     uncovered label: its app tool call only queues a task, while later
+ *     async writes happen outside the tool-result `wikiChanges` snapshot
+ *     channel, so rewinding across it stays fail-closed with a dedicated
+ *     detail instead of pretending a missing snapshot could fix it.
  */
 export function computeAgentRewindGateDecision(args: {
   target: AgentRewindRequestRecord
@@ -87,6 +93,7 @@ export function computeAgentRewindGateDecision(args: {
   let hasAmbiguousWikiWriteAfterTarget = false
   let hasNativeWriteAfterTarget = false
   let hasSnapshottedWikiWriteAfterTarget = false
+  let hasDeepResearchAsyncWriteAfterTarget = false
   for (const message of conversationMessages.slice(from)) {
     for (const call of message.toolCalls ?? []) {
       if (NATIVE_FILE_WRITE_TOOL_NAMES.has(call.toolName)) {
@@ -94,6 +101,10 @@ export function computeAgentRewindGateDecision(args: {
         continue
       }
       if (!isWikiWriteToolCall(call.toolName)) continue
+      if (call.toolName === DEEP_RESEARCH_TOOL_NAME) {
+        hasDeepResearchAsyncWriteAfterTarget = true
+        continue
+      }
       const matchingChanges = (message.wikiChanges ?? []).filter((change) =>
         change.toolUseId === call.toolUseId
       )
@@ -129,6 +140,9 @@ export function computeAgentRewindGateDecision(args: {
   }
   if (hasUncoveredWikiWriteAfterTarget) {
     return { allowed: false, reason: "wiki_write_after_target", detail: "uncovered" }
+  }
+  if (hasDeepResearchAsyncWriteAfterTarget) {
+    return { allowed: false, reason: "wiki_write_after_target", detail: "deep_research_async" }
   }
 
   return { allowed: true }

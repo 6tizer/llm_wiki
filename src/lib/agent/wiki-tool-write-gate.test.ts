@@ -37,6 +37,11 @@ describe("wiki-tool-write-gate drift guard (sidecar is the source of truth)", ()
     expect(mismatches).toEqual([])
   })
 
+  it("keeps run_deep_research classified as a wiki write for rewind gating", () => {
+    expect(isWikiWriteToolCall("mcp__llm_wiki__run_deep_research")).toBe(true)
+    expect(sidecarIsWikiWriteToolCall("mcp__llm_wiki__run_deep_research")).toBe(true)
+  })
+
   it("agrees on non-wiki and unknown-wiki-tool fallback behavior", () => {
     for (const name of ["Bash", "Read", "Write", "mcp__other_server__write_thing"]) {
       expect(isWikiWriteToolCall(name)).toBe(sidecarIsWikiWriteToolCall(name))
