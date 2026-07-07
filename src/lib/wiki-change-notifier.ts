@@ -14,6 +14,11 @@ function snapshotPaths(): string[] {
   return [...pendingPaths].sort()
 }
 
+function normalizeWikiNotificationPath(path: string): string {
+  const normalized = normalizePath(path)
+  return normalized.startsWith("wiki/") ? normalized.slice("wiki/".length) : normalized
+}
+
 function schedule(delayMs: number): void {
   if (timer) clearTimeout(timer)
   timer = setTimeout(() => {
@@ -70,7 +75,8 @@ export function notifyWikiPathsChanged(
   }
   pendingProjectPath = normalizedProjectPath
   for (const path of paths) {
-    if (path) pendingPaths.add(path)
+    const normalizedPath = normalizeWikiNotificationPath(path)
+    if (normalizedPath) pendingPaths.add(normalizedPath)
   }
   schedule(delayMs)
 }

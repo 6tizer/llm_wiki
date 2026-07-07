@@ -3,7 +3,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type FocusEvent,
   type KeyboardEvent,
 } from "react"
@@ -26,6 +25,7 @@ import {
 } from "./agent-permission"
 import { useChatStore, type AgentPermissionRequestRecord } from "@/stores/chat-store"
 import type { AgentPermissionDecision } from "@/lib/agent/agent-types"
+import { useCountdown } from "@/lib/hooks/use-countdown"
 
 interface AgentPermissionDialogProps {
   request: AgentPermissionRequestRecord | null
@@ -129,22 +129,15 @@ export function AgentPermissionDialog({
   onPauseTimer,
   onResumeTimer,
 }: AgentPermissionDialogProps) {
-  const [now, setNow] = useState(() => Date.now())
   const hoverPausedRef = useRef(false)
   const focusPausedRef = useRef(false)
+  const countdownDeadlineMs =
+    request && request.pausedRemainingMs == null ? request.expiresAt : null
+  const remainingMs = useCountdown(countdownDeadlineMs)
+  const displayMs = request ? request.pausedRemainingMs ?? remainingMs : 0
   const remainingSeconds = request
-    ? Math.max(
-        0,
-        Math.ceil((request.pausedRemainingMs ?? request.expiresAt - now) / 1000),
-      )
+    ? Math.max(0, Math.ceil(displayMs / 1000))
     : 0
-
-  useEffect(() => {
-    if (!request) return
-    setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [request])
 
   useEffect(() => {
     if (request) return
