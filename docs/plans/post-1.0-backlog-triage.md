@@ -4,7 +4,7 @@
 >
 > 1.0 门槛达成（[release-1.0-final-acceptance.md](./release-1.0-final-acceptance.md)）后，对全部 open issues、验收发现、真机根因追查结论做一次性归位。**本文档是 post-1.0 工作的唯一入口**：每个 open issue 都能在下面四个池子之一找到；不在池子里的 issue 应当已关闭（见 §5 关闭清单）。
 >
-> **⚡ 三轨清仓 GOAL 已达成（2026-07-06）**：四池全部清空——池 A=SPEC-15 completed（[closeout](./SPEC-15/closeout-report.md)，11 PR）、池 B=SPEC-16 completed（[closeout](./SPEC-16/closeout-report.md)，5 PR）、池 C=10 issue 全合并（#286/#287/#289/#350/#351/#353/#313/#314/#311/#309）、池 D=#183 收口关闭。27 PR（#380–#406）。backlog 仅剩 **SPEC-9（Swift，deferred）** + 三个新拆 follow-up（#405/#407）。总报告见 [three-track-cleanup-final.md](./three-track-cleanup-final.md)。
+> **⚡ 三轨清仓 GOAL 已达成（2026-07-06）+ follow-up 收尾（2026-07-07）**：四池全部清空——池 A=SPEC-15 completed（[closeout](./SPEC-15/closeout-report.md)，11 PR）、池 B=SPEC-16 completed（[closeout](./SPEC-16/closeout-report.md)，5 PR）、池 C=10 issue 全合并（#286/#287/#289/#350/#351/#353/#313/#314/#311/#309）、池 D=#183 收口关闭。27 PR（#380–#406）。两个新拆 follow-up 也已双轨清掉（#410 关 #405 rewind 方案 B、#411 关 #407 两条 P3，main=`7a971ffc`）。**open backlog 彻底清零，仅剩 SPEC-9（Swift，deferred，charter spec-9-swift-shell-reentry.md，deferred/gated，非 open issue）**。总报告见 [three-track-cleanup-final.md](./three-track-cleanup-final.md)。
 
 ## 0. 触发背景
 

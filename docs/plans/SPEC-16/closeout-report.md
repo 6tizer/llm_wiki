@@ -44,4 +44,4 @@
 代码质量维度完全满足（全 gate 绿 + 组合深审零阻塞）；#359 核心复现项实机视觉确认修复；装机溯源确定性确认 bundle 含全部修复。**A2 验收标准的纯渲染部分无 DB 确定性信号可查（区别于 A1）——由单测 + 组合深审 + 溯源覆盖，如实记录不假报**。SPEC-16 标记 completed。
 
 ## Follow-up
-- #407 notifier 路径形状归一（P3，当前 inert）
+- ~~#407 notifier 路径形状归一（P3，当前 inert）~~ → **已交付（#411，2026-07-07）**：notifier 边界归一 paths 为 wiki 根相对（去 `wiki/` 前缀）+ permission-dialog useCountdown 复用。
